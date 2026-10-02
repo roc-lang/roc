@@ -905,6 +905,38 @@ instantiation_is_immediate_callee: bool = false,
 /// method var was created by the rolled-back type-store work.
 dispatch_target_instantiations: std.ArrayListUnmanaged(DispatchTargetInstantiation) = .empty,
 dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Concrete dispatch replay (design.md): per replay shape hash, the edges
+/// whose target instance was ground right after their relation settled,
+/// with their exact shapes in `dispatch_replay_shapes`.
+dispatch_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(DispatchReplaySource)) = .empty,
+dispatch_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
+/// Bindings one of whose eligible edges has settled to a ground instance.
+/// Only their edges encode a replay shape.
+dispatch_replay_bindings: std.AutoHashMapUnmanaged(DispatchReplayBinding, void) = .empty,
+/// The latest freshly instantiated edge that encoded a replay shape, that
+/// shape and its hash, and the scheme-use record the edge wrote, until the
+/// edge settles.
+pending_replay_shape_edge: ?u32 = null,
+pending_replay_shape: std.ArrayListUnmanaged(u8) = .empty,
+pending_replay_shape_hash: u64 = 0,
+pending_replay_scheme_use: ?u32 = null,
+/// Unsettled root edges whose instantiation resolved nested requirements:
+/// the only edges whose settling can make a binding replayable.
+dispatch_replay_candidates: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+scratch_replay_shape: std.ArrayListUnmanaged(u8) = .empty,
+scratch_replay_shape_vars: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Replay sources whose whole nested requirement tree has settled.
+dispatch_replay_ready: std.AutoHashMapUnmanaged(u32, void) = .empty,
+/// Edges whose target concrete dispatch replay selected.
+dispatch_replayed_edges: std.ArrayListUnmanaged(u32) = .empty,
+scratch_ground_vars: std.ArrayListUnmanaged(Var) = .empty,
+scratch_ground_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
+scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
+scratch_replay_nodes: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+scratch_replay_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
+scratch_replay_walk: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
+scratch_replay_walked: std.AutoHashMapUnmanaged(DispatchReplayPair, void) = .empty,
 /// Raw body constraint callable -> its `where_method_use` record. Deferred
 /// constraint fixpoints revisit the same raw body-dispatch use; this index makes them reuse
 /// the recorded signature copy in constant time.
@@ -1472,6 +1504,32 @@ const DispatchTargetInstantiation = struct {
     target_binding: ModuleEnv.MethodBinding,
     method_name: Ident.Idx,
     method_var: Var,
+    /// The edge's own nested requirements: the `dispatch_derivations` its
+    /// target instantiation recorded.
+    derivations_start: u32 = 0,
+    derivations_end: u32 = 0,
+};
+
+/// A concrete dispatch replay source (design.md): the edge, its exact replay
+/// shape in `dispatch_replay_shapes`, and the dispatch-target scheme-use
+/// record it wrote, if any.
+const DispatchReplaySource = struct {
+    edge: u32,
+    shape_start: u32,
+    shape_len: u32,
+    scheme_use: ?u32,
+};
+
+/// A replay source's instance node and the callable node at its position.
+const DispatchReplayPair = struct {
+    source: Var,
+    target: Var,
+};
+
+const DispatchReplayBinding = struct {
+    env: usize,
+    type_node: u32,
+    def: u32,
 };
 
 const DispatchDerivation = struct {
@@ -3441,6 +3499,27 @@ pub fn deinit(self: *Self) void {
     self.default_materializations.deinit(self.gpa);
     self.dispatch_target_instantiations.deinit(self.gpa);
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
+    {
+        var sources = self.dispatch_replay_sources.valueIterator();
+        while (sources.next()) |list| list.deinit(self.gpa);
+        self.dispatch_replay_sources.deinit(self.gpa);
+    }
+    self.dispatch_replay_shapes.deinit(self.gpa);
+    self.dispatch_replay_bindings.deinit(self.gpa);
+    self.scratch_replay_shape.deinit(self.gpa);
+    self.pending_replay_shape.deinit(self.gpa);
+    self.dispatch_replayed_edges.deinit(self.gpa);
+    self.dispatch_replay_candidates.deinit(self.gpa);
+    self.scratch_replay_shape_vars.deinit(self.gpa);
+    self.dispatch_replay_ready.deinit(self.gpa);
+    self.scratch_ground_vars.deinit(self.gpa);
+    self.scratch_ground_seen.deinit(self.gpa);
+    self.scratch_replay_sources.deinit(self.gpa);
+    self.scratch_replay_pairs.deinit(self.gpa);
+    self.scratch_replay_nodes.deinit(self.gpa);
+    self.scratch_replay_grafts.deinit(self.gpa);
+    self.scratch_replay_walk.deinit(self.gpa);
+    self.scratch_replay_walked.deinit(self.gpa);
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
@@ -36359,14 +36438,7 @@ fn targetSchemeMintNames(
     instantiated_scheme: Var,
     predeclared_scheme_for_method: ?Var,
 ) Allocator.Error![]const MethodNameId {
-    const final = if (!method_lookup.is_this_module)
-        true
-    else if (predeclared_scheme_for_method != null)
-        false
-    else if (self.topLevelPattern(self.cir.store.getDef(method_lookup.binding.def_idx).pattern)) |processing_def|
-        processing_def.status == .processed and !self.defInOnStackGroup(method_lookup.binding.def_idx)
-    else
-        false;
+    const final = self.methodTargetSchemeIsFinal(method_lookup, predeclared_scheme_for_method);
     if (final) {
         if (self.scheme_mint_names.get(instantiated_scheme)) |names| return names;
     }
@@ -36377,6 +36449,20 @@ fn targetSchemeMintNames(
     errdefer self.gpa.free(owned);
     try self.scheme_mint_names.put(self.gpa, instantiated_scheme, owned);
     return owned;
+}
+
+/// Whether a selected method's scheme can no longer change: an imported
+/// scheme, or a local binding checked outside any still-open recursive group
+/// and not standing in through its predeclared scheme.
+inline fn methodTargetSchemeIsFinal(
+    self: *Self,
+    method_lookup: StaticDispatchMethodBinding,
+    predeclared_scheme_for_method: ?Var,
+) bool {
+    if (!method_lookup.is_this_module) return true;
+    if (predeclared_scheme_for_method != null) return false;
+    const processing_def = self.topLevelPattern(self.cir.store.getDef(method_lookup.binding.def_idx).pattern) orelse return false;
+    return processing_def.status == .processed and !self.defInOnStackGroup(method_lookup.binding.def_idx);
 }
 
 /// Append the constraint names that instantiating the scheme rooted at
@@ -37285,6 +37371,7 @@ fn instantiateDispatchTargetMethodVar(
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
     state_type_key: ?[32]u8,
+    replay_shape_hash: ?u64,
     grew_from_ancestor: bool,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
@@ -37294,6 +37381,7 @@ fn instantiateDispatchTargetMethodVar(
     region: Region,
 ) Allocator.Error!Var {
     std.debug.assert(self.dispatch_target_instantiation_by_fn_var.get(constraint.fn_var) == null);
+    const derivations_start: u32 = @intCast(self.dispatch_derivations.items.len);
 
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
@@ -37356,6 +37444,7 @@ fn instantiateDispatchTargetMethodVar(
         );
     }
 
+    const derivations_end: u32 = @intCast(self.dispatch_derivations.items.len);
     const raw_index: u32 = @intCast(self.dispatch_target_instantiations.items.len);
     self.dispatch_target_instantiations.appendAssumeCapacity(.{
         .constraint_fn_var = constraint.fn_var,
@@ -37368,9 +37457,614 @@ fn instantiateDispatchTargetMethodVar(
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = method_var,
+        .derivations_start = derivations_start,
+        .derivations_end = derivations_end,
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
+    // Replay saves resolving an instance's nested requirements; a method
+    // without any is cheaper to instantiate than to replay, so only a root
+    // edge that resolved some can make its binding replayable.
+    if (derivations_end != derivations_start and parent_constraint_fn_var == null and
+        constraint.origin.literalKind() == null and
+        self.probe_depth == 0 and !self.commit_probe_active)
+    {
+        try self.dispatch_replay_candidates.put(self.gpa, constraint.fn_var, raw_index);
+    }
+    if (replay_shape_hash) |hash| {
+        self.pending_replay_shape.clearRetainingCapacity();
+        try self.pending_replay_shape.appendSlice(self.gpa, self.scratch_replay_shape.items);
+        self.pending_replay_shape_edge = raw_index;
+        self.pending_replay_shape_hash = hash;
+        self.pending_replay_scheme_use = self.dispatchTargetSchemeUse(records_before, constraint.fn_var);
+    }
     return method_var;
+}
+
+/// MECHANISM: concrete dispatch replay (design.md). Whether a dispatch edge
+/// may be replayed or serve as a replay source: a root edge (no parent
+/// derivation) with a ground receiver, selecting a non-literal method whose
+/// scheme is final and has no explicit requirements, outside any probe.
+noinline fn dispatchReplayEligible(
+    self: *Self,
+    dispatcher_var: Var,
+    parent_constraint_fn_var: ?Var,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    cycle_method_expr_var: ?Var,
+    predeclared_scheme_for_method: ?Var,
+) Allocator.Error!bool {
+    if (parent_constraint_fn_var != null or cycle_method_expr_var != null) return false;
+    if (self.probe_depth != 0 or self.commit_probe_active) return false;
+    if (constraint.origin.literalKind() != null) return false;
+    if (!self.methodTargetSchemeIsFinal(method_lookup, predeclared_scheme_for_method)) return false;
+    const scheme_root = if (method_lookup.is_this_module)
+        ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
+    else
+        try self.importedMethodScheme(method_lookup);
+    if (self.schemeHasExplicitRequirements(scheme_root)) return false;
+    if (self.varIsConflictedDefaultLiteral(dispatcher_var)) return false;
+    return try self.varIsReplayGround(dispatcher_var);
+}
+
+fn dispatchReplayBinding(method_lookup: StaticDispatchMethodBinding) DispatchReplayBinding {
+    return .{
+        .env = @intFromPtr(method_lookup.env),
+        .type_node = @intFromEnum(method_lookup.binding.type_node_idx),
+        .def = @intFromEnum(method_lookup.binding.def_idx),
+    };
+}
+
+/// Encode an edge's replay shape into `scratch_replay_shape` and return its
+/// hash, or null when the shape holds an error. The shape is the selected
+/// binding and method, then the receiver and callable exactly as stored:
+/// every node's descriptor flags and content in depth-first order, each
+/// variable numbered by first appearance, and attached constraints left out
+/// (each is its own relation, settled on its own receiver). Equal shapes are
+/// equal types up to renaming their variables, so relating either to a fresh
+/// instance of the binding has the same result; two equal types stored
+/// differently merely encode differently.
+fn encodeDispatchReplayShape(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+) Allocator.Error!?u64 {
+    const out = &self.scratch_replay_shape;
+    out.clearRetainingCapacity();
+    self.scratch_replay_shape_vars.clearRetainingCapacity();
+    const stack = &self.scratch_ground_vars;
+    stack.clearRetainingCapacity();
+    const binding = dispatchReplayBinding(method_lookup);
+    try appendReplayWord(out, self.gpa, @truncate(binding.env));
+    try appendReplayWord(out, self.gpa, @truncate(binding.env >> 32));
+    try appendReplayWord(out, self.gpa, binding.type_node);
+    try appendReplayWord(out, self.gpa, binding.def);
+    try appendReplayWord(out, self.gpa, @bitCast(constraint.fn_name));
+    // The receiver is normally the callable's first argument; it is encoded
+    // separately only when it is not.
+    const receiver_is_first_arg = if (self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc()) |func| blk: {
+        const args = self.types.sliceVars(func.args);
+        break :blk args.len != 0 and self.types.resolveVar(args[0]).var_ == self.types.resolveVar(dispatcher_var).var_;
+    } else false;
+    try out.append(self.gpa, @intFromBool(receiver_is_first_arg));
+    if (!receiver_is_first_arg) try stack.append(self.gpa, dispatcher_var);
+    try stack.append(self.gpa, constraint.fn_var);
+    while (stack.pop()) |next| {
+        const resolved = self.types.resolveVar(next);
+        const seen = try self.scratch_replay_shape_vars.getOrPut(self.gpa, resolved.var_);
+        if (seen.found_existing) {
+            try out.append(self.gpa, 0xff);
+            try appendReplayWord(out, self.gpa, seen.value_ptr.*);
+            continue;
+        }
+        seen.value_ptr.* = self.scratch_replay_shape_vars.count() - 1;
+        try out.append(self.gpa, @bitCast(resolved.desc.flags));
+        // Children are pushed in reverse, so they are encoded in order.
+        switch (resolved.desc.content) {
+            .err => return null,
+            .flex => try out.append(self.gpa, 1),
+            .rigid => try out.append(self.gpa, 2),
+            .field_presence => |presence| switch (presence) {
+                .required => try out.append(self.gpa, 3),
+                .optional => try out.append(self.gpa, 4),
+                .defaulted => |id| {
+                    try out.append(self.gpa, 5);
+                    try appendReplayWord(out, self.gpa, @intFromEnum(id.origin_module));
+                    try appendReplayWord(out, self.gpa, id.expr_node);
+                },
+            },
+            .alias => |alias| {
+                try out.append(self.gpa, 6);
+                try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
+                try appendReplayWord(out, self.gpa, @intFromEnum(alias.origin_module));
+                try appendReplayWord(out, self.gpa, @bitCast(alias.source_decl));
+                try appendReplayWord(out, self.gpa, alias.source_arg_count);
+                const args = self.types.sliceAliasArgs(alias);
+                try appendReplayWord(out, self.gpa, @intCast(args.len));
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try appendReplayChildren(stack, self.gpa, args);
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record => try out.append(self.gpa, 7),
+                .empty_tag_union => try out.append(self.gpa, 8),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try out.append(self.gpa, switch (flat) {
+                        .fn_pure => 9,
+                        .fn_effectful => 10,
+                        .fn_unbound => 11,
+                        .empty_record, .empty_tag_union, .tuple, .record, .tag_union, .nominal_type => unreachable,
+                    });
+                    const args = self.types.sliceVars(func.args);
+                    try appendReplayWord(out, self.gpa, @intCast(args.len));
+                    try stack.append(self.gpa, func.ret);
+                    try appendReplayChildren(stack, self.gpa, args);
+                },
+                .tuple => |tuple| {
+                    try out.append(self.gpa, 12);
+                    const elems = self.types.sliceVars(tuple.elems);
+                    try appendReplayWord(out, self.gpa, @intCast(elems.len));
+                    try appendReplayChildren(stack, self.gpa, elems);
+                },
+                .record => |record| {
+                    try out.append(self.gpa, 13);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    try appendReplayWord(out, self.gpa, @intCast(fields.len));
+                    for (fields.items(.name), fields.items(.presence)) |name, presence| {
+                        try appendReplayWord(out, self.gpa, @bitCast(name));
+                        try out.append(self.gpa, switch (presence.decode()) {
+                            .required => 0,
+                            .unknown => 1,
+                        });
+                    }
+                    try stack.append(self.gpa, record.ext);
+                    var index = fields.len;
+                    while (index > 0) {
+                        index -= 1;
+                        switch (fields.items(.presence)[index].decode()) {
+                            .required => |field_var| try stack.append(self.gpa, field_var),
+                            .unknown => |unknown| {
+                                try stack.append(self.gpa, unknown.var_);
+                                try stack.append(self.gpa, unknown.presence);
+                            },
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try out.append(self.gpa, 14);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    try appendReplayWord(out, self.gpa, @intCast(tags.len));
+                    for (tags.items(.name), tags.items(.args)) |name, tag_args| {
+                        try appendReplayWord(out, self.gpa, @bitCast(name));
+                        try appendReplayWord(out, self.gpa, @intCast(self.types.sliceVars(tag_args).len));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                    var index = tags.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try appendReplayChildren(stack, self.gpa, self.types.sliceVars(tags.items(.args)[index]));
+                    }
+                },
+                .nominal_type => |nominal| {
+                    try out.append(self.gpa, 15);
+                    try appendReplayWord(out, self.gpa, @bitCast(nominal.ident.ident_idx));
+                    try appendReplayWord(out, self.gpa, @intFromEnum(nominal.origin_module));
+                    try appendReplayWord(out, self.gpa, @bitCast(nominal.source));
+                    const args = self.types.sliceNominalArgs(nominal);
+                    try appendReplayWord(out, self.gpa, @intCast(args.len));
+                    try appendReplayChildren(stack, self.gpa, args);
+                },
+            },
+        }
+    }
+    return std.hash.Wyhash.hash(0, out.items);
+}
+
+fn appendReplayWord(out: *std.ArrayListUnmanaged(u8), gpa: Allocator, value: u32) Allocator.Error!void {
+    try out.appendSlice(gpa, &.{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) });
+}
+
+/// Push `vars` so that popping visits them in order.
+fn appendReplayChildren(stack: *std.ArrayListUnmanaged(Var), gpa: Allocator, vars: []const Var) Allocator.Error!void {
+    var index = vars.len;
+    while (index > 0) {
+        index -= 1;
+        try stack.append(gpa, vars[index]);
+    }
+}
+
+fn replayShapeEql(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x != y) return false;
+    }
+    return true;
+}
+
+/// The replay source whose shape equals `shape`, if any.
+fn findDispatchReplaySource(self: *const Self, hash: u64, shape: []const u8) ?DispatchReplaySource {
+    const sources = self.dispatch_replay_sources.get(hash) orelse return null;
+    for (sources.items) |source| {
+        if (replayShapeEql(self.dispatch_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) {
+            return source;
+        }
+    }
+    return null;
+}
+
+/// Whether `var_`'s type contains no variable of any kind, so no later
+/// relation can refine it: no flex or rigid, no unbound effect (a later
+/// relation can still fix it), no error, and no invalid declaration. The
+/// roots it visits stay in `scratch_ground_seen` until the next call.
+fn varIsReplayGround(self: *Self, var_: Var) Allocator.Error!bool {
+    self.scratch_ground_vars.clearRetainingCapacity();
+    self.scratch_ground_seen.clearRetainingCapacity();
+    try self.scratch_ground_vars.append(self.gpa, var_);
+    while (self.scratch_ground_vars.pop()) |next| {
+        const resolved = self.types.resolveVar(next);
+        if ((try self.scratch_ground_seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err => return false,
+            .field_presence => {},
+            .alias => |alias| {
+                try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try self.scratch_ground_vars.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .fn_unbound => return false,
+                .fn_pure, .fn_effectful => |func| {
+                    try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try self.scratch_ground_vars.append(self.gpa, func.ret);
+                },
+                .tuple => |tuple| try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| switch (presence.decode()) {
+                        .required => |field_var| try self.scratch_ground_vars.append(self.gpa, field_var),
+                        .unknown => |unknown| {
+                            try self.scratch_ground_vars.append(self.gpa, unknown.presence);
+                            try self.scratch_ground_vars.append(self.gpa, unknown.var_);
+                        },
+                    };
+                    try self.scratch_ground_vars.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    try self.scratch_ground_vars.append(self.gpa, tag_union.ext);
+                },
+                .nominal_type => |nominal| {
+                    if (self.types.nominalDeclIsInvalid(nominal)) return false;
+                    try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                },
+            },
+        }
+    }
+    return true;
+}
+
+/// Record a settled root edge whose target instance resolved nested
+/// requirements and is ground, so the instance depends on the edge's inputs
+/// alone: its binding becomes replayable, and an eligible edge that encoded
+/// its shape becomes the replay source for that shape unless one already is.
+noinline fn recordDispatchReplaySource(self: *Self, fn_var: Var) Allocator.Error!void {
+    if (self.probe_depth != 0 or self.commit_probe_active) return;
+    const raw_index = (self.dispatch_replay_candidates.fetchRemove(fn_var) orelse return).value;
+    const instantiation = self.dispatch_target_instantiations.items[raw_index];
+    if (!try self.varIsReplayGround(instantiation.method_var)) return;
+    try self.dispatch_replay_bindings.put(self.gpa, .{
+        .env = @intFromPtr(instantiation.target_env),
+        .type_node = @intFromEnum(instantiation.target_binding.type_node_idx),
+        .def = @intFromEnum(instantiation.target_binding.def_idx),
+    }, {});
+    if (self.pending_replay_shape_edge != raw_index) return;
+    self.pending_replay_shape_edge = null;
+    const hash = self.pending_replay_shape_hash;
+    if (self.findDispatchReplaySource(hash, self.pending_replay_shape.items) != null) return;
+    const entry = try self.dispatch_replay_sources.getOrPut(self.gpa, hash);
+    if (!entry.found_existing) entry.value_ptr.* = .empty;
+    const start: u32 = @intCast(self.dispatch_replay_shapes.items.len);
+    try self.dispatch_replay_shapes.appendSlice(self.gpa, self.pending_replay_shape.items);
+    try entry.value_ptr.append(self.gpa, .{
+        .edge = raw_index,
+        .shape_start = start,
+        .shape_len = @intCast(self.pending_replay_shape.items.len),
+        .scheme_use = self.pending_replay_scheme_use,
+    });
+}
+
+/// Whether every nested requirement a replay source's instance carried, and
+/// every requirement those selected in turn, has settled without rejection.
+/// A replayed edge publishes exactly these requirements as its own.
+fn dispatchReplaySourceReady(self: *Self, source_idx: u32) Allocator.Error!bool {
+    if (self.dispatch_replay_ready.contains(source_idx)) return true;
+    self.scratch_replay_sources.clearRetainingCapacity();
+    try self.scratch_replay_sources.append(self.gpa, source_idx);
+    while (self.scratch_replay_sources.pop()) |index| {
+        const edge = self.dispatch_target_instantiations.items[index];
+        for (self.dispatch_derivations.items[edge.derivations_start..edge.derivations_end]) |derivation| {
+            const child = derivation.child_fn_var;
+            if (!self.settled_static_dispatch_constraint_fns.contains(child)) return false;
+            if (self.types.varStaticDispatchRejected(child)) return false;
+            if (self.dispatch_target_instantiation_by_fn_var.get(child)) |child_index| {
+                try self.scratch_replay_sources.append(self.gpa, child_index);
+            }
+        }
+    }
+    try self.dispatch_replay_ready.put(self.gpa, source_idx, {});
+    return true;
+}
+
+fn dispatchReplaySourceOwnsDerivation(self: *const Self, source: DispatchTargetInstantiation, fn_var: Var) bool {
+    const root = self.types.resolveVar(fn_var).var_;
+    for (self.dispatch_derivations.items[source.derivations_start..source.derivations_end]) |derivation| {
+        if (self.types.resolveVar(derivation.child_fn_var).var_ == root) return true;
+    }
+    return false;
+}
+
+/// MECHANISM: concrete dispatch replay (design.md). Select `replay_source`'s
+/// target for this edge exactly as a fresh instantiation would: the
+/// source's ground instance is the fresh instance related to an equal
+/// callable shape, and its settled nested requirements are the ones a
+/// fresh instance's concrete receivers would select. The edge keeps its own
+/// callable, with each of its variables related to a copy of the instance
+/// subtree at that position, so nothing later done to either edge's types
+/// reaches the other, and gets a scheme-use record whose substitution names
+/// its own nodes and whose nested requirements are the source's. Null when
+/// the source cannot be replayed now.
+fn replayDispatchTarget(
+    self: *Self,
+    replay_source: DispatchReplaySource,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    env: *Env,
+    region: Region,
+) Allocator.Error!?Var {
+    if (!try self.dispatchReplaySourceReady(replay_source.edge)) return null;
+    const source = self.dispatch_target_instantiations.items[replay_source.edge];
+    if (source.target_env != method_lookup.env or
+        !std.meta.eql(source.target_binding, method_lookup.binding) or
+        !source.method_name.eql(constraint.fn_name))
+    {
+        std.debug.panic("dispatch replay key matched an edge with a different method binding", .{});
+    }
+    // The source's own context may have refined or poisoned its instance
+    // since it was recorded; only a still-ground instance is its input's.
+    if (!try self.varIsReplayGround(source.method_var)) return null;
+    const source_record: ?ModuleEnv.SchemeUseRecord = if (replay_source.scheme_use) |record_idx|
+        self.cir.scheme_uses.items.items[record_idx]
+    else
+        null;
+    if (source_record) |record| {
+        for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
+            const fresh_var: Var = @enumFromInt(pair.fresh_var);
+            if (self.scratch_ground_seen.contains(self.types.resolveVar(fresh_var).var_)) continue;
+            if (!self.dispatchReplaySourceOwnsDerivation(source, fresh_var)) return null;
+        }
+    }
+
+    // Pair the source's ground instance with this edge's callable before
+    // changing anything: where the callable has structure it is the
+    // instance's (the shapes are equal), and where it has a variable the
+    // instance supplies that subtree.
+    if (!try self.pairDispatchReplayInstance(source.method_var, constraint.fn_var)) return null;
+
+    try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
+    try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
+    var graft_index: usize = 0;
+    while (graft_index < self.scratch_replay_grafts.items.len) : (graft_index += 1) {
+        const graft = self.scratch_replay_grafts.items[graft_index];
+        const copy = try self.instantiateVarOrphan(graft.source, env, env.rank(), .{ .explicit = region });
+        var copied = self.var_map.iterator();
+        while (copied.next()) |entry| try self.scratch_replay_nodes.put(self.gpa, entry.key_ptr.*, entry.value_ptr.*);
+        const result = try self.unify(graft.target, copy, env);
+        if (!result.isEstablished()) {
+            std.debug.panic("concrete dispatch replay could not relate a callable variable to its source's ground instance", .{});
+        }
+    }
+    const method_var = constraint.fn_var;
+    if (source_record) |record| {
+        self.scratch_replay_pairs.clearRetainingCapacity();
+        for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
+            const fresh_root = self.types.resolveVar(@as(Var, @enumFromInt(pair.fresh_var))).var_;
+            const node = self.scratch_replay_nodes.get(fresh_root);
+            try self.scratch_replay_pairs.append(self.gpa, .{
+                .old_var = pair.old_var,
+                .fresh_var = if (node) |mapped| @intFromEnum(mapped) else pair.fresh_var,
+            });
+        }
+        try self.cir.recordSchemeUse(
+            if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+            .dispatch_target,
+            @intFromEnum(constraint.fn_var),
+            @enumFromInt(record.scheme_root),
+            self.scratch_replay_pairs.items,
+        );
+    }
+    const raw_index: u32 = @intCast(self.dispatch_target_instantiations.items.len);
+    self.dispatch_target_instantiations.appendAssumeCapacity(.{
+        .constraint_fn_var = constraint.fn_var,
+        .is_literal_conversion = false,
+        .receiver_var = dispatcher_var,
+        .parent_constraint_fn_var = null,
+        .state_type_key = null,
+        .grew_from_ancestor = false,
+        .target_env = method_lookup.env,
+        .target_binding = method_lookup.binding,
+        .method_name = constraint.fn_name,
+        .method_var = method_var,
+    });
+    self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
+    try self.dispatch_replayed_edges.append(self.gpa, raw_index);
+    return method_var;
+}
+
+/// Walk a replay source's ground instance and a callable together, recording
+/// in `scratch_replay_nodes` a callable node standing at each instance node,
+/// and in `scratch_replay_grafts` each callable variable together with
+/// the instance subtree that a fresh instance would relate it to. False when
+/// the stored layouts differ at some position (two equal rows stored in
+/// different orders), in which case nothing is replayed.
+fn pairDispatchReplayInstance(self: *Self, source_var: Var, callable_var: Var) Allocator.Error!bool {
+    self.scratch_replay_nodes.clearRetainingCapacity();
+    self.scratch_replay_grafts.clearRetainingCapacity();
+    self.scratch_replay_walk.clearRetainingCapacity();
+    self.scratch_replay_walked.clearRetainingCapacity();
+    try self.scratch_replay_walk.append(self.gpa, .{ .source = source_var, .target = callable_var });
+    while (self.scratch_replay_walk.pop()) |pair| {
+        const source = self.types.resolveVar(pair.source);
+        const target = self.types.resolveVar(pair.target);
+        const walked = try self.scratch_replay_walked.getOrPut(self.gpa, .{ .source = source.var_, .target = target.var_ });
+        if (walked.found_existing) continue;
+        // A ground node shared by several positions stands at each of them;
+        // any one of its callable nodes holds the same type.
+        const node = try self.scratch_replay_nodes.getOrPut(self.gpa, source.var_);
+        if (!node.found_existing) node.value_ptr.* = target.var_;
+        switch (target.desc.content) {
+            .flex => {
+                try self.scratch_replay_grafts.append(self.gpa, .{ .source = source.var_, .target = target.var_ });
+                continue;
+            },
+            .rigid, .err => return false,
+            .field_presence, .alias, .structure => {},
+        }
+        if (!try self.pairDispatchReplayChildren(source.desc.content, target.desc.content)) return false;
+    }
+    return true;
+}
+
+fn pairDispatchReplayChildren(self: *Self, source: types_mod.Content, target: types_mod.Content) Allocator.Error!bool {
+    switch (target) {
+        .flex, .rigid, .err => unreachable,
+        .field_presence => |target_presence| {
+            if (source != .field_presence) return false;
+            return std.meta.eql(source.field_presence, target_presence);
+        },
+        .alias => |target_alias| {
+            if (source != .alias) return false;
+            const source_alias = source.alias;
+            if (!source_alias.ident.ident_idx.eql(target_alias.ident.ident_idx)) return false;
+            try self.pairReplayVars(self.types.sliceAliasArgs(source_alias), self.types.sliceAliasArgs(target_alias)) orelse return false;
+            try self.scratch_replay_walk.append(self.gpa, .{ .source = self.types.getAliasBackingVar(source_alias), .target = self.types.getAliasBackingVar(target_alias) });
+            return true;
+        },
+        .structure => |target_flat| {
+            if (source != .structure) return false;
+            const source_flat = source.structure;
+            switch (target_flat) {
+                .empty_record => return source_flat == .empty_record,
+                .empty_tag_union => return source_flat == .empty_tag_union,
+                .fn_pure, .fn_effectful, .fn_unbound => |target_func| {
+                    const source_func = switch (source_flat) {
+                        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                        .empty_record, .empty_tag_union, .tuple, .record, .tag_union, .nominal_type => return false,
+                    };
+                    try self.pairReplayVars(self.types.sliceVars(source_func.args), self.types.sliceVars(target_func.args)) orelse return false;
+                    try self.scratch_replay_walk.append(self.gpa, .{ .source = source_func.ret, .target = target_func.ret });
+                    return true;
+                },
+                .tuple => |target_tuple| {
+                    if (source_flat != .tuple) return false;
+                    try self.pairReplayVars(self.types.sliceVars(source_flat.tuple.elems), self.types.sliceVars(target_tuple.elems)) orelse return false;
+                    return true;
+                },
+                .nominal_type => |target_nominal| {
+                    if (source_flat != .nominal_type) return false;
+                    const source_nominal = source_flat.nominal_type;
+                    if (!source_nominal.ident.ident_idx.eql(target_nominal.ident.ident_idx) or
+                        source_nominal.origin_module != target_nominal.origin_module) return false;
+                    try self.pairReplayVars(self.types.sliceNominalArgs(source_nominal), self.types.sliceNominalArgs(target_nominal)) orelse return false;
+                    return true;
+                },
+                .record => |target_record| {
+                    if (source_flat != .record) return false;
+                    const source_record = source_flat.record;
+                    const source_fields = self.types.getRecordFieldsSlice(source_record.fields);
+                    const target_fields = self.types.getRecordFieldsSlice(target_record.fields);
+                    if (source_fields.len != target_fields.len) return false;
+                    for (source_fields.items(.name), target_fields.items(.name), source_fields.items(.presence), target_fields.items(.presence)) |source_name, target_name, source_presence, target_presence| {
+                        if (!source_name.eql(target_name)) return false;
+                        switch (target_presence.decode()) {
+                            .required => |target_field| switch (source_presence.decode()) {
+                                .required => |source_field| try self.scratch_replay_walk.append(self.gpa, .{ .source = source_field, .target = target_field }),
+                                .unknown => return false,
+                            },
+                            .unknown => |target_unknown| switch (source_presence.decode()) {
+                                .required => return false,
+                                .unknown => |source_unknown| {
+                                    try self.scratch_replay_walk.append(self.gpa, .{ .source = source_unknown.presence, .target = target_unknown.presence });
+                                    try self.scratch_replay_walk.append(self.gpa, .{ .source = source_unknown.var_, .target = target_unknown.var_ });
+                                },
+                            },
+                        }
+                    }
+                    try self.scratch_replay_walk.append(self.gpa, .{ .source = source_record.ext, .target = target_record.ext });
+                    return true;
+                },
+                .tag_union => |target_union| {
+                    if (source_flat != .tag_union) return false;
+                    const source_union = source_flat.tag_union;
+                    const source_tags = self.types.getTagsSlice(source_union.tags);
+                    const target_tags = self.types.getTagsSlice(target_union.tags);
+                    if (source_tags.len != target_tags.len) return false;
+                    for (source_tags.items(.name), target_tags.items(.name), source_tags.items(.args), target_tags.items(.args)) |source_name, target_name, source_args, target_args| {
+                        if (!source_name.eql(target_name)) return false;
+                        try self.pairReplayVars(self.types.sliceVars(source_args), self.types.sliceVars(target_args)) orelse return false;
+                    }
+                    try self.scratch_replay_walk.append(self.gpa, .{ .source = source_union.ext, .target = target_union.ext });
+                    return true;
+                },
+            }
+        },
+    }
+}
+
+/// Queue corresponding positions of two equally long variable lists; null
+/// when their lengths differ.
+fn pairReplayVars(self: *Self, source: []const Var, target: []const Var) Allocator.Error!?void {
+    if (source.len != target.len) return null;
+    for (source, target) |source_var, target_var| {
+        try self.scratch_replay_walk.append(self.gpa, .{ .source = source_var, .target = target_var });
+    }
+}
+
+/// Normalize an eligible edge's rows, encode its replay shape, and replay
+/// the source with that shape if there is one that can be replayed now.
+/// Otherwise the shape's hash, if it has one, goes with the edge's fresh
+/// instantiation.
+noinline fn attemptDispatchReplay(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    dispatch_value: ?Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!struct { method_var: ?Var = null, shape_hash: ?u64 = null } {
+    try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
+    const hash = try self.encodeDispatchReplayShape(dispatcher_var, constraint, method_lookup) orelse return .{};
+    if (self.findDispatchReplaySource(hash, self.scratch_replay_shape.items)) |replay_source| {
+        if (try self.replayDispatchTarget(replay_source, dispatcher_var, constraint, method_lookup, env, region)) |method_var| {
+            return .{ .method_var = method_var };
+        }
+    }
+    return .{ .shape_hash = hash };
+}
+
+/// The dispatch-target scheme-use record written for `fn_var` since
+/// `records_start`, if any.
+fn dispatchTargetSchemeUse(self: *const Self, records_start: usize, fn_var: Var) ?u32 {
+    const records = self.cir.scheme_uses.items.items;
+    var index = records.len;
+    while (index > records_start) {
+        index -= 1;
+        const record = records[index];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) and
+            record.slot_data == @intFromEnum(fn_var)) return @intCast(index);
+    }
+    return null;
 }
 
 /// Resolve one selected dispatch target. Revisiting an edge is the common
@@ -37403,6 +38097,22 @@ fn resolveDispatchTargetMethodVar(
     // directly. The edge keeps its state key only if a later same-target
     // descendant could compare against it.
     if (!self.hasSameTargetDispatchAncestor(constraint, parent_constraint_fn_var, method_lookup)) {
+        // Only a replayable binding's edges can replay or become sources.
+        const replay_eligible = self.dispatch_replay_bindings.count() != 0 and
+            self.dispatch_replay_bindings.contains(dispatchReplayBinding(method_lookup)) and try self.dispatchReplayEligible(
+            dispatcher_var,
+            parent_constraint_fn_var,
+            constraint,
+            method_lookup,
+            cycle_method_expr_var,
+            predeclared_scheme_for_method,
+        );
+        var replay_shape_hash: ?u64 = null;
+        if (replay_eligible) {
+            const attempt = try self.attemptDispatchReplay(dispatcher_var, constraint, method_lookup, dispatch_value, env, region);
+            if (attempt.method_var) |method_var| return method_var;
+            replay_shape_hash = attempt.shape_hash;
+        }
         const state_type_key: ?[32]u8 = if (try self.dispatchEdgeCanBeSameTargetAncestor(
             constraint,
             method_lookup,
@@ -37411,13 +38121,15 @@ fn resolveDispatchTargetMethodVar(
         ))
             try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, dispatch_value, env)
         else blk: {
-            try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
+            // A replay attempt has already normalized the rows.
+            if (!replay_eligible) try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
             break :blk null;
         };
         return try self.instantiateDispatchTargetMethodVar(
             dispatcher_var,
             parent_constraint_fn_var,
             state_type_key,
+            replay_shape_hash,
             false,
             constraint,
             method_lookup,
@@ -37469,6 +38181,7 @@ fn resolveDispatchTargetMethodVar(
         dispatcher_var,
         parent_constraint_fn_var,
         state_type_key,
+        null,
         grew_from_ancestor,
         constraint,
         method_lookup,
@@ -38308,7 +39021,10 @@ fn resumeStaticDispatchDrain(
                         break :fn_result probed_result;
                     };
                     switch (fn_result) {
-                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .unified => {
+                            try self.recordSuccessfulStaticDispatch(constraint);
+                            if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
+                        },
                         .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                             try self.markStaticDispatchRejected(constraint);
@@ -38628,7 +39344,10 @@ fn resumeStaticDispatchDrain(
                         },
                     });
                     switch (fn_result) {
-                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .unified => {
+                            try self.recordSuccessfulStaticDispatch(constraint);
+                            if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
+                        },
                         .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                             try self.markStaticDispatchRejected(constraint);

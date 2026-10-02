@@ -8429,6 +8429,53 @@ depth bound and cannot exhaust the native stack at any depth. Rejection
 poisons only the cyclic relation and does not discard unrelated queued
 relations.
 
+Concrete dispatch replay is a mechanism, not a typing rule: it selects a
+target exactly as a fresh instantiation would, without instantiating it. An
+edge is eligible when it is a root edge (no parent derivation, so its own
+selection and every requirement beneath it are judged on the same empty
+lineage), its receiver is ground (no flex, rigid, unbound effect, error, or
+invalid declaration anywhere), its method's scheme is final and has no
+explicit requirements, it is not a literal conversion, and no probe is active.
+A root edge outside any probe, not a literal conversion, whose target instance
+resolved nested requirements and is ground right after its callable relation
+is established—before anything else can refine it—makes its method binding
+replayable; when the edge is also eligible and encoded its replay shape, it
+becomes the source for that shape. Replay saves resolving those nested
+requirements; an instance without any is cheaper to instantiate than to
+replay, so such an edge never marks its binding. A replay shape is the
+selected binding and method plus the receiver and callable exactly as stored:
+descriptor flags and content in depth-first order, variables numbered by first
+appearance, and attached constraints omitted, since each is a separate
+relation settled on its own receiver. Equal shapes are equal types up to
+renaming, so relating a fresh instance to either yields the same ground
+instance, and the instance's requirements have ground receivers and final
+targets, so they select the same targets.
+
+A later eligible edge with an equal shape replays the source once every
+requirement the source's instance carried, recursively, has settled without
+rejection, and only while the source's instance is still ground: a source
+whose own context later refined or poisoned it replays nothing. The replay
+walks the source's instance and the edge's callable together. Where the
+callable already has structure the shapes guarantee it is the instance's, so
+it is kept as is; each callable variable is related to its own copy of the
+instance subtree at its position, exactly what relating the callable to a
+fresh instance would bind it to. The edge never receives the source's
+variables, so a failure in either edge's context cannot reach the other. A
+walk that finds the two stored layouts differ at some position (equal rows
+stored in different orders) replays nothing. The edge's scheme-use record is
+an ordinary dispatch-target record whose substitution names the callable node
+at each instance position and whose nested-requirement callables are the
+source's settled ones, which mention only ground types; evidence construction
+therefore treats it like any other edge's record. Eligibility and shape keys
+are computed only for bindings already proven replayable, so a method without
+nested requirements, or one whose instances never settle ground (one whose
+result depends on a callback's own requirements, for example), pays nothing.
+The accepted side is pinned by the checker test "concrete dispatch replay
+reuses a settled ground target across uses" and the eval test "replayed method
+chain computes each use's own values"; the rejected sides by "concrete
+dispatch replay keys each call's own argument types" and "concrete dispatch
+replay never selects a method whose scheme is still being checked".
+
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
 constraint production to quiescence. Capture transfers a settled local codec
@@ -9805,6 +9852,13 @@ Other solved-graph mutations:
   callable's argument and result variables stay bound to the relation that
   every later use instantiates; a probe that cannot establish the pair keeps
   the copy as an explicit requirement.
+- `replayDispatchTarget`—mechanism: concrete dispatch replay (Pending
+  Dispatch Requirements In Type Schemes, above). A root edge with a ground
+  receiver and a final method without explicit requirements relates each
+  variable of its callable to a copy of the matching subtree of an
+  equal-shaped source's ground instance instead of a fresh instantiation,
+  and records the source's settled nested requirements as its own; it writes
+  exactly the instance and evidence a fresh instantiation would.
 - `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). Two triggers: the explicit derivation chain and
   alpha-normalized receiver + callable digest prove that target selection has

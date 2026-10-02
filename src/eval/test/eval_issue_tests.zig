@@ -4343,4 +4343,37 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .problem_and_crash = {} },
     },
+    .{
+        // Concrete dispatch replay: later uses of `big` select each `step`
+        // from the first use's settled instance, and publish its `bump`.
+        .name = "issue 11801: replayed method chain computes each use's own values",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\  step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\  step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\}
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\  bump : Cnt -> Cnt
+        \\  bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\  pair_with : Cnt, b -> (Cnt, b)
+        \\  pair_with = |c, x| (c, x)
+        \\}
+        \\
+        \\big = |a| a.step().step().step()
+        \\
+        \\value : Wrap(Cnt) -> I64
+        \\value = |Wrap.W(Cnt.Cnt(n))| n
+        \\
+        \\small : (Cnt, U8)
+        \\small = Cnt.Cnt(1.I64).pair_with(200)
+        \\
+        \\wide : (Cnt, I32)
+        \\wide = Cnt.Cnt(2.I64).pair_with(-70000)
+        \\
+        \\main = (value(big(Wrap.W(Cnt.Cnt(0.I64)))), value(big(Wrap.W(Cnt.Cnt(10.I64)))), value(Wrap.W(Cnt.Cnt(5.I64)).step()), small.1, wide.1)
+        ,
+        .expected = .{ .inspect_str = "(3, 13, 6, 200, -70000)" },
+    },
 };
