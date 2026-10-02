@@ -17920,10 +17920,9 @@ fn emitStrFromUtf8Lossy(self: *Self, list_arg: ProcLocalId) Allocator.Error!void
         try self.emitLoadOp(.i32, 0);
         try self.emitLocalSet(data_ptr);
 
-        // `str_from_utf8_lossy` is an allocating primitive in LIR. Keep the
-        // Wasm lowering faithful to that contract instead of reinterpreting
-        // the input List allocation as the returned Str. ARC releases the
-        // input independently after this operation.
+        // This lowering copies the borrowed input into an owned result.
+        // The operation permits allocation or sharing; ARC releases the input
+        // independently after this operation.
         try self.emitHeapAllocWithRefcount(len, 1, false);
         const result_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLocalSet(result_data);

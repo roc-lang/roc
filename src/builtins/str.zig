@@ -3991,6 +3991,35 @@ test "fromUtf8Lossy: shared input survives releasing result" {
     try testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
+test "fromUtf8Lossy: uppercase preserves borrowed bytes and seamless slices" {
+    const inputs = [_][]const u8{ "abc", "abcdefghijklmnopqrstuvwxyz0123456789" };
+    for (inputs) |raw| {
+        for ([_]bool{ false, true }) |sliced| {
+            var test_env = TestEnv.init(std.testing.allocator);
+            defer test_env.deinit();
+            const ops = test_env.getOps();
+            const list = RocList.fromSlice(u8, raw, false, ops);
+            defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+            const bytes = if (sliced)
+                @import("list.zig").listSublistBorrowed(list, 1, 1, raw.len - 2, false, ops)
+            else
+                list;
+            const expected = if (sliced) raw[1 .. raw.len - 1] else raw;
+            const uppercased = strWithAsciiUppercased(fromUtf8Lossy(bytes, ops), .Immutable, ops);
+            defer uppercased.decref(ops);
+
+            try testing.expectEqualStrings(raw, list.bytes.?[0..list.len()]);
+            const original = fromUtf8Lossy(bytes, ops);
+            defer original.decref(ops);
+            try testing.expectEqualStrings(expected, original.asSlice());
+            try testing.expectEqual(expected.len, uppercased.len());
+            for (expected, uppercased.asSlice()) |before, after| {
+                try testing.expectEqual(ascii.toUpper(before), after);
+            }
+        }
+    }
+}
+
 test "fromUtf8Lossy: empty input does not allocate" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

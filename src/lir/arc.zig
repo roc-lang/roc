@@ -12265,6 +12265,47 @@ test "uniqueness: slice-producing checked op result keeps later check" {
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(trimmed));
 }
 
+// Regression for https://github.com/roc-lang/roc/issues/12003.
+test "uniqueness: from_utf8_lossy sharing a live list keeps the string mutation check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list_u8 = try f.layouts.insertList(.u8);
+    const bytes = try f.local(list_u8);
+    const string = try f.local(.str);
+    const uppercased = try f.local(.str);
+    const original = try f.local(.str);
+
+    // string = from_utf8_lossy(bytes); uppercased = uppercase(string);
+    // original = from_utf8_lossy(bytes); ret original
+    const ret = try f.ret(original);
+    const read_original = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = original,
+        .op = .str_from_utf8_lossy,
+        .rc_effect = LIR.LowLevel.str_from_utf8_lossy.rcEffect(),
+        .args = try f.span(&.{bytes}),
+        .next = ret,
+    } }, .test_fixture);
+    const uppercase = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = uppercased,
+        .op = .str_with_ascii_uppercased,
+        .rc_effect = LIR.LowLevel.str_with_ascii_uppercased.rcEffect(),
+        .args = try f.span(&.{string}),
+        .next = read_original,
+    } }, .test_fixture);
+    const convert = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = string,
+        .op = .str_from_utf8_lossy,
+        .rc_effect = LIR.LowLevel.str_from_utf8_lossy.rcEffect(),
+        .args = try f.span(&.{bytes}),
+        .next = uppercase,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{bytes}, convert, .str);
+
+    try f.run();
+    // The owned string can share bytes with the still-live input list.
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(uppercased));
+}
+
 test "uniqueness: list held by a struct keeps its runtime check" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
