@@ -437,6 +437,7 @@ const CustomCase = enum {
     build_int_interpreter_output_runs,
     build_int_dev_output_runs,
     issue_10492_build_default_app_args,
+    issue_11995_build_default_app_glibc_dev,
     issue_11453_nested_alias_json_encode,
     issue_11355_boxy_built_platform_codec_root,
     issue_11355_boxy_built_try_low_levels,
@@ -2148,6 +2149,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build executable runs correctly (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=dev executable runs correctly for test/int/app.roc", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10492: roc build default-platform executable receives args", .body = .{ .custom = .issue_10492_build_default_app_args } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11995: roc build --opt=dev default-platform executable for a glibc target runs", .body = .{ .custom = .issue_11995_build_default_app_glibc_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default-platform executable receives args (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_default_app_interpreter_args } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
@@ -3594,7 +3596,8 @@ fn runCustomCase(
         .build_int_dev_creates_output => customBuildIntCreatesOutput(io, allocator, &env, &timer, timeout_ms, .dev),
         .build_int_interpreter_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
-        .issue_10492_build_default_app_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .dev),
+        .issue_10492_build_default_app_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .dev, null),
+        .issue_11995_build_default_app_glibc_dev => customBuildDefaultAppGlibcDev(io, allocator, &env, &timer, timeout_ms),
         .issue_11453_nested_alias_json_encode => customIssue11453NestedAliasJsonEncode(io, allocator, &env, &timer, timeout_ms),
         .issue_11355_boxy_built_platform_codec_root => customBoxyBuiltEchoApp(io, allocator, &env, &timer, timeout_ms, .{
             .roc_file = "test/echo/issue_11355_platform_codec_root.roc",
@@ -3608,7 +3611,7 @@ fn runCustomCase(
             .exit = .success,
             .stdout_exact = boxy_try_low_levels_built_expected_stdout,
         }),
-        .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter),
+        .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter, null),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -7838,6 +7841,7 @@ fn customBuildDefaultAppArgs(
     timer: *harness.Timer,
     timeout_ms: u64,
     backend: OptMode,
+    target: ?[]const u8,
 ) ?TestResult {
     const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue_10492_args" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
@@ -7847,8 +7851,18 @@ fn customBuildDefaultAppArgs(
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
 
+    const target_arg: ?[]const u8 = if (target) |name|
+        std.fmt.allocPrint(allocator, "--target={s}", .{name}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err})
+    else
+        null;
+    const build_args: []const []const u8 = if (target_arg) |arg|
+        &.{ "build", opt_arg, "--no-cache", arg, out_arg }
+    else
+        &.{ "build", opt_arg, "--no-cache", out_arg };
+
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "build", opt_arg, "--no-cache", out_arg },
+        .args = build_args,
         .roc_file = "test/echo/issue_10492_build_args.roc",
         .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
     })) |failure| return failure;
@@ -7863,6 +7877,25 @@ fn customBuildDefaultAppArgs(
     })) |failure| return failure;
 
     return null;
+}
+
+/// The default platform makes no libc calls, so a default app built for a
+/// glibc target must be a static executable that runs on any Linux host of
+/// that architecture, whichever libc the host ships.
+fn customBuildDefaultAppGlibcDev(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux) return null;
+    const target: []const u8 = switch (builtin.cpu.arch) {
+        .x86_64 => "x64glibc",
+        .aarch64 => "arm64glibc",
+        else => return null,
+    };
+    return customBuildDefaultAppArgs(io, allocator, env, timer, timeout_ms, .dev, target);
 }
 
 const BoxyBuiltEchoApp = struct {
