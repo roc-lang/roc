@@ -1583,7 +1583,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .deps => |deps_args| rocDeps(&ctx, deps_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
-        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
+        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, ctx.coreCtx(), .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
             .syntax = lsp_args.debug_syntax,
@@ -13731,7 +13731,6 @@ fn runCompiledTestRoots(
         error.SymLinkLoop,
         error.SystemFdQuotaExceeded,
         error.SystemResources,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,
@@ -13992,7 +13991,6 @@ fn runCompiledLoweredTestModulesOnce(
         error.SymLinkLoop,
         error.SystemFdQuotaExceeded,
         error.SystemResources,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,

@@ -11159,7 +11159,6 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.SymLinkLoop,
         error.SystemFdQuotaExceeded,
         error.SystemResources,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,
