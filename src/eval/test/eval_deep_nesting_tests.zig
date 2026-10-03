@@ -139,7 +139,13 @@ fn codecChain(comptime n: usize) []const u8 {
 
 /// Deep-nesting eval cases, each run on a small stack under both
 /// specialization strategies.
-pub const tests = cases ++ boxyVariants(&cases) ++ boxy_cases;
+pub const tests = memoryStressCases(cases ++ boxyVariants(&cases) ++ boxy_cases);
+
+fn memoryStressCases(comptime input: anytype) @TypeOf(input) {
+    var out = input;
+    for (&out) |*case| case.serial = true;
+    return out;
+}
 
 fn nestedRecord(comptime n: usize) []const u8 {
     return repeat("{ a: ", n) ++ "1.U64" ++ repeat(" }", n);
