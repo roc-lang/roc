@@ -350,20 +350,29 @@ Representation finiteness is different from proof-query termination. Monotype
 bounds minted iterator identities at the single graph-owned construction choke
 point (`generatedIteratorNode` plus graph finalization); crossing that declared
 type-universe boundary produces the explicit `forced_dynamic` representation.
-SpecConstr's shape, substitution, structural-work, and constructor-size
-queries instead use typed proof exhaustion solely to decline an optional
-rewrite. Code-growth admission is likewise separate from rewrite-legality proof: a
-growth limit may retain the ordinary shared control-flow form after a rewrite
-has been proven legal, but it cannot change a proof result or choose a runtime
-encoding.
+SpecConstr's shape, structural-work, and constructor-size queries instead
+use typed proof exhaustion solely to decline an optional rewrite. Code-growth
+admission is likewise separate from rewrite-legality proof: a growth limit may
+retain the ordinary shared control-flow form after a rewrite has been proven
+legal, but it cannot change a proof result or choose a runtime encoding.
 
 Cycles in a constructor-specialization `Value` graph form through a nominal
 value's backing, a static-data candidate's runtime value, or a callable capture
-that reaches either edge. The size, substitution, shape, and reusability
-queries spend one shared proof-fuel value per query and preserve exhaustion in
-their result types. Constructor-size arithmetic also detects overflow instead
-of turning it into an apparent exact size. When an inline argument's finite
-size cannot be proven, the inliner binds a plain clone of its source expression;
+that reaches either edge. The size, shape, and reusability queries spend one
+shared proof-fuel value per query and preserve exhaustion in their result
+types. Substitutability is not a query: every structured value records whether
+all of its leaves are substitutable reads, and how many nodes materializing it
+produces (counting a shared sub-value once per path to it, saturating), both
+computed once from its children's corresponding fields when it is constructed. A
+value is immutable and its children are complete when it is built, and the
+substitutability of a runtime anchor or static-data candidate depends only on
+its exact runtime expression, never on its symbolic structure, so both fields
+are exact at any depth and reading them costs constant time. Substitution
+requires a substitutable value and admits it only when its expanded size is
+within an explicit code-growth limit; a larger value keeps its named binding.
+Constructor-size arithmetic also detects overflow instead of turning it into an
+apparent exact size. When an inline argument's finite size cannot be proven,
+the inliner binds a plain clone of its source expression;
 when static matching exhausts its proof fuel, it retains the runtime match. The
 value matchers (`bindPatToValue`, `bindPatToMatchValue`, `bindPatToFlowValue`),
 the field, item, and tag readers (`fieldFromValue`, `itemFromValue`,
