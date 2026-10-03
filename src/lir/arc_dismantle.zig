@@ -201,9 +201,6 @@ pub const FieldPlace = struct {
 pub const PayloadView = struct {
     view: LIR.LocalId,
     tag_discriminant: u32,
-    /// Scratch layout for the residual dispatch, borrowed from the
-    /// container's single-definition discriminant read.
-    discriminant_layout: layout_mod.Idx,
 };
 
 /// Committed field-place domain for one dismantlable container. Residual
@@ -400,7 +397,6 @@ const UnionRoot = struct {
     view: u32 = no_index,
     variant_index: u32 = 0,
     tag_discriminant: u32 = 0,
-    discriminant_layout: ?layout_mod.Idx = null,
 };
 
 const ambiguous_view: u32 = no_index - 1;
@@ -655,12 +651,6 @@ const Analysis = struct {
         const root_index = self.unionRootOf(local) orelse return;
         const entry = try self.unionEntryOf(root_index);
         entry.disqualified = true;
-    }
-
-    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
-        const root_index = self.unionRootOf(source) orelse return;
-        const entry = try self.unionEntryOf(root_index);
-        if (entry.discriminant_layout == null) entry.discriminant_layout = self.store.getLocal(target).layout_idx;
     }
 
     /// A borrowed payload view of a union root that owns every refcounted
@@ -1900,9 +1890,7 @@ pub fn compute(
                     },
                     .discriminant => |op| {
                         // The tag word is disjoint from every stored unit, so
-                        // reading it is no use of a tag union beyond lending
-                        // its layout to the residual dispatch.
-                        try analysis.noteDiscriminantRead(op.source, stmt.target);
+                        // reading it is no use of a tag union.
                         analysis.disqualify(op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
@@ -2351,7 +2339,6 @@ pub fn compute(
         const union_root: ?*UnionRoot = if (analysis.view_root[@intFromEnum(local)] != no_index) blk: {
             const root_entry = analysis.union_roots.getPtr(analysis.view_root[@intFromEnum(local)]) orelse continue :candidates;
             if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @intFromEnum(local)) continue :candidates;
-            if (root_entry.discriminant_layout == null) continue :candidates;
             break :blk root_entry;
         } else null;
 
@@ -2776,7 +2763,6 @@ pub fn compute(
                 .payload_view = .{
                     .view = local,
                     .tag_discriminant = view_root_entry.tag_discriminant,
-                    .discriminant_layout = view_root_entry.discriminant_layout.?,
                 },
             });
         } else if (owned_only) {

@@ -16996,12 +16996,15 @@ every occurrence of it must be a discriminant read, a borrowed pure alias, or
 exactly one borrowed `tag_payload_struct` view that owns every refcounted byte
 of the union (the union's other variants carry none). That view is the struct
 candidate, judged by the struct rules above; its takes spend the union's unit,
-and the union is the container ARC releases residually. A discriminant read of
-the union must exist to lend the residual dispatch its scratch layout. A second
-view, a second variant, or any other occurrence of the union keeps its whole
-release. The shape this serves is a call returning `Try` of a record whose
-fields are moved out under `Ok`: without it every such field pays a retain and
-the whole result a release, on every call.
+and the union is the container ARC releases residually. No discriminant read of
+the union needs to exist: the residual dispatch reads the discriminant into its
+own `u32` scratch local, the width of every LIR tag id, so a payload view with
+no guarding switch, because tag reachability removed it or because the union
+has a single tag, qualifies exactly like a guarded one. A second view, a second
+variant, or any other occurrence of the union keeps its whole release. The
+shape this serves is a call returning `Try` of a record whose fields are moved
+out under `Ok`: without it every such field pays a retain and the whole result
+a release, on every call.
 
 A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as
@@ -17366,12 +17369,11 @@ have to union or guess ownership. Neither ARC nor certification consults a
 backend, mutation name, source pattern, or runtime uniqueness check to recover
 this ownership state.
 
-Tag unions dismantle through their single payload view, so a union's
-claimable fields are the view struct's fields and share the struct encoding.
-A discriminant read is no use at all beyond lending its layout: the tag word
-is disjoint from every stored unit, so it needs no ordering with takes. A
-borrowed pure alias of the union carries the same unit and is no use of it
-either.
+Tag unions dismantle through their single payload view, so a union's claimable
+fields are the view struct's fields and share the struct encoding. A
+discriminant read is no use at all: the tag word is disjoint from every stored
+unit, so it needs no ordering with takes. A borrowed pure alias of the union
+carries the same unit and is no use of it either.
 
 Takes cross joins. A jump to a join declared before the candidate's
 definition leaves the analyzed region and ends that path like a return; the

@@ -1033,6 +1033,75 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(((\"capture\", 1.0), (\"capture\", \"a\")), ((42.0, 1.0), (42.0, \"a\")))" },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/12009
+        .name = "issue 12009: a Try whose caller match tag reachability folded hands its record fields on",
+        .source =
+        \\{
+        \\    step : List(U16), List(U16), U64 -> Try({ a : List(U16), b : List(U16) }, [Bug])
+        \\    step = |a, b0, i| {
+        \\        if i > 100 {
+        \\            return Ok({ a, b: b0 })
+        \\        } else {
+        \\        }
+        \\        var $b = b0
+        \\        var $j = 0.U64
+        \\        while $j < i {
+        \\            $b = match List.set($b, $j, $j.to_u16_wrap()) {
+        \\                Ok(next) => next
+        \\                Err(_) => crash "unreachable"
+        \\            }
+        \\            $j = $j + 1
+        \\        }
+        \\        Ok({ a, b: $b })
+        \\    }
+        \\
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < 8 {
+        \\        pair = match step($a, $b, $i) {
+        \\            Ok(p) => p
+        \\            Err(_) => crash "step"
+        \\        }
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    ($a.fold(0.U64, |acc, x| acc + x.to_u64()) + $b.fold(0.U64, |acc, x| acc + x.to_u64())).to_str()
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "37", .max_allocations = 2, .optimized = true } },
+    },
+    .{
+        .name = "issue 12009: a single-tag union returned from a call hands its record fields on",
+        .source =
+        \\{
+        \\    step : List(U16), List(U16), U64 -> [Pair({ a : List(U16), b : List(U16) })]
+        \\    step = |a, b0, i| {
+        \\        if i > 100 {
+        \\            return Pair({ a, b: b0 })
+        \\        } else {
+        \\        }
+        \\        Pair({ a, b: List.set(b0, i, i.to_u16_wrap()) ?? b0 })
+        \\    }
+        \\
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < 8 {
+        \\        pair = match step($a, $b, $i) {
+        \\            Pair(p) => p
+        \\        }
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    ($a.fold(0.U64, |acc, x| acc + x.to_u64()) + $b.fold(0.U64, |acc, x| acc + x.to_u64())).to_str()
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "44", .max_allocations = 2, .optimized = true } },
+    },
+    .{
         .name = "issue 10703: loop var aliasing an argument leaves argument reads loop-invariant",
         .source = issue10703LineLayoutSource,
         .expected = .{ .allocations_at_most = .{ .output = "820", .max_allocations = 32, .optimized = true } },
