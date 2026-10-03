@@ -2809,6 +2809,9 @@ const Lowerer = struct {
         // a SpecConstr clone or a second lowering of the same template has a
         // body and lowers normally.
         if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |hit| {
+            if (self.comptime_phase and !self.comptime_closure_hits) {
+                Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
+            }
             if (plain_spec) {
                 if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                     Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");

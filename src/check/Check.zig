@@ -5899,6 +5899,7 @@ fn walkSettledRoot(
     origin: Var,
     walk_stack: *std.ArrayListUnmanaged(SettledTypeReach),
     semantic_row_roots: *std.AutoHashMapUnmanaged(Var, Var),
+    visited: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!void {
     try walk_stack.append(self.gpa, .{ .var_ = origin, .starts_row = true });
     while (walk_stack.pop()) |entry| {
@@ -5907,8 +5908,8 @@ fn walkSettledRoot(
         }
 
         const resolved = self.types.resolveVar(entry.var_);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
+        if (visited.contains(resolved.var_)) continue;
+        try visited.put(resolved.var_, {});
 
         switch (resolved.desc.content) {
             .alias => |alias| {
@@ -5950,6 +5951,33 @@ fn walkSettledRoot(
     }
 }
 
+test "settled row reachability uses caller-owned scratch across all seeds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("SettledScratch", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    const shared_capacity = checker.var_set.capacity();
+    var visited = std.AutoHashMap(Var, void).init(std.testing.allocator);
+    defer visited.deinit();
+    var stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
+    defer stack.deinit(std.testing.allocator);
+    var owners: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    defer owners.deinit(std.testing.allocator);
+    var root = try store.fresh();
+    for (0..256) |_| {
+        root = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{ root, root }),
+        } } });
+    }
+    try checker.walkSettledRoot(root, &stack, &owners, &visited);
+    try std.testing.expectEqual(@as(u32, 257), visited.count());
+    try checker.walkSettledRoot(root, &stack, &owners, &visited);
+    try std.testing.expectEqual(@as(u32, 257), visited.count());
+    try std.testing.expectEqual(shared_capacity, checker.var_set.capacity());
+    try std.testing.expectEqual(@as(usize, 0), stack.items.len);
+}
+
 /// Validate every tag and record row reachable from a checked value after
 /// inference has settled. Source annotations are validated when they are
 /// materialized, but instantiating an inferred open row can repeat a label
@@ -5960,8 +5988,14 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    self.var_set.clearRetainingCapacity();
-    defer self.var_set.clearRetainingCapacity();
+    // This once-per-check walk can reach the entire published graph. Retaining
+    // that capacity in the common walk set makes every subsequent tiny walk
+    // clear a module-sized hash table. Reuse it across seeds, then release it.
+    var settled_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer settled_visited.deinit();
+    const visited = if (base.CompilerFeatures.settled_scratch) &settled_visited else &self.var_set;
+    visited.clearRetainingCapacity();
+    defer visited.clearRetainingCapacity();
 
     // Each row root maps to the first published root that reached it, which a
     // conflict report shows as the value whose type holds the row.
@@ -6001,7 +6035,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
 
     // Each seed's walk finishes before the next starts, so a row belongs to
     // the earliest source node whose type reaches it.
-    for (seeds.items) |seed| try self.walkSettledRoot(seed, &walk_stack, &semantic_row_roots);
+    for (seeds.items) |seed| try self.walkSettledRoot(seed, &walk_stack, &semantic_row_roots, visited);
 
     var row_roots: std.ArrayListUnmanaged(Var) = .empty;
     defer row_roots.deinit(self.gpa);
@@ -7889,6 +7923,25 @@ fn instantiateVarWithSubsPolarized(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
 ) std.mem.Allocator.Error!Var {
+    return self.instantiateVarWithSubsPolarizedFromScheme(var_to_instantiate, var_to_instantiate, subs, env, region_behavior, polarity_behavior, polarity, reach, .instantiation);
+}
+
+/// A constructor projection changes the structural copy root, not the source
+/// of the declaration's off-root obligations.
+const NominalOpeningPurpose = enum { instantiation, diagnostic };
+
+fn instantiateVarWithSubsPolarizedFromScheme(
+    self: *Self,
+    var_to_instantiate: Var,
+    scheme_source: Var,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+    polarity_behavior: PolarityVarBehavior,
+    polarity: Polarity,
+    reach: Instantiator.AdapterReach,
+    purpose: NominalOpeningPurpose,
+) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -7912,7 +7965,14 @@ fn instantiateVarWithSubsPolarized(
         .nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition },
         .alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused },
     };
-    const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
+    if (purpose == .diagnostic) {
+        self.var_map.clearRetainingCapacity();
+        const fresh_start = self.types.len();
+        const copied = try instantiate_ctx.instantiateVar(var_to_instantiate);
+        try self.registerExpectedShapeVars(fresh_start, env);
+        return copied;
+    }
+    const instantiated = try self.instantiateVarHelpFromScheme(var_to_instantiate, scheme_source, &instantiate_ctx, env, region_behavior, false, .none);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     return instantiated;
 }
@@ -7952,6 +8012,19 @@ fn instantiateVarHelp(
     force_type_scheme_root: bool,
     evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
+    return self.instantiateVarHelpFromScheme(var_to_instantiate, var_to_instantiate, instantiator, env, region_behavior, force_type_scheme_root, evidence);
+}
+
+fn instantiateVarHelpFromScheme(
+    self: *Self,
+    var_to_instantiate: Var,
+    scheme_source: Var,
+    instantiator: *Instantiator,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+    force_type_scheme_root: bool,
+    evidence: InstantiationEvidence,
+) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -7962,7 +8035,7 @@ fn instantiateVarHelp(
     const shape_validation = if (target) |site| site.shape_validation else false;
 
     if (!shape_validation) {
-        try self.enqueueLocalSchemeRequirements(var_to_instantiate, env);
+        try self.enqueueLocalSchemeRequirements(scheme_source, env);
     }
 
     // First, reset state
@@ -7988,7 +8061,7 @@ fn instantiateVarHelp(
     // while every use receives an independent callable relation.
     var instantiated_requirements: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty;
     defer instantiated_requirements.deinit(self.gpa);
-    if (self.typeSchemeIndexForRoot(var_to_instantiate)) |scheme_idx| {
+    if (self.typeSchemeIndexForRoot(scheme_source)) |scheme_idx| {
         try self.copySchemeDispatchRequirements(
             scheme_idx,
             instantiator,
@@ -8134,14 +8207,14 @@ fn instantiateVarHelp(
         try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
         // Nonempty substitutions already require a record; only an empty
         // substitution needs to query whether shared requirements need one.
-        if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(var_to_instantiate)) {
+        if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(scheme_source)) {
             const slot: ModuleEnv.SchemeUseRecord.Slot, const node_idx: u32, const slot_data: u32 = switch (evidence) {
                 .none => unreachable,
                 .value_use => |expr| .{ .value_use, @intFromEnum(expr), 0 },
                 .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), @intFromEnum(instantiated_var) },
                 .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @intFromEnum(site.constraint_fn_var) },
             };
-            try self.cir.recordSchemeUse(node_idx, slot, slot_data, var_to_instantiate, self.scratch_evidence_pairs.items);
+            try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_source, self.scratch_evidence_pairs.items);
         }
         self.scratch_evidence_pairs.clearRetainingCapacity();
     }
@@ -19975,6 +20048,7 @@ fn checkPatternHelp(
                 env,
                 .exact,
                 null,
+                self.ownedPatternConstructorTag(nominal.backing_pattern, ctx),
             );
             if (result == .err) valid.* = false;
         },
@@ -19994,6 +20068,7 @@ fn checkPatternHelp(
                     env,
                     .exact,
                     null,
+                    self.ownedPatternConstructorTag(nominal.backing_pattern, ctx),
                 );
                 if (result == .err) valid.* = false;
             } else {
@@ -20735,6 +20810,210 @@ fn borrowExpectedRecordField(self: *Self, base_var: Var, name: Ident.Idx, env: *
         current = ext orelse return null;
         allow_nominal = false;
     }
+}
+
+/// Borrowed slots are not mutable solver inputs. A nominal descriptor records
+/// the substitution required to turn its declaration slots into owned context.
+const BorrowedTagPayload = struct {
+    args: Var.SafeList.Range,
+    nominal: ?types_mod.NominalType,
+};
+
+fn borrowExpectedTagPayload(self: *Self, source: Var, name: Ident.Idx) ?BorrowedTagPayload {
+    var current = source;
+    var nominal: ?types_mod.NominalType = null;
+    var allow_nominal = true;
+    var checkpoint = self.types.resolveVar(source).var_;
+    var period: usize = 1;
+    var distance: usize = 0;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (distance > 0 and resolved.var_ == checkpoint) return null;
+        if (distance == period) {
+            checkpoint = resolved.var_;
+            period *= 2;
+            distance = 0;
+        }
+        distance += 1;
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tags| {
+                    const slice = self.types.getTagsSlice(tags.tags);
+                    for (slice.items(.name), slice.items(.args)) |tag_name, args| {
+                        if (tag_name.eql(name)) return .{ .args = args, .nominal = nominal };
+                    }
+                    current = tags.ext;
+                    allow_nominal = false;
+                },
+                .nominal_type => |application| {
+                    if (!allow_nominal or !application.canLiftInner(self.cir.selfModuleIdentity())) return null;
+                    const decl_idx = self.types.lookupNominalDecl(application) orelse return null;
+                    const decl = self.types.getNominalDecl(decl_idx);
+                    if (!decl.isValid()) return null;
+                    nominal = application;
+                    current = decl.backing;
+                    allow_nominal = false;
+                },
+                .empty_record, .empty_tag_union, .record, .tuple, .fn_pure, .fn_unbound, .fn_effectful => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
+}
+
+/// Expected Shape Context, projected by syntactic tag identity. No borrowed
+/// template cell reaches a unifier; all slots share one owned substitution.
+/// The full enclosing relation remains responsible for diagnosing rejection.
+fn projectExpectedTagPayload(
+    self: *Self,
+    expected: Expected,
+    name: Ident.Idx,
+    arity: usize,
+    env: *Env,
+) Allocator.Error!?Var.SafeList.Range {
+    const aggregate_type = expected.aggregateType() orelse return null;
+    var commit_probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+
+    const source = if (aggregate_type.record_field) |field|
+        try self.borrowExpectedRecordField(aggregate_type.var_, field, env) orelse return null
+    else
+        aggregate_type.var_;
+    self.var_set.clearRetainingCapacity();
+    const contains_error = try self.varContainsError(source, &self.var_set);
+    self.var_set.clearRetainingCapacity();
+    if (contains_error) return null;
+    const payload = self.borrowExpectedTagPayload(source, name) orelse return null;
+    if (payload.args.len() != arity) return null;
+
+    const fresh_start = self.types.len();
+    self.var_map.clearRetainingCapacity();
+    var copier = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .rank_behavior = .ignore_rank,
+        .purpose = .expected_shape,
+        .preserve_annotation_tag_ext = true,
+    };
+    var substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty;
+    defer substitutions.deinit(self.gpa);
+    const scratch_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(scratch_top);
+    if (payload.nominal) |nominal| {
+        const decl = self.types.getNominalDecl(self.types.lookupNominalDecl(nominal).?);
+        const actuals = types_mod.Store.getNominalArgsRange(nominal);
+        std.debug.assert(decl.formals.len() == actuals.len());
+        // Copy all actuals before seeding template roots: actual arguments
+        // belong to the caller's scope, not the declaration's rigid namespace.
+        for (0..actuals.len()) |index| {
+            const actual = self.types.getVarAt(actuals, @intCast(index));
+            try self.scratch_vars.append(try copier.instantiateVar(actual));
+        }
+        for (0..decl.formals.len()) |index| {
+            const formal = self.types.resolveVar(self.types.getVarAt(decl.formals, @intCast(index)));
+            const actual = self.scratch_vars.sliceFromStart(scratch_top)[index];
+            try self.var_map.put(formal.var_, actual);
+            if (formal.desc.content == .rigid) {
+                try substitutions.put(self.gpa, formal.desc.content.rigid.name, actual);
+            }
+        }
+        self.scratch_vars.clearFrom(scratch_top);
+        copier.rigid_behavior = .{ .substitute_rigids_flex = &substitutions };
+    }
+    for (0..arity) |index| {
+        const slot = self.types.getVarAt(payload.args, @intCast(index));
+        try self.scratch_vars.append(try copier.instantiateVar(slot));
+    }
+    try self.registerExpectedShapeVars(fresh_start, env);
+    const copied_args = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_top));
+    committed = true;
+    commit_probe.commit();
+    return copied_args;
+}
+
+test "tag projection copies selected slots together without copying other variants" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("Projection", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    var env = try checker.env_pool.acquire();
+    defer checker.env_pool.release(env);
+    const selected = try test_env.module_env.insertIdent(Ident.for_text("Selected"));
+    const other = try test_env.module_env.insertIdent(Ident.for_text("Other"));
+    const missing = try test_env.module_env.insertIdent(Ident.for_text("Missing"));
+    const shared = try store.fresh();
+    var unrelated = try store.fresh();
+    for (0..128) |_| {
+        unrelated = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{unrelated}),
+        } } });
+    }
+    const expected_union = try store.freshFromContent(try store.mkTagUnion(&.{
+        try store.mkTag(other, &.{unrelated}),
+        try store.mkTag(selected, &.{ shared, shared }),
+    }, try store.freshFromContent(.{ .structure = .empty_tag_union })));
+    try checker.fillInRegionsThrough(expected_union);
+    const expected = Expected.none().withContextualType(.{ .var_ = expected_union, .context = .none });
+    const before = store.len();
+    const slots = (try checker.projectExpectedTagPayload(expected, selected, 2, &env)).?;
+    // One repeated flex leaf, not a row head, extension, or unrelated tuple.
+    try std.testing.expectEqual(@as(u64, 1), store.len() - before);
+    const first = store.getVarAt(slots, 0);
+    try std.testing.expectEqual(first, store.getVarAt(slots, 1));
+    try std.testing.expect(first != shared);
+    const second_slots = (try checker.projectExpectedTagPayload(expected, selected, 2, &env)).?;
+    try std.testing.expect(first != store.getVarAt(second_slots, 0));
+    const empty_record = try checker.freshFromContent(.{ .structure = .empty_record }, &env, Region.zero());
+    _ = try checker.commitProjectedStoredValue(first, empty_record, &env);
+    try std.testing.expect(store.resolveVar(shared).desc.content == .flex);
+    try std.testing.expect(store.resolveVar(store.getVarAt(second_slots, 0)).desc.content == .flex);
+
+    const before_rejection = store.len();
+    try std.testing.expectEqual(@as(?Var.SafeList.Range, null), try checker.projectExpectedTagPayload(expected, missing, 2, &env));
+    try std.testing.expectEqual(@as(?Var.SafeList.Range, null), try checker.projectExpectedTagPayload(expected, selected, 1, &env));
+    try std.testing.expectEqual(before_rejection, store.len());
+}
+
+test "tag projection guides optional records and preserves real dispatch obligations" {
+    const TestEnv = @import("test/TestEnv.zig");
+    {
+        var test_env = try TestEnv.init("Projection",
+            \\Envelope := [Wrap(List({ count ?: U32 })), Empty]
+            \\value : Envelope
+            \\value = Envelope.Wrap([{}, { count: 1 }])
+        );
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+    }
+    {
+        var test_env = try TestEnv.init("Projection",
+            \\Envelope(a) := [Wrap(a), Empty]
+            \\bad : Envelope(Str)
+            \\bad = Envelope.Wrap("not numeric" + 1)
+        );
+        defer test_env.deinit();
+        try test_env.assertFirstTypeError("Missing Method");
+    }
+}
+
+test "tag projection carries numeric and from_quote context into optional record payloads" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Projection",
+        \\Quoted := [Quoted(Str)].{
+        \\    from_quote : Str -> Try(Quoted, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok(Quoted(text))
+        \\}
+        \\Envelope := [Wrap(List({ count ?: U32, text ?: Quoted })), Empty]
+        \\value = Envelope.Wrap([{}, { count: 1, text: "hello" }])
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
 /// Materialize expected structure only when an aggregate consumes it. Shape
@@ -21684,7 +21963,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
-            try self.unifyWith(expr_var, tag_union_content, env);
+            if (!try self.relateOwnedTagToExpectedNominal(expr_var, .{ .name = e.name, .arity = 0 }, tag_union_content, nested_expected, env, expr_region)) {
+                try self.unifyWith(expr_var, tag_union_content, env);
+            }
         },
         .e_tag => |e| {
             const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
@@ -21697,6 +21978,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // grounds and discharges the expected type's constraints.
                 if (arg_expr_idx_slice.len == 0) break :projected null;
                 _ = nested_expected.aggregateType() orelse break :projected null;
+                if (base.CompilerFeatures.tag_projection) {
+                    break :projected try self.projectExpectedTagPayload(nested_expected, e.name, arg_expr_idx_slice.len, env);
+                }
                 const projected_top = self.scratch_vars.top();
                 defer self.scratch_vars.clearFrom(projected_top);
                 for (arg_expr_idx_slice) |_| {
@@ -21747,7 +22031,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
-            try self.unifyWith(expr_var, tag_union_content, env);
+            if (!try self.relateOwnedTagToExpectedNominal(expr_var, .{ .name = e.name, .arity = arg_expr_idx_slice.len }, tag_union_content, nested_expected, env, expr_region)) {
+                try self.unifyWith(expr_var, tag_union_content, env);
+            }
         },
         // nominal //
         .e_nominal => |nominal| {
@@ -21757,6 +22043,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 ModuleEnv.varFrom(nominal.nominal_type_decl),
                 expr_region,
                 env,
+                self.ownedExprConstructorTag(nominal.backing_expr),
             );
             const backing_expected = if (prepared) |usage|
                 child_expected.withContextualType(.{
@@ -21791,6 +22078,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     ext_ref.local_var,
                     expr_region,
                     env,
+                    self.ownedExprConstructorTag(nominal.backing_expr),
                 )
             else prepared: {
                 try self.markErroneous(expr_var);
@@ -27942,6 +28230,17 @@ fn openNominalBackingForApp(
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
+    return self.openNominalBackingFromTemplate(nominal_type, null, env, region, .instantiation);
+}
+
+fn openNominalBackingFromTemplate(
+    self: *Self,
+    nominal_type: types_mod.NominalType,
+    projected_template: ?Var,
+    env: *Env,
+    region: Region,
+    purpose: NominalOpeningPurpose,
+) std.mem.Allocator.Error!?Var {
     const decl_idx = self.types.lookupNominalDecl(nominal_type) orelse {
         if (nominal_type.sourceDecl().present) {
             if (builtin.mode == .Debug) {
@@ -27974,17 +28273,228 @@ fn openNominalBackingForApp(
         try self.rigid_var_substitutions.put(self.gpa, formal_resolved.rigid.name, arg_var);
     }
 
-    return try self.instantiateVarWithSubs(
+    return try self.instantiateVarWithSubsPolarizedFromScheme(
+        projected_template orelse decl.backing,
         decl.backing,
         &self.rigid_var_substitutions,
         env,
         .{ .explicit = region },
+        .close,
+        .pos,
+        .nested,
+        purpose,
     );
+}
+
+const ConstructorTag = struct {
+    name: Ident.Idx,
+    arity: usize,
+};
+
+test "constructor projection retains nominal identity and sparse owned children" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Constructors",
+        \\Tree(a) := [Leaf(a), Branch(Tree(a), Tree(a)), Empty]
+        \\number : Tree(U32)
+        \\number = Tree.Leaf(1)
+        \\text : Tree(Str)
+        \\text = Tree.Leaf("one")
+        \\tree : Tree(U32)
+        \\tree = Tree.Branch(number, Tree.Empty)
+        \\implicit_tree : Tree(U32)
+        \\implicit_tree = Empty
+        \\good : Try(U32, Str)
+        \\good = Ok(1)
+        \\bad : Try(U32, Str)
+        \\bad = Err("failed")
+        \\yes : Bool
+        \\yes = True
+        \\no : Bool
+        \\no = False
+        \\read : Tree(U32) -> U32
+        \\read = |input| match input {
+        \\    Tree.Leaf(n) => n
+        \\    Tree.Branch(_, _) => 0
+        \\    Tree.Empty => 0
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("number", "Tree(U32)");
+    try test_env.assertDefType("text", "Tree(Str)");
+    if (base.CompilerFeatures.constructor_projection) {
+        var constructors: usize = 0;
+        var checked_growth = false;
+        var index: u32 = 0;
+        while (index < test_env.module_env.store.nodes.len()) : (index += 1) {
+            const node: CIR.Node.Idx = @enumFromInt(index);
+            if (!isExprNodeTag(test_env.module_env.store.nodes.get(node).tag)) continue;
+            const expr = test_env.module_env.store.getExpr(@enumFromInt(index));
+            if (expr != .e_nominal) continue;
+            const child = ModuleEnv.varFrom(expr.e_nominal.backing_expr);
+            const content = test_env.checker.types.resolveVar(child).desc.content;
+            try std.testing.expect(content == .structure and content.structure == .tag_union);
+            try std.testing.expectEqual(@as(u32, 1), content.structure.tag_union.tags.len());
+            const tail = test_env.checker.types.resolveVar(content.structure.tag_union.ext).desc.content;
+            try std.testing.expect(tail == .structure and tail.structure == .empty_tag_union);
+            if (!checked_growth) {
+                const checker = &test_env.checker;
+                const nominal = checker.types.resolveVar(@enumFromInt(index)).desc.content.structure.nominal_type;
+                const empty = try test_env.module_env.insertIdent(Ident.for_text("Empty"));
+                var env = try checker.env_pool.acquire();
+                defer checker.env_pool.release(env);
+                const before = checker.types.len();
+                const template = (try checker.selectedConstructorTemplate(nominal, .{ .name = empty, .arity = 0 }, Region.zero())).?;
+                _ = (try checker.openNominalBackingFromTemplate(nominal, template, &env, Region.zero(), .instantiation)).?;
+                // One transient template, its owned row, and its empty tail:
+                // neither recursive alternative nor unused argument is copied.
+                try std.testing.expect(checker.types.len() - before <= 3);
+                checked_growth = true;
+            }
+            constructors += 1;
+        }
+        try std.testing.expect(constructors >= 4);
+        var patterns: usize = 0;
+        index = 0;
+        while (index < test_env.module_env.store.nodes.len()) : (index += 1) {
+            if (!isPatternNodeTag(test_env.module_env.store.nodes.get(@enumFromInt(index)).tag)) continue;
+            const pattern = test_env.module_env.store.getPattern(@enumFromInt(index));
+            const backing = switch (pattern) {
+                .nominal => |nominal| nominal.backing_pattern,
+                .nominal_external => |nominal| nominal.backing_pattern,
+                else => continue,
+            };
+            const content = test_env.checker.types.resolveVar(ModuleEnv.varFrom(backing)).desc.content;
+            try std.testing.expect(content == .structure and content.structure == .tag_union);
+            try std.testing.expectEqual(@as(u32, 1), content.structure.tag_union.tags.len());
+            const tail = test_env.checker.types.resolveVar(content.structure.tag_union.ext).desc.content;
+            try std.testing.expect(tail == .structure and tail.structure == .empty_tag_union);
+            patterns += 1;
+        }
+        try std.testing.expect(patterns >= 3);
+    }
+}
+
+test "constructor projection rejects incompatible selected payloads" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Constructors",
+        \\Choice := [Number(U32), Text(Str)]
+        \\bad = Choice.Number("wrong")
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+/// Direct expected types are typing authority, unlike contextual scheme
+/// guidance. Consume that authority at the syntax-owned producer rather than
+/// first creating a structural row whose complementary variants would escape.
+fn relateOwnedTagToExpectedNominal(
+    self: *Self,
+    target: Var,
+    constructor: ConstructorTag,
+    content: Content,
+    expected: Expected,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    if (!base.CompilerFeatures.constructor_projection) return false;
+    const expectation = expected.expected_type orelse return false;
+    if (expectation.record_field != null) return false;
+    var current = expectation.var_;
+    var remaining = self.types.len();
+    const nominal = found: while (remaining > 0) : (remaining -= 1) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |application| break :found application,
+                else => return false,
+            },
+            else => return false,
+        }
+    } else return false;
+    if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return false;
+    var probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) probe.rollback();
+    const template = try self.selectedConstructorTemplate(nominal, constructor, region) orelse return false;
+    const backing = (try self.openNominalBackingFromTemplate(nominal, template, env, region, .instantiation)) orelse return false;
+    const actual = try self.freshFromContent(content, env, region);
+    if (!(try probe.unify(backing, actual)).isEstablished()) return false;
+    if (!(try probe.unify(target, expectation.var_)).isEstablished()) return false;
+    committed = true;
+    probe.commit();
+    return true;
+}
+
+/// Only direct syntax owns the construction's fresh row extension. A lookup,
+/// call, or arbitrary solved structural union cannot provide this authority.
+fn ownedExprConstructorTag(self: *Self, expr_idx: CIR.Expr.Idx) ?ConstructorTag {
+    if (!base.CompilerFeatures.constructor_projection) return null;
+    return switch (self.cir.store.getExpr(expr_idx)) {
+        .e_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.sliceExpr(tag.args).len },
+        .e_zero_argument_tag => |tag| .{ .name = tag.name, .arity = 0 },
+        else => null,
+    };
+}
+
+fn ownedPatternConstructorTag(self: *Self, pattern_idx: CIR.Pattern.Idx, ctx: PatternCtx) ?ConstructorTag {
+    if (!base.CompilerFeatures.constructor_projection or ctx.row_openness != .open) return null;
+    return switch (self.cir.store.getPattern(pattern_idx)) {
+        .applied_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.slicePatterns(tag.args).len },
+        else => null,
+    };
+}
+
+/// Build a transient copy root, never a solver operand. Its declaration
+/// children are read only by the instantiator; the returned owned copy is the
+/// only graph that participates in the constructor membership relation.
+fn selectedConstructorTemplate(
+    self: *Self,
+    nominal: types_mod.NominalType,
+    constructor: ConstructorTag,
+    region: Region,
+) Allocator.Error!?Var {
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return null;
+    const decl = self.types.getNominalDecl(decl_idx);
+    if (!decl.isValid()) return null;
+    var current = decl.backing;
+    var selected: ?Var.SafeList.Range = null;
+    // A row has one successor; more steps than cells proves a cycle.
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |row| {
+                    const tags = self.types.getTagsSlice(row.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| {
+                        if (!name.eql(constructor.name)) continue;
+                        // Repeated labels require ordinary row normalization.
+                        if (selected != null or args.len() != constructor.arity) return null;
+                        selected = args;
+                    }
+                    current = row.ext;
+                },
+                .empty_tag_union => {
+                    const args = selected orelse return null;
+                    const content = try self.types.mkTagUnion(&.{.{ .name = constructor.name, .args = args }}, current);
+                    const template = try self.types.freshFromContentWithRank(content, .generalized);
+                    try self.fillInRegionsThrough(template);
+                    self.setRegionAt(template, region);
+                    return template;
+                },
+                else => return null,
+            },
+            else => return null,
+        }
+    }
+    return null;
 }
 
 const PreparedNominalTypeUsage = struct {
     nominal_var: Var,
     backing_var: Var,
+    projected: bool = false,
 };
 
 /// Instantiate and explicitly open a nominal application before checking its
@@ -27997,6 +28507,7 @@ fn prepareNominalTypeUsage(
     nominal_type_decl_var: Var,
     region: Region,
     env: *Env,
+    constructor: ?ConstructorTag,
 ) std.mem.Allocator.Error!?PreparedNominalTypeUsage {
     const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region }, .none);
     const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
@@ -28022,7 +28533,8 @@ fn prepareNominalTypeUsage(
         // substituted for the declaration's formals.
         // E.g. ConList(a) := [Cons(a, ConstList), Nil]
         //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-        const nominal_backing_var = (try self.openNominalBackingForApp(nominal_type, env, region)) orelse {
+        const projected_template = if (constructor) |tag| try self.selectedConstructorTemplate(nominal_type, tag, region) else null;
+        const nominal_backing_var = (try self.openNominalBackingFromTemplate(nominal_type, projected_template, env, region, .instantiation)) orelse {
             // The declaration is invalid (already reported) or unresolvable;
             // poison this use silently.
             try self.markErroneous(target_var);
@@ -28032,6 +28544,7 @@ fn prepareNominalTypeUsage(
         return .{
             .nominal_var = nominal_var,
             .backing_var = nominal_backing_var,
+            .projected = projected_template != null,
         };
     } else if (nominal_resolved == .err) {
         // The declaration itself is poisoned (malformed backing or invalid
@@ -28063,6 +28576,36 @@ fn finishNominalTypeUsage(
     row_width_relation: unifier.RowWidthRelation,
     owner_expr: ?CIR.Expr.Idx,
 ) std.mem.Allocator.Error!NominalCheckResult {
+    if (prepared.projected) {
+        // Producer-Owned Single-Tag Construction: an ordinary relation between
+        // owned selected payloads proves membership. The constructor's child
+        // keeps its sparse row; only the outer node publishes nominal identity.
+        const context: problem.Context = .{ .nominal_constructor = .{
+            .backing_type = @enumFromInt(@intFromEnum(backing_type)),
+        } };
+        const result = try self.runUnify(prepared.backing_var, actual_backing_var, env, .{
+            .context = context,
+            .on_mismatch = .write_no_report,
+            .root_relation = .nominal_constructor_backing,
+            .row_width_relation = row_width_relation,
+        });
+        switch (result) {
+            .unified => {
+                _ = try self.unify(target_var, prepared.nominal_var, env);
+                return .ok;
+            },
+            .suppressed_by_error => {},
+            .problem, .mismatch => {
+                // Reporting owns the complete expected shape, but must not
+                // introduce a second use's dispatch/defaulting obligations.
+                const nominal = self.types.resolveVar(prepared.nominal_var).desc.content.structure.nominal_type;
+                const full_backing = (try self.openNominalBackingFromTemplate(nominal, null, env, self.getRegionAt(target_var), .diagnostic)).?;
+                _ = try self.appendTypeMismatch(full_backing, actual_backing_var, context);
+            },
+        }
+        try self.markErroneous(target_var);
+        return .err;
+    }
     const nominal_backing_var = prepared.backing_var;
 
     // Convert CIR.Expr.NominalBackingType to the diagnostic context's backing
@@ -28126,6 +28669,7 @@ fn checkNominalTypeUsage(
     env: *Env,
     row_width_relation: unifier.RowWidthRelation,
     owner_expr: ?CIR.Expr.Idx,
+    constructor: ?ConstructorTag,
 ) std.mem.Allocator.Error!NominalCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -28135,6 +28679,7 @@ fn checkNominalTypeUsage(
         nominal_type_decl_var,
         region,
         env,
+        constructor,
     )) orelse return .err;
     return self.finishNominalTypeUsage(
         target_var,

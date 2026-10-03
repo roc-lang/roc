@@ -22605,7 +22605,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("degenerate checked match alternative reached boxy lowering");
             }
             const remaps = branch_pattern.binderRemapsSlice(self.module.checked_bodies);
-            const needs_miss_join = try self.patternCanMiss(branch_pattern.pattern);
+            const needs_miss_join = try self.patternFromRepCanMiss(branch_pattern.pattern, source_rep);
             const miss = if (needs_miss_join)
                 PatternMiss{ .join_id = self.freshJoinPointId() }
             else
@@ -23426,6 +23426,30 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const backing = self.module.checked_bodies.expr(backing_id);
+        // The constructor edge publishes the nominal application, while its
+        // producer-owned tag child may retain only the selected variant.
+        // Construct against the nominal's representation; adapting a value
+        // built with the sparse child's descriptor loses that authority.
+        if (backing.data == .tag) {
+            const nominal_rep = self.repForType(nominal_ty);
+            if (self.nominalPatternSourceRep(nominal_rep) != null) {
+                const tag = backing.data.tag;
+                if (self.parent.plan.representations.items[@intFromEnum(nominal_rep)].kind == .bool_tag_union) {
+                    return try self.lowerBoolTagInto(target, tag.name, tag.args, next);
+                }
+                const scope = try self.enterNominalWrapperFormalScopes(nominal_rep);
+                defer self.dropNominalBackingFormalScope(scope);
+                const tag_rep = self.tagVariantRepForBoundary(nominal_rep) orelse
+                    boxyLowerInvariant("nominal tag constructor had no declaration tag representation");
+                const schema = self.parent.plan.representations.items[@intFromEnum(tag_rep)];
+                const lowered = switch (schema.kind) {
+                    .tag_union => try self.lowerPlannedTagInto(target, nominal_rep, schema, tag.name, tag.args, next),
+                    .dynamic => try self.lowerDynamicTagInto(target, nominal_rep, schema, tag.name, tag.args, next),
+                    else => boxyLowerInvariant("nominal tag constructor declaration had a non-tag representation"),
+                };
+                return try self.leaveNominalBackingFormalScope(scope, lowered);
+            }
+        }
         const backing_local = try self.addFrameLocalForType(backing.ty);
         const assign = try self.assignRepresentationBoundaryConsumingSource(target, backing_local, self.repForType(nominal_ty), self.repForType(backing.ty), next);
         return try self.lowerExprInto(backing_local, backing_id, assign);
@@ -24838,7 +24862,7 @@ const ProcBodyBuilder = struct {
                 );
             },
             .applied_tag => |tag| blk: {
-                const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse {
+                const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse {
                     const source_identity = self.descriptorStorageRep(source_rep);
                     const source_rep_value = self.parent.plan.representations.items[@intFromEnum(source_identity)];
                     if (source_rep_value.kind != .dynamic) {
@@ -25181,22 +25205,26 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const backing = self.module.checked_bodies.pattern(backing_pattern);
         const nominal_rep = self.repForType(nominal_ty);
-        const nominal = self.parent.plan.representations.items[@intFromEnum(nominal_rep)];
-        switch (nominal.kind) {
-            .nominal => |kind| switch (kind) {
-                // The value keeps the nominal's representation, whose backing is
-                // the declaration's shared template; the backing pattern's own
-                // type is this use's instantiation, which may be laid out
-                // differently (a concrete row where the template holds boxed
-                // formals), so the pattern reads it from the nominal's rep.
-                .transparent, .builtin_other => return try self.lowerPatternFromRepThen(backing_pattern, source, nominal_rep, on_match, miss, remaps),
-                .opaque_nominal => {},
-            },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+        if (self.nominalPatternSourceRep(nominal_rep)) |source_rep| {
+            return try self.lowerPatternFromRepThen(backing_pattern, source, source_rep, on_match, miss, remaps);
         }
         const backing_local = try self.addFrameLocalForType(backing.ty);
         const matched = try self.lowerPatternThen(backing_pattern, backing_local, on_match, miss, remaps);
         return try self.assignRepresentationBoundary(backing_local, source, self.repForType(backing.ty), nominal_rep, matched);
+    }
+
+    /// Transparent nominal patterns read the declaration-owned representation,
+    /// not the possibly projected backing pattern row. Builtin Bool has the
+    /// same contract despite having a dedicated scalar representation.
+    fn nominalPatternSourceRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return switch (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind) {
+            .nominal => |kind| switch (kind) {
+                .transparent, .builtin_other => rep_id,
+                .opaque_nominal => null,
+            },
+            .bool_tag_union => rep_id,
+            else => null,
+        };
     }
 
     fn lowerListPatternThen(
@@ -37998,7 +38026,13 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk false;
             },
-            .nominal => |nominal| try self.patternCanMiss(nominal.backing_pattern),
+            .nominal => |nominal| blk: {
+                const nominal_rep = self.repForType(pattern.ty);
+                if (self.nominalPatternSourceRep(nominal_rep)) |source_rep| {
+                    break :blk try self.patternFromRepCanMiss(nominal.backing_pattern, source_rep);
+                }
+                break :blk try self.patternCanMiss(nominal.backing_pattern);
+            },
             .applied_tag => |tag| try self.appliedTagPatternCanMiss(pattern.ty, tag.name, tag.args),
             .list,
             .str_interpolation,
@@ -38008,6 +38042,38 @@ const ProcBodyBuilder = struct {
             .runtime_error,
             .pending,
             => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match miss analysis"),
+        };
+    }
+
+    /// Miss analysis consumes the same producer representation as pattern
+    /// lowering. A projected contextual row does not define the value's
+    /// constructor universe, including inside a transparent nominal.
+    fn patternFromRepCanMiss(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        source_rep: Plan.TypeRepId,
+    ) Allocator.Error!bool {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        const pattern_rep = self.repForType(pattern.ty);
+        if (pattern_rep == source_rep or
+            self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx())
+        {
+            return try self.patternCanMiss(pattern_id);
+        }
+        return switch (pattern.data) {
+            .assign, .underscore => false,
+            .as => |as| try self.patternFromRepCanMiss(as.pattern, source_rep),
+            .applied_tag => |tag| blk: {
+                const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse {
+                    const source_identity = self.descriptorStorageRep(source_rep);
+                    if (self.parent.plan.representations.items[@intFromEnum(source_identity)].kind != .dynamic) {
+                        boxyLowerInvariant("boxy tag pattern producer had no tag representation during miss analysis");
+                    }
+                    break :blk true;
+                };
+                break :blk try self.appliedTagPatternRepCanMiss(pattern.ty, tag_rep, tag.name, tag.args);
+            },
+            .pending, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => try self.patternCanMiss(pattern_id),
         };
     }
 
@@ -38024,16 +38090,8 @@ const ProcBodyBuilder = struct {
         name: names.TagNameId,
         args: []const checked.CheckedPatternId,
     ) Allocator.Error!bool {
-        var payload_can_miss = false;
-        for (args) |arg| {
-            if (try self.patternCanMiss(arg)) {
-                payload_can_miss = true;
-                break;
-            }
-        }
-
         const rep_id = self.repForType(tag_ty);
-        return self.appliedTagPatternRepCanMiss(tag_ty, rep_id, name, args, payload_can_miss);
+        return self.appliedTagPatternRepCanMiss(tag_ty, rep_id, name, args);
     }
 
     fn appliedTagPatternRepCanMiss(
@@ -38042,7 +38100,6 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         name: names.TagNameId,
         args: []const checked.CheckedPatternId,
-        payload_can_miss: bool,
     ) Allocator.Error!bool {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
@@ -38060,7 +38117,11 @@ const ProcBodyBuilder = struct {
                 if (payloads.len != args.len) {
                     boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
                 }
-                break :blk variants.len > 1 or payload_can_miss;
+                if (variants.len > 1) break :blk true;
+                for (args, payloads) |arg, payload| {
+                    if (try self.patternFromRepCanMiss(arg, payload.rep)) break :blk true;
+                }
+                break :blk false;
             },
             .dynamic => blk: {
                 const payloads = try self.dynamicTagPayloadsForName(rep_id, name);
@@ -38074,13 +38135,12 @@ const ProcBodyBuilder = struct {
                 self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
                 name,
                 args,
-                payload_can_miss,
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
                     const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args, payload_can_miss);
+                    return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args);
                 },
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
             },
@@ -38382,6 +38442,14 @@ const ProcBodyBuilder = struct {
     }
 
     fn tagVariantRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return self.tagRepForBoundary(rep_id, false);
+    }
+
+    fn tagPatternRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return self.tagRepForBoundary(rep_id, true);
+    }
+
+    fn tagRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, include_bool: bool) ?Plan.TypeRepId {
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
@@ -38399,7 +38467,8 @@ const ProcBodyBuilder = struct {
                     if (rep.tag_variants.len == 0) return null;
                     return current;
                 },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
+                .bool_tag_union => return if (include_bool) current else null,
+                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
     }

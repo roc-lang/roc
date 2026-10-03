@@ -15,3 +15,8 @@ This module provides:
 - **Error Handling**: Common error types and error handling patterns
 - **Debugging Support**: Debugging and logging utilities
 - **Platform Abstractions**: Cross-platform abstractions for common operations
+
+`CompilerFeatures` exposes explicit, default-off performance rollout gates.
+The build and compiler share one feature registry, and its mask is part of
+compiler artifact identity so caches cannot conceal differences between flag
+combinations. These gates select implementations, not different language rules.

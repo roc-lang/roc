@@ -3485,7 +3485,7 @@ pub const Coordinator = struct {
         _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable;
         canonicalized_cache_entry.encode(parse_record, entry[canonicalized_module_cache_header_len + env_len ..][0..record_len]);
 
-        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir);
+        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir, env.module_name);
     }
 
     fn resolvedDirectImportsHaveCheckedOutput(
@@ -3538,7 +3538,7 @@ pub const Coordinator = struct {
         };
         writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes);
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
-        manager.storeRawBytes(key.bytes, bytes, directory);
+        manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
@@ -3626,7 +3626,7 @@ pub const Coordinator = struct {
         _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
         _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
 
-        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
+        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedCheckedModule(
@@ -6134,6 +6134,7 @@ pub const Coordinator = struct {
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
+        if (self.ctfe_timing.lowering.detailed_monotype_body) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
         const ctfe_timing = &local_ctfe_timing;
         const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         // Import resolution runs inside the type-check task and records its

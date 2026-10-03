@@ -152,7 +152,7 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
-    /// Whether Direct LIR may serve cache entries to the compile-time
+    /// Whether Monotype and Direct LIR may serve cache entries to the compile-time
     /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
     /// modules: a match whose exhaustiveness only the evaluation can decide
     /// must run as the evaluator's own code, which reports the branches it
@@ -1255,6 +1255,12 @@ pub fn prepareCheckedModulesMonotype(
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
+    // One checked-program proof governs both lookup stages. An early hit
+    // removes the source body, so Direct LIR cannot defer this decision until
+    // it discovers which procedures the evaluator reaches.
+    var prepared_target = target;
+    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
+
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(
@@ -1292,11 +1298,11 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
-                // A program that is also the compile-time evaluator's host
-                // takes its hits in Direct LIR, after the compile-time
-                // closure is known; only a runtime-only program can take
-                // them here.
-                .spec_cache = if (target.checked_module_state == .complete) target.spec_cache else null,
+                .spec_cache = if (monotypeCacheHitsAllowed(
+                    target.checked_module_state,
+                    base.CompilerFeatures.early_ctfe_cache,
+                    prepared_target.comptime_closure_hits,
+                )) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -1312,8 +1318,6 @@ pub fn prepareCheckedModulesMonotype(
         );
     };
     if (SpecCensus.enabled()) try SpecCensus.runMonotype(allocator, modules, &mono);
-    var prepared_target = target;
-    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
     return .{
         .allocator = allocator,
         .program = mono,
@@ -1321,6 +1325,22 @@ pub fn prepareCheckedModulesMonotype(
         .root_count = roots.requests.len,
         .test_plan_metadata = test_plan_metadata,
     };
+}
+
+/// Complete runtime programs retain their existing early lookup. During
+/// checking, the rollout flag changes lookup timing, never pack eligibility:
+/// the same whole-program proof also authorizes Direct LIR's CTFE hits.
+fn monotypeCacheHitsAllowed(state: CheckedModuleState, early_ctfe_cache: bool, comptime_closure_hits: bool) bool {
+    return state == .complete or (early_ctfe_cache and comptime_closure_hits);
+}
+
+test "early CTFE cache requires both rollout and the Direct LIR proof" {
+    for ([_]bool{ false, true }) |enabled| {
+        for ([_]bool{ false, true }) |proof| {
+            try std.testing.expect(monotypeCacheHitsAllowed(.complete, enabled, proof));
+            try std.testing.expectEqual(enabled and proof, monotypeCacheHitsAllowed(.checking_finalization, enabled, proof));
+        }
+    }
 }
 
 /// Whether every exhaustiveness site of the program resolves without the
@@ -1346,6 +1366,26 @@ fn hasCompileTimeOnlySite(sites: *const checked.CheckedExhaustivenessSiteTable) 
         }
     }
     return false;
+}
+
+test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
+    const policies = [_]checked.ExhaustivenessResolutionPolicy{
+        .not_pending,
+        .runtime_reachable,
+        .{ .compile_time_replaced_by_root = @enumFromInt(0) },
+        .compile_time_only,
+    };
+    var sites = [_]checked.CheckedExhaustivenessSite{.{
+        .id = @enumFromInt(0),
+        .kind = .match,
+        .region = std.mem.zeroes(base.Region),
+        .policy = .not_pending,
+    }};
+    for (policies) |policy| {
+        sites[0].policy = policy;
+        try std.testing.expectEqual(policy == .compile_time_only, hasCompileTimeOnlySite(&.{ .sites = &sites }));
+    }
+    try std.testing.expect(!hasCompileTimeOnlySite(&.{}));
 }
 
 /// Consumes the prepared program on success and failure. No specialization

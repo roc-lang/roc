@@ -1,5 +1,6 @@
 const std = @import("std");
 const stack_budget = @import("src/base/stack_budget.zig");
+const compiler_feature_specs = @import("src/base/compiler_feature_specs.zig");
 const builtin = @import("builtin");
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
@@ -3261,6 +3262,13 @@ pub fn build(b: *std.Build) void {
 
     // Create compile time build options
     const build_options = b.addOptions();
+    const perf_all = b.option(bool, "perf-all", "Enable all opt-in compiler performance features (default: off)") orelse false;
+    var compiler_perf_flags: u8 = 0;
+    inline for (std.meta.tags(compiler_feature_specs.Feature)) |feature| {
+        if (b.option(bool, feature.optionName(), feature.description()) orelse perf_all)
+            compiler_perf_flags |= feature.mask();
+    }
+    build_options.addOption(u8, "compiler_perf_flags", compiler_perf_flags);
     build_options.addOption(bool, "enable_tracy", flag_enable_tracy != null);
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption(bool, "trace_refcount", trace_refcount);
@@ -3281,7 +3289,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "eval_time_worker", eval_time_worker);
     const compiler_version_git = getCompilerVersionGit(b);
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
-    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
+    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git, compiler_perf_flags));
     // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
     // build_options module so its build-mode prefix comes from @import("builtin").mode—the
     // actual optimization level of each compiled binary. The prefix can't be baked here because
@@ -9064,10 +9072,12 @@ fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compile
 /// This is intentionally one build-time hash. Checked artifact cache keys must
 /// not separately store compiler version, builtin identity, semantic build
 /// switches, or serialization format identity.
-fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
+fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8, compiler_perf_flags: u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
+    hasher.update("compiler-performance-features");
+    hasher.update(&compiler_feature_specs.cacheIdentity(compiler_perf_flags));
 
     // Resolve against the build root rather than cwd so the hash works both for
     // standalone builds and when roc is consumed as a dependency (cwd is then the

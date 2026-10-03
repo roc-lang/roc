@@ -172,6 +172,8 @@ const CliBuildEnvOptions = struct {
     /// checked-module cache.
     no_cache: bool = false,
     verbose_cache: bool = false,
+    /// Collect CTFE body work for explicit `--timings`, without changing cache identity.
+    timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
     /// Identity-only synthetic marking for staged default-app roots (check
@@ -211,6 +213,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_version;
+    build_env.detailed_monotype_diagnostics = opts.timings;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
@@ -6991,6 +6994,7 @@ fn lowerLirWithBuildEnv(
         ),
         .max_threads = max_threads,
         .no_cache = !enable_checked_cache,
+        .timings = if (reporter) |r| r.always else false,
         .resolution_config = resolution_config,
         .track_watch_inputs = true,
         .source_dir_override = source_dir_override,
@@ -7293,7 +7297,7 @@ fn resolvePlatformRefToPaths(
                     .path = compile.compiler_platforms.identity(platform),
                     .err = error.AccessDenied,
                 } }),
-                error.IoError => return ctx.fail(.{ .file_write_failed = .{
+                else => return ctx.fail(.{ .file_write_failed = .{
                     .path = compile.compiler_platforms.identity(platform),
                     .err = error.WriteFailed,
                 } }),
@@ -10611,6 +10615,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -11000,6 +11005,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -11449,6 +11455,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -12143,7 +12150,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), bytes.items, entries_dir);
+    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), bytes.items, entries_dir, artifact.moduleEnvConst().module_name);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -15447,6 +15454,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .root_source_url = args.root_source_url,
@@ -17193,7 +17201,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -17222,6 +17230,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
         .{ .name = "Missing evidence", .count = counters.evidence_missing },
         .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
+        .{ .name = "Object specialization cache hits", .count = counters.spec_cache_hits },
     };
 }
 
@@ -18339,7 +18348,7 @@ fn checkFileWithBuildEnvPreserved(
     main_filepath: ?[]const u8,
     root_source_url: ?[]const u8,
     main_source_url: ?[]const u8,
-    _: bool,
+    timings: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
@@ -18356,6 +18365,7 @@ fn checkFileWithBuildEnvPreserved(
         .max_threads = max_threads,
         .no_cache = !cache_config.enabled,
         .verbose_cache = cache_config.verbose,
+        .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
         .synthetic_default_app = synthetic_default_app,
@@ -18485,7 +18495,7 @@ fn checkFileWithBuildEnv(
     main_filepath: ?[]const u8,
     root_source_url: ?[]const u8,
     main_source_url: ?[]const u8,
-    _: bool,
+    timings: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
@@ -18499,6 +18509,7 @@ fn checkFileWithBuildEnv(
         .max_threads = max_threads,
         .no_cache = !cache_config.enabled,
         .verbose_cache = cache_config.verbose,
+        .timings = timings,
         .resolution_config = resolution_config,
         .source_dir_override = source_dir_override,
         .synthetic_default_app = synthetic_default_app,
@@ -18704,7 +18715,7 @@ fn rocCheckDefaultApp(
         null,
         null,
         null,
-        args.time,
+        args.timings,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
@@ -18757,7 +18768,7 @@ fn rocCheckDefaultAppPreserved(
         null,
         null,
         null,
-        args.time,
+        args.timings,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
@@ -18865,7 +18876,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main,
             args.root_source_url,
             args.main_source_url,
-            args.time,
+            args.timings,
             cache_config,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
@@ -18904,7 +18915,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main,
             args.root_source_url,
             args.main_source_url,
-            args.time,
+            args.timings,
             cache_config,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
@@ -19807,7 +19818,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         args.main,
         args.root_source_url,
         args.main_source_url,
-        args.time,
+        false,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),

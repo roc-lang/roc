@@ -2172,11 +2172,7 @@ pub const CtxFetcher = struct {
         self.writeSidecar(allocator, sidecar_path, scanned, recorded_expanded) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A missing sidecar only costs a rescan next build.
-            error.AccessDenied,
-            error.FileNotFound,
-            error.IoError,
-            error.WriteFailed,
-            => {},
+            else => {},
         };
 
         return scanned;
@@ -2211,7 +2207,7 @@ pub const CtxFetcher = struct {
         const staging_dir = try self.stagingDirPath(allocator, package_dir);
         self.fs.createDir(staging_dir) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.AccessDenied, error.IoError => return error.DownloadFailed,
+            else => return error.DownloadFailed,
         };
 
         const expanded_bytes = self.fs.fetchUrl(self.gpa, url, staging_dir, max_expanded_bytes) catch |err| {
@@ -2312,10 +2308,7 @@ pub const CtxFetcher = struct {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
         const materialized = compiler_platforms.materialize(allocator, self.fs, self.compiler_owned_source_dir, platform) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.AccessDenied,
-            error.IoError,
-            error.NoHomeDirectory,
-            => return error.Unsupported,
+            else => return error.Unsupported,
         };
         const src = try self.readNormalizedSource(allocator, materialized.root_file);
         var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src);

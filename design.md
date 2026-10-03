@@ -405,6 +405,114 @@ does not carry. The pack encoder renames every carried program-numbered datum
 `roc__h` content name and records the references to it as `shared`; capture
 keeps program names, so only a pack write pays for the hashing.
 
+### Opt-In Performance Implementations
+
+Performance rollout gates are explicit build configuration, not inferred from
+program size or source spelling. `base.CompilerFeatures` is generated from the
+`-Dperf-*` options; every gate defaults off and `-Dperf-all` enables the suite.
+The feature mask participates in the compiler artifact identity, so checked
+artifacts and their object packs cannot accidentally cross implementations.
+Flags select implementations of the same language rules, not alternate
+language semantics.
+
+Read-only type analysis must not use permanent solver allocation as scratch.
+A nominal analysis view identifies a declaration-template root together with
+its argument-substitution environment. Entering another nominal declaration
+enters its own formal scope; equal names in unrelated declarations do not
+capture one another. A view of an actual argument can identify that argument's
+mutable solver root. An analysis-owned unknown or template root cannot escape
+as a mutable blocker or be passed to ordinary unification. Views preserve the
+identity needed for recursive traversal without cloning declaration graphs into
+the module's serializable type store.
+
+Environment normalization removes only irrelevant substitutions. Dependency
+analysis includes alias hidden arguments, field-presence variables, and row
+extensions. Template-owned unknowns retain their declaration-application owner
+even when no formal is reachable; unrelated applications cannot share a
+known-empty assumption merely because their immutable structure is equal.
+Analysis view identities never escape in returned diagnostic patterns or
+unions, and memo keys use the reader's stable identity namespace.
+
+An inhabitedness memo stores complete query answers, not provisional answers
+obtained by cutting an active recursive path. Its key includes the resolved
+root and the exact canonical known-empty assumptions; its lifetime is one
+mutation-free analysis. Shared DAG nodes are not recursive cycles. A cyclic
+query implementation must distinguish those states and establish its fixed-point
+or traversal semantics before publishing a reusable result. The same restriction
+applies to completion-relation memoization in Monotype: no result outlives the
+graph state and assumptions that established it.
+
+#### Potential Inhabitedness Queries
+
+Readonly exhaustive analysis asks whether a type may be inhabited under an
+explicit query mode and known-empty assumptions. Payload recursion retains the
+existing coinductive interpretation: a recursive component without a finite
+proof of emptiness remains potentially inhabited. A shared completed subgraph
+is not a recursive-path assumption.
+
+The view implementation expresses one finite monotone AND/OR graph per query
+context. Required record fields and tuple components are conjunctions; a tag's
+payload is a conjunction, and alternatives form a disjunction. Optional fields
+need not exist and do not require a witness. Functions, error-recovery types,
+field-presence terms, and builtin numeric types retain their existing inhabited
+leaf behavior. Exact known-empty view identities are false.
+
+An unconditional disjunction witness permits omission of its other dependencies.
+A zero-argument tag proves its row inhabited before any alternative payload or
+extension is traversed; an open terminal proves the same only under the query's
+tail policy. Such proofs propagate through row disjunctions and shared completed
+rows, but never through an exact known-empty identity. They are distinct from
+initial true values and coinductive cycle answers. Record conjunctions and
+row-only SCCs retain their full equations when no unconditional witness exists.
+
+Leaf and tail policy is explicit:
+
+- General queries treat unconstrained flex and rigid leaves, and open union
+  tails, as potentially inhabited.
+- Constructor-payload queries treat unbound flex and ignored rigid leaves as
+  empty candidates; constrained leaves remain inhabited. Their tails use the
+  same constructor-payload policy for union alternatives.
+- Known-absent-payload queries treat every flex and ignored rigid leaf as empty
+  candidates regardless of constraints, ignore open union tails, and retain
+  the existing rejection of non-union nominal backing shapes.
+
+Payload recursion and row-extension cycles are different. Extension traversal
+flattens the finite row and cuts a cyclic extension as closed; it must not turn
+an otherwise empty union row-only cycle into an inhabited payload SCC. Record
+rows conjoin required fields across nested and aliased tails; unresolved tails
+add no required fields in any mode. A record row-only cycle therefore has the
+empty conjunction as its identity, unlike a union's empty disjunction. Exact
+known-empty tail identities still make the record empty. This intentionally
+corrects the legacy checker's omission of nested record-tail fields only on the
+flagged view path; flag-off behavior is unchanged.
+
+The solver starts every graph node at true and propagates false through reverse
+edges until convergence. Each node changes at most once; conjunction failures
+and disjunction live-child counts process each dependency edge only when needed.
+This computes the greatest fixed point of the stated equations without
+enumerating recursive paths. Only converged answers may be reused, with query
+mode, assumptions, and stable reader identity kept distinct. Shared DAGs above
+recursive components must have graph-proportional work, not path-count work.
+
+### Early Compile-Time Object Reuse
+
+With `early_ctfe_cache` enabled, Monotype reservation may consume an offered
+closed object specialization during checking finalization under the same proof
+that permits Direct LIR to splice it: no checked module or relation in the
+program has a `compile_time_only` exhaustiveness site whose verdict requires
+observing evaluator branches. The proof is computed before Monotype and carried
+unchanged to Direct LIR. A hosted placeholder created by an early cache hit
+must not bypass this proof when reached by compile-time evaluation.
+
+This changes when an eligible body is skipped, not which entries a pack may
+offer. The producer still excludes the transitive closure of specialized
+literal conversion and uncarried program-local dependencies; carried immutable
+data keeps its content identity. Procedure identity, ABI, ownership signatures,
+root scheduling, literal rejection, debug observations, and cached-data
+relocations retain their existing contracts. A cache-hit counter alone is not
+the performance assertion: a warm test must also demonstrate skipped Monotype
+body work and preserve cold/warm diagnostics.
+
 ## Checking Effects And Const Roots
 
 Checking owns Roc effect validation, compile-time evaluation eligibility, and
@@ -2514,6 +2622,69 @@ by the CLI specs on `test/cli/issue_10788_nominal_record_update_rewrap/`; the
 accepted control—the same constructor built from a fresh record literal in the
 same inline-lambda position—is pinned by
 `test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`.
+
+### Producer-Owned Single-Tag Construction
+
+With `constructor_projection` enabled, a syntactic single-tag constructor can
+use a declaration-membership relation instead of materializing a whole closed
+nominal union. The producer must own the fresh backing expression and its row
+extension: neither may already represent a shared structural value. The
+nominal declaration, application arguments, tag identity, and payload arity
+are explicit inputs. Checking validates membership and arity, instantiates
+only the selected payload with the application's substitutions and full
+obligations, and relates its components ordinarily.
+
+The published result is the nominal application. The producer-owned child tag
+retains its actual sparse structural shape; the nominal declaration remains the
+authority for the complete representation and constructor universe. Checked
+publication, evidence, diagnostics, and lowering consume that construction edge
+explicitly, rather than reconstructing discarded variants from values.
+Declaration-template cells are never exposed to mutation.
+
+Boxy consumes an explicit nominal-to-tag construction edge using the
+declaration's tag schema and the application's descriptor identity in its
+formal scope. The sparse child's descriptor is not the nominal descriptor,
+and an intermediate template-owned descriptor environment cannot be published
+as the application's environment. Pattern miss analysis and pattern lowering
+must consume the same representation authority, including builtin Bool;
+a projected backing pattern does not define the nominal's constructor universe.
+
+Constructor projection cannot introduce a different equal-layout tag universe.
+The checked producer owns a syntactic single tag and publishes a selected
+template with exactly that tag and a closed empty tail. Planning preserves a
+closed root row even when its payloads need dynamic or recursive storage.
+Layout identity includes the ordered variant payload layouts, variant count,
+and discriminant width; a zero-sized singleton is ZST, while a multi-variant
+row still needs a discriminant. A projected singleton therefore cannot share
+its layout identity with a multi-variant declaration. When the declaration is
+itself singleton, checked membership supplies the same tag and implicit
+discriminant, and layout identity supplies the same payload placement.
+This proof is specific to the new closed-singleton projection state; it does
+not assert general descriptor-environment or contextual payload equivalence
+from equal byte sizes. Existing contextual payload adaptation is unchanged.
+
+Constructor projection cannot introduce a different equal-layout tag universe.
+The checked producer owns a syntactic single tag and publishes a selected
+template with exactly that tag and a closed empty tail. Planning preserves a
+closed root row even when its payloads need dynamic or recursive storage.
+Layout identity includes the ordered variant payload layouts, variant count,
+and discriminant width; a zero-sized singleton is ZST, while a multi-variant
+row still needs a discriminant. A projected singleton therefore cannot share
+its layout identity with a multi-variant declaration. When the declaration is
+itself singleton, checked membership supplies the same tag and implicit
+discriminant, and layout identity supplies the same payload placement.
+This proof is specific to the new closed-singleton projection state; it does
+not assert general descriptor-environment or contextual payload equivalence
+from equal byte sizes. Existing contextual payload adaptation is unchanged.
+
+This rule does not change general structural-row unification. A shared row or
+an independently produced backing must still preserve its exact complement
+row when related to a nominal. Contextual scheme guidance alone is not authority
+to publish a nominal result; an implicit constructor needs a real expected
+nominal relation. Unknown tags, wrong arity, opacity violations, payload
+mismatches, and inverse rewrapping retain the constructor's ordinary diagnostics.
+Implementation must audit all consumers of a sparse child type before enabling
+this representation.
 
 ## Module Completion Boundary
 
@@ -6793,6 +6964,19 @@ including aliases and extensions; a nominal base requires the same opacity
 capability, declaration substitution, and record backing as record unification.
 No solved-graph memo survives between field checks, which can refine the base.
 Ordinary lookups consume no aggregate context and allocate no expected-shape copy.
+
+A tag constructor carries its syntactic tag identity and arity. With
+`tag_projection` enabled, expected context borrows only that tag's ordered
+payload slots, following aliases and row extensions with the same nominal
+opacity and substitution capability as ordinary tag unification. Selected
+slots are copied together with one substitution map, preserving repeated-variable
+equalities. Omitted variants remain authoritative in the enclosing full
+relation, and no declaration-template cell is exposed to mutation. Missing
+tags, arity disagreement, or erroneous context establish no projection. The
+selected copy and projected relations share one commit-probe; rejection leaves
+diagnostic ownership with the full enclosing relation. This is expected-shape
+guidance, not permission to discard a structural row's complement or its source
+dispatch obligations.
 
 The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
 arithmetic remains polymorphic, including heterogeneous user arithmetic;

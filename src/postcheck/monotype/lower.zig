@@ -23945,6 +23945,40 @@ const BodyContext = struct {
         produced: NodeId,
     };
 
+    /// Completion revisits many siblings while keeping only the current path.
+    /// Tombstone deletion makes that workload saturate a probing hash table;
+    /// dense-map deletion repairs its index instead, without memoizing the
+    /// provisional answers used to cut recursive cycles.
+    const RequestCompletionPath = struct {
+        const Map = if (base.CompilerFeatures.const_completion)
+            std.array_hash_map.Auto(RequestCompletionPair, void)
+        else
+            std.AutoHashMapUnmanaged(RequestCompletionPair, void);
+
+        map: Map = .empty,
+        allocator: Allocator,
+
+        fn init(allocator: Allocator) RequestCompletionPath {
+            return .{ .allocator = allocator };
+        }
+
+        fn deinit(self: *RequestCompletionPath) void {
+            self.map.deinit(self.allocator);
+        }
+
+        fn enter(self: *RequestCompletionPath, pair: RequestCompletionPair) Allocator.Error!bool {
+            return !(try self.map.getOrPut(self.allocator, pair)).found_existing;
+        }
+
+        fn leave(self: *RequestCompletionPath, pair: RequestCompletionPair) void {
+            const removed = if (base.CompilerFeatures.const_completion)
+                self.map.swapRemove(pair)
+            else
+                self.map.remove(pair);
+            std.debug.assert(removed);
+        }
+    };
+
     const ProducedValuePair = struct {
         request: NodeId,
         produced: NodeId,
@@ -23962,7 +23996,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
+        var visiting = RequestCompletionPath.init(self.allocator);
         defer visiting.deinit();
         return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting)) == .completed;
     }
@@ -24341,7 +24375,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!RequestCompletion {
         const request_root = self.graph.rootNode(request_node);
         const produced_root = self.graph.rootNode(produced_node);
@@ -24353,9 +24387,8 @@ const BodyContext = struct {
         }
 
         const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
-        const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return .unchanged;
-        defer _ = visiting.remove(pair);
+        if (!try visiting.enter(pair)) return .unchanged;
+        defer visiting.leave(pair);
 
         if (try self.producedPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
             return relation;
@@ -24422,7 +24455,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!?RequestCompletion {
         const backing = self.checkedPublicInspectableBacking(produced_node) orelse return null;
 
@@ -24436,7 +24469,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!?RequestCompletion {
         const backing = self.checkedPublicInspectableBacking(request_node) orelse return null;
 
@@ -24460,7 +24493,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_items: []const NodeId,
         produced_items: []const NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!RequestCompletion {
         if (request_items.len != produced_items.len) return .mismatch;
         var relation: RequestCompletion = .unchanged;
@@ -24478,7 +24511,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_fn: anytype,
         produced_fn: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!RequestCompletion {
         if (request_fn.args.len != produced_fn.args.len) return .mismatch;
         for (request_fn.args, produced_fn.args) |request_arg, produced_arg| {
@@ -24491,7 +24524,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_row: anytype,
         produced_row: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!RequestCompletion {
         if ((try self.requestCompletionRelation(request_row.ext, produced_row.ext, visiting)) != .unchanged) {
             return .mismatch;
@@ -24513,7 +24546,7 @@ const BodyContext = struct {
         self: *BodyContext,
         request_row: anytype,
         produced_row: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        visiting: *RequestCompletionPath,
     ) Allocator.Error!RequestCompletion {
         if ((try self.requestCompletionRelation(request_row.ext, produced_row.ext, visiting)) != .unchanged) {
             return .mismatch;
@@ -25417,11 +25450,11 @@ const BodyContext = struct {
             .zero_argument_tag => |tag| return try self.addConstructorExpr(ty, .{ .tag = .{ .name = try self.tagName(self.view, tag.name), .payloads = .empty() } }),
             .nominal => |nominal| {
                 if (self.nominalConstructionLayer(ty)) |layer| {
-                    const backing = if (try self.typeIsProvenUninhabited(layer.backing))
-                        try self.lowerExplicitUninhabitedInvocation(nominal.backing_expr, layer.backing)
-                    else
-                        try self.lowerExprAtType(nominal.backing_expr, layer.backing);
-                    return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing } });
+                    // A producer-owned tag child may have a sparse checked row.
+                    // The nominal edge supplies its complete representation;
+                    // consume that edge just as graph-backed constructors do,
+                    // rather than equating the child row with the full backing.
+                    return try self.lowerNominalConstructorAtNode(nominal, try self.activeNodeFromType(layer.named));
                 }
                 const backing_ty = self.namedBackingType(ty) orelse ty;
                 const backing = if (try self.typeIsProvenUninhabited(backing_ty))
@@ -58846,6 +58879,76 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
         .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("non-numeric Monotype primitive has no numeral target"),
         inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |p| @field(exact_numeral.Target, @tagName(p)),
     };
+}
+
+test "completion path retains ancestors across distinct sibling visits" {
+    var path = BodyContext.RequestCompletionPath.init(std.testing.allocator);
+    defer path.deinit();
+    const ancestor: BodyContext.RequestCompletionPair = .{
+        .request = @enumFromInt(1),
+        .produced = @enumFromInt(2),
+    };
+    try std.testing.expect(try path.enter(ancestor));
+    for (3..4096) |index| {
+        const sibling: BodyContext.RequestCompletionPair = .{
+            .request = @enumFromInt(index),
+            .produced = @enumFromInt(index + 4096),
+        };
+        try std.testing.expect(try path.enter(sibling));
+        try std.testing.expect(!try path.enter(ancestor));
+        try std.testing.expect(!try path.enter(sibling));
+        path.leave(sibling);
+        try std.testing.expectEqual(@as(usize, 1), path.map.count());
+    }
+    path.leave(ancestor);
+    try std.testing.expectEqual(@as(usize, 0), path.map.count());
+    try std.testing.expect(try path.enter(ancestor));
+    path.leave(ancestor);
+}
+
+test "completion relation preserves recursive and shared DAG outcomes" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    var builder: Builder = undefined;
+    builder.timing = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = allocator;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.inhabitation_visiting = .{};
+    defer ctx.inhabitation_visiting.deinit(allocator);
+
+    for ([_]BodyContext.RequestCompletion{ .unchanged, .completed, .mismatch }) |expected| {
+        // Each side is a recursive list of pairs. Repeated tuple edges below
+        // revisit the same cycle after a sibling traversal has left the path.
+        const request_items = try graph.arena().alloc(NodeId, 2);
+        const produced_items = try graph.arena().alloc(NodeId, 2);
+        const request_tuple = try graph.newNode(.{ .tuple = request_items });
+        const produced_tuple = try graph.newNode(.{ .tuple = produced_items });
+        request_items[0] = try graph.newNode(.{ .list = request_tuple });
+        produced_items[0] = try graph.newNode(.{ .list = produced_tuple });
+        request_items[1] = try graph.newNode(if (expected == .completed)
+            .empty_tag_union
+        else
+            .{ .primitive = .i64 });
+        produced_items[1] = try graph.newNode(.{ .primitive = if (expected == .mismatch) .str else .i64 });
+
+        const request_siblings = try graph.arena().alloc(NodeId, 64);
+        const produced_siblings = try graph.arena().alloc(NodeId, 64);
+        @memset(request_siblings, request_items[0]);
+        @memset(produced_siblings, produced_items[0]);
+        const request = try graph.newNode(.{ .tuple = request_siblings });
+        const produced = try graph.newNode(.{ .tuple = produced_siblings });
+        var path = BodyContext.RequestCompletionPath.init(allocator);
+        defer path.deinit();
+        try std.testing.expectEqual(expected, try ctx.requestCompletionRelation(request, produced, &path));
+        try std.testing.expectEqual(@as(usize, 0), path.map.count());
+    }
 }
 
 test "materialized evidence normalization borrows unchanged contracts without allocating" {

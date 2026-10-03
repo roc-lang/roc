@@ -212,6 +212,8 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// Instrumentation only; never participates in checked or object identity.
+    detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
@@ -816,6 +818,7 @@ pub const BuildEnv = struct {
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
         coord.compile_time_object_cache = self.compile_time_object_cache;
+        if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
     }
 

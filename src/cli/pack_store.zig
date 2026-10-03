@@ -27,6 +27,7 @@ pub const Store = struct {
     allocator: Allocator,
     roc_ctx: CoreCtx,
     root: []u8,
+    verbose: bool,
 
     pub const InitError = Allocator.Error || error{NoHomeDirectory};
 
@@ -36,7 +37,7 @@ pub const Store = struct {
         const mode = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
         defer allocator.free(mode);
         const root = try std.fs.path.join(allocator, &.{ version_dir, "objects", mode });
-        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root };
+        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .verbose = cache_config.verbose };
     }
 
     pub fn deinit(self: *Store) void {
@@ -67,14 +68,30 @@ pub const Store = struct {
     pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
-        self.roc_ctx.makePath(dir) catch return error.PackWriteFailed;
+        self.roc_ctx.makePath(dir) catch |err| {
+            self.reportWriteFailure("create directory", dir, bytes.len, err);
+            return error.PackWriteFailed;
+        };
         const path = try self.packPath(origin, identity, key);
         defer self.allocator.free(path);
         if (self.roc_ctx.fileExists(path)) return;
         const temp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path});
         defer self.allocator.free(temp_path);
-        self.roc_ctx.writeFile(temp_path, bytes) catch return error.PackWriteFailed;
-        self.roc_ctx.rename(temp_path, path) catch return error.PackWriteFailed;
+        self.roc_ctx.writeFile(temp_path, bytes) catch |err| {
+            self.reportWriteFailure("write staging file", temp_path, bytes.len, err);
+            return error.PackWriteFailed;
+        };
+        self.roc_ctx.rename(temp_path, path) catch |err| {
+            self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
+            return error.PackWriteFailed;
+        };
+    }
+
+    fn reportWriteFailure(self: *const Store, operation: []const u8, path: []const u8, byte_count: usize, err: anyerror) void {
+        if (!self.verbose) return;
+        const message = std.fmt.allocPrint(self.allocator, "Failed to {s} for object cache at {s} ({d} bytes): {}\n", .{ operation, path, byte_count, err }) catch return;
+        defer self.allocator.free(message);
+        self.roc_ctx.writeStderr(message) catch {};
     }
 
     /// Every pack filed under a module identity, in name order.
@@ -87,6 +104,72 @@ pub const Store = struct {
         };
     }
 };
+
+test "object cache write failures preserve quiet behavior and report verbose causes" {
+    const Capture = struct {
+        stderr: std.ArrayList(u8) = .empty,
+        stage: enum { directory, write, rename },
+
+        fn makePath(context: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.stage == .directory) return error.ReadOnlyFileSystem;
+        }
+
+        fn fileExists(_: ?*anyopaque, _: std.Io, _: []const u8) bool {
+            return false;
+        }
+
+        fn writeFile(context: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.WriteError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.stage == .write) return error.NoSpaceLeft;
+        }
+
+        fn rename(context: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.stage == .rename) return error.DiskQuota;
+        }
+
+        fn writeStderr(context: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.stderr.appendSlice(std.testing.allocator, bytes) catch return error.IoError;
+        }
+    };
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |verbose| {
+        for (std.enums.values(@FieldType(Capture, "stage"))) |stage| {
+            var capture = Capture{ .stage = stage };
+            defer capture.stderr.deinit(allocator);
+            var filesystem = CoreCtx.testing(allocator, allocator);
+            filesystem.ctx = &capture;
+            filesystem.vtable.makePath = &Capture.makePath;
+            filesystem.vtable.fileExists = &Capture.fileExists;
+            filesystem.vtable.writeFile = &Capture.writeFile;
+            filesystem.vtable.rename = &Capture.rename;
+            filesystem.vtable.writeStderr = &Capture.writeStderr;
+            var store = try Store.init(allocator, .{
+                .cache_dir = "cache",
+                .roc_ctx = filesystem,
+                .verbose = verbose,
+            }, .arm64mac, "dev");
+            defer store.deinit();
+            for (0..2) |_| {
+                try std.testing.expectError(error.PackWriteFailed, store.write(.local, [_]u8{1} ** 32, [_]u8{2} ** 32, "pack"));
+            }
+            if (verbose) {
+                const cause = switch (stage) {
+                    .directory => "error.ReadOnlyFileSystem",
+                    .write => "error.NoSpaceLeft",
+                    .rename => "error.DiskQuota",
+                };
+                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, cause));
+                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, "(4 bytes)"));
+                try std.testing.expect(std.mem.containsAtLeast(u8, capture.stderr.items, 1, store.root));
+            } else {
+                try std.testing.expectEqualStrings("", capture.stderr.items);
+            }
+        }
+    }
+}
 
 /// What a lazily loaded store needs once checking has produced the module
 /// set: the store and the modules in view.
