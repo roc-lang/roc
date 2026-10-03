@@ -239,12 +239,19 @@ pub fn hasDependency(
 
 const DemandSummary = struct {
     deps: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
+    /// Lambdas whose summarized graph deps this demand also has. A callee's
+    /// deps are reached through its summary rather than copied into every
+    /// caller's, so a call chain's summaries stay the size of each body's
+    /// direct demands; `DemandAnalyzer.expandDeps` collects the transitive set
+    /// once per def that needs its edges.
+    deps_from: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
     called_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
     /// Literal callable vars whose target remains polymorphic in this summary.
     literal_requirements: std.AutoHashMapUnmanaged(Var, void) = .{},
 
     fn deinit(self: *DemandSummary, allocator: std.mem.Allocator) void {
         self.deps.deinit(allocator);
+        self.deps_from.deinit(allocator);
         self.called_patterns.deinit(allocator);
         self.literal_requirements.deinit(allocator);
     }
@@ -276,6 +283,12 @@ const DemandSummary = struct {
         var dep_iter = other.deps.keyIterator();
         while (dep_iter.next()) |def_idx| {
             if (try self.addDep(allocator, def_idx.*)) changed = true;
+        }
+
+        var from_iter = other.deps_from.keyIterator();
+        while (from_iter.next()) |lambda_idx| {
+            const gop = try self.deps_from.getOrPut(allocator, lambda_idx.*);
+            if (!gop.found_existing) changed = true;
         }
 
         var called_iter = other.called_patterns.keyIterator();
@@ -485,6 +498,25 @@ const DemandAnalyzer = struct {
         const def = self.cir.store.getDef(def_idx);
         try self.walkDemand(def.expr, out, &local_callables);
         try self.walkPatternDemand(def.pattern, out, &local_callables);
+    }
+
+    /// Every graph dep a def's demand reaches: its own, and each summarized
+    /// lambda's reached through `deps_from`, visiting each lambda once.
+    fn expandDeps(self: *DemandAnalyzer, demand: *DemandSummary) std.mem.Allocator.Error!void {
+        var visited = std.AutoHashMapUnmanaged(CIR.Expr.Idx, void).empty;
+        defer visited.deinit(self.allocator);
+        var pending = std.ArrayList(CIR.Expr.Idx).empty;
+        defer pending.deinit(self.allocator);
+        var roots = demand.deps_from.keyIterator();
+        while (roots.next()) |lambda_idx| try pending.append(self.allocator, lambda_idx.*);
+        while (pending.pop()) |lambda_idx| {
+            if ((try visited.getOrPut(self.allocator, lambda_idx)).found_existing) continue;
+            const summary = self.summaries.getPtr(lambda_idx) orelse continue;
+            var deps = summary.deps.keyIterator();
+            while (deps.next()) |def_idx| _ = try demand.addDep(self.allocator, def_idx.*);
+            var callees = summary.deps_from.keyIterator();
+            while (callees.next()) |callee| try pending.append(self.allocator, callee.*);
+        }
     }
 
     fn addGraphDep(self: *DemandAnalyzer, out: *DemandSummary, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
@@ -783,9 +815,14 @@ const DemandAnalyzer = struct {
         lambda_idx: CIR.Expr.Idx,
         call_args: CIR.Expr.Span,
     ) std.mem.Allocator.Error!void {
-        var dep_iter = summary.deps.keyIterator();
-        while (dep_iter.next()) |def_idx| {
-            try self.addGraphDep(into, def_idx.*);
+        if (self.summaries.getPtr(lambda_idx) == summary) {
+            try into.deps_from.put(self.allocator, lambda_idx, {});
+        } else {
+            // An inline frame's demand has no stored summary to reach later.
+            var dep_iter = summary.deps.keyIterator();
+            while (dep_iter.next()) |def_idx| try self.addGraphDep(into, def_idx.*);
+            var from_iter = summary.deps_from.keyIterator();
+            while (from_iter.next()) |callee| try into.deps_from.put(self.allocator, callee.*, {});
         }
 
         var called_iter = summary.called_patterns.keyIterator();
@@ -1424,6 +1461,7 @@ pub fn buildDependencyGraphWithResolvedLiteralTargets(
         defer deps.deinit(allocator);
 
         try analyzer.collectDefDependencies(def_idx, &deps);
+        try analyzer.expandDeps(&deps);
 
         var dep_iter = deps.deps.keyIterator();
         while (dep_iter.next()) |dep_def_idx| {
@@ -1535,6 +1573,7 @@ pub fn getConstantsInDependencyOrder(
         defer deps.deinit(allocator);
 
         try analyzer.collectDefDependencies(def_idx, &deps);
+        try analyzer.expandDeps(&deps);
 
         var dep_iter = deps.deps.keyIterator();
         while (dep_iter.next()) |dep_def_idx| {

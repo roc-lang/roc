@@ -27,6 +27,7 @@ const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
 const ArcSnapshot = @import("arc_state.zig").Snapshot;
+const LoopForest = collections.LoopForest;
 const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
@@ -909,6 +910,8 @@ const EmissionOwner = struct {
         inserter.place_query_seen = .{};
         inserter.place_query_visited = .empty;
         inserter.place_query_stack = .empty;
+        inserter.place_query_uses = .empty;
+        inserter.place_use_facts = null;
         inserter.death_scratch = &self.death_scratch;
         inserter.transfer_position_scratch = &self.transfer_position_scratch;
         inserter.retain_arg_scratch = &self.retain_arg_scratch;
@@ -1866,7 +1869,9 @@ const Inserter = struct {
     /// costs the statements it visits rather than a store-wide reset.
     place_query_seen: std.bit_set.DynamicBitSetUnmanaged = .{},
     place_query_visited: std.ArrayList(u32) = .empty,
-    place_query_stack: std.ArrayList(LIR.CFStmtId) = .empty,
+    place_query_stack: std.ArrayList(u32) = .empty,
+    place_query_uses: std.ArrayList(LIR.LocalId) = .empty,
+    place_use_facts: ?PlaceUseFacts = null,
     /// Arena backing all non-output state for the current proc emission.
     emission_allocator: Allocator = undefined,
     arc_plans: *ArcPlans = undefined,
@@ -5654,27 +5659,519 @@ const Inserter = struct {
         }
     }
 
-    fn spanUsesOwnershipPlace(self: *const Inserter, span: LIR.LocalSpan, place: LIR.LocalId) bool {
+    /// What one statement does to ownership places, as the place-use query
+    /// sees it: the locals whose places it uses (appended to `uses`), the
+    /// place root it rebinds, and whether it uses every place.
+    const StmtPlaceFacts = struct {
+        rebinds: ?LIR.LocalId = null,
+        uses_every_place: bool = false,
+    };
+
+    fn appendSpanLocals(self: *const Inserter, uses: *std.ArrayList(LIR.LocalId), span: LIR.LocalSpan) Allocator.Error!void {
         const locals = self.store.getLocalSpan(span);
-        for (0..GuardedList.borrowLen(locals)) |index| {
-            if (self.localInOwnershipPlace(GuardedList.at(locals, index), place)) return true;
+        for (0..GuardedList.borrowLen(locals)) |index| try uses.append(self.emission_allocator, GuardedList.at(locals, index));
+    }
+
+    /// Borrowed pure aliases, discriminant reads, and non-RC field reads only
+    /// touch the inline representation and do not use the stored unit;
+    /// whole-value operands and RC-bearing projections of any place member
+    /// do. An owned pure alias of a member retains through the place at its
+    /// bind, so that bind is a use even though the alias itself then carries
+    /// its own unit.
+    fn stmtPlaceFacts(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!StmtPlaceFacts {
+        const gpa = self.emission_allocator;
+        switch (self.store.getCFStmt(stmt)) {
+            .assign_ref => |assign| {
+                switch (assign.op) {
+                    .local => |source| if (source != assign.target and !self.isBindingBorrowed(assign.target)) try uses.append(gpa, source),
+                    .discriminant => {},
+                    .field => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
+                    .tag_payload => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
+                    .tag_payload_struct => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
+                    .list_reinterpret => |op| if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, op.backing_ref),
+                    .nominal => |op| if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, op.backing_ref),
+                }
+                return .{ .rebinds = assign.target };
+            },
+            .assign_literal => |assign| return .{ .rebinds = assign.target },
+            .init_uninitialized => |assign| return .{ .rebinds = assign.target },
+            .assign_call => |assign| {
+                try self.appendSpanLocals(uses, assign.args);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_call_erased => |assign| {
+                try uses.append(gpa, assign.closure);
+                if (assign.reuse_source) |reuse_source| try uses.append(gpa, reuse_source);
+                try self.appendSpanLocals(uses, assign.args);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_packed_erased_fn => |assign| {
+                if (assign.capture) |capture| try uses.append(gpa, capture);
+                if (assign.reuse) |reuse| try uses.append(gpa, reuse);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_desc_ref => |assign| return .{ .rebinds = assign.target },
+            .assign_boxy_dict_ref => |assign| return .{ .rebinds = assign.target },
+            .assign_boxy_box => |assign| {
+                try uses.append(gpa, assign.payload);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_record_update => |assign| {
+                try uses.append(gpa, assign.base);
+                try uses.append(gpa, assign.fields);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_reuse_box => |assign| {
+                try uses.append(gpa, assign.source);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_unbox => |assign| {
+                try uses.append(gpa, assign.source);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_adapt => |assign| {
+                try uses.append(gpa, assign.source);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_inspect => |assign| {
+                try uses.append(gpa, assign.source);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_tag => |assign| {
+                if (assign.payload) |payload| try uses.append(gpa, payload);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_boxy_tag_payload => |assign| {
+                try uses.append(gpa, assign.source);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_call_dict => |assign| {
+                try self.appendSpanLocals(uses, assign.args);
+                try self.appendSpanLocals(uses, assign.hidden_args);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_low_level => |assign| {
+                try self.appendSpanLocals(uses, assign.args);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_list => |assign| {
+                try self.appendSpanLocals(uses, assign.elems);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_struct => |assign| {
+                try self.appendSpanLocals(uses, assign.fields);
+                return .{ .rebinds = assign.target };
+            },
+            .assign_tag => |assign| {
+                if (assign.payload) |payload| try uses.append(gpa, payload);
+                return .{ .rebinds = assign.target };
+            },
+            .store_struct => |assign| {
+                try uses.append(gpa, assign.dest);
+                try self.appendSpanLocals(uses, assign.fields);
+                return .{};
+            },
+            .store_tag => |assign| {
+                try uses.append(gpa, assign.dest);
+                if (assign.payload) |payload| try uses.append(gpa, payload);
+                return .{};
+            },
+            .set_local => |assign| {
+                try uses.append(gpa, assign.value);
+                // Rebinding the place ends this definition. Uses reached
+                // through the following jump belong to the newly written
+                // join value, not to the value whose projection is being
+                // considered here. Every statement that writes the place
+                // ends it the same way, which is what stops a walk when it
+                // follows a loop edge back to the definition.
+                return .{ .rebinds = assign.target };
+            },
+            .debug => |debug_stmt| {
+                try uses.append(gpa, debug_stmt.message);
+                return .{};
+            },
+            .expect => |expect_stmt| {
+                try uses.append(gpa, expect_stmt.condition);
+                return .{};
+            },
+            .comptime_branch_taken, .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => return .{},
+            .incref => |rc| {
+                try uses.append(gpa, rc.value);
+                return .{};
+            },
+            .decref, .decref_if_initialized, .free => return .{ .uses_every_place = true },
+            .switch_stmt => |switch_stmt| {
+                try uses.append(gpa, switch_stmt.cond);
+                return .{};
+            },
+            .switch_initialized_payload => |switch_stmt| {
+                try uses.append(gpa, switch_stmt.cond);
+                try uses.append(gpa, switch_stmt.payload);
+                return .{};
+            },
+            .str_match, .str_match_set, .boxy_tag_match => return .{ .uses_every_place = true },
+            .ret => |ret_stmt| {
+                try uses.append(gpa, ret_stmt.value);
+                return .{};
+            },
+            .crash => |crash_stmt| {
+                if (crash_stmt.msg.localId()) |message| try uses.append(gpa, message);
+                return .{};
+            },
+            .expect_err => |expect_err_stmt| {
+                try uses.append(gpa, expect_err_stmt.message);
+                return .{};
+            },
+            // An implicit loop boundary hands the kept value to either the
+            // next iteration or the code after the loop.
+            .loop_continue, .loop_break => return .{ .uses_every_place = true },
         }
-        return false;
+    }
+
+    /// The statements control reaches after `stmt` for the place-use query.
+    fn appendStmtWalkSuccessors(self: *Inserter, stmt: LIR.CFStmtId, out: *std.ArrayList(LIR.CFStmtId)) Allocator.Error!void {
+        const gpa = self.emission_allocator;
+        switch (self.store.getCFStmt(stmt)) {
+            inline .assign_ref,
+            .assign_literal,
+            .init_uninitialized,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .comptime_branch_taken,
+            .incref,
+            => |payload| try out.append(gpa, payload.next),
+            .switch_stmt => |switch_stmt| {
+                if (switch_stmt.continuation) |continuation| try out.append(gpa, continuation);
+                const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                for (0..GuardedList.borrowLen(branches)) |index| try out.append(gpa, GuardedList.at(branches, index).body);
+                try out.append(gpa, switch_stmt.default_branch);
+            },
+            .switch_initialized_payload => |switch_stmt| {
+                try out.append(gpa, switch_stmt.initialized_branch);
+                try out.append(gpa, switch_stmt.uninitialized_branch);
+            },
+            .join => |join_stmt| try out.append(gpa, join_stmt.remainder),
+            .jump => {
+                const join_index = self.solution.jumpTargetJoinIndexOf(stmt);
+                const joins = self.solution.joinBodiesOf(self.current_source_proc);
+                if (join_index >= joins.len) arcInvariant("ARC ownership-place use query exceeded its join table");
+                try out.append(gpa, joins[join_index].body);
+            },
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .ret,
+            .crash,
+            .expect_err,
+            .loop_continue,
+            .loop_break,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            => {},
+        }
+    }
+
+    /// What the place-use query needs of the procedure's statement graph:
+    /// which statements use each place, which root each statement rebinds,
+    /// which statements use every place and which can reach one, and the
+    /// loop-nesting forest with the roots each loop rebinds.
+    const PlaceUseFacts = struct {
+        forest: LoopForest,
+        rebound_roots: []ExactBitSet,
+        /// Edges entering a loop other than at its header, by loop.
+        side_entry_starts: []u32,
+        side_entries: []u32,
+        rebinds: []LIR.LocalId,
+        /// Statements using each place leader: `place_users[place_user_starts[i]..]`
+        /// for the i-th entry of `place_leaders` (sorted).
+        place_leaders: []u32,
+        place_user_starts: []u32,
+        place_users: []u32,
+        reaches_every_place_use: std.bit_set.DynamicBitSetUnmanaged,
+        /// Roots whose place-use region is solved, and the nodes and loops
+        /// in each region, keyed by `root << 32 | index`.
+        solved_roots: std.AutoHashMapUnmanaged(u32, void) = .empty,
+        live_nodes: std.AutoHashMapUnmanaged(u64, void) = .empty,
+        live_loops: std.AutoHashMapUnmanaged(u64, void) = .empty,
+        node_stamp: []u32,
+        loop_stamp: []u32,
+        stamp: u32 = 0,
+    };
+
+    const no_rebind: LIR.LocalId = @enumFromInt(std.math.maxInt(u32));
+
+    fn placeUseFacts(self: *Inserter) ResourceError!*PlaceUseFacts {
+        if (self.place_use_facts) |*facts| return facts;
+        try self.prepareSourceLiveness();
+        const allocator = self.emission_allocator;
+        const graph = self.source_liveness.graphFor(self.current_sig);
+        const node_count = graph.nodes.items.len;
+        const succ_starts = try allocator.alloc(u32, node_count + 1);
+        const pred_starts = try allocator.alloc(u32, node_count + 1);
+        succ_starts[0] = 0;
+        for (graph.nodes.items, 0..) |node, index| {
+            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
+            pred_starts[index] = @intCast(graph.predecessor_starts[index]);
+        }
+        pred_starts[node_count] = @intCast(graph.predecessor_starts[node_count]);
+        const succs = try allocator.alloc(u32, succ_starts[node_count]);
+        for (graph.nodes.items, 0..) |node, index| {
+            @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
+        }
+        const preds = try allocator.alloc(u32, graph.predecessors.len);
+        for (graph.predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        const forest = try LoopForest.build(allocator, succ_starts, succs, pred_starts, preds);
+        const loop_count = forest.loops.len;
+        const local_count = self.store.localCount();
+
+        const rebinds = try allocator.alloc(LIR.LocalId, node_count);
+        const rebound_roots = try allocator.alloc(ExactBitSet, loop_count);
+        for (rebound_roots) |*rebound| rebound.* = try ExactBitSet.initEmpty(allocator, local_count);
+        var every_place = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        const PlaceUser = struct { place: u32, node: u32 };
+        var place_user_list = std.ArrayList(PlaceUser).empty;
+        var uses = std.ArrayList(LIR.LocalId).empty;
+        for (graph.nodes.items, 0..) |node, node_index| {
+            uses.clearRetainingCapacity();
+            const facts = try self.stmtPlaceFacts(node.stmt, &uses);
+            if (facts.uses_every_place) every_place.set(node_index);
+            rebinds[node_index] = facts.rebinds orelse no_rebind;
+            if (facts.rebinds) |root| {
+                const loop = forest.innermost[node_index];
+                if (loop != LoopForest.none) try rebound_roots[loop].set(@intFromEnum(root));
+            }
+            for (uses.items) |local| {
+                try place_user_list.append(allocator, .{ .place = @intFromEnum(self.ownershipPlaceLeader(local)), .node = @intCast(node_index) });
+            }
+        }
+        var order = loop_count;
+        while (order > 0) {
+            order -= 1;
+            const loop = forest.preorder[order];
+            const parent = forest.loops[loop].parent;
+            if (parent != LoopForest.none) try rebound_roots[parent].setUnion(rebound_roots[loop]);
+        }
+        std.mem.sort(PlaceUser, place_user_list.items, {}, struct {
+            fn lessThan(_: void, lhs: PlaceUser, rhs: PlaceUser) bool {
+                return if (lhs.place == rhs.place) lhs.node < rhs.node else lhs.place < rhs.place;
+            }
+        }.lessThan);
+        var place_leaders = std.ArrayList(u32).empty;
+        var place_user_starts = std.ArrayList(u32).empty;
+        const place_users = try allocator.alloc(u32, place_user_list.items.len);
+        for (place_user_list.items, place_users, 0..) |entry, *out, index| {
+            out.* = entry.node;
+            if (index == 0 or place_user_list.items[index - 1].place != entry.place) {
+                try place_leaders.append(allocator, entry.place);
+                try place_user_starts.append(allocator, @intCast(index));
+            }
+        }
+        try place_user_starts.append(allocator, @intCast(place_user_list.items.len));
+
+        // Statements from which some statement using every place is reachable.
+        var reaches = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        {
+            var work = std.ArrayList(u32).empty;
+            var nodes = every_place.iterator(.{});
+            while (nodes.next()) |node_index| {
+                reaches.set(node_index);
+                try work.append(allocator, @intCast(node_index));
+            }
+            while (work.pop()) |node_index| {
+                for (preds[pred_starts[node_index]..pred_starts[node_index + 1]]) |predecessor| {
+                    if (reaches.isSet(predecessor)) continue;
+                    reaches.set(predecessor);
+                    try work.append(allocator, predecessor);
+                }
+            }
+        }
+
+        const SideEntry = struct { loop: u32, pred: u32 };
+        var side = std.ArrayList(SideEntry).empty;
+        for (0..node_count) |target| {
+            for (preds[pred_starts[target]..pred_starts[target + 1]]) |predecessor| {
+                var loop = forest.innermost[target];
+                while (loop != LoopForest.none and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
+                    if (forest.loops[loop].header != target) try side.append(allocator, .{ .loop = loop, .pred = predecessor });
+                }
+            }
+        }
+        std.mem.sort(SideEntry, side.items, {}, struct {
+            fn lessThan(_: void, lhs: SideEntry, rhs: SideEntry) bool {
+                return lhs.loop < rhs.loop;
+            }
+        }.lessThan);
+        const side_entry_starts = try allocator.alloc(u32, loop_count + 1);
+        const side_entries = try allocator.alloc(u32, side.items.len);
+        {
+            var cursor: usize = 0;
+            for (0..loop_count) |loop| {
+                side_entry_starts[loop] = @intCast(cursor);
+                while (cursor < side.items.len and side.items[cursor].loop == loop) : (cursor += 1) side_entries[cursor] = side.items[cursor].pred;
+            }
+            side_entry_starts[loop_count] = @intCast(cursor);
+        }
+
+        const node_stamp = try allocator.alloc(u32, node_count);
+        @memset(node_stamp, std.math.maxInt(u32));
+        const loop_stamp = try allocator.alloc(u32, loop_count);
+        @memset(loop_stamp, std.math.maxInt(u32));
+        self.place_use_facts = .{
+            .forest = forest,
+            .rebound_roots = rebound_roots,
+            .side_entry_starts = side_entry_starts,
+            .side_entries = side_entries,
+            .rebinds = rebinds,
+            .place_leaders = place_leaders.items,
+            .place_user_starts = place_user_starts.items,
+            .place_users = place_users,
+            .reaches_every_place_use = reaches,
+            .node_stamp = node_stamp,
+            .loop_stamp = loop_stamp,
+        };
+        return &self.place_use_facts.?;
+    }
+
+    /// A loop that never rebinds the root: the root's place is used after
+    /// one of its statements exactly when it is after all of them.
+    const PlaceRootTransparency = struct {
+        facts: *const PlaceUseFacts,
+        root_bit: usize,
+
+        fn transparent(ctx: @This(), loop: u32) bool {
+            return !ctx.facts.rebound_roots[loop].isSet(ctx.root_bit);
+        }
+
+        /// The largest loop around `node` that never rebinds the root.
+        fn outermost(ctx: @This(), node: u32) ?u32 {
+            const loop = ctx.facts.forest.innermost[node];
+            if (loop == LoopForest.none or !ctx.transparent(loop)) return null;
+            return ctx.facts.forest.outermostWhile(loop, ctx, transparent);
+        }
+    };
+
+    /// Solve where `root`'s place is used later: one backward search from the
+    /// statements using the place, stopped by statements that rebind `root`,
+    /// in which every loop that never rebinds `root` is a single unit.
+    fn solvePlaceUseRegion(self: *Inserter, facts: *PlaceUseFacts, root: LIR.LocalId) ResourceError!void {
+        const allocator = self.emission_allocator;
+        const graph = self.source_liveness.graphFor(self.current_sig);
+        const root_key = @as(u64, @intFromEnum(root)) << 32;
+        const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @intFromEnum(root) };
+        facts.stamp +%= 1;
+        const Unit = struct { loop: bool, index: u32 };
+        var work = std.ArrayList(Unit).empty;
+        const Reach = struct {
+            fn reach(facts_: *PlaceUseFacts, transparency_: PlaceRootTransparency, work_: *std.ArrayList(Unit), allocator_: Allocator, node: u32) Allocator.Error!void {
+                if (transparency_.outermost(node)) |loop| {
+                    if (facts_.loop_stamp[loop] == facts_.stamp) return;
+                    facts_.loop_stamp[loop] = facts_.stamp;
+                    try work_.append(allocator_, .{ .loop = true, .index = loop });
+                } else {
+                    if (facts_.node_stamp[node] == facts_.stamp) return;
+                    facts_.node_stamp[node] = facts_.stamp;
+                    try work_.append(allocator_, .{ .loop = false, .index = node });
+                }
+            }
+        }.reach;
+        const place: u32 = @intFromEnum(self.ownershipPlaceLeader(root));
+        var low: usize = 0;
+        var high: usize = facts.place_leaders.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (facts.place_leaders[mid] < place) low = mid + 1 else high = mid;
+        }
+        if (low < facts.place_leaders.len and facts.place_leaders[low] == place) {
+            for (facts.place_users[facts.place_user_starts[low]..facts.place_user_starts[low + 1]]) |user| {
+                try Reach(facts, transparency, &work, allocator, user);
+            }
+        }
+        while (work.pop()) |unit| {
+            if (unit.loop) {
+                try facts.live_loops.put(allocator, root_key | unit.index, {});
+                const header = facts.forest.loops[unit.index].header;
+                const pred_start = graph.predecessor_starts[header];
+                const pred_end = graph.predecessor_starts[header + 1];
+                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                    const pred: u32 = @intCast(predecessor);
+                    if (facts.forest.containsNode(unit.index, pred) or facts.rebinds[pred] == root) continue;
+                    try Reach(facts, transparency, &work, allocator, pred);
+                }
+                for (facts.side_entries[facts.side_entry_starts[unit.index]..facts.side_entry_starts[unit.index + 1]]) |pred| {
+                    if (facts.rebinds[pred] == root) continue;
+                    try Reach(facts, transparency, &work, allocator, pred);
+                }
+            } else {
+                try facts.live_nodes.put(allocator, root_key | unit.index, {});
+                const pred_start = graph.predecessor_starts[unit.index];
+                const pred_end = graph.predecessor_starts[unit.index + 1];
+                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                    const pred: u32 = @intCast(predecessor);
+                    if (facts.rebinds[pred] == root) continue;
+                    try Reach(facts, transparency, &work, allocator, pred);
+                }
+            }
+        }
+        try facts.solved_roots.put(allocator, @intFromEnum(root), {});
     }
 
     /// Exact use query for one complete ownership place, keyed by the unit
-    /// local `root`. Borrowed pure aliases, discriminant reads, and non-RC
-    /// field reads only touch the inline representation and do not use the
-    /// stored unit; whole-value operands and RC-bearing projections of any
-    /// place member do. An owned pure alias of a member retains through the
-    /// place at its bind, so that bind is a use even though the alias itself
-    /// then carries its own unit.
+    /// local `root`: whether some path from `start` reaches a use of the
+    /// place (see `stmtPlaceFacts`) before a statement rebinds `root`. Uses
+    /// of the place itself are answered from the root's solved region; a
+    /// statement that uses every place is looked for only from statements
+    /// that can reach one.
     fn ownershipPlaceUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         root: LIR.LocalId,
     ) ResourceError!bool {
-        const place = self.ownershipPlaceLeader(root);
+        const used = try self.placeUsedInPath(start, root);
+        if (builtin.mode == .Debug and used != try self.walkOwnershipPlaceUsedInPath(start, root)) {
+            arcInvariant("ARC place-use regions disagreed with the statement walk");
+        }
+        return used;
+    }
+
+    fn placeUsedInPath(self: *Inserter, start: LIR.CFStmtId, root: LIR.LocalId) ResourceError!bool {
+        const facts = try self.placeUseFacts();
+        const start_node = self.source_liveness.nodeIndex(start);
+        if (!facts.solved_roots.contains(@intFromEnum(root))) try self.solvePlaceUseRegion(facts, root);
+        const root_key = @as(u64, @intFromEnum(root)) << 32;
+        const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @intFromEnum(root) };
+        if (transparency.outermost(start_node)) |loop| {
+            if (facts.live_loops.contains(root_key | loop)) return true;
+        } else if (facts.live_nodes.contains(root_key | start_node)) {
+            return true;
+        }
+        if (!facts.reaches_every_place_use.isSet(start_node)) return false;
+
+        // Look for a statement that uses every place before `root` is rebound.
+        const graph = self.source_liveness.graphFor(self.current_sig);
         const seen = &self.place_query_seen;
         const visited = &self.place_query_visited;
         const stack = &self.place_query_stack;
@@ -5683,201 +6180,44 @@ const Inserter = struct {
             visited.clearRetainingCapacity();
             stack.clearRetainingCapacity();
         }
-        try stack.append(self.emission_allocator, start);
+        if (seen.bit_length < graph.nodes.items.len) try seen.resize(self.emission_allocator, graph.nodes.items.len, false);
+        try stack.append(self.emission_allocator, start_node);
+        while (stack.pop()) |node_index| {
+            if (seen.isSet(node_index)) continue;
+            seen.set(node_index);
+            try visited.append(self.emission_allocator, node_index);
+            if (!facts.reaches_every_place_use.isSet(node_index)) continue;
+            const node = graph.nodes.items[node_index];
+            self.place_query_uses.clearRetainingCapacity();
+            if ((try self.stmtPlaceFacts(node.stmt, &self.place_query_uses)).uses_every_place) return true;
+            if (facts.rebinds[node_index] == root) continue;
+            try stack.appendSlice(self.emission_allocator, graph.successors.items[node.successor_start..][0..node.successor_len]);
+        }
+        return false;
+    }
+
+    /// The place-use query answered by walking statements forward from
+    /// `start`; certifies the solved regions in Debug builds.
+    fn walkOwnershipPlaceUsedInPath(self: *Inserter, start: LIR.CFStmtId, root: LIR.LocalId) ResourceError!bool {
+        const allocator = self.emission_allocator;
+        const place = self.ownershipPlaceLeader(root);
+        var seen = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
+        defer seen.deinit(allocator);
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(allocator);
+        var uses = std.ArrayList(LIR.LocalId).empty;
+        defer uses.deinit(allocator);
+        try stack.append(allocator, start);
         while (stack.pop()) |current| {
-            const stmt_index = @intFromEnum(current);
-            if (stmt_index >= seen.bit_length) {
-                try seen.resize(self.emission_allocator, @max(self.store.cfStmtCount(), stmt_index + 1), false);
+            if ((try seen.getOrPut(allocator, current)).found_existing) continue;
+            uses.clearRetainingCapacity();
+            const facts = try self.stmtPlaceFacts(current, &uses);
+            if (facts.uses_every_place) return true;
+            for (uses.items) |local| {
+                if (self.localInOwnershipPlace(local, place)) return true;
             }
-            if (seen.isSet(stmt_index)) continue;
-            seen.set(stmt_index);
-            try visited.append(self.emission_allocator, @intCast(stmt_index));
-            switch (self.store.getCFStmt(current)) {
-                .assign_ref => |assign| {
-                    switch (assign.op) {
-                        .local => |source| if (source != assign.target and
-                            self.localInOwnershipPlace(source, place) and
-                            !self.isBindingBorrowed(assign.target)) return true,
-                        .discriminant => {},
-                        .field => |op| if (self.localInOwnershipPlace(op.source, place) and self.localContainsRefcounted(assign.target)) return true,
-                        .tag_payload => |op| if (self.localInOwnershipPlace(op.source, place) and self.localContainsRefcounted(assign.target)) return true,
-                        .tag_payload_struct => |op| if (self.localInOwnershipPlace(op.source, place) and self.localContainsRefcounted(assign.target)) return true,
-                        .list_reinterpret => |op| if (self.localInOwnershipPlace(op.backing_ref, place) and
-                            !self.isBindingBorrowed(assign.target)) return true,
-                        .nominal => |op| if (self.localInOwnershipPlace(op.backing_ref, place) and
-                            !self.isBindingBorrowed(assign.target)) return true,
-                    }
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_literal => |assign| {
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .init_uninitialized => |assign| {
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_call => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.args, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_call_erased => |assign| {
-                    if (self.localInOwnershipPlace(assign.closure, place) or
-                        (assign.reuse_source != null and self.localInOwnershipPlace(assign.reuse_source.?, place)) or
-                        self.spanUsesOwnershipPlace(assign.args, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_packed_erased_fn => |assign| {
-                    if ((assign.capture != null and self.localInOwnershipPlace(assign.capture.?, place)) or
-                        (assign.reuse != null and self.localInOwnershipPlace(assign.reuse.?, place))) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_desc_ref => |assign| {
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_box => |assign| {
-                    if (self.localInOwnershipPlace(assign.payload, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_record_update => |assign| {
-                    if (self.localInOwnershipPlace(assign.base, place)) return true;
-                    if (self.localInOwnershipPlace(assign.fields, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    if (self.localInOwnershipPlace(assign.source, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_unbox => |assign| {
-                    if (self.localInOwnershipPlace(assign.source, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_adapt => |assign| {
-                    if (self.localInOwnershipPlace(assign.source, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_inspect => |assign| {
-                    if (self.localInOwnershipPlace(assign.source, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_tag => |assign| {
-                    if (assign.payload != null and self.localInOwnershipPlace(assign.payload.?, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_boxy_tag_payload => |assign| {
-                    if (self.localInOwnershipPlace(assign.source, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_call_dict => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.args, place) or self.spanUsesOwnershipPlace(assign.hidden_args, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_low_level => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.args, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_list => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.elems, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_struct => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.fields, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .assign_tag => |assign| {
-                    if (assign.payload != null and self.localInOwnershipPlace(assign.payload.?, place)) return true;
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .store_struct => |assign| {
-                    if (self.localInOwnershipPlace(assign.dest, place) or self.spanUsesOwnershipPlace(assign.fields, place)) return true;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .store_tag => |assign| {
-                    if (self.localInOwnershipPlace(assign.dest, place) or
-                        (assign.payload != null and self.localInOwnershipPlace(assign.payload.?, place))) return true;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .set_local => |assign| {
-                    if (self.localInOwnershipPlace(assign.value, place)) return true;
-                    // Rebinding the place ends this definition. Uses reached
-                    // through the following jump belong to the newly written
-                    // join value, not to the value whose projection is being
-                    // considered here. Every statement that writes the place
-                    // ends it the same way, which is what stops this walk
-                    // when it follows a loop edge back to the definition.
-                    if (assign.target == root) continue;
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .debug => |stmt| {
-                    if (self.localInOwnershipPlace(stmt.message, place)) return true;
-                    try stack.append(self.emission_allocator, stmt.next);
-                },
-                .expect => |stmt| {
-                    if (self.localInOwnershipPlace(stmt.condition, place)) return true;
-                    try stack.append(self.emission_allocator, stmt.next);
-                },
-                .comptime_branch_taken => |stmt| try stack.append(self.emission_allocator, stmt.next),
-                .incref => |stmt| {
-                    if (self.localInOwnershipPlace(stmt.value, place)) return true;
-                    try stack.append(self.emission_allocator, stmt.next);
-                },
-                .decref, .decref_if_initialized, .free => return true,
-                .switch_stmt => |stmt| {
-                    if (self.localInOwnershipPlace(stmt.cond, place)) return true;
-                    if (stmt.continuation) |continuation| try stack.append(self.emission_allocator, continuation);
-                    const branches = self.store.getCFSwitchBranches(stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |index| try stack.append(self.emission_allocator, GuardedList.at(branches, index).body);
-                    try stack.append(self.emission_allocator, stmt.default_branch);
-                },
-                .switch_initialized_payload => |stmt| {
-                    if (self.localInOwnershipPlace(stmt.cond, place) or self.localInOwnershipPlace(stmt.payload, place)) return true;
-                    try stack.append(self.emission_allocator, stmt.initialized_branch);
-                    try stack.append(self.emission_allocator, stmt.uninitialized_branch);
-                },
-                .str_match, .str_match_set, .boxy_tag_match => return true,
-                .join => |stmt| try stack.append(self.emission_allocator, stmt.remainder),
-                .jump => {
-                    const join_index = self.solution.jumpTargetJoinIndexOf(current);
-                    const joins = self.solution.joinBodiesOf(self.current_source_proc);
-                    if (join_index >= joins.len) arcInvariant("ARC ownership-place use query exceeded its join table");
-                    try stack.append(self.emission_allocator, joins[join_index].body);
-                },
-                .ret => |stmt| if (self.localInOwnershipPlace(stmt.value, place)) return true,
-                .crash => |stmt| {
-                    if (stmt.msg.localId()) |message| {
-                        if (self.localInOwnershipPlace(message, place)) return true;
-                    }
-                },
-                .expect_err => |stmt| if (self.localInOwnershipPlace(stmt.message, place)) return true,
-                // An implicit loop boundary hands the kept value to either
-                // the next iteration or the code after the loop. A root
-                // rebind encountered earlier stopped this path before it
-                // could get here.
-                .loop_continue, .loop_break => return true,
-                .runtime_error, .comptime_exhaustiveness_failed => {},
-            }
+            if (facts.rebinds == root) continue;
+            try self.appendStmtWalkSuccessors(current, &stack);
         }
         return false;
     }
@@ -6861,7 +7201,387 @@ const Inserter = struct {
         graph_slot.* = graph;
     }
 
+    /// Solve every node's keep-free liveness row: a bit is exposed at a node
+    /// when some path from the node reaches a read of it without crossing a
+    /// definition of it or an edge that kills it.
+    ///
+    /// The statement graph is reducible (a join body is entered only by jumps
+    /// to its join), so its cycles form a loop-nesting forest. A loop is
+    /// strongly connected, so a bit that nothing inside a loop defines or
+    /// kills is exposed either at every node of the loop or at none. Each bit
+    /// is solved by one backward search from its reads in which every loop
+    /// that is transparent to it counts as a single unit, and each row is the
+    /// shared set of bits its enclosing loops carry whole plus the few bits
+    /// live at the node itself. A loop nest therefore costs its size rather
+    /// than its size times its depth.
     fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+        try self.solveStructuredLiveness(graph);
+        if (builtin.mode == .Debug) try self.certifyStructuredLiveness(graph);
+    }
+
+    /// Debug-only oracle: re-solve the equations by flooding each cyclic
+    /// component to its least fixed point and require identical rows.
+    fn certifyStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+        if (builtin.mode != .Debug) return;
+        const allocator = self.source_liveness.scratch_allocator;
+        const solved = try allocator.alloc(ExactBitSet, graph.nodes.items.len);
+        defer allocator.free(solved);
+        for (graph.nodes.items, solved) |*node, *row| {
+            row.* = try node.exposed.clone(graph.allocator);
+            node.exposed.unsetAll();
+        }
+        try self.floodKeepFreeLiveness(graph);
+        for (graph.nodes.items, solved) |*node, *row| {
+            if (!node.exposed.eql(row.*)) arcInvariant("ARC structured liveness disagreed with the least fixed point");
+        }
+    }
+
+    fn solveStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+        var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
+        defer scratch_arena.deinit();
+        const allocator = scratch_arena.allocator();
+        const node_count = graph.nodes.items.len;
+        const bit_len = self.domain().livenessBitLen();
+        const no_loop = LoopForest.none;
+
+        const succ_starts = try allocator.alloc(u32, node_count + 1);
+        const pred_starts = try allocator.alloc(u32, node_count + 1);
+        succ_starts[0] = 0;
+        for (graph.nodes.items, 0..) |node, index| {
+            succ_starts[index + 1] = succ_starts[index] + node.successor_len;
+            pred_starts[index] = @intCast(graph.predecessor_starts[index]);
+        }
+        pred_starts[node_count] = @intCast(graph.predecessor_starts[node_count]);
+        const succs = try allocator.alloc(u32, succ_starts[node_count]);
+        for (graph.nodes.items, 0..) |node, index| {
+            @memcpy(succs[succ_starts[index]..succ_starts[index + 1]], graph.successors.items[node.successor_start..][0..node.successor_len]);
+        }
+        const preds = try allocator.alloc(u32, graph.predecessors.len);
+        for (graph.predecessors, preds) |predecessor, *out| out.* = @intCast(predecessor);
+        var forest = try LoopForest.build(allocator, succ_starts, succs, pred_starts, preds);
+        const loop_count = forest.loops.len;
+
+        // Edges entering a loop other than at its header, by loop.
+        const LoopEntry = struct { loop: u32, predecessor: u32, target: u32 };
+        var side_entries = std.ArrayList(LoopEntry).empty;
+        for (0..node_count) |target_index| {
+            const target: u32 = @intCast(target_index);
+            for (preds[pred_starts[target]..pred_starts[target + 1]]) |predecessor| {
+                var loop = forest.innermost[target];
+                while (loop != no_loop and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
+                    if (forest.loops[loop].header != target) {
+                        try side_entries.append(allocator, .{ .loop = loop, .predecessor = predecessor, .target = target });
+                    }
+                }
+            }
+        }
+        std.mem.sort(LoopEntry, side_entries.items, {}, struct {
+            fn lessThan(_: void, lhs: LoopEntry, rhs: LoopEntry) bool {
+                return lhs.loop < rhs.loop;
+            }
+        }.lessThan);
+        const side_entry_starts = try allocator.alloc(u32, loop_count + 1);
+        {
+            var cursor: usize = 0;
+            for (0..loop_count) |loop| {
+                side_entry_starts[loop] = @intCast(cursor);
+                while (cursor < side_entries.items.len and side_entries.items[cursor].loop == loop) cursor += 1;
+            }
+            side_entry_starts[loop_count] = @intCast(cursor);
+        }
+
+        // Bits each loop defines or kills: a node's definition belongs to its
+        // innermost loop, and an edge's kills to the innermost loop holding
+        // both its ends.
+        const written = try allocator.alloc(ExactBitSet, loop_count);
+        for (written) |*bits| bits.* = try ExactBitSet.initEmpty(graph.allocator, bit_len);
+        for (graph.nodes.items, 0..) |node, node_index| {
+            const loop = forest.innermost[node_index];
+            if (loop == no_loop) continue;
+            if (node.def) |local| {
+                if (self.rawLivenessBitOf(local)) |bit| try written[loop].set(bit);
+                if (self.groupBitOf(local)) |bit| try written[loop].set(bit);
+                if (self.valueUseBitOf(local)) |bit| try written[loop].set(bit);
+            }
+            for (node.edge_kills) |kill| {
+                const target_loop = forest.innermost[graph.successors.items[node.successor_start + kill.successor_offset]];
+                if (target_loop == no_loop) continue;
+                var common = loop;
+                while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
+                if (common != no_loop) try written[common].set(kill.bit);
+            }
+        }
+        var preorder_index = loop_count;
+        while (preorder_index > 0) {
+            preorder_index -= 1;
+            const loop = forest.preorder[preorder_index];
+            const parent = forest.loops[loop].parent;
+            if (parent != no_loop) try written[parent].setUnion(written[loop]);
+        }
+
+        // Components in an order that solves every successor component
+        // first: a node outside every cycle is one exact step of the
+        // equations from its successors' finished rows, sharing their sets.
+        const no_component = std.math.maxInt(u32);
+        const component_of = try allocator.alloc(u32, node_count);
+        @memset(component_of, no_component);
+        var component_nodes = std.ArrayList(u32).empty;
+        var component_starts = std.ArrayList(u32).empty;
+        {
+            const Frame = struct { node: u32, next_successor: u32 };
+            var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+            var frames = std.ArrayList(Frame).empty;
+            var finish_order = std.ArrayList(u32).empty;
+            for (0..node_count) |root| {
+                if (seen.isSet(root)) continue;
+                seen.set(root);
+                try frames.append(allocator, .{ .node = @intCast(root), .next_successor = 0 });
+                while (frames.items.len != 0) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    const node = graph.nodes.items[frame.node];
+                    if (frame.next_successor < node.successor_len) {
+                        const successor = graph.successors.items[node.successor_start + frame.next_successor];
+                        frame.next_successor += 1;
+                        if (!seen.isSet(successor)) {
+                            seen.set(successor);
+                            try frames.append(allocator, .{ .node = successor, .next_successor = 0 });
+                        }
+                        continue;
+                    }
+                    try finish_order.append(allocator, frame.node);
+                    _ = frames.pop();
+                }
+            }
+            var reverse_work = std.ArrayList(u32).empty;
+            var order_index = finish_order.items.len;
+            while (order_index > 0) {
+                order_index -= 1;
+                const root = finish_order.items[order_index];
+                if (component_of[root] != no_component) continue;
+                const component: u32 = @intCast(component_starts.items.len);
+                try component_starts.append(allocator, @intCast(component_nodes.items.len));
+                component_of[root] = component;
+                try reverse_work.append(allocator, root);
+                while (reverse_work.pop()) |member| {
+                    try component_nodes.append(allocator, member);
+                    for (preds[pred_starts[member]..pred_starts[member + 1]]) |predecessor| {
+                        if (component_of[predecessor] != no_component) continue;
+                        component_of[predecessor] = component;
+                        try reverse_work.append(allocator, predecessor);
+                    }
+                }
+            }
+            try component_starts.append(allocator, @intCast(component_nodes.items.len));
+        }
+
+        // Inside a cyclic component, one backward search per bit. A unit is a
+        // node, or the largest loop around a node that is transparent to the
+        // bit, whose whole body shares one answer.
+        const Unit = struct { loop: bool, index: u32 };
+        const BitAt = struct { index: u32, bit: u32 };
+        const Search = struct {
+            inserter: *Inserter,
+            graph_: *ReadBeforeRebindGraph,
+            forest_: *const LoopForest,
+            written_: []const ExactBitSet,
+            component_of_: []const u32,
+            component: u32 = 0,
+            node_stamp: []u32,
+            loop_stamp: []u32,
+            stamp: u32 = 0,
+            bit: u32 = 0,
+            work: std.ArrayList(Unit) = .empty,
+            node_bits: std.ArrayList(BitAt) = .empty,
+            loop_bits: std.ArrayList(BitAt) = .empty,
+            allocator_: Allocator,
+
+            fn transparent(search: *const @This(), loop: u32) bool {
+                return !search.written_[loop].isSet(search.bit);
+            }
+
+            /// The largest loop around `node` that defines and kills nothing
+            /// of the bit, or none.
+            fn transparentLoop(search: *const @This(), node: u32) ?u32 {
+                const loop = search.forest_.innermost[node];
+                if (loop == LoopForest.none or !search.transparent(loop)) return null;
+                return search.forest_.outermostWhile(loop, search, transparent);
+            }
+
+            fn reach(search: *@This(), node: u32) Allocator.Error!void {
+                if (search.component_of_[node] != search.component) return;
+                if (search.transparentLoop(node)) |loop| {
+                    if (search.loop_stamp[loop] == search.stamp) return;
+                    search.loop_stamp[loop] = search.stamp;
+                    try search.work.append(search.allocator_, .{ .loop = true, .index = loop });
+                } else {
+                    if (search.node_stamp[node] == search.stamp) return;
+                    search.node_stamp[node] = search.stamp;
+                    try search.work.append(search.allocator_, .{ .loop = false, .index = node });
+                }
+            }
+
+            fn defines(search: *const @This(), node_index: u32) bool {
+                const local = search.graph_.nodes.items[node_index].def orelse return false;
+                const inserter = search.inserter;
+                const bit: usize = search.bit;
+                for ([_]?usize{ inserter.rawLivenessBitOf(local), inserter.groupBitOf(local), inserter.valueUseBitOf(local) }) |defined| {
+                    if (defined) |defined_bit| if (defined_bit == bit) return true;
+                }
+                return false;
+            }
+
+            /// Whether some edge from `predecessor` to `successor` keeps the bit.
+            fn edgeKeeps(search: *const @This(), predecessor: u32, successor: u32) bool {
+                const node = search.graph_.nodes.items[predecessor];
+                const successors = search.graph_.successors.items[node.successor_start..][0..node.successor_len];
+                for (successors, 0..) |candidate, offset| {
+                    if (candidate != successor) continue;
+                    const killed = for (node.edge_kills) |kill| {
+                        if (kill.successor_offset == offset and kill.bit == search.bit) break true;
+                    } else false;
+                    if (!killed) return true;
+                }
+                return false;
+            }
+
+            /// Whether the bit exposed at `successor` is exposed at
+            /// `predecessor` through their edges and its definition.
+            fn passes(search: *const @This(), predecessor: u32, successor: u32) bool {
+                return !search.defines(predecessor) and search.edgeKeeps(predecessor, successor);
+            }
+
+            fn reachPredecessorsOf(search: *@This(), target: u32, outside: ?u32) Allocator.Error!void {
+                const pred_start = search.graph_.predecessor_starts[target];
+                const pred_end = search.graph_.predecessor_starts[target + 1];
+                for (search.graph_.predecessors[pred_start..pred_end]) |predecessor| {
+                    const pred: u32 = @intCast(predecessor);
+                    if (outside) |loop| if (search.forest_.containsNode(loop, pred)) continue;
+                    if (search.passes(pred, target)) try search.reach(pred);
+                }
+            }
+        };
+        var search = Search{
+            .inserter = self,
+            .graph_ = graph,
+            .forest_ = &forest,
+            .written_ = written,
+            .component_of_ = component_of,
+            .node_stamp = try allocator.alloc(u32, node_count),
+            .loop_stamp = try allocator.alloc(u32, loop_count),
+            .allocator_ = allocator,
+        };
+        @memset(search.node_stamp, std.math.maxInt(u32));
+        @memset(search.loop_stamp, std.math.maxInt(u32));
+        const carried = try allocator.alloc(ExactBitSet, loop_count);
+        const byIndex = struct {
+            fn lessThan(_: void, lhs: BitAt, rhs: BitAt) bool {
+                return if (lhs.index == rhs.index) lhs.bit < rhs.bit else lhs.index < rhs.index;
+            }
+        }.lessThan;
+        const byBit = struct {
+            fn lessThan(_: void, lhs: BitAt, rhs: BitAt) bool {
+                return if (lhs.bit == rhs.bit) lhs.index < rhs.index else lhs.bit < rhs.bit;
+            }
+        }.lessThan;
+        var seeds = std.ArrayList(BitAt).empty;
+        var scratch = try ExactBitSet.initEmpty(graph.allocator, bit_len);
+        var edge_scratch = try ExactBitSet.initEmpty(graph.allocator, bit_len);
+
+        var component_cursor = component_starts.items.len - 1;
+        while (component_cursor > 0) {
+            component_cursor -= 1;
+            const members = component_nodes.items[component_starts.items[component_cursor]..component_starts.items[component_cursor + 1]];
+            const first = members[0];
+            if (members.len == 1 and forest.innermost[first] == no_loop) {
+                _ = try self.recomputeLivenessNode(graph, first, &scratch, &edge_scratch);
+                continue;
+            }
+            const component: u32 = @intCast(component_cursor);
+            search.component = component;
+            search.node_bits.clearRetainingCapacity();
+            search.loop_bits.clearRetainingCapacity();
+
+            // Seeds: reads inside the component, and bits exposed just past
+            // an edge leaving it.
+            seeds.clearRetainingCapacity();
+            for (members) |member| {
+                const node = graph.nodes.items[member];
+                var read_bits = node.reads.iteratorRange(0, bit_len);
+                while (read_bits.next()) |bit| try seeds.append(allocator, .{ .index = member, .bit = @intCast(bit) });
+                const successors = graph.successors.items[node.successor_start..][0..node.successor_len];
+                for (successors, 0..) |successor, offset| {
+                    if (component_of[successor] == component) continue;
+                    var exposed_bits = graph.nodes.items[successor].exposed.iteratorRange(0, bit_len);
+                    while (exposed_bits.next()) |bit| {
+                        const killed = for (node.edge_kills) |kill| {
+                            if (kill.successor_offset == offset and kill.bit == bit) break true;
+                        } else false;
+                        if (!killed) try seeds.append(allocator, .{ .index = member, .bit = @intCast(bit) });
+                    }
+                }
+            }
+            std.mem.sort(BitAt, seeds.items, {}, byBit);
+            var seed_index: usize = 0;
+            while (seed_index < seeds.items.len) : (search.stamp += 1) {
+                search.bit = seeds.items[seed_index].bit;
+                while (seed_index < seeds.items.len and seeds.items[seed_index].bit == search.bit) : (seed_index += 1) {
+                    const seed = seeds.items[seed_index].index;
+                    // An exit seed is exposed at its node only through the
+                    // node's definition; a read is exposed regardless.
+                    if (graph.nodes.items[seed].reads.isSet(search.bit) or !search.defines(seed)) try search.reach(seed);
+                }
+                while (search.work.pop()) |unit| {
+                    if (unit.loop) {
+                        try search.loop_bits.append(allocator, .{ .index = unit.index, .bit = search.bit });
+                        try search.reachPredecessorsOf(forest.loops[unit.index].header, unit.index);
+                        for (side_entries.items[side_entry_starts[unit.index]..side_entry_starts[unit.index + 1]]) |entry| {
+                            if (component_of[entry.predecessor] != component) continue;
+                            if (search.passes(entry.predecessor, entry.target)) try search.reach(entry.predecessor);
+                        }
+                    } else {
+                        try search.node_bits.append(allocator, .{ .index = unit.index, .bit = search.bit });
+                        try search.reachPredecessorsOf(unit.index, null);
+                    }
+                }
+            }
+
+            // Rows: the bits whole loops carry, shared down the component's
+            // loop tree, plus the bits exposed at the node itself.
+            std.mem.sort(BitAt, search.loop_bits.items, {}, byIndex);
+            std.mem.sort(BitAt, search.node_bits.items, {}, byIndex);
+            var top = forest.innermost[first];
+            while (forest.loops[top].parent != no_loop) top = forest.loops[top].parent;
+            for (forest.preorder[forest.loops[top].enter .. forest.loops[top].exit + 1]) |loop| {
+                const parent = forest.loops[loop].parent;
+                var row = if (parent != no_loop)
+                    try carried[parent].clone(graph.allocator)
+                else
+                    try ExactBitSet.initEmpty(graph.allocator, bit_len);
+                var low: usize = 0;
+                var high: usize = search.loop_bits.items.len;
+                while (low < high) {
+                    const mid = low + (high - low) / 2;
+                    if (search.loop_bits.items[mid].index < loop) low = mid + 1 else high = mid;
+                }
+                while (low < search.loop_bits.items.len and search.loop_bits.items[low].index == loop) : (low += 1) {
+                    try row.set(search.loop_bits.items[low].bit);
+                }
+                carried[loop] = row;
+            }
+            std.mem.sort(u32, members, {}, std.sort.asc(u32));
+            var bit_index: usize = 0;
+            for (members) |member| {
+                var row = try carried[forest.innermost[member]].clone(graph.allocator);
+                while (bit_index < search.node_bits.items.len and search.node_bits.items[bit_index].index < member) bit_index += 1;
+                while (bit_index < search.node_bits.items.len and search.node_bits.items[bit_index].index == member) : (bit_index += 1) {
+                    try row.set(search.node_bits.items[bit_index].bit);
+                }
+                graph.nodes.items[member].exposed = row;
+            }
+        }
+    }
+
+    fn floodKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
         var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
         defer scratch_arena.deinit();
         const allocator = scratch_arena.allocator();
@@ -6923,8 +7643,11 @@ const Inserter = struct {
         // bitset scratch belongs to the durable allocator, unlike SCC work.
         var scratch = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         var edge_scratch = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
-        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-        var node_work = std.ArrayList(usize).empty;
+        const LiveWord = struct { node: usize, word: u32, mask: u64 };
+        var word_work = std.ArrayList(LiveWord).empty;
+        // Words members gained while flooding, by `node << 32 | word`, written
+        // to their persistent sets once the component is solved.
+        var gained_words = std.AutoHashMapUnmanaged(u64, u64).empty;
 
         var scc_cursor = scc_offsets.items.len - 1;
         while (scc_cursor > 0) {
@@ -6945,23 +7668,73 @@ const Inserter = struct {
                 _ = try self.recomputeLivenessNode(graph, members[0], &scratch, &edge_scratch);
                 continue;
             }
+            // The members' sets are the least fixpoint of the equation
+            // `recomputeLivenessNode` evaluates. Evaluate each member once, then
+            // flood each word of newly exposed bits to every predecessor that
+            // passes them: bits reach a predecessor that does not define them
+            // along an edge that does not kill them. A member's word changes
+            // only when it gains bits, where re-evaluating whole members would
+            // revisit each one once per loop around it.
+            for (members) |node_index| graph.nodes.items[node_index].exposed.unsetAll();
             for (members) |node_index| {
-                if (in_work.isSet(node_index)) continue;
-                in_work.set(node_index);
-                try node_work.append(allocator, node_index);
+                _ = try self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch);
+                var words = graph.nodes.items[node_index].exposed.words.iterator();
+                while (words.next()) |entry| try word_work.append(allocator, .{ .node = node_index, .word = entry.index, .mask = entry.value });
             }
-            while (node_work.pop()) |node_index| {
-                in_work.unset(node_index);
-                if (!try self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch)) continue;
-                const pred_start = graph.predecessor_starts[node_index];
-                const pred_end = graph.predecessor_starts[node_index + 1];
+            while (word_work.pop()) |live| {
+                const pred_start = graph.predecessor_starts[live.node];
+                const pred_end = graph.predecessor_starts[live.node + 1];
                 for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                    if (scc_of[predecessor] != scc_cursor or in_work.isSet(predecessor)) continue;
-                    in_work.set(predecessor);
-                    try node_work.append(allocator, predecessor);
+                    if (scc_of[predecessor] != scc_cursor) continue;
+                    const pred_node = &graph.nodes.items[predecessor];
+                    const slot = try gained_words.getOrPut(allocator, (@as(u64, predecessor) << 32) | live.word);
+                    if (!slot.found_existing) slot.value_ptr.* = pred_node.exposed.words.get(live.word);
+                    var gained = live.mask & ~slot.value_ptr.*;
+                    if (gained == 0) continue;
+                    gained &= ~self.livenessDefinedWordMask(pred_node.*, live.word);
+                    gained &= livenessEdgeWordMask(graph, pred_node.*, live.node, live.word);
+                    if (gained == 0) continue;
+                    slot.value_ptr.* |= gained;
+                    try word_work.append(allocator, .{ .node = predecessor, .word = live.word, .mask = gained });
                 }
             }
+            var gained_entries = gained_words.iterator();
+            while (gained_entries.next()) |entry| {
+                const node_index: usize = @intCast(entry.key_ptr.* >> 32);
+                const word: u32 = @truncate(entry.key_ptr.*);
+                const exposed = &graph.nodes.items[node_index].exposed;
+                if (exposed.words.get(word) != entry.value_ptr.*) try exposed.words.put(word, entry.value_ptr.*);
+            }
+            gained_words.clearRetainingCapacity();
         }
+    }
+
+    /// The bits of word `word` that `node`'s definition removes from what
+    /// reaches it.
+    fn livenessDefinedWordMask(self: *const Inserter, node: ReadBeforeRebindNode, word: u32) u64 {
+        const local = node.def orelse return 0;
+        var mask: u64 = 0;
+        for ([_]?usize{ self.rawLivenessBitOf(local), self.groupBitOf(local), self.valueUseBitOf(local) }) |maybe_bit| {
+            const bit = maybe_bit orelse continue;
+            if (bit / 64 == word) mask |= @as(u64, 1) << @intCast(bit % 64);
+        }
+        return mask;
+    }
+
+    /// The bits of word `word` that some edge from `node` to `successor`
+    /// carries: each edge carries every bit it does not kill.
+    fn livenessEdgeWordMask(graph: *const ReadBeforeRebindGraph, node: ReadBeforeRebindNode, successor: usize, word: u32) u64 {
+        const successors = graph.successors.items[node.successor_start..][0..node.successor_len];
+        var passes: u64 = 0;
+        for (successors, 0..) |candidate, offset| {
+            if (candidate != successor) continue;
+            var edge: u64 = std.math.maxInt(u64);
+            for (node.edge_kills) |kill| {
+                if (kill.successor_offset == offset and kill.bit / 64 == word) edge &= ~(@as(u64, 1) << @intCast(kill.bit % 64));
+            }
+            passes |= edge;
+        }
+        return passes;
     }
 
     fn recomputeLivenessNode(

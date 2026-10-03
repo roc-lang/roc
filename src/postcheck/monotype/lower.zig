@@ -2560,6 +2560,10 @@ const CheckedMonoRequestFrame = struct {
     ops_start: usize,
     ops_end: usize,
     next: usize,
+    /// The graph structure epoch at which neither root contained generated-
+    /// private evidence. While the epoch is unchanged no class has changed,
+    /// so no component of either root contains any either.
+    public_at_epoch: ?u32,
 };
 
 fn relateCheckedMonoRequestNodeAt(
@@ -2579,7 +2583,7 @@ fn relateCheckedMonoRequestNodeAt(
         };
         frames.deinit(allocator);
     }
-    try beginCheckedMonoRequestPair(graph, checked_node, request_node, row_width, seen, &ops, &frames);
+    try beginCheckedMonoRequestPair(graph, checked_node, request_node, row_width, null, seen, &ops, &frames);
     while (frames.items.len > 0) {
         const top = frames.items.len - 1;
         const frame = &frames.items[top];
@@ -2591,8 +2595,9 @@ fn relateCheckedMonoRequestNodeAt(
         }
         const op = ops.items[frame.next];
         frame.next += 1;
+        const public_at_epoch = frame.public_at_epoch;
         switch (op) {
-            .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, seen, &ops, &frames),
+            .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, public_at_epoch, seen, &ops, &frames),
             .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
             .join_container => |pair| try graph.joinRelatedRequestContainer(pair.checked, pair.request),
             .named_instances => |pair| try graph.relateNamedInstances(pair.checked, pair.request),
@@ -2611,6 +2616,8 @@ fn beginCheckedMonoRequestPair(
     checked_node: NodeId,
     request_node: NodeId,
     row_width: solve.RowWidthRelation,
+    /// The enclosing pair's `public_at_epoch`, whose roots reach these.
+    enclosing_public_at_epoch: ?u32,
     seen: *std.AutoHashMap(CheckedMonoRequestPair, void),
     ops: *std.ArrayList(CheckedMonoRequestOp),
     frames: *std.ArrayList(CheckedMonoRequestFrame),
@@ -2620,12 +2627,15 @@ fn beginCheckedMonoRequestPair(
     const request_root = graph.rootNode(request_node);
     if (checked_root == request_root) return;
 
-    if (try graph.containsGeneratedPrivate(checked_root) or
-        try graph.containsGeneratedPrivate(request_root))
-    {
-        try relateRequestComponentAtWidth(graph, checked_root, request_root, row_width);
-        return;
+    if (enclosing_public_at_epoch != graph.structure_epoch) {
+        if (try graph.containsGeneratedPrivate(checked_root) or
+            try graph.containsGeneratedPrivate(request_root))
+        {
+            try relateRequestComponentAtWidth(graph, checked_root, request_root, row_width);
+            return;
+        }
     }
+    const public_at_epoch = graph.structure_epoch;
 
     const roots: CheckedMonoRequestPair = .{ .checked = checked_root, .request = request_root };
     const entry = try seen.getOrPut(roots);
@@ -2755,7 +2765,13 @@ fn beginCheckedMonoRequestPair(
         .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
     };
     if (!structural) try ops.append(allocator, .{ .unify = roots });
-    frames.appendAssumeCapacity(.{ .pair = roots, .ops_start = ops_start, .ops_end = ops.items.len, .next = ops_start });
+    frames.appendAssumeCapacity(.{
+        .pair = roots,
+        .ops_start = ops_start,
+        .ops_end = ops.items.len,
+        .next = ops_start,
+        .public_at_epoch = public_at_epoch,
+    });
 }
 
 fn sameNamedValueDefinition(left: anytype, right: anytype) bool {
@@ -4200,6 +4216,15 @@ const Builder = struct {
     /// identity and status live on the `Ast.SpecRecord`.
     lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
+    /// Each checked expression's reassigned binders in source order (see
+    /// `collectReassignedBindersInExpr`), as spans of
+    /// `reassigned_binder_pool`. They depend only on the checked expression
+    /// and the compilation's expect mode, so every body shares them.
+    reassigned_binders_memo: std.AutoHashMapUnmanaged(ReassignedBinderAddress, ReassignedBinderSpan) = .empty,
+    /// Whether each checked type reaches the error type (see
+    /// `checkedTypeContainsError`).
+    checked_type_contains_error: std.AutoHashMapUnmanaged(CheckedTypeAddress, bool) = .empty,
+    reassigned_binder_pool: std.ArrayList(checked.PatternBinderId) = .empty,
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
     /// Static-data uses indexed by `StaticDataId`. These types have crossed the
@@ -4598,6 +4623,9 @@ const Builder = struct {
         self.static_data_ids.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
+        self.reassigned_binders_memo.deinit(self.allocator);
+        self.checked_type_contains_error.deinit(self.allocator);
+        self.reassigned_binder_pool.deinit(self.allocator);
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
         var resolved_vectors = self.resolved_callable_vectors.valueIterator();
@@ -19662,6 +19690,9 @@ const TypeInstantiationContext = struct {
     /// argument cells. Default materializations must not reuse a caller's or
     /// another materialization's request, even for the same checked expression.
     direct_call_requests: collections.DenseMap(checked.CheckedExprId, DirectCallRequest),
+    /// Result-type reads belong to this checked-type instantiation. Imported
+    /// defaults and other instantiations use independent expression-read maps.
+    expr_type_reads: collections.DenseMap(checked.CheckedExprId, NodeId),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
@@ -19679,6 +19710,7 @@ const TypeInstantiationContext = struct {
             .node_map = InstantiatingNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
             .direct_call_requests = collections.DenseMap(checked.CheckedExprId, DirectCallRequest).init(allocator),
+            .expr_type_reads = collections.DenseMap(checked.CheckedExprId, NodeId).init(allocator),
         };
     }
 
@@ -19688,6 +19720,7 @@ const TypeInstantiationContext = struct {
         self.node_map.deinit();
         self.field_kind_map.deinit();
         self.direct_call_requests.deinit();
+        self.expr_type_reads.deinit();
     }
 };
 
@@ -19733,6 +19766,13 @@ const BodyContext = struct {
     /// Node IDs are dense, and each walk unsets on exit, so this replaces a
     /// fresh visitation hash table per query.
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
+    /// Each node being expanded by the running uninhabitedness scan, with the
+    /// scan's count of unsettled encounters when it was entered.
+    inhabitation_entered: std.AutoHashMapUnmanaged(NodeId, usize) = .empty,
+    /// Uninhabitedness of graph roots whose whole reachable structure was
+    /// settled when scanned, per backing access. Nothing can change such an
+    /// answer.
+    settled_node_uninhabited: [2]std.AutoHashMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
     /// The stacks the uninhabitedness scans run on, kept between scans.
     node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
     type_uninhabited_scratch: TypeUninhabitedScan.Evaluation.Scratch = .{},
@@ -19762,10 +19802,9 @@ const BodyContext = struct {
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
     propagate_constructor_value_evidence: bool = false,
-    /// Result-type reads of dispatch expressions carrying no expected cell,
-    /// shared by every later such read of the same expression (see
-    /// `sharedDispatchTypeRead`).
-    dispatch_type_reads: std.AutoHashMapUnmanaged(checked.CheckedExprId, NodeId) = .empty,
+    /// One shared request interface per direct call expression of this body;
+    /// see `DirectCallRequest`.
+    direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Constructor expressions already related to a request node, keyed by
     /// the node's class root at the time. A constructor's relation only
     /// unifies its children with the node's component slots, so relating it
@@ -20821,12 +20860,14 @@ const BodyContext = struct {
         self.deinitSpareInstFrames();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
-        self.dispatch_type_reads.deinit(self.allocator);
+        self.direct_call_requests.deinit(self.allocator);
         self.related_constructors.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
+        self.inhabitation_entered.deinit(self.allocator);
+        for (&self.settled_node_uninhabited) |*settled| settled.deinit(self.allocator);
         self.node_uninhabited_scratch.deinit(self.allocator);
         self.type_uninhabited_scratch.deinit(self.allocator);
         self.pattern_uninhabited_scratch.deinit(self.allocator);
@@ -23535,18 +23576,34 @@ const BodyContext = struct {
         return try self.instNode(checked_ty);
     }
 
+    /// Whether a checked type reaches the error type. Checked types are
+    /// immutable, so answers are memoized per module for the compilation:
+    /// every type a scan without an error visited is error-free too.
     fn checkedTypeContainsError(self: *BodyContext, root: checked.CheckedTypeId) Allocator.Error!bool {
+        const memo = &self.builder.checked_type_contains_error;
+        if (memo.get(checkedTypeAddress(self.view, root))) |known| return known;
         var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
+        var visited_order: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer visited_order.deinit(self.allocator);
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |checked_ty| {
             if (visited.contains(checked_ty)) continue;
+            if (memo.get(checkedTypeAddress(self.view, checked_ty))) |known| {
+                if (!known) continue;
+                try memo.put(self.builder.allocator, checkedTypeAddress(self.view, root), true);
+                return true;
+            }
             try visited.put(checked_ty, {});
+            try visited_order.append(self.allocator, checked_ty);
             switch (checkedPayload(self.view, checked_ty)) {
                 .pending => Common.invariant("pending checked type reached Monotype error scan"),
-                .err => return true,
+                .err => {
+                    try memo.put(self.builder.allocator, checkedTypeAddress(self.view, root), true);
+                    return true;
+                },
                 .flex, .rigid, .empty_record, .empty_tag_union => {},
                 .alias => |alias| {
                     try pending.append(self.allocator, alias.backing);
@@ -23570,6 +23627,9 @@ const BodyContext = struct {
                     try pending.append(self.allocator, tag_union.ext);
                 },
             }
+        }
+        for (visited_order.items) |checked_ty| {
+            try memo.put(self.builder.allocator, checkedTypeAddress(self.view, checked_ty), false);
         }
         return false;
     }
@@ -27432,19 +27492,19 @@ const BodyContext = struct {
         };
     }
 
-    /// A dispatch expression's result type is instantiated once per lowered
-    /// body and shared by every later result-type read carrying no expected
-    /// cell, as a direct call's request interface is. A result carrying
-    /// generated-private evidence depends on the read and is never shared.
-    fn sharedDispatchTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?NodeId {
-        const node = self.dispatch_type_reads.get(expr_id) orelse return null;
+    /// An expression's result type is read once per checked-type instantiation and
+    /// shared by every later result-type read carrying no expected cell, as a
+    /// direct call's request interface is. A result carrying generated-private
+    /// evidence depends on the read and is never shared.
+    fn sharedExprTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?NodeId {
+        const node = self.instantiation.expr_type_reads.get(expr_id) orelse return null;
         if (try self.graph.containsGeneratedPrivate(node)) return null;
         return node;
     }
 
-    fn recordDispatchTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId, node: NodeId) Allocator.Error!void {
+    fn recordExprTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId, node: NodeId) Allocator.Error!void {
         if (try self.graph.containsGeneratedPrivate(node)) return;
-        try self.dispatch_type_reads.put(self.allocator, expr_id, node);
+        try self.instantiation.expr_type_reads.put(expr_id, node);
     }
 
     fn isDispatchExpr(expr: checked.CheckedExpr) bool {
@@ -27454,14 +27514,15 @@ const BodyContext = struct {
         };
     }
 
-    fn finishTypeNodeLeaf(task: anytype, node: NodeId) EvidenceStep {
+    fn finishTypeNodeLeaf(self: *BodyContext, task: anytype, node: NodeId) Allocator.Error!EvidenceStep {
+        try self.recordExprTypeRead(task.expr, node);
         task.timing.end();
         return .{ .ret = .{ .node = node } };
     }
 
     fn stepTypeNode(self: *BodyContext, frame: *EvidenceFrame, task: anytype, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         if (frame.cursor == 1) {
-            if (isDispatchExpr(self.view.bodies.expr(task.expr))) try self.recordDispatchTypeRead(task.expr, input.?.nodeValue());
+            try self.recordExprTypeRead(task.expr, input.?.nodeValue());
             task.timing.end();
             return .{ .ret = input.? };
         }
@@ -27469,8 +27530,9 @@ const BodyContext = struct {
         frame.cursor = 1;
         const expr_id = task.expr;
         const expr = self.view.bodies.expr(expr_id);
-        if (isDispatchExpr(expr)) {
-            if (try self.sharedDispatchTypeRead(expr_id)) |node| return finishTypeNodeLeaf(task, node);
+        if (try self.sharedExprTypeRead(expr_id)) |node| {
+            task.timing.end();
+            return .{ .ret = .{ .node = node } };
         }
         const next: EvidenceTask = switch (expr.data) {
             .call => |call| .{ .call_result = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = null } },
@@ -27480,12 +27542,12 @@ const BodyContext = struct {
             .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
             .field_access => |field| .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } },
             .tuple_access => |access| .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = null } },
-            .lookup_local => |lookup| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, lookup.resolved)),
-            .lookup_external => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
-            .lookup_required => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
-            .lambda => |lambda| return finishTypeNodeLeaf(task, try self.lambdaFunctionNode(expr.ty, lambda)),
-            .closure => |closure| return finishTypeNodeLeaf(task, try self.closureFunctionNode(closure)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
+            .lookup_local => |lookup| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, lookup.resolved)),
+            .lookup_external => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
+            .lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
+            .lambda => |lambda| return try self.finishTypeNodeLeaf(task, try self.lambdaFunctionNode(expr.ty, lambda)),
+            .closure => |closure| return try self.finishTypeNodeLeaf(task, try self.closureFunctionNode(closure)),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return try self.finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
         };
         return evidenceCall(self, next);
     }
@@ -27519,14 +27581,14 @@ const BodyContext = struct {
             // A shared null-expected dispatch result read.
             4 => {
                 const node = input.?.nodeValue();
-                try self.recordDispatchTypeRead(checked_arg, node);
+                try self.recordExprTypeRead(checked_arg, node);
                 return .{ .ret = .{ .maybe_node = node } };
             },
             else => return .{ .ret = .{ .maybe_node = input.?.maybeNodeValue() } },
         }
         if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return .{ .ret = .{ .maybe_node = null } };
         if (expected_ty == null and isDispatchExpr(expr)) {
-            if (try self.sharedDispatchTypeRead(checked_arg)) |node| return .{ .ret = .{ .maybe_node = node } };
+            if (try self.sharedExprTypeRead(checked_arg)) |node| return .{ .ret = .{ .maybe_node = node } };
         }
         const expected_node: ?NodeId = if (expected_ty) |expected| try self.activeNodeFromType(expected) else null;
         switch (expr.data) {
@@ -33687,6 +33749,7 @@ const BodyContext = struct {
         node: NodeId,
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
+        self.inhabitation_entered.clearRetainingCapacity();
         var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
         return try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
     }
@@ -33700,7 +33763,7 @@ const BodyContext = struct {
         if (self.draft.uninhabited_type_cache.get(ty)) |cached| return cached;
         var scan = TypeUninhabitedScan{
             .body = self,
-            .visiting = collections.DenseMap(Type.TypeId, void).init(self.allocator),
+            .visiting = collections.DenseMap(Type.TypeId, usize).init(self.allocator),
         };
         defer scan.visiting.deinit();
         const result = try TypeUninhabitedScan.Evaluation.runWith(self.allocator, &self.type_uninhabited_scratch, &scan, ty);
@@ -62065,29 +62128,121 @@ const BodyContext = struct {
 
     const ReassignedBinderItem = union(enum) {
         expr: checked.CheckedExprId,
-        statement: checked.CheckedStatementId,
         loop_mutations: ?checked.LoopMutationPlanId,
+        /// A binder a statement reassigns directly, in its source position.
+        binder: checked.PatternBinderId,
     };
 
-    /// Collect the binders an expression reassigns, in source order, on an
-    /// explicit stack: each popped item pushes its parts last-first.
+    /// One expression whose reassigned binders are being collected: its
+    /// parts in `items[items_start..items_end]`, and its unique binders so
+    /// far in `binders[binders_start..]`.
+    const ReassignedBinderFrame = struct {
+        expr: checked.CheckedExprId,
+        items_start: usize,
+        items_end: usize,
+        next: usize,
+        binders_start: usize,
+    };
+
+    /// Collect the binders an expression reassigns, in source order. Each
+    /// expression's binders are its parts' binders in order, first occurrence
+    /// kept, so every expression's list is memoized for the compilation: a
+    /// nest of stateful expressions each asking for its own binders reads its
+    /// children's lists instead of walking them again.
     fn collectReassignedBindersInExpr(
         self: *BodyContext,
         root: checked.CheckedExprId,
         out: *std.ArrayList(checked.PatternBinderId),
     ) Allocator.Error!void {
-        var pending: std.ArrayList(ReassignedBinderItem) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .expr = root });
-        while (pending.pop()) |item| {
-            const start = pending.items.len;
-            switch (item) {
-                .loop_mutations => |plan| try self.collectLoopMutationBinders(plan, out),
-                .statement => |statement_id| try self.pushReassignedStatementParts(&pending, statement_id, out),
-                .expr => |expr_id| try self.pushReassignedExprParts(&pending, expr_id),
+        const gpa = self.allocator;
+        if (self.builder.reassigned_binders_memo.get(self.reassignedBinderAddress(root)) == null) {
+            var frames: std.ArrayList(ReassignedBinderFrame) = .empty;
+            defer frames.deinit(gpa);
+            var items: std.ArrayList(ReassignedBinderItem) = .empty;
+            defer items.deinit(gpa);
+            var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+            defer binders.deinit(gpa);
+            try self.pushReassignedBinderFrame(&frames, &items, &binders, root);
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                if (frame.next == frame.items_end) {
+                    const finished = frames.pop().?;
+                    const span = try self.memoizeReassignedBinders(finished.expr, binders.items[finished.binders_start..]);
+                    binders.shrinkRetainingCapacity(finished.binders_start);
+                    items.shrinkRetainingCapacity(finished.items_start);
+                    if (frames.items.len != 0) {
+                        const parent_start = frames.items[frames.items.len - 1].binders_start;
+                        for (self.builder.reassigned_binder_pool.items[span.start..][0..span.len]) |binder| {
+                            try appendUniqueBinderFrom(gpa, &binders, parent_start, binder);
+                        }
+                    }
+                    continue;
+                }
+                const item = items.items[frame.next];
+                frame.next += 1;
+                const binders_start = frame.binders_start;
+                switch (item) {
+                    .binder => |binder| try appendUniqueBinderFrom(gpa, &binders, binders_start, binder),
+                    .loop_mutations => |plan| for (self.loopMutationBinders(plan)) |binder| {
+                        try appendUniqueBinderFrom(gpa, &binders, binders_start, binder);
+                    },
+                    .expr => |expr_id| if (self.builder.reassigned_binders_memo.get(self.reassignedBinderAddress(expr_id))) |span| {
+                        for (self.builder.reassigned_binder_pool.items[span.start..][0..span.len]) |binder| {
+                            try appendUniqueBinderFrom(gpa, &binders, binders_start, binder);
+                        }
+                    } else {
+                        try self.pushReassignedBinderFrame(&frames, &items, &binders, expr_id);
+                    },
+                }
             }
-            std.mem.reverse(ReassignedBinderItem, pending.items[start..]);
         }
+        const span = self.builder.reassigned_binders_memo.get(self.reassignedBinderAddress(root)).?;
+        for (self.builder.reassigned_binder_pool.items[span.start..][0..span.len]) |binder| try self.appendUniqueBinder(out, binder);
+    }
+
+    fn pushReassignedBinderFrame(
+        self: *BodyContext,
+        frames: *std.ArrayList(ReassignedBinderFrame),
+        items: *std.ArrayList(ReassignedBinderItem),
+        binders: *const std.ArrayList(checked.PatternBinderId),
+        expr_id: checked.CheckedExprId,
+    ) Allocator.Error!void {
+        const items_start = items.items.len;
+        try self.pushReassignedExprParts(items, expr_id);
+        try frames.append(self.allocator, .{
+            .expr = expr_id,
+            .items_start = items_start,
+            .items_end = items.items.len,
+            .next = items_start,
+            .binders_start = binders.items.len,
+        });
+    }
+
+    fn reassignedBinderAddress(self: *const BodyContext, expr_id: checked.CheckedExprId) ReassignedBinderAddress {
+        return .{ .module = self.view.key, .expr = expr_id };
+    }
+
+    fn memoizeReassignedBinders(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        binders: []const checked.PatternBinderId,
+    ) Allocator.Error!ReassignedBinderSpan {
+        const span: ReassignedBinderSpan = .{ .start = self.builder.reassigned_binder_pool.items.len, .len = binders.len };
+        try self.builder.reassigned_binder_pool.appendSlice(self.builder.allocator, binders);
+        try self.builder.reassigned_binders_memo.put(self.builder.allocator, self.reassignedBinderAddress(expr_id), span);
+        return span;
+    }
+
+    fn appendUniqueBinderFrom(
+        gpa: Allocator,
+        binders: *std.ArrayList(checked.PatternBinderId),
+        start: usize,
+        binder: checked.PatternBinderId,
+    ) Allocator.Error!void {
+        for (binders.items[start..]) |existing| {
+            if (existing == binder) return;
+        }
+        try binders.append(gpa, binder);
     }
 
     fn pushReassignedExprParts(self: *BodyContext, pending: *std.ArrayList(ReassignedBinderItem), expr_id: checked.CheckedExprId) Allocator.Error!void {
@@ -62120,7 +62275,7 @@ const BodyContext = struct {
                 for (record.fields) |field| try pending.append(gpa, .{ .expr = field.value });
             },
             .block => |block| {
-                for (block.statements) |statement| try pending.append(gpa, .{ .statement = statement });
+                for (block.statements) |statement| try self.pushReassignedStatementParts(pending, statement);
                 try pending.append(gpa, .{ .expr = block.final_expr });
             },
             .tag => |tag| for (tag.args) |arg| try pending.append(gpa, .{ .expr = arg }),
@@ -62185,7 +62340,6 @@ const BodyContext = struct {
         self: *BodyContext,
         pending: *std.ArrayList(ReassignedBinderItem),
         statement_id: checked.CheckedStatementId,
-        out: *std.ArrayList(checked.PatternBinderId),
     ) Allocator.Error!void {
         const gpa = self.allocator;
         const statement = self.view.bodies.statement(statement_id);
@@ -62194,7 +62348,7 @@ const BodyContext = struct {
             .var_ => |var_| try pending.append(gpa, .{ .expr = var_.expr }),
             .var_uninitialized, .promoted_proc => {},
             .reassign => |reassign| {
-                for (reassign.reassigned_binders) |binder| try self.appendUniqueBinder(out, binder);
+                for (reassign.reassigned_binders) |binder| try pending.append(gpa, .{ .binder = binder });
                 try pending.append(gpa, .{ .expr = reassign.expr });
             },
             .dbg,
@@ -62205,7 +62359,7 @@ const BodyContext = struct {
                 try pending.append(gpa, .{ .expr = for_.expr });
                 try pending.append(gpa, .{ .loop_mutations = for_.mutations });
             },
-            inline .while_, .infinite_loop, .breakable_loop => |loop| try self.collectLoopMutationBinders(loop.mutations, out),
+            inline .while_, .infinite_loop, .breakable_loop => |loop| try pending.append(gpa, .{ .loop_mutations = loop.mutations }),
             .return_ => |ret| try pending.append(gpa, .{ .expr = ret.expr }),
             .pending,
             .crash,
@@ -62219,14 +62373,6 @@ const BodyContext = struct {
             .runtime_error,
             => {},
         }
-    }
-
-    fn collectLoopMutationBinders(
-        self: *BodyContext,
-        plan: ?checked.LoopMutationPlanId,
-        out: *std.ArrayList(checked.PatternBinderId),
-    ) Allocator.Error!void {
-        for (self.loopMutationBinders(plan)) |binder| try self.appendUniqueBinder(out, binder);
     }
 
     /// The published binders a loop carries.
@@ -66304,8 +66450,16 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
 const NodeUninhabitedScan = struct {
     body: *BodyContext,
     backing_access: BodyContext.UninhabitedBackingAccess,
+    /// Encounters whose answer later graph work can change: an unresolved
+    /// node, a named node's backing, or a node already on the path. A node
+    /// whose expansion saw none has a settled answer.
+    unsettled_hits: usize = 0,
 
     const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
+
+    fn settled(self: *NodeUninhabitedScan) *std.AutoHashMapUnmanaged(NodeId, bool) {
+        return &self.body.settled_node_uninhabited[@intFromEnum(self.backing_access)];
+    }
 
     pub fn enter(self: *NodeUninhabitedScan, items: Evaluation.Items, node: NodeId) Allocator.Error!Evaluation.Expansion {
         const body = self.body;
@@ -66314,7 +66468,11 @@ const NodeUninhabitedScan = struct {
         if (body.inhabitation_visiting.bit_length <= root_index) {
             try body.inhabitation_visiting.resize(body.allocator, root_index + 1, false);
         }
-        if (body.inhabitation_visiting.isSet(root_index)) return .{ .value = false };
+        if (body.inhabitation_visiting.isSet(root_index)) {
+            self.unsettled_hits += 1;
+            return .{ .value = false };
+        }
+        if (self.settled().get(root)) |answer| return .{ .value = answer };
 
         const expansion: Evaluation.Expansion = switch (body.graph.content(root)) {
             .redirect => |target| blk: {
@@ -66323,6 +66481,7 @@ const NodeUninhabitedScan = struct {
             },
             .empty_tag_union => .{ .value = true },
             .named => |named| blk: {
+                self.unsettled_hits += 1;
                 const backing = named.backing orelse break :blk .{ .value = false };
                 if (backing.use != .inspectable and self.backing_access != .runtime_layout) break :blk .{ .value = false };
                 try items.add(backing.node);
@@ -66350,7 +66509,10 @@ const NodeUninhabitedScan = struct {
                 }
                 break :blk .{ .group = .all };
             },
-            .unresolved,
+            .unresolved => blk: {
+                self.unsettled_hits += 1;
+                break :blk .{ .value = false };
+            },
             .primitive,
             .list,
             .func,
@@ -66359,12 +66521,20 @@ const NodeUninhabitedScan = struct {
             .zst,
             => .{ .value = false },
         };
-        if (expansion == .group) body.inhabitation_visiting.set(root_index);
+        if (expansion == .group) {
+            body.inhabitation_visiting.set(root_index);
+            try body.inhabitation_entered.put(body.allocator, root, self.unsettled_hits);
+        }
         return expansion;
     }
 
-    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, _: ?bool) std.mem.Allocator.Error!void {
-        self.body.inhabitation_visiting.unset(@intFromEnum(self.body.graph.rootNode(node)));
+    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, result: ?bool) std.mem.Allocator.Error!void {
+        const body = self.body;
+        const root = body.graph.rootNode(node);
+        body.inhabitation_visiting.unset(@intFromEnum(root));
+        const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
+        const answer = result orelse return;
+        if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
     }
 };
 
@@ -66372,12 +66542,22 @@ const NodeUninhabitedScan = struct {
 /// the active path is not.
 const TypeUninhabitedScan = struct {
     body: *BodyContext,
-    visiting: collections.DenseMap(Type.TypeId, void),
+    /// Each type being expanded, with the number of cycle hits seen before
+    /// it was entered.
+    visiting: collections.DenseMap(Type.TypeId, usize),
+    /// Re-entries of a type still being expanded. A type whose expansion saw
+    /// none answers independently of the types enclosing it, so its answer
+    /// is memoized for every later scan.
+    cycle_hits: usize = 0,
 
     const Evaluation = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
 
     pub fn enter(self: *TypeUninhabitedScan, items: Evaluation.Items, ty: Type.TypeId) Allocator.Error!Evaluation.Expansion {
-        if (self.visiting.contains(ty)) return .{ .value = false };
+        if (self.visiting.contains(ty)) {
+            self.cycle_hits += 1;
+            return .{ .value = false };
+        }
+        if (self.body.draft.uninhabited_type_cache.get(ty)) |cached| return .{ .value = cached };
         const types_ = self.body.typeStore();
         const expansion: Evaluation.Expansion = switch (types_.get(ty)) {
             .named => |named| blk: {
@@ -66413,12 +66593,14 @@ const TypeUninhabitedScan = struct {
             },
             .primitive, .list, .func, .erased, .zst => .{ .value = false },
         };
-        if (expansion == .group) try self.visiting.put(ty, {});
+        if (expansion == .group) try self.visiting.put(ty, self.cycle_hits);
         return expansion;
     }
 
-    pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, _: ?bool) std.mem.Allocator.Error!void {
-        _ = self.visiting.remove(ty);
+    pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, result: ?bool) std.mem.Allocator.Error!void {
+        const hits_before = (self.visiting.fetchRemove(ty) orelse return).value;
+        const decided = result orelse return;
+        if (self.cycle_hits == hits_before) try self.body.draft.uninhabited_type_cache.put(ty, decided);
     }
 };
 
@@ -66715,6 +66897,13 @@ fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) Check
         .type_id = @intFromEnum(checked_ty),
     };
 }
+
+const ReassignedBinderSpan = struct { start: usize, len: usize };
+
+const ReassignedBinderAddress = struct {
+    module: checked.ModuleId,
+    expr: checked.CheckedExprId,
+};
 
 const NestedSiteAddress = struct {
     module_bytes: [32]u8,

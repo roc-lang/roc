@@ -109,7 +109,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
-    try expectContains(type_node_step, ".lookup_required => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
+    try expectContains(type_node_step, ".lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| {\n                frame.cursor = 3;\n                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
@@ -1170,7 +1170,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "const ImpossibilityProofScan = struct {",
     );
     try expectContains(durable_scan, "const types_ = self.body.typeStore()");
-    try expectContains(durable_scan, "_ = self.visiting.remove(ty)");
+    try expectContains(durable_scan, "self.visiting.fetchRemove(ty)");
     try expectNotContains(durable_scan, "activeNodeFromType");
     const inspect_call = sourceSliceBetween(
         lower_source,
