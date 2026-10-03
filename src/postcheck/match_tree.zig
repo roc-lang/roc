@@ -1172,6 +1172,9 @@ pub fn Compiler(comptime Ctx: type) type {
             tree_stats: Stats,
             done: Ctx.JoinPointId,
             uses: collections.DenseMap(OccId, OccUse),
+            /// Every used occurrence in interning order, grouped by the test
+            /// whose scope establishes it.
+            scoped_uses: std.AutoHashMapUnmanaged(ScopeOwner, std.ArrayList(ScopedUse)) = .empty,
             exit_joins: std.AutoHashMap(u32, Ctx.JoinPointId),
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.
@@ -1185,13 +1188,36 @@ pub fn Compiler(comptime Ctx: type) type {
             /// the host answers it.
             frames: std.ArrayList(EmitFrame) = .empty,
 
+            /// The locals of the scope being emitted. Emission is depth-first,
+            /// so a nested scope records each local it adds or changes and
+            /// restores them all before its enclosing scope continues.
             const Env = struct {
                 locals: std.AutoHashMapUnmanaged(OccId, EmitLocals),
+                undo: std.ArrayList(EnvUndo) = .empty,
 
-                fn clone(self: *const Env, arena: std.mem.Allocator) error{OutOfMemory}!*Env {
-                    const cloned = try arena.create(Env);
-                    cloned.* = .{ .locals = try self.locals.clone(arena) };
-                    return cloned;
+                const EnvUndo = struct { occ: OccId, previous: ?EmitLocals };
+
+                /// The locals of `occ` for writing, recording what to restore.
+                fn localsFor(self: *Env, arena: std.mem.Allocator, occ: OccId) error{OutOfMemory}!*EmitLocals {
+                    const gop = try self.locals.getOrPut(arena, occ);
+                    try self.undo.append(arena, .{ .occ = occ, .previous = if (gop.found_existing) gop.value_ptr.* else null });
+                    if (!gop.found_existing) gop.value_ptr.* = .{};
+                    return gop.value_ptr;
+                }
+
+                fn enterNested(self: *const Env) usize {
+                    return self.undo.items.len;
+                }
+
+                fn leaveNested(self: *Env, mark: usize) void {
+                    while (self.undo.items.len > mark) {
+                        const entry = self.undo.pop().?;
+                        if (entry.previous) |previous| {
+                            self.locals.putAssumeCapacity(entry.occ, previous);
+                        } else {
+                            _ = self.locals.remove(entry.occ);
+                        }
+                    }
                 }
             };
 
@@ -1216,7 +1242,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 env: *Env,
                 body: CtxStmt = undefined,
                 cond: CtxLocal = undefined,
-                then_env: *Env = undefined,
+                then_mark: usize = undefined,
                 extractions: []const Extraction = &.{},
                 jp: Ctx.JoinPointId = undefined,
             };
@@ -1225,7 +1251,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 t: TestNode,
                 arm: Arm,
                 env: *Env,
-                arm_env: *Env = undefined,
+                arm_mark: usize = undefined,
                 extractions: []const Extraction = &.{},
             };
 
@@ -1241,7 +1267,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 t: TestNode,
                 env: *Env,
                 arms: []Ctx.StrArm = &.{},
-                arm_env: *Env = undefined,
+                arm_mark: usize = undefined,
                 capture_locals: []const ?CtxLocal = &.{},
                 extractions: []const Extraction = &.{},
             };
@@ -1279,6 +1305,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     .delegated_stmts = 0,
                 };
                 try self.collectUses(result.tree);
+                try self.indexScopedUses();
 
                 const env = try arena.create(Env);
                 env.* = .{ .locals = .empty };
@@ -1363,13 +1390,16 @@ pub fn Compiler(comptime Ctx: type) type {
                 try marks.append(self.arena, .{ .occ = occ, .what = what });
                 while (marks.pop()) |mark| {
                     const gop = try self.uses.getOrPut(mark.occ);
+                    const already_marked = gop.found_existing;
                     if (!gop.found_existing) gop.value_ptr.* = .{};
                     switch (mark.what) {
                         .value => gop.value_ptr.value = true,
                         .disc => gop.value_ptr.disc = true,
                         .len => gop.value_ptr.len = true,
                     }
-                    if (mark.occ == .root) continue;
+                    // An occurrence's marks propagate the same way whichever
+                    // flag is set, so its first mark already propagated them.
+                    if (already_marked or mark.occ == .root) continue;
                     const entry = self.occEntry(mark.occ);
                     try marks.append(self.arena, .{ .occ = entry.parent, .what = .value });
                     switch (entry.step) {
@@ -1460,12 +1490,43 @@ pub fn Compiler(comptime Ctx: type) type {
                 scope: Scope,
                 extractions: *std.ArrayList(Extraction),
             ) Ctx.LowerError!void {
-                // Deterministic iteration: walk occs in interning order.
+                // Deterministic iteration: occs in interning order.
+                const scoped = self.scoped_uses.get(scopeOwner(scope)) orelse return;
+                for (scoped.items) |entry| {
+                    if (!scopeSatisfies(scope, entry.needed)) continue;
+                    try self.materialize(env, entry.occ, self.uses.get(entry.occ).?, extractions);
+                }
+            }
+
+            /// The test a scope belongs to: only a scope of the same test can
+            /// satisfy another.
+            const ScopeOwner = struct {
+                kind: std.meta.Tag(Scope),
+                occ: OccId,
+            };
+
+            const ScopedUse = struct { occ: OccId, needed: Scope };
+
+            fn scopeOwner(scope: Scope) ScopeOwner {
+                return switch (scope) {
+                    .top => .{ .kind = .top, .occ = .root },
+                    .tag_arm => |s| .{ .kind = .tag_arm, .occ = s.occ },
+                    .callable_arm => |s| .{ .kind = .callable_arm, .occ = s.occ },
+                    .list_len => |s| .{ .kind = .list_len, .occ = s.occ },
+                    .str_arm => |s| .{ .kind = .str_arm, .occ = s.occ },
+                };
+            }
+
+            /// Group the used occurrences by the test establishing them, once
+            /// every use is marked.
+            fn indexScopedUses(self: *Emitter) error{OutOfMemory}!void {
                 for (0..self.occs.len) |i| {
                     const occ: OccId = @enumFromInt(i);
-                    const use = self.uses.get(occ) orelse continue;
-                    if (!scopeSatisfies(scope, self.establishingScope(occ))) continue;
-                    try self.materialize(env, occ, use, extractions);
+                    if (!self.uses.contains(occ)) continue;
+                    const needed = self.establishingScope(occ);
+                    const gop = try self.scoped_uses.getOrPut(self.arena, scopeOwner(needed));
+                    if (!gop.found_existing) gop.value_ptr.* = .empty;
+                    try gop.value_ptr.append(self.arena, .{ .occ = occ, .needed = needed });
                 }
             }
 
@@ -1476,11 +1537,10 @@ pub fn Compiler(comptime Ctx: type) type {
                 use: OccUse,
                 extractions: *std.ArrayList(Extraction),
             ) Ctx.LowerError!void {
-                const gop = try env.locals.getOrPut(self.arena, occ);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
+                const locals = try env.localsFor(self.arena, occ);
                 const entry = self.occEntry(occ);
 
-                if ((use.value or use.disc or use.len) and gop.value_ptr.value == null) {
+                if ((use.value or use.disc or use.len) and locals.value == null) {
                     // String captures get their locals from the enclosing
                     // string arm, which registers them before entering the
                     // subtree; reaching here for one is a compiler bug.
@@ -1489,15 +1549,15 @@ pub fn Compiler(comptime Ctx: type) type {
                     // so the parent's value local is already available for
                     // layout-derived allocations (callable payloads).
                     const parent = if (occ == .root) null else env.locals.get(entry.parent).?.value;
-                    gop.value_ptr.value = try self.ctx.lirLocalForOcc(entry.step, entry.ty, parent);
+                    locals.value = try self.ctx.lirLocalForOcc(entry.step, entry.ty, parent);
                     try extractions.append(self.arena, .{ .occ = occ, .what = .value });
                 }
-                if (use.disc and gop.value_ptr.disc == null) {
-                    gop.value_ptr.disc = try self.ctx.lirLocalDiscriminant();
+                if (use.disc and locals.disc == null) {
+                    locals.disc = try self.ctx.lirLocalDiscriminant();
                     try extractions.append(self.arena, .{ .occ = occ, .what = .disc });
                 }
-                if (use.len and gop.value_ptr.len == null) {
-                    gop.value_ptr.len = try self.ctx.lirLocalU64();
+                if (use.len and locals.len == null) {
+                    locals.len = try self.ctx.lirLocalU64();
                     try extractions.append(self.arena, .{ .occ = occ, .what = .len });
                 }
             }
@@ -1616,15 +1676,16 @@ pub fn Compiler(comptime Ctx: type) type {
                     } },
                     .len_check => |lc| switch (frame.cursor) {
                         0 => {
-                            task.then_env = try env.clone(self.arena);
+                            task.then_mark = env.enterNested();
                             var extractions: std.ArrayList(Extraction) = .empty;
-                            try self.enterScope(task.then_env, .{ .list_len = .{ .occ = lc.occ, .min_len = lc.min_len } }, &extractions);
+                            try self.enterScope(env, .{ .list_len = .{ .occ = lc.occ, .min_len = lc.min_len } }, &extractions);
                             task.extractions = extractions.items;
                             frame.cursor = 1;
-                            return .{ .call = .{ .tree = .{ .tree = lc.then, .env = task.then_env } } };
+                            return .{ .call = .{ .tree = .{ .tree = lc.then, .env = env } } };
                         },
                         1 => {
-                            task.body = try self.emitExtractions(task.extractions, task.then_env, input.?);
+                            task.body = try self.emitExtractions(task.extractions, env, input.?);
+                            env.leaveNested(task.then_mark);
                             frame.cursor = 2;
                             return .{ .call = .{ .tree = .{ .tree = lc.otherwise, .env = env } } };
                         },
@@ -1651,7 +1712,9 @@ pub fn Compiler(comptime Ctx: type) type {
 
             fn stepArm(self: *Emitter, frame: *EmitFrame, task: *ArmTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
                 if (frame.cursor == 1) {
-                    return .{ .ret = try self.emitExtractions(task.extractions, task.arm_env, input.?) };
+                    const body = try self.emitExtractions(task.extractions, task.env, input.?);
+                    task.env.leaveNested(task.arm_mark);
+                    return .{ .ret = body };
                 }
                 const t = task.t;
                 const scope: Scope = switch (t.kind) {
@@ -1664,12 +1727,12 @@ pub fn Compiler(comptime Ctx: type) type {
                     },
                     .str_set => unreachable, // handled by the string-set step
                 };
-                task.arm_env = try task.env.clone(self.arena);
+                task.arm_mark = task.env.enterNested();
                 var extractions: std.ArrayList(Extraction) = .empty;
-                try self.enterScope(task.arm_env, scope, &extractions);
+                try self.enterScope(task.env, scope, &extractions);
                 task.extractions = extractions.items;
                 frame.cursor = 1;
-                return .{ .call = .{ .tree = .{ .tree = task.arm.subtree, .env = task.arm_env } } };
+                return .{ .call = .{ .tree = .{ .tree = task.arm.subtree, .env = task.env } } };
             }
 
             /// A discriminant, integer, or length switch: one body per arm,
@@ -1759,7 +1822,8 @@ pub fn Compiler(comptime Ctx: type) type {
                     },
                     1 => {
                         const arm = t.arms[frame.index];
-                        const body = try self.emitExtractions(task.extractions, task.arm_env, input.?);
+                        const body = try self.emitExtractions(task.extractions, task.env, input.?);
+                        task.env.leaveNested(task.arm_mark);
                         task.arms[frame.index] = try self.ctx.buildStrArm(arm.example, task.capture_locals, body);
                         frame.index += 1;
                     },
@@ -1767,7 +1831,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 }
                 if (frame.index < t.arms.len) {
                     const arm = t.arms[frame.index];
-                    task.arm_env = try task.env.clone(self.arena);
+                    task.arm_mark = task.env.enterNested();
                     task.capture_locals = try self.ctx.strArmCaptureLocals(arm.example);
                     // Register capture locals under their occurrences before
                     // entering the subtree; only interned (used) captures
@@ -1776,13 +1840,13 @@ pub fn Compiler(comptime Ctx: type) type {
                     for (task.capture_locals, 0..) |maybe_local, step_index| {
                         const local = maybe_local orelse continue;
                         if (self.lookupOcc(t.occ, .{ .str_capture = .{ .shape = shape, .index = @intCast(step_index) } })) |occ| {
-                            try task.arm_env.locals.put(self.arena, occ, .{ .value = local });
+                            (try task.env.localsFor(self.arena, occ)).* = .{ .value = local };
                         }
                     }
                     var extractions: std.ArrayList(Extraction) = .empty;
-                    try self.enterScope(task.arm_env, .{ .str_arm = .{ .occ = t.occ, .shape = shape } }, &extractions);
+                    try self.enterScope(task.env, .{ .str_arm = .{ .occ = t.occ, .shape = shape } }, &extractions);
                     task.extractions = extractions.items;
-                    return .{ .call = .{ .tree = .{ .tree = arm.subtree, .env = task.arm_env } } };
+                    return .{ .call = .{ .tree = .{ .tree = arm.subtree, .env = task.env } } };
                 }
                 frame.cursor = 2;
                 return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };

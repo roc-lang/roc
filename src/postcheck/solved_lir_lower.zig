@@ -797,6 +797,9 @@ const Lowerer = struct {
     /// through this digest, so the child stays visible to recursion analysis.
     type_layout_digests: collections.DenseMap(Type.TypeId, layout.GraphDigest),
     named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
+    /// Each laid-out type's `RepresentationShape`, so a named layout lookup
+    /// compares only candidates whose shapes can be equivalent.
+    representation_shapes: collections.DenseMap(Type.TypeId, RepresentationShape),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
@@ -809,6 +812,12 @@ const Lowerer = struct {
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
+    /// Each access-path expression's `lowerExprContextTy`, so a chain of
+    /// accesses walks each link once. A body worker keeps its own.
+    expr_context_tys: collections.DenseMap(Lifted.ExprId, Type.TypeId),
+    /// Each classified type's `erasedResultDemand`. A body worker keeps its
+    /// own.
+    erased_result_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
     packed_literals: std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
@@ -1065,6 +1074,7 @@ const Lowerer = struct {
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
             .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
+            .representation_shapes = collections.DenseMap(Type.TypeId, RepresentationShape).init(allocator),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
@@ -1075,6 +1085,8 @@ const Lowerer = struct {
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
+            .expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator),
+            .erased_result_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
@@ -1193,6 +1205,9 @@ const Lowerer = struct {
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
+        self.representation_shapes.deinit();
+        self.expr_context_tys.deinit();
+        self.erased_result_demands.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1276,6 +1291,9 @@ const Lowerer = struct {
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
+        self.representation_shapes.deinit();
+        self.expr_context_tys.deinit();
+        self.erased_result_demands.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1635,6 +1653,8 @@ const Lowerer = struct {
         // which ordered commit relocates. A worker therefore derives its own
         // and never reads or grows the coordinator's cache.
         worker.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator);
+        worker.expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator);
+        worker.erased_result_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator);
         worker.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator);
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
@@ -1648,6 +1668,8 @@ const Lowerer = struct {
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.deinitPackedPlans();
+        self.expr_context_tys.deinit();
+        self.erased_result_demands.deinit();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
@@ -3663,12 +3685,18 @@ const Lowerer = struct {
     }
 
     /// The type an expression is read at: an access path's type follows the
-    /// path from its root's type. The path is walked iteratively.
+    /// path from its root's type. The path is walked iteratively, from its
+    /// innermost link whose type is already known.
     fn lowerExprContextTy(self: *Lowerer, expr_id: Lifted.ExprId) Common.LowerError!Type.TypeId {
         var path: std.ArrayList(Lifted.ExprId) = .empty;
         defer path.deinit(self.allocator);
         var root = expr_id;
+        var known: ?Type.TypeId = null;
         while (true) {
+            if (self.expr_context_tys.get(root)) |ty| {
+                known = ty;
+                break;
+            }
             switch (self.solved.lifted.getExpr(root).data) {
                 .field_access => |field| {
                     try path.append(self.allocator, root);
@@ -3681,7 +3709,7 @@ const Lowerer = struct {
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
-        var ty = try self.lowerExprTy(root);
+        var ty = known orelse try self.lowerExprTy(root);
         var index = path.items.len;
         while (index > 0) {
             index -= 1;
@@ -3701,6 +3729,7 @@ const Lowerer = struct {
                 },
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
+            try self.expr_context_tys.put(path.items[index], ty);
         }
         return ty;
     }
@@ -9272,7 +9301,9 @@ const Lowerer = struct {
     /// slot. Lists and recursive paths decline reuse because their runtime
     /// multiplicity is not one statically named slot: a path longer than the
     /// store's type count must revisit a type. Types wait on an explicit
-    /// stack, so type nesting never becomes native call depth.
+    /// stack, so type nesting never becomes native call depth. A type's
+    /// demand is memoized when its walk never exhausted the budget, so it did
+    /// not depend on the path that reached the type.
     fn erasedResultDemand(self: *Lowerer, ty: Type.TypeId) Common.LowerError!ErasedResultDemand {
         if (self.erased_demands_sets != self.types.sets) {
             self.erased_demands.clearRetainingCapacity();
@@ -9294,6 +9325,8 @@ const Lowerer = struct {
             /// The simultaneous demand of the children classified so far.
             sum: ErasedResultDemand = .none,
             any_single_variant: bool = false,
+            /// `exhaustions` when this type's walk began.
+            exhaustions_before: usize,
         };
         // Most results nest a few types deep, so the stack starts in a
         // buffer on this frame and moves to the heap only past it.
@@ -9304,24 +9337,29 @@ const Lowerer = struct {
         try frames.ensureTotalCapacityPrecise(frame_allocator, 24);
         var child_ty = ty;
         var child_remaining = self.types.typeCount();
+        // How many paths have exhausted the budget so far.
+        var exhaustions: usize = 0;
         outer: while (true) {
-            var result: ErasedResultDemand = if (child_remaining == 0) .ambiguous else switch (self.types.get(child_ty)) {
+            var result: ErasedResultDemand = if (self.erased_result_demands.get(child_ty)) |known| known else if (child_remaining == 0) blk: {
+                exhaustions += 1;
+                break :blk .ambiguous;
+            } else switch (self.types.get(child_ty)) {
                 .erased_fn => .single_slot,
                 .primitive, .callable, .erased_capture_ptr, .zst => .none,
                 .named => |named| if (named.backing) |backing| {
-                    try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining });
+                    try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions });
                     child_ty = backing.ty;
                     child_remaining -= 1;
                     continue :outer;
                 } else .none,
                 .box, .list => |elem| {
-                    try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining });
+                    try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions });
                     child_ty = elem;
                     child_remaining -= 1;
                     continue :outer;
                 },
                 .record, .capture_record, .tuple, .tag_union => blk: {
-                    var frame = Frame{ .ty = child_ty, .remaining = child_remaining };
+                    var frame = Frame{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions };
                     const first = self.erasedDemandChild(&frame.index, &frame.tag_index, &frame.sum, &frame.any_single_variant, child_ty);
                     switch (first) {
                         .child => |next_ty| {
@@ -9356,6 +9394,7 @@ const Lowerer = struct {
                     },
                     .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst => unreachable,
                 }
+                if (exhaustions == top.exhaustions_before) try self.erased_result_demands.put(top.ty, result);
                 _ = frames.pop();
             }
             return result;
@@ -11570,6 +11609,12 @@ const Lowerer = struct {
         default_is_cold: bool,
     ) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
+        // A union with one variant holds that variant: there is nothing to test.
+        const source_layout = self.result.layouts.getLayout(self.result.store.getLocal(source).layout_idx);
+        if (source_layout.tag == .tag_union and self.result.layouts.getTagUnionInfo(source_layout).variants.len == 1) {
+            if (discriminant != 0) Common.invariant("discriminant switch tested a variant its one-variant union lacks");
+            return body;
+        }
         const disc_local = try self.addLocalForLayout(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = discriminant, .body = body }};
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
@@ -13257,10 +13302,12 @@ const Lowerer = struct {
             .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return null,
         };
         const candidates = self.named_layout_index.get(namedRepresentationKey(named)) orelse return null;
+        const shape = try self.representationShape(ty);
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
         for (candidates.items) |other_ty| {
             if (other_ty == ty) continue;
+            if (!std.meta.eql(try self.representationShape(other_ty), shape)) continue;
             visited.clearRetainingCapacity();
             if (try self.representationTypesEquivalent(ty, other_ty, &visited)) {
                 const layout_idx = self.type_layouts.get(other_ty) orelse
@@ -13269,6 +13316,168 @@ const Lowerer = struct {
             }
         }
         return null;
+    }
+
+    /// A summary of a type that representation-equivalent types share. A type
+    /// that reaches a cycle unfolds to an infinite tree and so is equivalent
+    /// only to other such types; a finite type's hash covers its structure
+    /// over exactly the parts `representationTypesEquivalent` compares.
+    const RepresentationShape = union(enum) {
+        finite: u64,
+        cyclic,
+    };
+
+    /// One type whose shape is waiting on its components' shapes.
+    const RepresentationShapeFrame = struct {
+        ty: Type.TypeId,
+        children_start: usize,
+        next: usize,
+    };
+
+    fn representationShape(self: *Lowerer, root: Type.TypeId) Common.LowerError!RepresentationShape {
+        if (self.representation_shapes.get(root)) |shape| return shape;
+        var children: std.ArrayList(Type.TypeId) = .empty;
+        defer children.deinit(self.allocator);
+        var frames: std.ArrayList(RepresentationShapeFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        var on_stack = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer on_stack.deinit();
+        var reaches_cycle = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer reaches_cycle.deinit();
+
+        try self.pushRepresentationShapeFrame(&frames, &children, &on_stack, root);
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next < children.items.len) {
+                const child = children.items[frame.next];
+                frame.next += 1;
+                if (on_stack.contains(child)) {
+                    try reaches_cycle.put(frame.ty, {});
+                } else if (self.representation_shapes.get(child)) |shape| {
+                    if (shape == .cyclic) try reaches_cycle.put(frame.ty, {});
+                } else {
+                    try self.pushRepresentationShapeFrame(&frames, &children, &on_stack, child);
+                }
+                continue;
+            }
+            const finished = frames.pop().?;
+            _ = on_stack.remove(finished.ty);
+            const shape: RepresentationShape = if (reaches_cycle.contains(finished.ty))
+                .cyclic
+            else
+                .{ .finite = try self.finiteRepresentationShapeHash(finished.ty, children.items[finished.children_start..]) };
+            children.shrinkRetainingCapacity(finished.children_start);
+            try self.representation_shapes.put(finished.ty, shape);
+            if (shape == .cyclic) if (frames.items.len > 0) {
+                try reaches_cycle.put(frames.items[frames.items.len - 1].ty, {});
+            };
+        }
+        return self.representation_shapes.get(root).?;
+    }
+
+    fn pushRepresentationShapeFrame(
+        self: *Lowerer,
+        frames: *std.ArrayList(RepresentationShapeFrame),
+        children: *std.ArrayList(Type.TypeId),
+        on_stack: *collections.DenseMap(Type.TypeId, void),
+        ty: Type.TypeId,
+    ) Common.LowerError!void {
+        try on_stack.put(ty, {});
+        const children_start = children.items.len;
+        try self.appendRepresentationShapeChildren(children, ty);
+        try frames.append(self.allocator, .{ .ty = ty, .children_start = children_start, .next = children_start });
+    }
+
+    /// The component types `representationTypesEquivalent` compares, in a
+    /// fixed order.
+    fn appendRepresentationShapeChildren(self: *Lowerer, children: *std.ArrayList(Type.TypeId), ty: Type.TypeId) Common.LowerError!void {
+        switch (self.types.get(ty)) {
+            .primitive, .zst, .erased_capture_ptr => {},
+            .list, .box => |elem| try children.append(self.allocator, elem),
+            .tuple => |elems| try self.appendTypeSpan(children, elems),
+            .record => |fields| {
+                const field_span = self.types.fieldSpan(fields);
+                for (0..field_span.len) |index| try children.append(self.allocator, GuardedList.at(field_span, index).ty);
+            },
+            .capture_record => |fields| {
+                const field_span = self.types.captureFieldSpan(fields);
+                for (0..field_span.len) |index| try children.append(self.allocator, GuardedList.at(field_span, index).ty);
+            },
+            .tag_union => |tags| {
+                const tag_span = self.types.tagSpan(tags);
+                for (0..tag_span.len) |index| try self.appendTypeSpan(children, GuardedList.at(tag_span, index).payloads);
+            },
+            .callable => |variants| try self.appendVariantCaptureTypes(children, variants),
+            .erased_fn => |erased| try self.appendVariantCaptureTypes(children, erased.members),
+            .named => |named| {
+                try self.appendTypeSpan(children, named.args);
+                if (named.backing) |backing| try children.append(self.allocator, backing.ty);
+            },
+        }
+    }
+
+    fn appendVariantCaptureTypes(self: *Lowerer, children: *std.ArrayList(Type.TypeId), variants: Type.Span) Common.LowerError!void {
+        const variant_span = self.types.fnVariantSpan(variants);
+        for (0..variant_span.len) |index| {
+            if (GuardedList.at(variant_span, index).capture_ty) |capture_ty| try children.append(self.allocator, capture_ty);
+        }
+    }
+
+    /// Hash a finite type from its own compared data and its components'
+    /// finite shapes, given in `appendRepresentationShapeChildren` order.
+    fn finiteRepresentationShapeHash(self: *Lowerer, ty: Type.TypeId, children: []const Type.TypeId) Common.LowerError!u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        const content = self.types.get(ty);
+        std.hash.autoHash(&hasher, std.meta.activeTag(content));
+        switch (content) {
+            .primitive => |primitive| std.hash.autoHash(&hasher, primitive),
+            .zst, .erased_capture_ptr, .list, .box => {},
+            .tuple => |elems| std.hash.autoHash(&hasher, elems.len),
+            .record => |fields| {
+                const field_span = self.types.fieldSpan(fields);
+                std.hash.autoHash(&hasher, field_span.len);
+                for (0..field_span.len) |index| std.hash.autoHash(&hasher, GuardedList.at(field_span, index).name);
+            },
+            .capture_record => |fields| std.hash.autoHash(&hasher, self.types.captureFieldSpan(fields).len),
+            .tag_union => |tags| {
+                const tag_span = self.types.tagSpan(tags);
+                std.hash.autoHash(&hasher, tag_span.len);
+                for (0..tag_span.len) |index| {
+                    const tag = GuardedList.at(tag_span, index);
+                    std.hash.autoHash(&hasher, tag.name);
+                    std.hash.autoHash(&hasher, tag.checked_name);
+                    std.hash.autoHash(&hasher, tag.payloads.len);
+                }
+            },
+            .callable => |variants| self.hashVariantShapes(&hasher, variants),
+            .erased_fn => |erased| {
+                hasher.update(erased.source_fn_ty.bytes[0..]);
+                self.hashVariantShapes(&hasher, erased.members);
+            },
+            .named => |named| {
+                std.hash.autoHash(&hasher, named.kind);
+                std.hash.autoHash(&hasher, named.def.source_decl);
+                std.hash.autoHash(&hasher, named.builtin_owner);
+                std.hash.autoHash(&hasher, named.args.len);
+                std.hash.autoHash(&hasher, named.backing != null);
+            },
+        }
+        for (children) |child| {
+            const child_shape = self.representation_shapes.get(child) orelse
+                Common.invariant("finite representation shape hashed before its component");
+            std.hash.autoHash(&hasher, child_shape.finite);
+        }
+        return hasher.final();
+    }
+
+    fn hashVariantShapes(self: *Lowerer, hasher: *std.hash.Wyhash, variants: Type.Span) void {
+        const variant_span = self.types.fnVariantSpan(variants);
+        std.hash.autoHash(hasher, variant_span.len);
+        for (0..variant_span.len) |index| {
+            const variant = GuardedList.at(variant_span, index);
+            std.hash.autoHash(hasher, variant.source);
+            std.hash.autoHash(hasher, variant.capture_ty != null);
+        }
     }
 
     /// Public equivalence compares the checked interface of two Lambda Mono

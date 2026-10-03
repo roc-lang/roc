@@ -501,6 +501,19 @@ fn findCandidate(
 ) ResourceError!?Candidate {
     const body = rewritableProcBody(store, proc) orelse return null;
     stats.discovery_walks += 1;
+    // A join is fused only when literal tag writes to its parameter produce
+    // it, so a parameter no reachable statement writes a tag to is decided
+    // before its regions are inventoried.
+    var tag_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
+    defer tag_targets.deinit();
+    {
+        var targets_walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
+        defer targets_walk.deinit();
+        while (try targets_walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_tag) try tag_targets.put(stmt.assign_tag.target, {});
+        }
+    }
     var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |join_stmt| {
@@ -514,6 +527,7 @@ fn findCandidate(
         const param = GuardedList.at(params, 0);
         const param_layout = layouts.getLayout(store.getLocal(param).layout_idx);
         if (param_layout.tag != .tag_union or store.getLocal(param).boxy_desc != null) continue;
+        if (!tag_targets.contains(param)) continue;
 
         var wrappers = std.ArrayList(LIR.CFStmtId).empty;
         var keep_wrappers = false;
