@@ -188,11 +188,13 @@ Because the LSP takes control of the standard input and output, an optional flag
 roc experimental-lsp --debug-transport
 ```
 
-Passing the `--debug-transport` flag will create a log file in your OS tmp folder (`/tmp` on Unix
-systems). A mirror of the raw JSON-RPC traffic will be appended to the log file. Watching the file 
-will allow a user to see incoming and outgoing message between the server and the editor
+Passing the `--debug-transport` flag will create `lsp-debug.log` in your Roc cache directory
+(`~/.cache/roc` on Linux, `~/Library/Caches/roc` on macOS, `%APPDATA%\Roc` on Windows; the server
+prints the exact path to stderr on startup). A mirror of the raw JSON-RPC traffic will be appended
+to the log file. Watching the file will allow a user to see incoming and outgoing message between
+the server and the editor
 ```bash
-tail -f /tmp/roc-lsp-debug.log 
+tail -f ~/.cache/roc/lsp-debug.log 
 ---
 [1763992681773] OUT (128 bytes)
 {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":"utf-16"},"serverInfo":{"name":"roc-lsp","version":"0.1"}}}

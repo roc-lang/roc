@@ -113,6 +113,14 @@ enum ZigLLVMFloatABI {
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
     char **error_message, const ZigLLVMEmitOptions *options);
 
+// Like `ZigLLVMTargetMachineEmitToFile`, but writes the object file into a buffer stored in
+// `*out_bytes` (length in `*out_len`) instead of `options->bin_filename`, which is ignored. On
+// success the caller owns the buffer and releases it with `ZigLLVMFreeEmittedObject`.
+ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitObjectToMemory(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
+    char **error_message, const ZigLLVMEmitOptions *options, char **out_bytes, size_t *out_len);
+
+ZIG_EXTERN_C void ZigLLVMFreeEmittedObject(char *bytes);
+
 ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref);
 
 ZIG_EXTERN_C LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,

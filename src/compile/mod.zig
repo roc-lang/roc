@@ -41,7 +41,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: []const u8, _: []const u8, _: std.Io) Allocator.Error!?CleanupThread {
+    pub fn startBackgroundCleanup(_: []const u8, _: std.Io) Allocator.Error!?CleanupThread {
         return null;
     }
 

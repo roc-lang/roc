@@ -783,7 +783,6 @@ fn buildGluePlugin(
         error.MissingBuiltinBitcode,
         error.ModuleLinkFailed,
         error.NoBitcodeModules,
-        error.TempFileError,
         error.UnsupportedLlvmTriple,
         error.WindowsSDKNotFound,
         => return error.CompilationFailed,

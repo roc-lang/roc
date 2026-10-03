@@ -87,7 +87,6 @@ pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || s
     LlvmObjectEmitFailed,
     BitcodeParseError,
     ModuleLinkFailed,
-    TempFileError,
     LinkFailed,
     UnsupportedLowLevel,
     UnsupportedHostedFunction,

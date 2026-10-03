@@ -226,7 +226,6 @@ const LlvmError = Allocator.Error || std.DynLib.Error || error{
     LinkFailed,
     LlvmBackendUnavailable,
     ModuleLinkFailed,
-    TempFileError,
     UnsupportedLowLevel,
     UnsupportedTarget,
     WindowsSDKNotFound,
