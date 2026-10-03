@@ -715,10 +715,11 @@ const Pass = struct {
     /// those meet as scalars at a merge. A list field keeps its value's
     /// length term and must not be replaced by a met scalar.
     int_fields: std.AutoHashMap(u64, void),
-    /// The node each loop parameter was bound to when its body was seeded
-    /// this round. A back edge carrying that very value brings the
-    /// parameter back unchanged, so the entry edges' bounds hold on it too.
-    seeded_param_roots: collections.DenseMap(LocalId, NodeId),
+    /// The node each loop parameter was bound to when its join's body was
+    /// seeded this round, keyed by `loopBoundKey(join, param)`. A back edge
+    /// into that same join carrying that very value brings the parameter
+    /// back unchanged, so the join's entry edges' bounds hold on it too.
+    seeded_param_roots: std.AutoHashMap(u64, NodeId),
     /// Roots of those nodes, so merges keep a parameter's identity even
     /// before any fact mentions it.
     seeded_param_root_set: collections.DenseMap(NodeId, void),
@@ -817,7 +818,7 @@ const Pass = struct {
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
             .int_fields = std.AutoHashMap(u64, void).init(allocator),
-            .seeded_param_roots = collections.DenseMap(LocalId, NodeId).init(allocator),
+            .seeded_param_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .sums = .empty,
@@ -2270,6 +2271,7 @@ const Pass = struct {
             }
             state.facts.shrinkRetainingCapacity(keep);
 
+            const seed_join = self.body_joins.get(head);
             for (state.env.items) |*meet| {
                 if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0) continue;
                 const binding = self.path_env.get(meet.local);
@@ -2278,14 +2280,18 @@ const Pass = struct {
                 else
                     null;
                 if (node_id) |nid| {
-                    // A loop parameter arriving as the very value its body
-                    // was seeded with is unchanged around the loop: the
-                    // entry edges' meet already describes it.
+                    // A loop parameter arriving at its own join as the very
+                    // value that join's body was seeded with is unchanged
+                    // around the loop: the entry edges' meet already
+                    // describes it. Any other merge meets every edge, since
+                    // its other edges may carry narrower values.
                     if (meet.field == null) {
-                        if (self.seeded_param_roots.get(meet.local)) |seed_node| {
-                            const seeded = self.nodes.items[seed_node];
-                            const arriving = self.nodes.items[nid];
-                            if (seeded.root == arriving.root and seeded.off_lo == arriving.off_lo and seeded.off_hi == arriving.off_hi) continue;
+                        if (seed_join) |join_id| {
+                            if (self.seeded_param_roots.get(loopBoundKey(join_id, meet.local))) |seed_node| {
+                                const seeded = self.nodes.items[seed_node];
+                                const arriving = self.nodes.items[nid];
+                                if (seeded.root == arriving.root and seeded.off_lo == arriving.off_lo and seeded.off_hi == arriving.off_hi) continue;
+                            }
                         }
                     }
                     const node = self.nodes.items[nid];
@@ -2414,7 +2420,7 @@ const Pass = struct {
                         try self.seedLoopParam(join_id, param);
                         if (self.lookup(param) == null) try self.bindFresh(param);
                         if (self.lookup(param)) |b| {
-                            try self.seeded_param_roots.put(param, b.node);
+                            try self.seeded_param_roots.put(loopBoundKey(join_id, param), b.node);
                             try self.seeded_param_root_set.put(self.rootOf(b.node), {});
                         }
                     }
