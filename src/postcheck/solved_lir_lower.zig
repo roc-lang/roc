@@ -512,7 +512,7 @@ const RootEntry = struct {
 const LiteralRootEntry = struct {
     fn_id: Type.FnId,
     module: check.CheckedModule.ModuleId,
-    site: Common.LiteralRejectionSite,
+    subject: Common.LiteralRootSubject,
 };
 
 const LayoutRequest = struct {
@@ -1375,7 +1375,7 @@ const Lowerer = struct {
                 self.literal_roots.appendAssumeCapacity(.{
                     .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                     .module = root.module,
-                    .site = root.site,
+                    .subject = root.subject,
                 });
             }
         }
@@ -3031,6 +3031,7 @@ const Lowerer = struct {
                 .binder = local.binder,
                 .capture_id = local.capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys.items[@intFromEnum(capture.local)],
             });
         }
@@ -4189,6 +4190,7 @@ const Lowerer = struct {
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
+                .capture_kind = capture.capture_kind,
                 .ty = capture_ty,
                 .storage_ty = try self.captureFieldStorageType(capture, capture_ty),
             });
@@ -4413,7 +4415,7 @@ const Lowerer = struct {
             try self.result.literal_roots.append(self.allocator, .{
                 .module = root.module,
                 .id = id,
-                .site = root.site,
+                .subject = root.subject,
                 .proc = try self.markReachableFn(root.fn_id),
                 .ret_layout = ret_layout,
                 .plan = try self.constPlanOfType(entry.ret),
@@ -5078,6 +5080,7 @@ const Lowerer = struct {
                 Common.invariant("ConstStore capture field had no checked capture identity");
             task.slots[task.index] = .{
                 .id = checked_capture_id,
+                .kind = field.capture_kind,
                 .slot = @intCast(task.index),
                 .ty = undefined,
                 .plan = undefined,
@@ -5811,11 +5814,16 @@ const Lowerer = struct {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.comptime-root-accessor.v2");
         hasher.update(&root.module.bytes);
-        // A literal root's id is program-local; the literal's checked
-        // expression names it within its module.
+        // A literal root's id is program-local; its subject names it within
+        // its module: the literal's checked expression, or the value's
+        // checked root. The representation below separates the
+        // specializations of one subject.
         const tag: u8, const index: u32 = switch (root.root) {
             .checked => |checked_root| .{ 0, @intFromEnum(checked_root) },
-            .literal => |literal| .{ 1, self.literal_roots.items[@intFromEnum(literal)].site.checked_expr },
+            .literal => |literal| switch (self.literal_roots.items[@intFromEnum(literal)].subject) {
+                .conversion => |site| .{ 1, site.checked_expr },
+                .value => |value| .{ 2, @intFromEnum(value.root) },
+            },
         };
         hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
         hasher.update(&representation.bytes);

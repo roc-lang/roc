@@ -694,7 +694,7 @@ fn testTemplate() Program.FnTemplate {
 
 // Only slot, plan and storage are read by these synthetic capture export tests.
 fn testCapture(plan: Program.ConstPlanId, storage: Program.CaptureSlotStorage) Program.CaptureSlot {
-    return .{ .id = undefined, .slot = 0, .ty = undefined, .plan = plan, .storage = storage };
+    return .{ .id = undefined, .kind = .lexical, .slot = 0, .ty = undefined, .plan = plan, .storage = storage };
 }
 
 test "native root export closes recursive finite callable capture graphs" {

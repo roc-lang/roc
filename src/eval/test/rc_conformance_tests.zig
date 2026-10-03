@@ -986,6 +986,7 @@ const exemptions = [_]Exemption{
     .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
     .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
     .{ .op = .list_drop_last, .reason = "no producer: List.drop_last lowers through list_sublist" },
+    .{ .op = .list_prefetched, .reason = "no producer: LIR lowering splits List.prefetched into an alias plus list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
     .{ .op = .list_split_first, .reason = "no producer: List.split_first is written in Roc" },
     .{ .op = .list_split_last, .reason = "no producer: List.split_last is written in Roc" },

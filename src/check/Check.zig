@@ -654,12 +654,14 @@ bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
 annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange),
-/// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
-/// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
-/// after the module solves (`closeWeakValueImplicitOpenExts`), so the
-/// published type—what importers copy and what stored constants are sealed
-/// against—is the closed row the annotation produced before polarity.
-weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
+/// Type-variable-free top-level annotations whose generation mints at least
+/// one implicitly opened extension, recorded by
+/// `predeclareAnnotatedDefSchemes` before any body is checked. An implicitly
+/// opened row counts as a type variable for value generalization (design.md
+/// "Polarity"), so a value binding with one of these annotations generalizes
+/// exactly as if the row were written `..` (`isGeneralizableValueBinding`).
+/// Local annotations are never recorded.
+implicit_open_top_level_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// Every implicitly opened extension the post-body audit
 /// (`auditImplicitOpenExts`) visited, in visit order, with the binding that
 /// owns it. A generated codec validated after that audit can
@@ -3160,7 +3162,7 @@ fn initAssumePrepared(
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
-        .weak_value_implicit_open_ext_ranges = .empty,
+        .implicit_open_top_level_annotations = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
         .rejected_default_exprs = .empty,
@@ -3309,7 +3311,7 @@ pub fn deinit(self: *Self) void {
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
-    self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
+    self.implicit_open_top_level_annotations.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
     self.codec_row_demand_tags.deinit(self.gpa);
@@ -10457,8 +10459,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveLambdaParams(&env);
     try self.reportNonExhaustiveForPatterns(&env);
 
-    try self.closeWeakValueImplicitOpenExts(&env);
-
     try self.pruneSelectedHoistedRootsAfterSolving();
     // Pruning can mark a destructured name erroneous; its uses are poisoned
     // like those of any other erroneous binding.
@@ -13472,8 +13472,31 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
         self.var_set.clearRetainingCapacity();
         if (!try self.varHasUnresolvedStaticDispatchConstraints(def_var, &self.var_set)) continue;
 
-        try self.reportPolymorphicValueProblem(def_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
+        const hole = if (def.annotation) |annotation_idx| try self.polymorphicAnnotationHole(annotation_idx) else null;
+        try self.reportPolymorphicValueProblemWithHole(def_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern), hole);
     }
+}
+
+/// The first `_` inference hole of a polymorphic value's annotation whose
+/// inferred type carries an unresolved constrained variable. A hole is
+/// inferred from the body and generalized at the definition's boundary like
+/// any body-inferred variable (design.md "Polarity"), so a hole filled only by
+/// a constrained literal is exactly what leaves the value polymorphic; the
+/// report points there. Which annotation nodes are holes is recorded data.
+fn polymorphicAnnotationHole(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!?Var {
+    if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) return null;
+    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer nodes.deinit(stack_allocator);
+    try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
+    for (nodes.items) |anno_idx| {
+        if (self.cir.store.getTypeAnno(anno_idx) != .underscore) continue;
+        const hole_var = ModuleEnv.varFrom(anno_idx);
+        self.var_set.clearRetainingCapacity();
+        if (try self.varHasUnresolvedStaticDispatchConstraints(hole_var, &self.var_set)) return hole_var;
+    }
+    return null;
 }
 
 fn reportPolymorphicExecutableRootResults(self: *Self) std.mem.Allocator.Error!void {
@@ -13517,11 +13540,26 @@ fn reportPolymorphicValueProblem(
     region_var: Var,
     def_name: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
+    return self.reportPolymorphicValueProblemWithHole(snapshot_var, region_var, def_name, null);
+}
+
+fn reportPolymorphicValueProblemWithHole(
+    self: *Self,
+    snapshot_var: Var,
+    region_var: Var,
+    def_name: ?Ident.Idx,
+    hole_var: ?Var,
+) std.mem.Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, snapshot_var);
+    const hole: ?problem.PolymorphicValue.PolymorphicHole = if (hole_var) |var_| .{
+        .var_ = var_,
+        .snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_),
+    } else null;
     _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_value = .{
         .var_ = region_var,
         .snapshot = snapshot,
         .def_name = def_name,
+        .hole = hole,
     } });
 }
 
@@ -14845,11 +14883,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.finalizeTypes(&env, .{ .repl_expr = expr_idx });
     try self.reportPolymorphicConstrainedExpr(expr_idx);
 
-    // Polarity's two settled-state steps, in the one order they may run in
-    // (see `runLateImplicitOpenExtAudit`): run the late audit while the rows
-    // still carry the tags it reads, then—after every pass that can still
-    // widen one—ground the survivors. `checkFile` runs the same two
-    // steps at the matching points in its own sequence.
+    // Check generated-codec error demands against their owners' annotated
+    // rows now that nothing further unifies (as `checkFile` does).
     try self.runLateImplicitOpenExtAudit(&env);
 
     try self.validateSettledValueRows(&env);
@@ -14859,8 +14894,6 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
-
-    try self.closeWeakValueImplicitOpenExts(&env);
 
     try self.finalizeExpectEffectSlots();
     // Expression checking suppresses root selection, but constant-condition
@@ -15085,31 +15118,25 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     const def_expr = self.cir.store.getExpr(def.expr);
     const def_is_function = state.def_is_function;
     const platform_required = self.platform_required_defs.get(def_idx);
-    // A function, a pure signature, and a value alias generalize regardless
-    // of any written `..`, so a `..` in their output positions is redundant;
-    // on a value it is the opt-in to a quantified row.
+    // A function, a pure signature, and a value alias generalize regardless of
+    // their annotation. A value generalizes when its annotation introduces a
+    // type variable, an implicitly opened row included
+    // (`isGeneralizableValueBinding`), so its uses widen fresh copies.
     const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
-    const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
-    const annotation_generalizes = generalizes_regardless or
-        (if (def.annotation) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
+    const annotation_generalizes = def_is_function or def_expr == .e_anno_only or is_value_alias or
+        self.isGeneralizableValueBinding(def.annotation, true);
     try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, def.annotation, annotation_generalizes);
     if (def.annotation) |annotation_idx| {
+        // Every top-level definition generalizes regardless of any written
+        // `..`: a function, a pure signature, and a value alias always do, and
+        // a value's implicitly opened row counts as a type variable exactly
+        // as a written `..` would (`implicit_open_top_level_annotations`), so
+        // a `..` in an output position is redundant on all of them.
         try self.auditImplicitOpenExts(
             annotation_idx,
-            generalizes_regardless,
+            true,
             def.expr,
         );
-
-        // A top-level value binding that does not generalize (not a function,
-        // not a pure signature, not a value alias, and no written type
-        // variable) shares its implicitly opened rows weakly with every use;
-        // whatever is still open after the module solves is grounded to `[]`
-        // (`closeWeakValueImplicitOpenExts`).
-        if (!annotation_generalizes) {
-            if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
-                if (range.len > 0) try self.weak_value_implicit_open_ext_ranges.append(self.gpa, range);
-            }
-        }
     }
     if (def.annotation) |annotation_idx| {
         if (platform_required) |required| {
@@ -15226,17 +15253,66 @@ fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
 /// dispatch—then instantiates the scheme and never requires the referenced
 /// body to have been checked; bodies are later checked on the ordinary path,
 /// in graph order like everything else.
+///
+/// The same pass records which annotations mint an implicitly opened
+/// extension (`implicit_open_top_level_annotations`), since whether a value
+/// binding generalizes is decided before its body pass regenerates the
+/// annotation. A predeclared scheme and the def's own scheme therefore agree:
+/// both quantify those rows. An annotation that cannot be predeclared is
+/// generated speculatively for this alone (`recordAnnotationImplicitOpenExts`).
 fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     std.debug.assert(env.rank() == .outermost);
+    self.implicit_open_top_level_annotations.clearRetainingCapacity();
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
-        if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const predeclarable = self.annotationIsPredeclarableScheme(def.pattern, annotation_idx);
+        if (predeclarable) {
+            const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
+            self.setPredeclaredSchemeVar(def_idx, scheme_var);
+            try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        }
+        // A written type variable already generalizes the binding.
+        if (self.cir.store.getAnnotation(annotation_idx).mentions_type_var) continue;
+        if (!predeclarable) try self.recordAnnotationImplicitOpenExts(annotation_idx, env);
+        const range = self.annotation_implicit_open_exts.get(annotation_idx).?;
+        if (range.len > 0) try self.implicit_open_top_level_annotations.put(self.gpa, annotation_idx, {});
     }
+}
+
+/// Generate an annotation only to record the implicitly opened extensions its
+/// generation mints (`annotation_implicit_open_exts`), unwinding every other
+/// effect exactly as `predeclareAnnotationScheme` does: the body pass
+/// regenerates the annotation from pristine nodes and reports its problems.
+/// The minted count depends only on the annotation and the declarations it
+/// names, so the body pass's regeneration mints the same count.
+fn recordAnnotationImplicitOpenExts(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const problems_len = self.problems.len();
+    const snapshots_mark = self.snapshots.mark();
+
+    try env.var_pool.pushRank();
+    const saved_predeclaring = self.predeclaring_annotation;
+    const saved_active_scheme_root = self.active_scheme_root;
+    self.predeclaring_annotation = true;
+    self.active_scheme_root = ModuleEnv.varFrom(annotation_idx);
+    defer {
+        self.predeclaring_annotation = saved_predeclaring;
+        self.active_scheme_root = saved_active_scheme_root;
+    }
+    try self.generateAnnotationType(annotation_idx, env);
+    try self.judgeFieldKindsAtBoundary(env);
+    self.unify_scratch.clearPersistentOpenings();
+    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    env.var_pool.popRank();
+
+    self.problems.truncate(problems_len);
+    self.snapshots.truncateToMark(snapshots_mark);
+    try self.resetAnnotationNodes(annotation_idx);
 }
 
 /// Whether a def's annotation can be declared as a standalone scheme before
@@ -17435,9 +17511,11 @@ const CodecRowDemand = struct {
 /// here rather than at the producing expression.
 ///
 /// `redundant_open_warns`: the binding generalizes regardless of any written
-/// `..` (a function, a pure signature, a value alias), so an explicit
-/// anonymous `..` in an output position adds nothing and warns. On a value
-/// binding `..` is the opt-in to a quantified row, so it never warns there.
+/// `..` (every top-level definition, whose implicitly opened rows generalize
+/// exactly like written ones, and a local function), so an explicit
+/// anonymous `..` in an output position adds nothing and warns. On a local
+/// value binding `..` is the opt-in to a quantified row, so it never warns
+/// there.
 ///
 /// This is a single READ of a mutable var, and it is not always the last word:
 /// a generated codec the definition's body introduced can be validated after
@@ -17589,9 +17667,8 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 /// constructs directly. Callers may still widen the row; a tag a caller added
 /// that the codec does not demand is never reported.
 ///
-/// Codec relations can be validated after the owner's body was checked, so
-/// this runs once nothing further unifies, before
-/// `closeWeakValueImplicitOpenExts` grounds the remaining extensions to `[]`.
+/// Codec relations can be validated after the post-body audit read the row,
+/// so this runs once nothing further unifies.
 /// Provenance is exact: each demand names its owning expression and the tags
 /// it requires, so neither timing nor type-graph reachability decides who
 /// widened a row.
@@ -17862,36 +17939,6 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
         }
         if (expr == .e_lambda) return expr.e_lambda.body;
         return current;
-    }
-}
-
-/// After the module solves, ground every still-open implicitly opened
-/// extension of a top-level weak value binding to `[]` (design.md
-/// "Polarity"). Nothing in this module can widen the row any further, and
-/// the closed row is exactly what the annotation produced before polarity,
-/// so importers and Monotype's stored constants see the type they always
-/// did. An extension that meanwhile joined a generalized scheme (a function's
-/// quantified row) is left alone: closing a quantified variable after it has
-/// been instantiated would desync the scheme from its uses.
-///
-/// A use may have widened the shared row, so the extension can resolve to a
-/// tag row; what is grounded is the row's tail (`tagRowTail`), which a
-/// widening leaves open.
-///
-/// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
-/// reason stated there: grounding an extension empties it, and the late audit
-/// only reads extensions that still carry tags.
-fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.weak_value_implicit_open_ext_ranges.items) |range| {
-        for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-            const tail = self.tagRowTail(entry.var_);
-            const resolved = self.types.resolveVar(tail);
-            if (resolved.desc.content != .flex) continue;
-            if (resolved.desc.content.flex.constraints.len() != 0) continue;
-            if (resolved.desc.rank == .generalized) continue;
-            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, entry.region);
-            _ = try self.unify(tail, empty_tu_var, env);
-        }
     }
 }
 
@@ -27353,7 +27400,8 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 ///     a bare number or tag union. Restricted to binding-RHS position so bare
 ///     lookups in arbitrary subexpressions aren't generalized out from under their
 ///     surrounding context.
-///   - **An annotated value binding** whose annotation introduces a free type var
+///   - **An annotated value binding** whose annotation introduces a free type var,
+///     or—at the top level—an implicitly opened row, which counts as one
 ///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
 ///     quantify exactly the generalizable vars—with none (e.g. a concrete
 ///     annotation) the generalize call is a no-op and the value stays monomorphic.
@@ -27372,9 +27420,13 @@ fn shouldGeneralize(
 /// True when a value binding generalizes to its annotated scheme: it sits in
 /// binding-RHS position (only a binding's own right-hand side qualifies; a call
 /// argument never generalizes on its own) and has an annotation introducing a
-/// type variable. The polymorphic annotation is the opt-in, honored regardless
-/// of whether the RHS does work (an expansive definition pays per-specialization—
-/// the cost the author chose by writing the scheme).
+/// type variable. A top-level annotation's implicitly opened row counts as a
+/// type variable, exactly as the `..` it could have been written with does
+/// (design.md "Polarity"); `predeclareAnnotatedDefSchemes` recorded which
+/// annotations mint one before any body was checked. The polymorphic
+/// annotation is the opt-in, honored regardless of whether the RHS does work
+/// (an expansive definition pays per-specialization—the cost the author chose
+/// by writing the scheme).
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
@@ -27382,7 +27434,8 @@ fn isGeneralizableValueBinding(
 ) bool {
     if (!is_binding_rhs) return false;
     const annotation_idx = annotation orelse return false;
-    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var or
+        self.implicit_open_top_level_annotations.contains(annotation_idx);
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {

@@ -118,6 +118,7 @@ const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
+const PolymorphicValue = problem_mod.PolymorphicValue;
 const RowLabelConflict = problem_mod.types.RowLabelConflict;
 
 // Context types for precise error reporting
@@ -4818,7 +4819,7 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildPolymorphicValueReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
+    fn buildPolymorphicValueReport(self: *Self, data: PolymorphicValue) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Polymorphic Value", "This top-level value still has an unresolved polymorphic type.", .runtime_error);
         errdefer report.deinit();
 
@@ -4840,7 +4841,43 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addAnnotated(type_str, .code_block);
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Add an annotation or use this value in a way that fixes its concrete type.");
+
+        const hole = data.hole orelse {
+            try report.document.addReflowingText("Add an annotation or use this value in a way that fixes its concrete type.");
+            return report;
+        };
+        // The polymorphic part was inferred for a `_` in the annotation: a
+        // hole is inferred from the body and generalized with the value, so
+        // a literal that fixes nothing leaves it polymorphic.
+        try D.renderSlice(&.{
+            D.bytes("The polymorphic part was inferred for this"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes("in its annotation:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(hole.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+        const hole_str = try report.addOwnedString(self.getFormattedString(hole.snapshot));
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("It was inferred as:");
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(hole_str, .code_block);
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Write the concrete type you want in place of"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report);
 
         return report;
     }

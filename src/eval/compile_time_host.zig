@@ -52,15 +52,25 @@ pub const ExpectFailedEvent = struct {
     loc: ?base.SourceLoc,
 };
 
+/// A `dbg` observed during native compile-time evaluation, with its
+/// statement's checked region and resolved location (whose file entry names
+/// the declaring module) as emitted by the dev backend's failure-region hook
+/// immediately before the dbg call.
+pub const DbgEvent = struct {
+    message: []u8,
+    region: ?base.Region,
+    loc: ?base.SourceLoc,
+};
+
 /// Root-local host effects captured during native compile-time evaluation.
 pub const HostEvent = union(enum) {
-    dbg: []u8,
+    dbg: DbgEvent,
     expect_failed: ExpectFailedEvent,
     crashed: []u8,
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
+            .dbg => |event| event.message,
             .expect_failed => |event| event.message,
             .crashed => |msg| msg,
         };
@@ -365,6 +375,19 @@ fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), by
     };
 }
 
+fn appendDbgEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
+    const owned = self.dupeEventBytes(bytes);
+    const host_allocator = self.host_arena.allocator();
+    self.events.append(host_allocator, .{ .dbg = .{
+        .message = owned,
+        .region = region,
+        .loc = loc,
+    } }) catch {
+        self.jump(.host_oom);
+        unreachable;
+    };
+}
+
 fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
     const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
@@ -438,7 +461,16 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
 
 fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.appendEvent(.dbg, bytes[0..len]);
+    // The dev backend emits a failure-region hook call immediately before a
+    // dbg call, exactly as before an expect-failed call. Consume that pending
+    // location into this event: evaluation continues after a dbg, so leaving
+    // it set would misattribute a later crash to the dbg.
+    const region = self.failed_region;
+    const loc = self.failed_loc;
+    self.failed_region = null;
+    self.failed_loc = null;
+    self.failed_stmt = null;
+    self.appendDbgEvent(bytes[0..len], region, loc);
 }
 
 fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {

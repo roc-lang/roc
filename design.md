@@ -504,6 +504,10 @@ checking already walks every expression, resolves local identity, computes
 types, validates function effects, and receives static-dispatch results. The
 checker must not perform a later whole-module expression walk merely to decide
 which expressions are roots, and later stages must not recreate those answers.
+Selecting a top-level value whose type is not context-free as a
+per-specialization root is part of this selection; the post-check pipeline
+only supplies the concrete types at which checking's selection is evaluated
+(see "Specialization-Owned Top-Level Values").
 
 The question "can this expression be evaluated at compile time?" depends only
 on checked data dependency, checked control reachability, and effectfulness. It
@@ -1001,7 +1005,9 @@ validation checks the recorded root ids and message ranges before replay.
 
 Compile-time evaluation must evaluate every checked top-level expression and
 every selected compile-time root that can be evaluated without effectful calls
-or runtime data. It must run `crash`, `dbg`, and `expect` during that
+or runtime data. A specialization-owned top-level value is evaluated
+once per concrete specialization the program uses (see "Specialization-Owned
+Top-Level Values" below). It must run `crash`, `dbg`, and `expect` during that
 evaluation and output their diagnostics during `roc check`.
 
 A function-typed top-level binding whose entire checked right-hand side is one
@@ -1014,6 +1020,135 @@ kind and its resolved value reference. It must not infer a procedure from source
 names, function type alone, body shape below the root expression, or post-check
 specialization results. Any wrapper, capture, conditional, call, or other
 function-valued computation remains an ordinary compile-time callable root.
+
+### Specialization-Owned Top-Level Values
+
+A top-level value binding (a `constant` or `callable_binding` root whose
+source is the definition) is effect-free and evaluated unconditionally
+whenever it is used, so checking always selects it for compile-time
+evaluation. Whether the module itself can evaluate it depends on its checked
+type. A context-free type gets one module-owned `RootRequest`
+(`request_eligibility = .eligible`). A type that is not context-free—a
+generalized value such as `made : List(a)` or a value whose annotation
+has an implicitly opened (or written `..`) output row (Polarity), or an
+unannotated data value with a reachable callable slot—is specialization-owned when specialization can supply what
+the type lacks: the type contains no error, and it is either concrete (only
+a callable graph waits for a consumer) or the checker classified the
+binding as a scheme (`ModuleEnv.nodeIsBindingScheme`), so each use
+instantiates its quantified variables. Checking then records
+`request_eligibility = .per_specialization` and requests nothing, because no
+concrete type exists to evaluate it at until post-check specialization
+instantiates it. An erroneous type, or a variable no scheme quantifies, has
+nothing for a specialization to instantiate and stays `.ineligible`. A callable binding
+that is one resolved procedure lookup has no value computation and is demoted
+to `.ineligible`. A value whose checked right-hand side diverges on every path
+(the checked body's explicit divergence data for its root expression,
+`diverges_without_inline_expects`, which implies divergence when inline expects
+run too) is also demoted to `.ineligible`, once dispatch resolutions have fixed
+that data: there is no value for any specialization to fold, so evaluating it
+at compile time could only fail, and it would fail for every use, reached or
+not. It stays evaluated at its use exactly as a value no specialization owns,
+so a placeholder such as `todo : a` / `todo = crash "TODO"` crashes only when a
+use of it runs. A value that diverges on only some paths keeps
+`.per_specialization`, and a specialization whose evaluation takes a failing
+path reports at compile time. A per-specialization evaluation that reaches code checking
+rejected stops there like any other compile-time root: its literal root's
+failure carries `ComptimeFailureKind.checked_error`, and nothing further is
+reported. This is root SELECTION, and it stays in checking: the
+post-check pipeline never decides that a value is compile-time evaluable.
+
+A program lowered with literal roots (every compile-time evaluation, see
+`specialization_dispatch` under literal-origin resolution) evaluates each
+concrete specialization of a `.per_specialization` value once. Where
+Monotype would otherwise lower the value's checked body at a use (a pending
+`ConstEvalTemplate` or pending callable-eval binding), it lowers that body
+at the use's concrete type as the body of a zero-argument literal root whose
+subject is the value (`LiteralRootSubject.value`: owning module, checked
+root id, and specialization identity), and the use reads the root's
+`comptime_value` slot. The root's definition identity is the checked root
+plus its sealed return type, so every use at one concrete type reads one
+root, and distinct types are distinct roots; that identity is the subject's
+`specialization`, and it is the same in every program that lowers the same
+specialization. Only a use that no other inlined value body encloses
+becomes a root: a use lowered as part of another top-level value's body
+(including through a deferred const-use boundary, which records the
+enclosing depth, and including the body of a module-evaluated callable
+value's own root, which is lowered under that value's recursive binding)
+stays inline, because it belongs to that enclosing
+computation—which is itself a literal root when it is specialization-owned,
+exactly as an ordinary top-level constant's body selects no nested hoisted
+roots—and because only there are the enclosing value's recursive bindings
+in scope. A separate root definition must never name another definition's
+recursive-binding local. The enclosing depth (`inlined_value_depth`, raised by
+`lowerCallableEvalBindingBody`) is draft-wide and stays above zero inside
+nested lambda bodies lowered within the enclosing value, so a
+per-specialization use inside a stored closure's runtime body is inlined there
+and recomputed on every call of that closure rather than evaluated once as a
+root: correct, since it is the enclosing computation's code, but weaker than
+once per concrete specialization. A use whose root definition is deduplicated
+into an earlier root of the same identity reads that root and cites that
+root's definition as its representation evidence: a nested function that reads
+a recursive-binding local has no merge identity, so two equal-identity
+definitions may name different specializations of it, and the read must name
+the one the root evaluates. Finalization evaluates these roots exactly like literal
+conversion roots—on first slot demand from another root, otherwise after
+every checked root—and a runtime consumer continuing the shared Solved
+program reads their completed values from the frozen image. Nothing is
+written to the owning module's `ConstStore`: the specializations a program
+demands are a property of the program, not of the checked module, so the
+values live in the program's evaluation and are recomputed by every
+command that finalizes the program, as literal roots are.
+
+Observables follow from that: each specialization is its own evaluation.
+`dbg` runs once per concrete specialization the program evaluates; a value
+no specialization uses is never evaluated, because there is no type to
+evaluate it at. Failures are diagnostics of the value's source, each
+identified by explicit data: the value's checked root, the specialization
+identity, the failure kind, and the failure site, where the site is the
+explicit source stamp of the failed statement in the value's module. One
+identity is one diagnostic (`comptimeFailureReported`), even when a later
+finalization program of the same compilation evaluates the specialization
+again: each program reports into a problem store that ends with it, so the
+driver retains each module's reported identities
+(`ReportedValueFailure`) and hands them to the next program. Different
+specializations and different values always report separately, and a
+failure with no stamp of its own (or one in source inlined from another
+module) has no identity and is never treated as already reported. Message
+text never identifies a failure.
+A literal root's `dbg` observations go through the finalization's ordered
+debug-event stream like a checked root's: a literal root a checked root
+demands runs exactly when that root runs, so its observations are recorded
+as that root's (persisted with it and replayed on a cache hit); one that no
+checked root demands is evaluated by every finalization of its program, so
+its observations are replayed but never persisted. A value root's observation
+made at an explicitly stamped `dbg` in the value's module carries an identity
+(`CompileTimeDebugStore.ValueSite`): the value's module and checked root, the
+specialization identity, and the stamp's region, persisted with the
+observation. An observation whose identity a stored observation (one a
+completed checked module replays, such as the platform program's) already
+carries is the same specialization's `dbg` an earlier program reported, so it
+is neither replayed nor persisted again. Observations one finalization makes
+never suppress each other, because one evaluation may run one `dbg` many
+times; an observation with no stamp of its own in the value's module, and a
+conversion literal's, has no identity and always reports.
+
+Declared limitation: a platform paired with an app finalizes in two
+programs—first the platform's own roots, then the pairing. A specialization
+both programs need (a platform constant and app runtime code using one
+generalized platform value at one type) is evaluated by each, as literal
+conversion roots are, because the first program's literal roots are not
+retained. Only the evaluation repeats, which costs time but is not
+observable: its `dbg` reports once per specialization (the second program's
+observations at identities the first program stored are dropped, see above),
+and a failure no checked root embeds (an inline `expect`) is reported at the
+value once. A failure the first program's checked root embedded is reported at
+that root, while the second program reports it at the value. Evaluating such a
+specialization once is follow-up work. Retaining program-local roots across the two programs would
+need a durable per-specialization store, which checked modules do not
+have. A lowering without literal roots (a
+Boxy program, or a program not lowered for compile-time evaluation) has no
+slot to read and evaluates the value's body at the use, as before; it does
+not select or reject roots.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -1044,7 +1179,9 @@ reads always name the completed slot directly, never a runtime accessor.
 
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
-`expect` behavior is reported, but successfully evaluated unreachable data does
+`expect` behavior is reported (a specialization-owned value is the exception:
+with no specialization there is no type to evaluate it at, see
+"Specialization-Owned Top-Level Values"), but successfully evaluated unreachable data does
 not need to be stored in checked module data or target static data. Reachable
 evaluated values that have a static representation should be stored once and
 shared. Records that contain static lists should point at shared static list
@@ -1085,7 +1222,10 @@ not by root type eligibility alone. Eligible procedure aliases and roots with
 unbound platform requirements can be intentionally absent from that manifest.
 The initial reservation pass records exactly its module/root identities and
 reserved root functions; lowering uses that declaration table to select slot reads.
-Unrequested callable bindings retain their ordinary checked body computation.
+Unrequested callable bindings retain their ordinary checked body computation,
+except that a `.per_specialization` binding in a program lowered with literal
+roots computes it as a literal root (see "Specialization-Owned Top-Level
+Values").
 
 A shared compile-time value slot has its root type's own layout. A read whose
 target stores that type boxed, such as a recursive payload field, reads the
@@ -4774,7 +4914,12 @@ Every live literal-origin record leaves checking with one explicit resolution:
   definition the draft registers; the specialization reads the root's
   `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
   beside the checked roots' plans; and finalization evaluates each literal root
-  on its first slot demand, and the rest after every checked root. Every command
+  on its first slot demand, and the rest after every checked root. A literal
+  root carries an explicit subject (`LiteralRootSubject`): a `conversion`
+  names the literal its rejection reports, and a `value` names a
+  specialization-owned top-level value's checked root (see
+  "Specialization-Owned Top-Level Values"); failures without a source
+  region of their own report at the subject. Every command
   that finalizes checking evaluates the literal roots of its program roots,
   with the rest of compile-time evaluation and under its fixed configuration,
   so `roc check` reports every rejected or crashing conversion a build would. Two object-cache
@@ -7239,18 +7384,20 @@ tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
 `Err` branch), which opening would destroy. Polarity is walk state only
 (`types.Polarity`); no new content kind exists.
 
-What that opening MEANS depends on what is annotated. One spelling, three
-rules:
+What that opening MEANS depends on what is annotated. One spelling, two
+rules: a function or a top-level value quantifies the row, and a host
+boundary does not open it.
 
 | Annotated thing | The opened extension | What a use may do |
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
-| A VALUE binding | ONE weak flex shared by every use in the module, grounded to `[]` after the module solves (`Check.closeWeakValueImplicitOpenExts`) | Uses may widen the shared row, and what accumulates is what every later use sees |
+| A top-level VALUE binding | A quantified flex, exactly as for a function: the implicitly opened row counts as a type variable, so the value generalizes as if the row were written `..` | Each use may use the value at a wider union, independently of every other use |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
-A value binding generalizes only when its annotation writes a type variable,
-exactly as before; a host boundary opts out because the host is a fixed ABI
-rather than a Roc producer participating in unification.
+A value binding otherwise generalizes only when its annotation writes a type
+variable, so at the top level values and functions follow one rule; a host
+boundary opts out because the host is a fixed ABI rather than a Roc producer
+participating in unification.
 
 The annotation still BOUNDS the definition—widening happens only at
 instantiation sites. When the definition's body pass generates its annotation,
@@ -7295,8 +7442,7 @@ parser's error tags, and any tag the validation added to the row by relating it
 to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
 every demanded tag that lies in the extension of a binding whose right-hand side
 contains the demanding expression and whose row the demand shares (the two rows
-end in the same extension variable), before `closeWeakValueImplicitOpenExts`
-grounds the leftovers to `[]`.
+end in the same extension variable).
 
 Provenance is exact, so neither timing nor type-graph reachability decides who
 widened a row. A caller that widens the same row with other tags is not
@@ -7353,9 +7499,10 @@ resolved declaration over EVERY declaration the spelling could reach (every
 same-named type declaration in the file, the `Builtin` type of that name, any
 import that could introduce it) and deletes only on a unanimous answer. It
 also keeps the `..` wherever the file alone cannot rule out a different
-meaning: a value binding (where `..` opts into a quantified row) and any
-other body that is not a lambda, a platform's `provides` definition, and an
-annotation-only definition outside an app (which may be hosted). So the
+meaning: a block-local binding whose body is not a lambda (on a local value
+`..` opts into a quantified row), a platform's `provides` definition, and an
+annotation-only definition outside an app (which may be hosted). Every other
+top-level or associated definition, value or function, generalizes regardless. So the
 formatter may keep a `..` the checker reports, and never deletes one it does
 not; `src/check/test/redundant_open_fmt_test.zig` runs both on the same
 sources to hold that. A change to where the checker opens a row is a change
@@ -7367,17 +7514,33 @@ positions, shared across its sequential files and paths and released at invocati
 exit. Standalone formatting owns the same data for that call; independent
 workers never share mutable analysis state.
 
-The VALUE row above is the pre-polarity behaviour of an inferred value
-(`x = Boom`) extended to annotated ones: the value's body is bounded by the
-audit, and a later annotated use listing fewer tags than the shared row has
-accumulated is rejected by its own audit. Writing `..` on the value opts into
-a quantified row, as it always has. Grounding those extensions is safe because
-nothing in the module can widen them further, and the closed row is exactly
-what the annotation produced before polarity, so importers and Monotype's
-stored constants see the type they always did (an extension that meanwhile
-joined a generalized scheme is left alone). Local value bindings are not
-grounded: their rows behave like inferred local rows and are sealed by
-Monotype's row defaults.
+The top-level VALUE row above is decided before the value's body is checked:
+`Check.predeclareAnnotatedDefSchemes` records every type-variable-free
+top-level annotation whose generation mints an implicitly opened extension
+(`Check.implicit_open_top_level_annotations`; an annotation that cannot be
+predeclared is generated speculatively for this alone), and
+`Check.isGeneralizableValueBinding` treats those exactly like a written type
+variable, so a predeclared scheme and the value's own scheme agree. The
+value's body is still bounded by the audit, and the value's checked type is
+the annotated row whatever its uses do, so an importer may widen it too. A
+body that forwards a closed value closes the row, which then has nothing left
+to quantify (Deferred: Row Subsumption). An `_` hole in such an annotation
+follows the existing hole rule (Def Checking Order: a hole is a body-inferred
+variable that the definition's boundary generalizes like any other), so a
+hole filled only by a constrained literal (`e : Try(_, [Boom])`,
+`e = Ok(1)`, or `Ok("ok")`) makes the value polymorphic, and it is rejected
+like any constrained top-level value; the Polymorphic Value report points at
+the hole and asks for the concrete type in its place.
+
+Local value bindings do not yet generalize by their implicitly opened rows.
+This is a known gap, not the intended language rule: a generalized local value
+lowers to a single Monotype cell, so generalizing it needs "evaluate once at
+the annotated width, widen at each use", which waits for row subsumption's
+widen-at-use lowering primitive (`row_widen`, Deferred: Row Subsumption).
+Until then those rows behave like inferred local rows, one variable shared by
+every use, and are sealed by Monotype's row defaults; a written `..` is how a
+local value opts into a quantified row. Locals follow the top-level rule once
+that primitive exists.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -7708,9 +7871,10 @@ Two questions are settled in the same pass, because each asks what a closed
 row means at a boundary. A bounded row refuses exactly the relations that
 would add a tag to it, so a coercion that changes when an extension gains tags
 changes what the bound refuses with it.
-`Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
-still-open extensions to `[]`, and cross-module widening of annotated weak
-values waits on this same coercion rather than on a lowering default.
+A top-level annotated value whose body forwards a closed value is closed by
+that body like any other definition, so widening it, in its own module or
+across modules, waits on this same coercion rather than on a lowering
+default.
 
 The acceptance bar is that no fixture is edited: a program this design says
 should typecheck must typecheck as written. The hosted instance already meets
@@ -10231,8 +10395,51 @@ selected compile-time roots did not need it, but a runtime body references that
 binding, planning records a `RuntimeCallableEvalUsePlan` containing the exact
 module-qualified checked producer expression. Lowering evaluates that producer
 in its owning module with an isolated binder environment; caller-module binder
-ids and lambda arguments are unavailable there. This is explicit checked-stage
-data, not recovery from the lookup, name, or callable shape.
+ids and lambda arguments are unavailable there. The environment is isolated
+within the owning module too, so two uses in one caller each lower the
+producer's binders afresh. This is explicit checked-stage data, not recovery
+from the lookup, name, or callable shape.
+
+A pending binding is generalized (a non-context-free type is exactly what
+leaves it pending), so the producer's checked types mention the binding's
+quantified variables, which no worker scheme of the caller quantifies. Each
+use instantiates that scheme: the plan records, per quantified variable, the
+caller type the use substitutes for it. The variables are the scheme the
+binding's compile-time root entry wrapper records, and the caller types are
+the checked use-site substitution recorded at the lookup, in the same slot
+order; a disagreement in length is a planning invariant violation. While
+lowering the producer inline, the caller binds each variable's descriptor
+requirement to the descriptor of its substituted caller type (static, or the
+caller's own descriptor when that type is itself dynamic), and restores its
+bindings afterwards. Descriptor-need planning applies the same substitution:
+a caller that would need a quantified variable of a binding it evaluates
+inline needs the descriptor leaves of the substituted caller type instead, so
+the variable never becomes a hidden descriptor parameter of the caller.
+
+The substitution closes transitively. A pending binding used inside another
+pending binding's producer is lowered inline in the same caller, and its
+caller types are written in the outer binding's quantified variables; those
+are replaced by their own substituted caller types, so the inner variable's
+descriptor leaves are the caller's. Lowering needs no extra step for this:
+the outer binding's variables are already bound when the inner producer's
+descriptors are materialized.
+
+A recursive use substitutes like any other. A recursive direct call takes its
+callee's descriptors from the checked call relation instead, but an inline
+producer has no call relation, so the use-site substitution is its only
+binding. Checking records an annotated recursive use, in flight or replayed at
+the group boundary, against the binding's own scheme, so its substitution is
+in that scheme's slot order.
+
+The substitution covers descriptors only. A pending callable binding whose
+scheme carries a static-dispatch constraint would need its dictionary
+substituted the same way, and that is not yet implemented: checking rejects a
+constrained top-level *data* value as a polymorphic value, but a constrained
+callable value whose producer is a general expression reaches Boxy, and its
+producer's dictionary has no binding there (a known gap, not an invariant).
+
+A use whose checked substitution holds an erroneous type lowers as the
+reported error (`runtime_error`), and its producer is not planned at that use.
 
 When a pending callable-eval binding is itself selected as a private worker,
 planning follows that same checked producer expression. A producer that is an
@@ -11806,7 +12013,14 @@ owned only by an unresolved callee body are present in the checked interface
 program and have already participated in the request's relation closure.
 Lexically context-dependent local procedures still lower in their owning graph
 because that lexical context is an explicit input rather than a context-free
-specialization key.
+specialization key. A nested function whose body reads a recursive-binding
+local reserved by an enclosing expansion (a callable-eval binding, an active
+constant binding, or an active ConstStore node binding) is lexically dependent
+in exactly this way, as is every function between that read and the
+binding's owner: the local is not a checked capture, so the function's
+specialization identity cannot name it, and such a body is never merged with
+or committed as an equal-looking specialization lowered where that local is
+not in scope.
 
 A deferred procedure-template request has two distinct sources of type
 evidence. Caller value flow owns the request's function arguments and return;
@@ -18778,8 +18992,14 @@ const CaptureId = union(enum) {
     generated: u32,
 };
 
+const ConstCaptureKind = union(enum) {
+    lexical,
+    recursive_binding: struct { module: CheckedModuleDigest, root: ComptimeRootId },
+};
+
 const ConstCapture = struct {
     id: CaptureId,
+    kind: ConstCaptureKind,
     ty: ConstTypeId,
     value: ConstNodeId,
 };
@@ -18799,7 +19019,19 @@ checked pattern binders. Compiler-generated functions whose captures have no
 source pattern, such as structural parser runtime functions, use explicit
 generated capture ids assigned by the generator. Capture identity selects the
 checked template binder; it is not a substitute for value identity and is never
-used to infer a graph back-edge. A stored function does not store a lambda set,
+used to infer a graph back-edge. `kind` records what the capture is where the
+captured local was bound: compile-time evaluation lowers a top-level value's
+body under a recursive binding local for that value's compile-time root (a
+callable-eval binding, or an active constant binding, including a hoisted
+extraction's result binding), and Monotype marks that local
+`recursive_binding` with the root's module and id when it reserves it. The
+mark travels with the local through every post-check stage to the LIR capture
+slot and into the stored capture. A closure whose body refers back to that
+root captures the local, but a restored worker reaches the root through its
+own top-level reference, so a `recursive_binding` capture fills no worker
+slot. Consumers read the kind; they never derive it from the capture's binder,
+whose index is relative to the root's module rather than the storing module.
+A stored function does not store a lambda set,
 callable-set descriptor, call specialization id, erased ABI, capture layout,
 runtime tag, or LIR proc id.
 

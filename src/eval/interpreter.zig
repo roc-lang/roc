@@ -89,6 +89,15 @@ const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
 
+/// A `dbg` observed during one interpreter evaluation, with the explicit
+/// source stamp of its `debug` statement (whose file entry names the declaring
+/// module), so a consumer can identify the observation by its site.
+pub const DebugObservation = struct {
+    message: []const u8,
+    region: base.Region,
+    loc: base.SourceLoc,
+};
+
 /// Failed inline `expect` observed during one interpreter evaluation.
 pub const ExpectFailure = struct {
     message: []const u8,
@@ -118,6 +127,7 @@ const InterpreterRocEnv = struct {
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
     expect_failures: std.ArrayList(ExpectFailure) = .empty,
+    debug_observations: std.ArrayList(DebugObservation) = .empty,
     expect_err_message: ?[]const u8 = null,
     expect_err_region: ?base.Region = null,
     jmp_buf: JmpBuf = undefined,
@@ -140,6 +150,8 @@ const InterpreterRocEnv = struct {
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.clearExpectFailures();
         self.expect_failures.deinit(self.allocator);
+        self.clearDebugObservations();
+        self.debug_observations.deinit(self.allocator);
         if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
@@ -152,6 +164,7 @@ const InterpreterRocEnv = struct {
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
         self.clearExpectFailures();
+        self.clearDebugObservations();
         if (self.expect_err_message) |msg| self.allocator.free(msg);
         self.expect_err_message = null;
         self.expect_err_region = null;
@@ -190,6 +203,23 @@ const InterpreterRocEnv = struct {
             self.allocator.free(failure.message);
         }
         self.expect_failures.clearRetainingCapacity();
+    }
+
+    fn clearDebugObservations(self: *InterpreterRocEnv) void {
+        for (self.debug_observations.items) |observation| {
+            self.allocator.free(observation.message);
+        }
+        self.debug_observations.clearRetainingCapacity();
+    }
+
+    fn recordDebugObservation(self: *InterpreterRocEnv, msg: []const u8, region: base.Region, loc: base.SourceLoc) Allocator.Error!void {
+        const owned_msg = try self.allocator.dupe(u8, msg);
+        errdefer self.allocator.free(owned_msg);
+        try self.debug_observations.append(self.allocator, .{
+            .message = owned_msg,
+            .region = region,
+            .loc = loc,
+        });
     }
 
     fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region, loc: base.SourceLoc) Allocator.Error!void {
@@ -968,6 +998,12 @@ pub const Interpreter = struct {
 
     pub fn getExpectFailures(self: *const LirInterpreter) []const ExpectFailure {
         return self.roc_env.expect_failures.items;
+    }
+
+    /// Every `dbg` the last evaluation ran, in order, with its statement's
+    /// source stamp.
+    pub fn getDebugObservations(self: *const LirInterpreter) []const DebugObservation {
+        return self.roc_env.debug_observations.items;
     }
 
     /// The failure message from a `?` operator that evaluated an Err inside a
@@ -3239,7 +3275,9 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .debug => |debug_stmt| {
-                    self.roc_ops.dbg(self.readRocStr(try self.getLocalChecked(frame, debug_stmt.message)));
+                    const message = self.readRocStr(try self.getLocalChecked(frame, debug_stmt.message));
+                    try self.roc_env.recordDebugObservation(message, self.store.stmtRegion(current), self.store.stmtLoc(current));
+                    self.roc_ops.dbg(message);
                     current = debug_stmt.next;
                 },
                 .expect => |expect_stmt| {

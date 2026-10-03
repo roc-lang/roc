@@ -571,7 +571,7 @@ fn recursiveCallable(allocator: Allocator, program: *Program.Result) Allocator.E
     const box_layout = try program.layouts.reserveLayout(layout.Layout.box(.zst));
     const fn_layout = try program.layouts.putTagUnion(&.{box_layout});
     program.layouts.updateLayout(box_layout, layout.Layout.box(fn_layout));
-    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
+    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .kind = .lexical, .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
     const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 17, .fn_type = 1, .captures = .{ .own = 1 } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
     // Fill every variant identity from its allocated slice index before publication.
     for (variants, 0..) |*variant, index| variant.id = @enumFromInt(index);
@@ -624,7 +624,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
     var other_template = template;
     other_template.frozen_worker = @as([96]u8, @splat(2));
-    const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
+    const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .kind = .lexical, .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
     const source_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const target_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const drop = lir.LIR.ErasedCallableOnDrop{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } };
@@ -704,7 +704,7 @@ fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bo
     const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
     const idx = try program.layouts.putTagUnion(if (reverse) &.{ .str, .zst } else &.{ .zst, .str });
-    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value }});
+    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .kind = .lexical, .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value }});
     const selected: u16 = if (reverse) 0 else 1;
     const variants = try allocator.alloc(Program.FnVariant, 2);
     for (variants, 0..) |*variant, i| {
@@ -766,7 +766,7 @@ test "frozen root transcode distinguishes zero-sized capture contexts of one fun
                 .variant_index = @intCast(index),
                 .payload_layout = .zst,
                 .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 9, .fn_type = 12, .captures = .{ .solved = .{ .start = @intCast(context), .len = 1 } } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
-                .captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(context), .slot = 0, .ty = undefined, .plan = unit_plan, .storage = .value }}),
+                .captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(context), .kind = .lexical, .slot = 0, .ty = undefined, .plan = unit_plan, .storage = .value }}),
             };
         }
         try program.fn_sets.append(allocator, .{ .layout = .bool, .variants = variants });

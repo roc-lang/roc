@@ -14,8 +14,9 @@
 //! the application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
 //! the result-row widening adapter can re-tag. Which annotations qualify at all
-//! mirrors `Check.checkDef`'s `generalizes_regardless` together with
-//! `Check.collectHostBoundaryAnnotations`.
+//! mirrors where `Check.checkDef` and the local statement check report a
+//! redundant `..` (every top-level definition, and a local function), together
+//! with `Check.collectHostBoundaryAnnotations`.
 //!
 //! The checker reads resolved names; the parse AST has only spellings. So every
 //! application root is checked against every declaration its spelling could
@@ -223,10 +224,12 @@ pub const OpenRows = struct {
     }
 
     /// Whether the definition this annotation belongs to generalizes whatever
-    /// its annotation writes (`Check.checkDef`'s `generalizes_regardless`) and
-    /// is not a host boundary (`Check.collectHostBoundaryAnnotations`). A
-    /// value binding does not: on a value, `..` is the opt-in to a quantified
-    /// row.
+    /// its annotation writes (`Check.checkDef` and the local statement check
+    /// warn on exactly these) and is not a host boundary
+    /// (`Check.collectHostBoundaryAnnotations`). Every top-level or associated
+    /// definition does: a value's implicitly opened rows generalize exactly
+    /// like written ones. A block's value binding does not: on a local value,
+    /// `..` is the opt-in to a quantified row.
     fn annotationGeneralizesRegardless(self: *OpenRows, name_tok: Token.Idx, next: ?AST.Statement.Idx, scope: StatementScope) Allocator.Error!bool {
         const name = self.tokenName(name_tok);
         // A platform's provided definitions are host-boundary annotations.
@@ -238,20 +241,24 @@ pub const OpenRows = struct {
                 const decl = next_stmt.decl;
                 const pattern = self.ast.store.getPattern(decl.pattern);
                 if (pattern == .ident and std.mem.eql(u8, self.tokenName(pattern.ident.ident_tok), name)) {
-                    // A function definition. Every other body, including a
-                    // lookup whose canonical form this AST cannot tell, keeps
-                    // its `..`.
-                    return self.ast.store.getExpr(decl.body) == .lambda;
+                    return switch (scope) {
+                        // Every definition at these scopes generalizes.
+                        .file, .associated => true,
+                        // A local function definition. Every other local
+                        // body, including a lookup whose canonical form this
+                        // AST cannot tell, keeps its `..`.
+                        .block => self.ast.store.getExpr(decl.body) == .lambda,
+                    };
                 }
                 // At the top level, Can attaches the annotation to the def a
-                // destructured literal splits off for that name, which may be
-                // a value, so the `..` stays. Associated and block scopes
+                // destructured literal splits off for that name: a top-level
+                // definition, which generalizes. Associated and block scopes
                 // attach only to a same-named ident; any other declaration
                 // leaves the annotation annotation-only.
                 if (scope == .file and self.destructuredLiteralShapesMatch(decl.pattern, decl.body) and
                     try self.destructuredLiteralPatternBindsName(decl.pattern, name))
                 {
-                    return false;
+                    return true;
                 }
             }
         }

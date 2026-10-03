@@ -321,7 +321,7 @@ Builtin :: [].{
 				}
 			}
 
-			invalid_json : [InvalidJson(Str), ..]
+			invalid_json : [InvalidJson(Str)]
 			invalid_json = InvalidJson("Invalid JSON")
 
 			parse_json_bool : Str -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])

@@ -10,6 +10,7 @@ const types_mod = @import("types");
 const can = @import("can");
 
 const snapshot = @import("../snapshot.zig");
+const canonical_names = @import("../canonical_names.zig");
 const context_mod = @import("context.zig");
 
 const CIR = can.CIR;
@@ -45,7 +46,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     row_label_conflict: RowLabelConflict,
-    polymorphic_value: VarWithSnapshot,
+    polymorphic_value: PolymorphicValue,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_comptime_expression: EffectfulComptimeExpression,
@@ -241,12 +242,31 @@ pub const ComptimeOrigin = struct {
     column: u32,
 };
 
+/// The explicit identity of a failed specialization of a specialization-owned
+/// top-level value (design.md "Specialization-Owned Top-Level Values"): the
+/// value's checked compile-time root in the reporting module and the
+/// specialization's content identity. Every program that evaluates the same
+/// specialization gives it the same identity, so a failure it already
+/// reported at the same explicitly stamped site is not reported again.
+pub const ComptimeValueSpecialization = struct {
+    root: u32,
+    specialization: canonical_names.TypeDigest,
+
+    pub fn eql(a: ComptimeValueSpecialization, b: ComptimeValueSpecialization) bool {
+        return a.root == b.root and std.meta.eql(a.specialization, b.specialization);
+    }
+};
+
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
     message: ExtraStringIdx,
     region: base.Region,
     /// See `ComptimeOrigin`.
     origin: ?ComptimeOrigin = null,
+    /// Set when the crash is a specialization-owned value's failure at an
+    /// explicitly stamped site of this module; see
+    /// `ComptimeValueSpecialization`.
+    value_specialization: ?ComptimeValueSpecialization = null,
 
     pub const Origin = ComptimeOrigin;
 };
@@ -281,6 +301,8 @@ pub const ComptimeExpectFailed = struct {
     /// inside a `??` field default fails while the consuming module's
     /// compile-time root evaluates the inlined copy.
     origin: ?ComptimeOrigin = null,
+    /// See `ComptimeCrash.value_specialization`.
+    value_specialization: ?ComptimeValueSpecialization = null,
 };
 
 /// An error that occurred during compile-time evaluation
@@ -311,6 +333,24 @@ pub const InvalidNominalDeclRecursion = struct {
 };
 
 // generic errors //
+
+/// A top-level value whose type still has an unresolved constrained variable.
+pub const PolymorphicValue = struct {
+    var_: Var,
+    snapshot: SnapshotContentIdx,
+    /// If this type was found in a top-level def, the name of that def
+    def_name: ?Ident.Idx,
+    /// The first `_` inference hole of the value's annotation whose inferred
+    /// type is (part of) the polymorphic part: writing a concrete type there
+    /// fixes the value.
+    hole: ?PolymorphicHole = null,
+
+    pub const PolymorphicHole = struct {
+        /// The hole's annotation node variable; its region is the `_`.
+        var_: Var,
+        snapshot: SnapshotContentIdx,
+    };
+};
 
 /// A problem involving a single type variable, with a snapshot for error reporting.
 /// Used for recursion errors, invalid extension types, etc.

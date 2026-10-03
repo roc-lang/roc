@@ -497,7 +497,7 @@ const Lifter = struct {
             try self.output.addLiteralRoot(.{
                 .fn_id = fn_id,
                 .module = root.module,
-                .site = root.site,
+                .subject = root.subject,
             });
         }
 
@@ -2952,8 +2952,8 @@ test "pre-lift closure operands name target slots independently of supplied loca
     const ty = try program.types.add(.zst);
     const first_key = checked.CaptureId.fromBinder(@enumFromInt(1));
     const second_key = checked.CaptureId.fromBinder(@enumFromInt(2));
-    const first = try program.addLocalWithCaptureIdentity(@enumFromInt(1), ty, @enumFromInt(1), program.nextLiftCaptureId(), first_key);
-    const second = try program.addLocalWithCaptureIdentity(@enumFromInt(2), ty, @enumFromInt(2), program.nextLiftCaptureId(), second_key);
+    const first = try program.addLocalWithCaptureIdentity(@enumFromInt(1), ty, @enumFromInt(1), program.nextLiftCaptureId(), first_key, .lexical);
+    const second = try program.addLocalWithCaptureIdentity(@enumFromInt(2), ty, @enumFromInt(2), program.nextLiftCaptureId(), second_key, .lexical);
     const first_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = first } });
     const second_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = second } });
     const supplied = try program.addFnDefCaptureSpan(&.{
@@ -2980,6 +2980,7 @@ test "lift boundary normalizes checked capture identity" {
         binder,
         rewritten_id,
         checked_id,
+        .lexical,
     );
 
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -3012,6 +3013,7 @@ test "lift boundary preserves an already-lifted capture identity" {
         binder,
         lifted_id,
         checked_id,
+        .lexical,
     );
 
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });

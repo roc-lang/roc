@@ -11,11 +11,18 @@
 # up as a wrong branch on either backend.
 WidenNestedEvidenceClosedImpl := {}
 
+# `seal` forwards its closed input, which closes its output row, and so the
+# row of every value built from it (design.md "Deferred: Row Subsumption").
+# This depends on that known limitation (forwarding closes the row): once
+# row subsumption lands, this fixture must close its impl row another way.
+seal : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+seal = |v| v
+
 closed_ok : [Ok(Str), Err(Str)]
-closed_ok = Ok("ok")
+closed_ok = seal(Ok("ok"))
 
 closed_err : [Ok(Str), Err(Str)]
-closed_err = Err("err")
+closed_err = seal(Err("err"))
 
 Wrap(a) := [W(a)].{
     status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]

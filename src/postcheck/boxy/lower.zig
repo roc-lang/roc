@@ -7754,7 +7754,7 @@ const ProcedureBuilder = struct {
         self.result.literal_roots.items[index] = .{
             .module = module.key,
             .id = @enumFromInt(index),
-            .site = .{ .owner = owner, .checked_expr = @intFromEnum(site.source.expr), .kind = if (expr.data == .numeral) .numeral else .quote },
+            .subject = .{ .conversion = .{ .owner = owner, .checked_expr = @intFromEnum(site.source.expr), .kind = if (expr.data == .numeral) .numeral else .quote } },
             .proc = proc_id,
             .ret_layout = ret_layout,
             .plan = constant_plan,
@@ -16088,6 +16088,12 @@ const ProcBodyBuilder = struct {
 
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
+            // A recursive-binding capture fills no worker slot: the body
+            // reaches its root through a top-level reference, not the binder.
+            switch (capture.kind) {
+                .lexical => {},
+                .recursive_binding => continue,
+            }
             const binder = capture.id.binder();
             const ty = checkedBinderType(self.module, binder);
             const target_rep = self.repForType(ty);
@@ -23584,10 +23590,10 @@ const ProcBodyBuilder = struct {
             if (runtime_eval.source.expr == expr_id) {
                 boxyLowerInvariant("runtime callable evaluation source recursively referenced its own lookup");
             }
-            return try self.beginRuntimeCallableEval(
+            return try self.beginRuntimeCallableEvalUse(
                 target,
                 call_type,
-                runtime_eval.source,
+                runtime_eval,
                 next,
             );
         }
@@ -23609,6 +23615,70 @@ const ProcBodyBuilder = struct {
         );
     }
 
+    /// Lower a runtime-evaluated callable binding's producer inline at its
+    /// use, at the use's instantiation of the binding's scheme: each
+    /// quantified variable is bound to the descriptor of the caller type the
+    /// use substitutes for it while the producer is lowered.
+    fn beginRuntimeCallableEvalUse(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        call_type: Plan.CheckedTypeIdentity,
+        runtime_eval: Plan.RuntimeCallableEvalUsePlan,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        if (runtime_eval.checked_error) {
+            return exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin));
+        }
+        const substitutions = self.parent.plan.runtimeCallableEvalSubstitutionSlice(runtime_eval.substitutions);
+        if (substitutions.len == 0) {
+            return try self.beginRuntimeCallableEval(target, call_type, runtime_eval.source, next);
+        }
+
+        const allocator = self.parent.allocator;
+        var initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer initializers.deinit(allocator);
+        const snapshot = try self.snapshotDescriptorBindings();
+        var snapshot_moved = false;
+        defer if (!snapshot_moved) snapshot.deinit(allocator);
+
+        // Every site type is a caller type, so all are materialized against
+        // the caller's frame before any scheme variable is bound.
+        const locals = try allocator.alloc(?LIR.LocalId, substitutions.len);
+        defer allocator.free(locals);
+        for (substitutions, locals) |substitution, *local| {
+            const scheme_rep = self.descriptorStorageRep(substitution.scheme_rep);
+            if (self.parent.plan.representations.items[@intFromEnum(scheme_rep)].descriptor == null) {
+                local.* = null;
+                continue;
+            }
+            const materialization = try self.descriptorMaterializationForKnownRep(substitution.site_rep);
+            local.* = try self.erasedCallDescriptorLocal(materialization, &initializers);
+        }
+
+        // The producer is lowered under the bindings, which are restored once
+        // it is done; its descriptor initializers wrap the lowered producer.
+        const items = try allocator.alloc(ExprChainItem, 3);
+        errdefer allocator.free(items);
+        const producer = self.runtimeCallableEvalProducer(target, call_type, runtime_eval.source, next);
+        const owned_initializers = try initializers.toOwnedSlice(allocator);
+        items[0] = .{ .lower = producer };
+        items[1] = .{ .prepend_descriptor_initializers = owned_initializers };
+        items[2] = .restore_descriptors;
+
+        for (substitutions, locals) |substitution, maybe_local| {
+            const local = maybe_local orelse continue;
+            const scheme_rep = self.descriptorStorageRep(substitution.scheme_rep);
+            const desc = self.parent.plan.representations.items[@intFromEnum(scheme_rep)].descriptor.?;
+            self.bindDescriptorRequirementLocalForRep(desc, scheme_rep, local, true) catch |err| {
+                self.restoreDescriptorBindings(snapshot);
+                allocator.free(owned_initializers);
+                return err;
+            };
+        }
+        snapshot_moved = true;
+        return .{ .tail = .{ .chain = .{ .items = items, .current = next, .snapshot = snapshot } } };
+    }
+
     fn beginRuntimeCallableEval(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -23616,16 +23686,26 @@ const ProcBodyBuilder = struct {
         source: Plan.CheckedExprIdentity,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (checked_moduleKeyEqual(source.module, self.module.key)) {
-            return .{ .tail = .{ .expected_ref = .{ .target = target, .expected_ty = call_type, .expr_id = source.expr, .next = next } } };
-        }
-        return .{ .tail = .{ .module_expr = .{
+        return .{ .tail = self.runtimeCallableEvalProducer(target, call_type, source, next) };
+    }
+
+    /// The producer is a top-level expression: it never sees the caller's
+    /// binders, and each use lowers its own binders afresh, so it always gets
+    /// an isolated binder environment, also within its own module.
+    fn runtimeCallableEvalProducer(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        call_type: Plan.CheckedTypeIdentity,
+        source: Plan.CheckedExprIdentity,
+        next: LIR.CFStmtId,
+    ) ExprTask {
+        return .{ .module_expr = .{
             .expr_module = procedureModuleByKey(self.parent.modules, source.module),
             .target = target,
             .expr_id = source.expr,
             .expected = call_type,
             .next = next,
-        } } };
+        } };
     }
 
     fn procedureValueRefForExpr(
@@ -24974,7 +25054,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("unresolved value dispatch reached boxy lowering without dictionary support for that method"),
             .parser_for,
             .encoder_for,
-            => boxyLowerInvariant("unresolved parser or encoder dispatch reached boxy lowering before structural parser/encoder support"),
+            => boxyLowerInvariant("evidence-dependent parser or encoder dispatch reached boxy lowering without a planned dictionary"),
             .map,
             .map_effectful,
             => boxyLowerInvariant("derived map dispatch reached Boxy lowering without an explicit checked implementation"),
@@ -44141,8 +44221,13 @@ const ConstPlanBuilder = struct {
                     }
                     const source_capture = stored_capture orelse
                         boxyLowerInvariant("static erased callable capture was absent from ConstStore function");
+                    switch (source_capture.kind) {
+                        .lexical => {},
+                        .recursive_binding => boxyLowerInvariant("static erased callable worker slot named a recursive-binding capture"),
+                    }
                     current.slots[current.slot_count] = .{
                         .id = source_capture.id,
+                        .kind = .lexical,
                         .slot = @intCast(field_index),
                         .ty = source_capture.ty,
                         .plan = undefined,
@@ -44192,7 +44277,17 @@ const ConstPlanBuilder = struct {
                     .hidden_desc, .hidden_dict, .hidden_literal => boxyLowerInvariant("static erased callable required hidden descriptor or dictionary captures"),
                 }
             }
-            if (value_capture_count != fn_value.captures.len) {
+            // A stored recursive-binding capture has no worker slot: the
+            // worker reaches that root through its own top-level reference,
+            // so the frozen environment holds only the lexical captures.
+            var lexical_capture_count: usize = 0;
+            for (fn_value.captures) |stored| {
+                switch (stored.kind) {
+                    .lexical => lexical_capture_count += 1,
+                    .recursive_binding => {},
+                }
+            }
+            if (value_capture_count != lexical_capture_count) {
                 boxyLowerInvariant("static erased callable capture plan disagreed with ConstStore captures");
             }
             build.current = .{

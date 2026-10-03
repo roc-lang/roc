@@ -806,6 +806,9 @@ pub const Local = struct {
     /// `ConstStore` publication. Alternative binders use their arm's
     /// representative key; durable runtime capture identity remains separate.
     checked_capture_id: ?checked.CaptureId = null,
+    /// Whether this local, when captured, is a lexical value or a top-level
+    /// root's recursive binding; carried to `ConstStore` captures.
+    capture_kind: checked.ConstCaptureKind = .lexical,
 };
 
 /// Local id paired with its monomorphic type.
@@ -1403,13 +1406,14 @@ pub const Root = struct {
 };
 
 /// One literal root, at its `Common.LiteralRootId` position: a zero-argument
-/// definition that converts one custom literal at the concrete type one
+/// definition that computes its subject—one custom literal's conversion, or
+/// one specialization-owned top-level value—at the concrete type one
 /// specialization gives it, and is evaluated at compile time.
 pub const LiteralRoot = struct {
     def: DefId,
-    /// Checked module that owns the literal.
+    /// Checked module that owns the subject.
     module: checked.ModuleId,
-    site: Common.LiteralRejectionSite,
+    subject: Common.LiteralRootSubject,
 };
 
 /// Runtime layout requested for a checked data value.
