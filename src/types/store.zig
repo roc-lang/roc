@@ -789,6 +789,29 @@ pub const Store = struct {
         return self.resolveVar(target_var).desc.flags.static_dispatch_rejected;
     }
 
+    /// Record that the vars in `[start, end)`, minted by opening a nominal
+    /// declaration's backing as `opened`, are that backing's declared
+    /// structure below its root. The root itself is related to a constructor
+    /// operand by the nominal constructor backing relation, which owns that
+    /// pair. A minted var whose class is rooted outside the range was linked
+    /// to a var that predates the opening, such as a substituted arg, and
+    /// keeps that var's provenance.
+    pub fn markNominalBackingStructure(self: *Self, opened: Var, start: u32, end: u32) Allocator.Error!void {
+        std.debug.assert(start <= end and end <= self.len());
+        const opened_root = self.resolveVar(opened).var_;
+        var minted = start;
+        while (minted < end) : (minted += 1) {
+            const resolved = self.resolveVar(@enumFromInt(minted));
+            if (resolved.var_ == opened_root) continue;
+            const root: u32 = @intFromEnum(resolved.var_);
+            if (root < start or root >= end) continue;
+            if (resolved.desc.flags.nominal_backing_structure) continue;
+            var desc = resolved.desc;
+            desc.flags.nominal_backing_structure = true;
+            try self.setDesc(resolved.desc_idx, desc);
+        }
+    }
+
     /// Record definition-site annotation openness (design.md "Derived Parser
     /// Tag-Row Closure"). Provenance travels with the flex equivalence class.
     pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {
@@ -1625,6 +1648,10 @@ pub const Store = struct {
         // either side was rejected.
         merged_desc.flags.static_dispatch_rejected = a_data.desc.flags.static_dispatch_rejected or
             b_data.desc.flags.static_dispatch_rejected;
+        // Declared backing structure stays declared: a class that merged with
+        // an opened nominal backing component is that component.
+        merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
+            b_data.desc.flags.nominal_backing_structure;
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);

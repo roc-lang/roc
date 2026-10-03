@@ -2730,6 +2730,39 @@ parameter reaches post-check instantiation and independent definitions remain
 available. This is propagation of the backing relation's explicit result, not a
 later scan of solved pattern types or a change to nominal typing rules.
 
+### Declared Backing Structure
+
+The no-inverse-lift rule also holds at every component below an opened
+backing's root. The root is the constructor relation's own pair, decided by
+that relation and its settled-state re-decision (below), which keep the
+rejection owned by the constructor expression. A nominal declaration fixes its
+backing: an application substitutes the declaration's formals and nothing
+else, so the concrete structure written in the backing is the same for every
+use. A nominal value therefore never unifies into a structural tag payload,
+record field, or other anonymous structure that the declaration wrote. Given
+`LogLevel := [Info, Error]` and `LogEntry := [Entry([Info, Error])]`,
+`Entry(level)` with `level : LogLevel` is a type mismatch where a `LogEntry`
+is expected, as is `{ name: level }` where the declared field is
+`name : [Info, Error]`. Structural values still lift into a nominal written in
+the backing, and a backing formal still resolves to whatever nominal the
+application supplies.
+
+The rule is carried as explicit descriptor data. Every opening of a
+declaration backing—unification's `openNominalBacking`, the checker's
+`openNominalBackingForApp`, and exhaustiveness checking—marks the vars it
+mints below the backing's root with
+`DescriptorFlags.nominal_backing_structure`; substituted args predate the
+opening and are not marked. The flag belongs to the
+equivalence class: merges keep it if either side had it, scheme
+instantiation copies it, and import copying carries it across modules. The
+nominal-versus-anonymous unification entry points reject a lift whose
+anonymous side carries the mark, so the verdict does not depend on which
+relation reached the structure first. The rejected side is pinned in
+`src/check/test/type_checking_integration.zig` for a tag payload, a record
+field, a generalized constructor helper, an annotated structural parameter
+that feeds a backing, and an imported backing; the accepted control keeps a
+structural payload and a nominal payload side by side in one backing.
+
 ### Settled-State Re-Decision
 
 Whether the operand has already lifted to a nominal is decided from its solved
@@ -9845,6 +9878,11 @@ Other solved-graph mutations:
   acquire the merged content, so an extension reaching either operand must
   preserve that operand's pre-merge row meaning before the classes are joined.
   The surviving descriptor slot is not the only overwritten row identity.
+- `markNominalBackingStructure`—mechanism: provenance on vars an opening
+  of a nominal declaration backing has just minted below its root, written before any
+  relation reads them. Unification consults the mark under the declared
+  rule in Declared Backing Structure (above); the write itself never changes
+  content or links classes.
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.

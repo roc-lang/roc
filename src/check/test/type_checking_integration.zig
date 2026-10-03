@@ -7734,6 +7734,113 @@ test "nominal constructor backing allows a nested nominal value" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
 }
 
+// repro for https://github.com/roc-lang/roc/issues/11931
+// A nominal value is not its structural backing: storing a `LogLevel` where a
+// nominal declaration's backing names the structural `[Info, Error]` is a type
+// mismatch, in a tag payload and in a record field alike.
+test "nominal value does not inverse-lift into a structural tag payload of a nominal backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogLevel := [Info, Error]
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make_entry : LogLevel -> LogEntry
+        \\make_entry = |level| Entry(level)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "nominal value does not inverse-lift into a structural record field of a nominal backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogLevel := [Info, Error]
+        \\
+        \\Logger(output) :: { name : [Info, Error] }.{
+        \\    create : LogLevel -> Logger(output)
+        \\    create = |name| { name: name }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "nominal value does not inverse-lift through a generalized constructor helper" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogLevel := [Info, Error]
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make = |x| LogEntry.Entry(x)
+        \\
+        \\entry = make(LogLevel.Info)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "nominal value does not inverse-lift through an annotated structural parameter feeding a backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogLevel := [Info, Error]
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make : [Info, Error] -> LogEntry
+        \\make = |x| Entry(x)
+        \\
+        \\entry = make(LogLevel.Info)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "nominal value does not inverse-lift into an imported nominal backing" {
+    const source_lib =
+        \\module [LogEntry]
+        \\
+        \\LogEntry := [Entry([Info, Error])].{
+        \\    make = |x| LogEntry.Entry(x)
+        \\}
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib exposing [LogEntry]
+        \\
+        \\LogLevel := [Info, Error]
+        \\
+        \\entry = LogEntry.make(LogLevel.Info)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "structural and nominal values keep their own positions in a nominal backing (control)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogLevel := [Info, Error]
+        \\LogEntry := [Entry([Info, Error]), Leveled(LogLevel)]
+        \\
+        \\structural : LogEntry
+        \\structural = Entry(Info)
+        \\
+        \\leveled : LogLevel -> LogEntry
+        \\leveled = |level| Leveled(level)
+        \\
+        \\payload : LogEntry -> [Info, Error]
+        \\payload = |entry| match entry {
+        \\    Entry(level) => level
+        \\    Leveled(_) => Error
+        \\}
+        \\
+        \\levels = (payload(structural), payload(leveled(Info)))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "([Error, Info], [Error, Info])");
+}
+
 test "record update still lifts to its nominal extension" {
     const source =
         \\main! = |_| {}

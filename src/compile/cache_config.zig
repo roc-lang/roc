@@ -279,7 +279,8 @@ pub const Constants = struct {
     /// 125: Checked modules drop checked-error reachability templates, and
     ///      compile-time values and test results record checked-error crashes.
     /// 126: Evidence paths store shared prefixes instead of complete paths.
-    pub const CACHE_VERSION = 126;
+    /// 127: Type descriptors mark declared nominal backing structure.
+    pub const CACHE_VERSION = 127;
 };
 
 /// Configuration for the Roc cache system.
