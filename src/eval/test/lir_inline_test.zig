@@ -10714,6 +10714,75 @@ test "field takes split across the arms of a branch" {
     try std.testing.expectEqual(@as(usize, 0), root_retained.?);
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/12009
+//
+// `step` can only ever return `Ok`, so tag reachability removes the caller's
+// discriminant switch and leaves an unguarded `Ok` payload read of the call
+// result. That payload view still owns every refcounted byte of the dying
+// `Try`, so its record's field reads must take the union's stored units
+// rather than each paying a retain followed by a whole release of the `Try`
+// on every loop iteration.
+test "field takes dismantle a Try whose caller match tag reachability folded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Pair : { a : List(U16), b : List(U16) }
+        \\
+        \\step : List(U16), List(U16), U64 -> Try(Pair, [Bug])
+        \\step = |a, b0, i| {
+        \\    if i > 100 {
+        \\        return Ok({ a, b: b0 })
+        \\    } else {
+        \\    }
+        \\    var $b = b0
+        \\    var $j = 0.U64
+        \\    while $j < i {
+        \\        $b = match List.set($b, $j, 1) {
+        \\            Ok(next) => next
+        \\            Err(_) => crash "unreachable"
+        \\        }
+        \\        $j = $j + 1
+        \\    }
+        \\    Ok({ a, b: $b })
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        pair = match step($a, $b, $i) {
+        \\            Ok(p) => p
+        \\            Err(_) => crash "step"
+        \\        }
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    (List.get($a, 3) ?? 0).to_u64() + (List.get($b, 2) ?? 0).to_u64()
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var main_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpec(proc_id).body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        main_retained = (main_retained orelse 0) + retained;
+    }
+    try std.testing.expect(main_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), main_retained.?);
+}
+
 // A record of lists updated through a helper function stays in place: the
 // call site demands a mode-specialized variant whose owned parameter lets the
 // field reads take, so no emitted variant both mutates a list and retains a

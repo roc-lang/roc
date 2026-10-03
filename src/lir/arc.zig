@@ -7550,7 +7550,7 @@ const Inserter = struct {
         if (residual_mask == container.full_mask) return whole;
 
         const arm = try self.releaseResidualFields(local, view.view, container, residual_mask, cause, next);
-        const discriminant = try self.store.addLocal(.{ .layout_idx = view.discriminant_layout });
+        const discriminant = try self.store.addLocal(.{ .layout_idx = .u32 });
         try self.dismantle_temps.append(self.emission_allocator, discriminant);
         const branches = try self.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
             .{ .value = view.tag_discriminant, .body = arm },
