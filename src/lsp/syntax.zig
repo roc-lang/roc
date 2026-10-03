@@ -51,6 +51,7 @@ pub const SyntaxQueryError = SyntaxPrepareDocumentError || error{WriteFailed};
 const MethodOwnerLookup = struct {
     owner: CIR.Statement.Idx,
     type_ident: base.Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
     builtin_origin: bool,
 };
 
@@ -906,7 +907,7 @@ pub const SyntaxChecker = struct {
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
-        const range = self.rangeFromReport(rep);
+        const range = rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
             .runtime_error, .fatal => 1,
@@ -927,14 +928,57 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    fn rangeFromReport(_: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
+    fn rangeFromReport(rep: reporting.Report) Diagnostics.Range {
         if (rep.getRegionInfo()) |region| {
-            return .{
-                .start = .{ .line = saturatingMinusOne(region.start_line_idx), .character = saturatingMinusOne(region.start_col_idx) },
-                .end = .{ .line = saturatingMinusOne(region.end_line_idx), .character = saturatingMinusOne(region.end_col_idx) },
-            };
+            // Convert the original source bytes, never the visible diagnostic
+            // text: escaping a control must not move its editor highlight.
+            for (rep.document.elements.items) |element| {
+                const source, const first_line = switch (element) {
+                    .source_code_region => |display| .{ display.line_text, display.start_line },
+                    .source_code_with_underlines => |underlines| if (underlines.underline_regions.len > 0)
+                        .{ underlines.display_region.line_text, underlines.display_region.start_line }
+                    else
+                        continue,
+                    .source_code_multi_region => |multi| if (multi.regions.len > 0)
+                        .{ multi.source, @as(u32, 1) }
+                    else
+                        continue,
+                    .text,
+                    .annotated,
+                    .line_break,
+                    .indent,
+                    .space,
+                    .horizontal_rule,
+                    .annotation_start,
+                    .annotation_end,
+                    .raw,
+                    .reflowing_text,
+                    .link,
+                    .vertical_stack,
+                    .horizontal_concat,
+                    .source_location,
+                    => continue,
+                };
+                return .{
+                    .start = reportPosition(source, first_line, region.start_line_idx, region.start_col_idx),
+                    .end = reportPosition(source, first_line, region.end_line_idx, region.end_col_idx),
+                };
+            }
         }
         return .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } };
+    }
+
+    fn reportPosition(source: []const u8, first_line: u32, line: u32, column: u32) Diagnostics.Position {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var current = first_line;
+        while (lines.next()) |text| : (current += 1) {
+            if (current == line) return .{
+                .line = saturatingMinusOne(line),
+                .character = pos.byteOffsetToUtf16Column(text, saturatingMinusOne(column)),
+            };
+        }
+        // Reports can point immediately past the available source at EOF.
+        return .{ .line = saturatingMinusOne(line), .character = 0 };
     }
 
     fn saturatingMinusOne(value: u32) u32 {
@@ -1289,6 +1333,7 @@ pub const SyntaxChecker = struct {
             return .{
                 .owner = @enumFromInt(source_decl),
                 .type_ident = content.alias.ident.ident_idx,
+                .origin_module = content.alias.origin_module,
                 .builtin_origin = content.alias.source_decl.originIsBuiltin(),
             };
         }
@@ -1298,6 +1343,7 @@ pub const SyntaxChecker = struct {
         return .{
             .owner = @enumFromInt(source_decl),
             .type_ident = nominal.ident.ident_idx,
+            .origin_module = nominal.origin_module,
             .builtin_origin = nominal.originIsBuiltin(),
         };
     }
@@ -1311,13 +1357,18 @@ pub const SyntaxChecker = struct {
     }
 
     fn findTypeForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+        const pattern_idx = findPatternForQualifiedIdent(module_env, qualified_ident) orelse return null;
+        return ModuleEnv.varFrom(pattern_idx);
+    }
+
+    fn findPatternForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?CIR.Pattern.Idx {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, def.pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
-                return ModuleEnv.varFrom(def.pattern);
+                return def.pattern;
             }
         }
 
@@ -1329,7 +1380,7 @@ pub const SyntaxChecker = struct {
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
-                return ModuleEnv.varFrom(pattern_idx);
+                return pattern_idx;
             }
         }
 
@@ -1750,35 +1801,15 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             }
+            if (expr_tag == .e_method_call) {
+                const method_call = expr.e_method_call;
+                if (!cir_queries.regionContainsOffset(method_call.method_name_region, target_offset)) return null;
+                return self.findMethodDefinition(build_env, module_env, method_call.receiver, method_call.method_name, current_uri, oom);
+            }
             if (expr_tag == .e_dispatch_call) {
                 const method_call = expr.e_dispatch_call;
-                const method_name = module_env.common.idents.getText(method_call.method_name);
-                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                const resolved = module_env.types.resolveVar(receiver_type_var);
-                const base_type_opt: ?[]const u8 = switch (resolved.desc.content) {
-                    .alias => |alias| module_env.common.idents.getText(alias.ident.ident_idx),
-                    .structure => |flat| switch (flat) {
-                        .nominal_type => |nom| module_env.common.idents.getText(nom.ident.ident_idx),
-                        .record,
-                        .tuple,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => null,
-                    },
-                    .flex,
-                    .rigid,
-                    .field_presence,
-                    .err,
-                    => null,
-                };
-                if (base_type_opt) |base_type| {
-                    return self.findDefinitionInModule(build_env, doc_path, base_type, method_name, oom);
-                }
-                return null;
+                if (!cir_queries.regionContainsOffset(method_call.method_name_region, target_offset)) return null;
+                return self.findMethodDefinition(build_env, module_env, method_call.receiver, method_call.method_name, current_uri, oom);
             }
             return null;
         }
@@ -1789,6 +1820,63 @@ pub const SyntaxChecker = struct {
         }
 
         return null;
+    }
+
+    /// Find the definition of the method a method call (`receiver.method()`)
+    /// dispatches to, using the receiver's checked nominal type: its declaring
+    /// module and declaration locate the method table entry for `method_name`.
+    fn findMethodDefinition(
+        self: *SyntaxChecker,
+        build_env: *BuildEnv,
+        module_env: *ModuleEnv,
+        receiver: CIR.Expr.Idx,
+        method_name: base.Ident.Idx,
+        current_uri: []const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        const method_owner = resolveMethodOwnerForLookup(module_env, ModuleEnv.varFrom(receiver)) orelse return null;
+
+        if (method_owner.builtin_origin) {
+            const type_name = module_env.getIdentText(method_owner.type_ident);
+            const base_name = if (std.mem.findLast(u8, type_name, ".")) |dot_pos|
+                type_name[dot_pos + 1 ..]
+            else
+                type_name;
+            return self.findBuiltinDefinition(base_name, module_env.getIdentText(method_name), oom);
+        }
+
+        if (method_owner.origin_module == module_env.selfModuleIdentity()) {
+            const range = methodDefinitionRange(module_env, module_env, method_owner.owner, method_name) orelse return null;
+            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                oom.* = err;
+                return null;
+            };
+            return DefinitionResult{ .uri = uri_copy, .range = range };
+        }
+
+        const origin_hash = module_env.moduleIdentityHash(method_owner.origin_module);
+        const target_mod_state = findModuleByContentIdentity(build_env, origin_hash) orelse return null;
+        const target_mod_env = target_mod_state.moduleEnv() orelse return null;
+        const range = methodDefinitionRange(target_mod_env, module_env, method_owner.owner, method_name) orelse return null;
+        const module_uri = uri_util.pathToUri(self.allocator, target_mod_state.path) catch |err| {
+            oom.* = err;
+            return null;
+        };
+        return DefinitionResult{ .uri = module_uri, .range = range };
+    }
+
+    /// The range of the definition of `method_name` (an ident in `source_env`)
+    /// on the type declared by `owner` in `owner_env`.
+    fn methodDefinitionRange(
+        owner_env: *ModuleEnv,
+        source_env: *const ModuleEnv,
+        owner: CIR.Statement.Idx,
+        method_name: base.Ident.Idx,
+    ) ?LspRange {
+        const owner_method_name = owner_env.common.findIdentFrom(&source_env.common, method_name) orelse return null;
+        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(owner, owner_method_name) orelse return null;
+        const pattern_idx = findPatternForQualifiedIdent(owner_env, qualified_ident) orelse return null;
+        return cir_queries.regionToRange(owner_env, owner_env.store.getPatternRegion(pattern_idx));
     }
 
     const TagOriginInfo = struct {
@@ -4304,4 +4392,21 @@ fn truncateTypeLabel(rendered: []const u8) []const u8 {
     // Back off any UTF-8 continuation bytes so the cut lands on a boundary.
     while (end > 0 and (rendered[end] & 0xC0) == 0x80) : (end -= 1) {}
     return rendered[0..end];
+}
+
+test "bidi diagnostic range uses original UTF-16 source positions" {
+    const source = "# \u{1F642} \u{5D0}\u{5D1}\u{202E}\n";
+    const start = std.mem.find(u8, source, "\u{202E}").?;
+    var report = try reporting.Report.init(std.testing.allocator, "Bidi Test", "A control is forbidden.", .runtime_error);
+    defer report.deinit();
+    try report.document.addSourceRegion(.{
+        .start_line_idx = 0,
+        .start_col_idx = @intCast(start),
+        .end_line_idx = 0,
+        .end_col_idx = @intCast(start + "\u{202E}".len),
+    }, .error_highlight, "Probe.roc", source, &.{0});
+    const range = SyntaxChecker.rangeFromReport(report);
+    try std.testing.expectEqual(@as(u32, 0), range.start.line);
+    try std.testing.expectEqual(@as(u32, 7), range.start.character);
+    try std.testing.expectEqual(@as(u32, 8), range.end.character);
 }

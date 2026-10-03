@@ -330,13 +330,13 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
     switch (node) {
         .StaticAtom => |s| {
             try writer_impl.setColor(.node_name);
-            try writer_impl.print("{s}", .{s});
+            try writer_impl.print("{f}", .{@import("bidi.zig").Display{ .bytes = s }});
             try writer_impl.setColor(.default);
         },
         .DynamicAtom => |range| {
             const s = self.data.items[range.begin..range.end];
             try writer_impl.setColor(.node_name);
-            try writer_impl.print("{s}", .{s});
+            try writer_impl.print("{f}", .{@import("bidi.zig").Display{ .bytes = s }});
             try writer_impl.setColor(.default);
         },
         .String => |range| {
@@ -344,7 +344,7 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
             try writer_impl.setColor(.punctuation);
             try writer_impl.print("\"", .{});
             try writer_impl.setColor(.string);
-            try writer_impl.print("{s}", .{s});
+            try writer_impl.print("{f}", .{@import("bidi.zig").Display{ .bytes = s }});
             try writer_impl.setColor(.punctuation);
             try writer_impl.print("\"", .{});
             try writer_impl.setColor(.default);

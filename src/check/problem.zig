@@ -33,6 +33,7 @@ pub const DispatcherNotNominal = types.DispatcherNotNominal;
 pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
 pub const TypeDoesNotSupportMap = types.TypeDoesNotSupportMap;
+pub const UndeterminedCodecType = types.UndeterminedCodecType;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 pub const RecursiveDispatch = types.RecursiveDispatch;
 

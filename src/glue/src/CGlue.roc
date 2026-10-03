@@ -1,23 +1,23 @@
 ## A glue script for generating a C header file.
 app [make_glue] { pf: platform glue }
 
-import pf.Types exposing [Types]
-import pf.File exposing [File]
-import pf.TypeRepr exposing [TypeRepr]
-import pf.AbiLayout exposing [AbiLayout]
-import pf.AbiFieldLayout exposing [AbiFieldLayout]
-import pf.AbiTagLayout exposing [AbiTagLayout]
-import pf.AbiWidth exposing [AbiWidth]
-import pf.ArgShape exposing [ArgShape]
-import pf.GlueInput exposing [GlueInput]
-import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
-import pf.TypeNamePlan exposing [TypeNamePlan]
-import pf.RecordField exposing [RecordField]
-import pf.RecordRepr exposing [RecordRepr]
-import pf.TagUnionRepr exposing [TagUnionRepr]
-import pf.ProvidesEntry exposing [ProvidesEntry]
-import pf.TypeTable exposing [TypeTable]
-import pf.RocName exposing [RocName]
+import pf.Types
+import pf.File
+import pf.TypeRepr
+import pf.AbiLayout
+import pf.AbiFieldLayout
+import pf.AbiTagLayout
+import pf.AbiWidth
+import pf.ArgShape
+import pf.GlueInput
+import pf.HostedFunctionInfo
+import pf.TypeNamePlan
+import pf.RecordField
+import pf.RecordRepr
+import pf.TagUnionRepr
+import pf.ProvidesEntry
+import pf.TypeTable
+import pf.RocName
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
@@ -601,6 +601,7 @@ generate_c_header = |hosted_functions, type_table, provides_list| {
 		.concat(args_structs_header)
 		.concat(args_structs)
 		.concat("\n")
+		.concat(runtime_symbol_decls)
 		.concat(hosted_symbol_decls)
 		.concat(provided_symbol_decls)
 		.concat(hosted_functions_registry(hosted_fn_fields))
@@ -1141,6 +1142,14 @@ direct_hosted_param_list = |type_table, duplicate_records, duplicate_tags, prefe
 		$params
 	}
 }
+
+## Declarations for the fixed runtime symbols every host defines.
+runtime_symbol_decls : Str
+runtime_symbol_decls =
+	section(
+		"Runtime Symbols",
+		"/* The host defines these linker symbols. Compiled Roc code calls them directly. */\n\n#if defined(__GNUC__) || defined(__clang__)\n#define ROC_RETURNS_NONNULL __attribute__((returns_nonnull))\n#else\n#define ROC_RETURNS_NONNULL\n#endif\n\n/* Returns `length` bytes aligned to `alignment`. Never returns NULL: Roc writes through\n   the result without checking it, so a host that cannot allocate must stop the Roc\n   program and not return, exactly as roc_crashed does. */\nROC_RETURNS_NONNULL void* roc_alloc(size_t length, size_t alignment);\nvoid roc_dealloc(void* ptr, size_t alignment);\n/* Never returns NULL, under the same rule as roc_alloc. */\nROC_RETURNS_NONNULL void* roc_realloc(void* ptr, size_t new_length, size_t alignment);\nvoid roc_dbg(const uint8_t* bytes, size_t len);\nvoid roc_expect_failed(const uint8_t* bytes, size_t len);\nvoid roc_crashed(const uint8_t* bytes, size_t len);\n",
+	)
 
 generate_hosted_symbol_decls : List(HostedFunctionInfo), TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames -> Str
 generate_hosted_symbol_decls = |hosted_functions, type_table, duplicate_records, duplicate_tags, preferred_names| {

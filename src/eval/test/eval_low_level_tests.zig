@@ -1248,6 +1248,43 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"  hello\"" },
     },
     .{
+        // `{ a : Str }` and `{ b : Str }` commit one layout, so each
+        // allow-listed low-level wrapper below lowers to one procedure shared
+        // by both item types (design.md "Layout-Keyed Builtin
+        // Procedures"). Refcounted items make every backend run ARC on
+        // the shared procedures from both callers.
+        .name = "low_level - layout-keyed wrappers shared across item types",
+        .source =
+        \\{
+        \\xs : List({ a : Str })
+        \\xs = List.append(List.prepend([{ a: "two" }], { a: "one" }), { a: "three" })
+        \\ys : List({ b : Str })
+        \\ys = List.concat(List.append(List.with_capacity(4), { b: "four" }), [{ b: "five" }, { b: "six" }])
+        \\xs2 = match List.set(xs, 0, { a: "uno" }) {
+        \\    Ok(list) => list
+        \\    Err(_) => xs
+        \\}
+        \\ys2 = match List.swap(ys, 0, 2) {
+        \\    Ok(list) => List.drop_at(list, 1)
+        \\    Err(_) => ys
+        \\}
+        \\bx = Box.unbox(Box.box({ a: "boxed" }))
+        \\by = Box.unbox(Box.box({ b: "boxed too" }))
+        \\x_text = match List.get(xs2, 0) {
+        \\    Ok(r) => r.a
+        \\    Err(_) => "none"
+        \\}
+        \\y_text = match List.get(List.sublist(ys2, { start: 0, len: 1 }), 0) {
+        \\    Ok(r) => r.b
+        \\    Err(_) => "none"
+        \\}
+        \\count = List.len(xs) + List.len(xs2) + List.len(ys) + List.len(ys2)
+        \\"${x_text} ${y_text} ${bx.a} ${by.b} ${count.to_str()}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"uno six boxed boxed too 11\"" },
+    },
+    .{
         .name = "low_level - List.concat with two non-empty lists",
         .source =
         \\{
@@ -1650,6 +1687,35 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        // With encoded capacity 10, the old LLVM fast path mistook a five-byte
+        // allocation for enough space for the eight-byte store at offset one.
+        // Requiring growth makes the invalid capacity observable as well as
+        // checking the appended bytes, without relying on malloc detecting it.
+        .name = "low_level - append_le_bytes grows past decoded capacity #11917",
+        .source =
+        \\{
+        \\    bytes = List.with_capacity(5).append(1.U8)
+        \\    result = 0x0807060504030201.U64.append_le_bytes_to(bytes, 8).ok_or([])
+        \\    (result, result.capacity() >= result.len())
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1, 1, 2, 3, 4, 5, 6, 7, 8], True)" },
+    },
+    .{
+        .name = "low_level - append_le_bytes exact capacity and word slack #11917",
+        .source =
+        \\{
+        \\    append_header = |capacity| {
+        \\        bytes = List.with_capacity(capacity).append(1.U8)
+        \\        result = 0x0807060504030201.U64.append_le_bytes_to(bytes, 4).ok_or([])
+        \\        (result, result.capacity())
+        \\    }
+        \\    (append_header(5), append_header(8), append_header(9), append_header(13))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(([1, 1, 2, 3, 4], 5), ([1, 1, 2, 3, 4], 8), ([1, 1, 2, 3, 4], 9), ([1, 1, 2, 3, 4], 13))" },
+    },
+    .{
         .name = "low_level - List.with_capacity of non refcounted elements creates empty list",
         .source =
         \\{
@@ -1819,6 +1885,51 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(4, 0)" },
     },
     .{
+        .name = "low_level - prepend after drop_first pops and pushes at the front",
+        .source =
+        \\{
+        \\var $xs = [10.U64, 20, 30, 40]
+        \\for i in 0..<5.U64 {
+        \\    $xs = $xs.drop_first(1).prepend(i)
+        \\}
+        \\$xs
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[4, 20, 30, 40]" },
+    },
+    .{
+        .name = "low_level - prepend after drop_first releases popped heap strings",
+        .source =
+        \\{
+        \\var $xs = [
+        \\    Str.concat("first string long enough to live on the heap ", "a"),
+        \\    Str.concat("second string long enough to live on the heap ", "b"),
+        \\    Str.concat("third string long enough to live on the heap ", "c"),
+        \\]
+        \\for i in 0..<3.U64 {
+        \\    $xs = $xs.drop_first(1).prepend(Str.concat("pushed string long enough to live on the heap ", i.to_str()))
+        \\}
+        \\$xs
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[\"pushed string long enough to live on the heap 2\", \"second string long enough to live on the heap b\", \"third string long enough to live on the heap c\"]" },
+    },
+    .{
+        .name = "low_level - prepend after drop_first leaves a shared list unchanged",
+        .source =
+        \\{
+        \\xs = [
+        \\    Str.concat("first string long enough to live on the heap ", "a"),
+        \\    Str.concat("second string long enough to live on the heap ", "b"),
+        \\]
+        \\ys = xs.drop_first(1)
+        \\zs = ys.prepend(Str.concat("pushed string long enough to live on the heap ", "z"))
+        \\(xs, ys, zs)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"first string long enough to live on the heap a\", \"second string long enough to live on the heap b\"], [\"second string long enough to live on the heap b\"], [\"pushed string long enough to live on the heap z\", \"second string long enough to live on the heap b\"])" },
+    },
+    .{
         .name = "low_level - zero-sized list append reports zero capacity",
         .source =
         \\{
@@ -1913,6 +2024,22 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        // The emptied list keeps its allocation: a uniquely owned list of
+        // ten items with room for sixteen still has room for sixteen.
+        .name = "low_level - clear keeps a unique list's capacity",
+        .source =
+        \\{
+        \\x = List.append(List.with_capacity(16), 1.U8)
+        \\r = List.clear(x)
+        \\(List.len(r), List.capacity(r) >= 16)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, True)" },
+        // The wasm test mode's host imports report every list as shared,
+        // so no list keeps its allocation there.
+        .skip = .{ .wasm = true },
     },
     .{
         .name = "low_level - zero-sized list clear reports zero capacity",
@@ -8130,6 +8257,19 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // The prefetched list is the list it was given, at an index inside
+        // it or far past its end.
+        .name = "low_level - prefetched returns its list unchanged",
+        .source =
+        \\{
+        \\x = List.prefetched([1.U8, 2, 3], 1)
+        \\y = List.prefetched(x, 1000000)
+        \\(List.len(y), List.get(y, 1), y == [1, 2, 3])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, Ok(2), True)" },
     },
     .{
         .name = "low_level - U64.to_f64 reads the source as unsigned",

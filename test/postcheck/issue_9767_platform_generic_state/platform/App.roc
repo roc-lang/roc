@@ -1,4 +1,4 @@
-import Host exposing [Host]
+import Host
 
 App := [].{
     Config : {}

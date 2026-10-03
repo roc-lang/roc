@@ -163,6 +163,8 @@ Since `?` can return early from the function, the function's return type must be
 
 When `?` is used directly inside a top-level [`expect`](statements#expect), there's no function to return from. Instead, if the expression evaluates to `Err`, the `expect` fails, and the test report shows which `Err` it was.
 
+Using `?` directly inside an inline [`expect`](statements#expect) gives a compile error, because returning early from the enclosing function would make the program behave differently in optimized builds, which omit inline `expect`s. (See [control flow and variables inside `expect`](statements#expect-control-flow).)
+
 ### `[…]` (subscript operator)
 
 (This has not been implemented yet.)

@@ -178,6 +178,10 @@ describe = |color| match color {
 Since `describe` already says its argument is a `Color`, the unqualified patterns (like `Green`)
 work too, so qualifying them is optional.
 
+A qualified tag is a value like any other, so methods can be called on it directly. If `Color`
+has a `to_hex` method, `Color.Red.to_hex()` calls it on `Color.Red`. (If `Color` also had a
+nested type named `Red`, then `Color.Red.to_hex` would refer to that type's `to_hex` instead.)
+
 ### Opaque Tag Unions
 
 Like other [opaque nominal types](types#opaque-nominal-types), a tag union declared with `::` instead

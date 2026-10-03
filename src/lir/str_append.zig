@@ -184,14 +184,14 @@ const AppendRewriter = struct {
         return try self.concatInto(cloner, target, self.accumulator, try cloner.mapLocal(value), fused, ret_stmt);
     }
 
-    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         if (stmt == .assign_low_level) {
             const s = stmt.assign_low_level;
             if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {
-                return try self.cloneConcatReturn(cloner, s, origin);
+                return .{ .done = try self.cloneConcatReturn(cloner, s, origin) };
             }
         }
-        return null;
+        return .none;
     }
 
     fn cloneConcatReturn(self: *AppendRewriter, cloner: anytype, s: anytype, origin: LIR.StmtOrigin) ResourceError!CFStmtId {

@@ -37,50 +37,44 @@ pub const Error = std.mem.Allocator.Error;
 const no_index: u32 = std.math.maxInt(u32);
 
 /// Compact description of an aggregate projection whose result may carry a
-/// stored ownership unit out of its source. The high two bits identify the
-/// projection form; the remaining bits hold the semantic field or tag indices.
-pub const no_projection: u64 = std.math.maxInt(u64);
-const projection_kind_shift = 62;
-const projection_data_mask = (@as(u64, 1) << projection_kind_shift) - 1;
-const ProjectionKind = enum(u2) {
-    field,
-    tag_payload,
-    tag_payload_struct,
-    reserved,
+/// stored ownership unit out of its source: the projection form and its
+/// semantic field or tag indices. It has no padding, so its bytes hash
+/// directly.
+pub const Projection = extern struct {
+    kind: Kind,
+    /// The field index of a `.field` projection, or the variant index of a tag
+    /// payload projection.
+    first: u32,
+    /// The payload index within the variant of a `.tag_payload` projection.
+    second: u32,
+
+    pub const Kind = enum(u32) {
+        none,
+        field,
+        tag_payload,
+        tag_payload_struct,
+    };
+
+    pub const none: Projection = .{ .kind = .none, .first = 0, .second = 0 };
+
+    pub fn eql(a: Projection, b: Projection) bool {
+        return a.kind == b.kind and a.first == b.first and a.second == b.second;
+    }
+
+    pub fn isNone(self: Projection) bool {
+        return self.kind == .none;
+    }
 };
 
 /// Encodes the ownership-relevant shape of a reference projection, or null
 /// when the operation does not select aggregate storage.
-pub fn encodeProjection(op: LIR.RefOp) ?u64 {
+pub fn encodeProjection(op: LIR.RefOp) ?Projection {
     return switch (op) {
-        .field => |field| @as(u64, field.field_idx),
-        .tag_payload => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload)) << projection_kind_shift) |
-            (@as(u64, payload.variant_index) << 16) |
-            @as(u64, payload.payload_idx),
-        .tag_payload_struct => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload_struct)) << projection_kind_shift) |
-            @as(u64, payload.variant_index),
+        .field => |field| .{ .kind = .field, .first = field.field_idx, .second = 0 },
+        .tag_payload => |payload| .{ .kind = .tag_payload, .first = payload.variant_index, .second = payload.payload_idx },
+        .tag_payload_struct => |payload| .{ .kind = .tag_payload_struct, .first = payload.variant_index, .second = 0 },
         .local, .discriminant, .list_reinterpret, .nominal => null,
     };
-}
-
-fn projectionKind(projection: u64) ProjectionKind {
-    return @enumFromInt(@as(u2, @intCast(projection >> projection_kind_shift)));
-}
-
-fn projectionField(projection: u64) u16 {
-    return @intCast(projection & projection_data_mask);
-}
-
-fn projectionVariant(projection: u64) u16 {
-    return switch (projectionKind(projection)) {
-        .tag_payload => @intCast((projection >> 16) & 0xffff),
-        .tag_payload_struct => @intCast(projection & 0xffff),
-        .field, .reserved => 0,
-    };
-}
-
-fn projectionPayload(projection: u64) u16 {
-    return @intCast(projection & 0xffff);
 }
 
 /// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
@@ -122,7 +116,7 @@ pub fn layoutMayContainBoxyDynamic(
     return false;
 }
 
-fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
+fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u32) ?layout_mod.StructField {
     const info = layouts.getStructInfo(struct_layout);
     for (0..info.fields.len) |index| {
         const field = info.fields.get(@intCast(index));
@@ -131,9 +125,9 @@ fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: l
     return null;
 }
 
-fn structHasOneRcField(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) bool {
+fn structHasOneRcField(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u32) bool {
     const info = layouts.getStructInfo(struct_layout);
-    var only_field: ?u16 = null;
+    var only_field: ?u32 = null;
     for (0..info.fields.len) |index| {
         const field = info.fields.get(@intCast(index));
         if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
@@ -153,16 +147,15 @@ pub fn projectionOwnsAllRc(
     layouts: *const layout_mod.Store,
     source: LIR.LocalId,
     target: LIR.LocalId,
-    projection: u64,
+    projection: Projection,
 ) bool {
-    if (projection == no_projection) return false;
     const source_layout_idx = store.getLocal(source).layout_idx;
     const target_layout_idx = store.getLocal(target).layout_idx;
     const source_layout = layouts.getLayout(source_layout_idx);
-    switch (projectionKind(projection)) {
+    switch (projection.kind) {
         .field => {
             if (source_layout.tag != .struct_) return false;
-            const field_idx = projectionField(projection);
+            const field_idx = projection.first;
             const field = structFieldBySemanticIndex(layouts, source_layout, field_idx) orelse return false;
             return field.layout == target_layout_idx and
                 layouts.layoutContainsRefcounted(layouts.getLayout(field.layout)) and
@@ -171,15 +164,15 @@ pub fn projectionOwnsAllRc(
         .tag_payload, .tag_payload_struct => {
             if (source_layout.tag != .tag_union) return false;
             const info = layouts.getTagUnionInfo(source_layout);
-            const variant_index = projectionVariant(projection);
+            const variant_index = projection.first;
             if (variant_index >= info.variants.len) return false;
             const payload_layout_idx = info.variants.get(variant_index).payload_layout;
             const payload_layout = layouts.getLayout(payload_layout_idx);
-            if (projectionKind(projection) == .tag_payload_struct) {
+            if (projection.kind == .tag_payload_struct) {
                 return payload_layout_idx == target_layout_idx and
                     layouts.layoutContainsRefcounted(payload_layout);
             }
-            const payload_idx = projectionPayload(projection);
+            const payload_idx = projection.second;
             if (payload_layout.tag == .struct_) {
                 const field = structFieldBySemanticIndex(layouts, payload_layout, payload_idx) orelse return false;
                 return field.layout == target_layout_idx and
@@ -189,7 +182,7 @@ pub fn projectionOwnsAllRc(
             return payload_idx == 0 and payload_layout_idx == target_layout_idx and
                 layouts.layoutContainsRefcounted(payload_layout);
         },
-        .reserved => return false,
+        .none => return false,
     }
 }
 
@@ -207,10 +200,7 @@ pub const FieldPlace = struct {
 /// the first for the union's single ownership-complete claim.
 pub const PayloadView = struct {
     view: LIR.LocalId,
-    tag_discriminant: u16,
-    /// Scratch layout for the residual dispatch, borrowed from the
-    /// container's single-definition discriminant read.
-    discriminant_layout: layout_mod.Idx,
+    tag_discriminant: u32,
 };
 
 /// Committed field-place domain for one dismantlable container. Residual
@@ -405,9 +395,8 @@ const UnionRoot = struct {
     /// The single payload view, `no_index` before one is seen and
     /// `ambiguous_view` once a second view or variant appears.
     view: u32 = no_index,
-    variant_index: u16 = 0,
-    tag_discriminant: u16 = 0,
-    discriminant_layout: ?layout_mod.Idx = null,
+    variant_index: u32 = 0,
+    tag_discriminant: u32 = 0,
 };
 
 const ambiguous_view: u32 = no_index - 1;
@@ -662,12 +651,6 @@ const Analysis = struct {
         const root_index = self.unionRootOf(local) orelse return;
         const entry = try self.unionEntryOf(root_index);
         entry.disqualified = true;
-    }
-
-    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
-        const root_index = self.unionRootOf(source) orelse return;
-        const entry = try self.unionEntryOf(root_index);
-        if (entry.discriminant_layout == null) entry.discriminant_layout = self.store.getLocal(target).layout_idx;
     }
 
     /// A borrowed payload view of a union root that owns every refcounted
@@ -947,6 +930,7 @@ const FutureFields = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -1048,6 +1032,7 @@ fn fieldObservedAfter(
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -1401,9 +1386,9 @@ fn findOutcomeRefinement(
 }
 
 fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-    if (value > std.math.maxInt(u16)) return null;
+    if (value > std.math.maxInt(u32)) return null;
     for (outcomes) |outcome| {
-        if (outcome.discriminant == @as(u16, @intCast(value))) return outcome.restituted_params;
+        if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
     }
     return null;
 }
@@ -1905,9 +1890,7 @@ pub fn compute(
                     },
                     .discriminant => |op| {
                         // The tag word is disjoint from every stored unit, so
-                        // reading it is no use of a tag union beyond lending
-                        // its layout to the residual dispatch.
-                        try analysis.noteDiscriminantRead(op.source, stmt.target);
+                        // reading it is no use of a tag union.
                         analysis.disqualify(op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
@@ -1982,6 +1965,13 @@ pub fn compute(
             },
             .assign_boxy_box => |stmt| {
                 try analysis.useWhole(current, stmt.payload);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_record_update => |stmt| {
+                try analysis.useWhole(current, stmt.base);
+                try analysis.useWhole(current, stmt.fields);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2349,7 +2339,6 @@ pub fn compute(
         const union_root: ?*UnionRoot = if (analysis.view_root[@intFromEnum(local)] != no_index) blk: {
             const root_entry = analysis.union_roots.getPtr(analysis.view_root[@intFromEnum(local)]) orelse continue :candidates;
             if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @intFromEnum(local)) continue :candidates;
-            if (root_entry.discriminant_layout == null) continue :candidates;
             break :blk root_entry;
         } else null;
 
@@ -2367,6 +2356,7 @@ pub fn compute(
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2607,7 +2597,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2773,7 +2763,6 @@ pub fn compute(
                 .payload_view = .{
                     .view = local,
                     .tag_discriminant = view_root_entry.tag_discriminant,
-                    .discriminant_layout = view_root_entry.discriminant_layout.?,
                 },
             });
         } else if (owned_only) {

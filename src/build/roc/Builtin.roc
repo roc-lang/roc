@@ -746,7 +746,7 @@ Builtin :: [].{
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len)
+				var $out = u8_list_reserve_for_append(out, len)
 				var $index = 0
 
 				while $index < len {
@@ -760,7 +760,7 @@ Builtin :: [].{
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len + 2)
+				var $out = u8_list_reserve_for_append(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
@@ -3151,11 +3151,11 @@ Builtin :: [].{
 						Unknown => Unknown
 					},
 					||
-					# Once `remaining_first` is exhausted it is kept (not swapped
-					# for `range_done()`) so `make`'s inner-iterator argument keeps
-					# a single monomorphic type for the whole chain. An exhausted
-					# iterator reports length 0 and its `next` stays `Done`, so this
-					# is length- and result-equivalent.
+						# Once `remaining_first` is exhausted it is kept (not swapped
+						# for `range_done()`) so `make`'s inner-iterator argument keeps
+						# a single monomorphic type for the whole chain. An exhausted
+						# iterator reports length 0 and its `next` stays `Done`, so this
+						# is length- and result-equivalent.
 						match Iter.next(remaining_first) {
 							Done =>
 								match Iter.next(remaining_second) {
@@ -3973,13 +3973,10 @@ Builtin :: [].{
 		## }
 		## ```
 		##
-		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
-		## trusts the request rather than rounding it up. If the list is not shared and
-		## already has room for `spare` more items, it does nothing. Otherwise it asks
-		## the allocator to grow the list to that size. The one exception is reserving
-		## a single item beyond the current capacity: that is indistinguishable from an
-		## ordinary [List.append] outgrowing the list, so the capacity grows
-		## geometrically instead of by one.
+		## `reserve(spare)` aims for a capacity of exactly `List.len(list) + spare`
+		## items; it trusts the request rather than rounding it up. If the list is not
+		## shared and already has room for `spare` more items, it does nothing.
+		## Otherwise it asks the allocator to grow the list to that size.
 		##
 		## Note that the reserve above sits before the loop. Because [List.reserve] aims
 		## for the exact size requested, it is a poor fit for use inside one: a reserve
@@ -4111,7 +4108,7 @@ Builtin :: [].{
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
-			reserved = List.reserve(list, 1)
+			reserved = list_reserve_for_append(list, 1)
 			list_append_unsafe(reserved, item)
 		}
 
@@ -4217,6 +4214,17 @@ Builtin :: [].{
 		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
 
 		## Add a single item to the beginning of a list.
+		##
+		## This is usually O(n), because every existing item has to move over by
+		## one to make room at the front. To build up a list one item at a time,
+		## `append` is much faster; if you need the items in the opposite order,
+		## `reverse` the list once at the end.
+		##
+		## The one exception is a list that is unique (nothing else refers to it)
+		## and has had items removed from its front, for example by `drop_first`.
+		## Removing items from the front leaves free space there, so prepending
+		## onto such a list is O(1). This makes a pop-then-push pattern like
+		## `list.drop_first(1).prepend(item)` fast.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -4244,11 +4252,32 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds])
-		get = |list, index| if index < List.len(list) {
+		get = |list, index| if bool_likely(index < List.len(list)) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
 		}
+
+		## Returns the list unchanged, hinting to the processor that the item
+		## at the given index is about to be read or written so it can start
+		## bringing that memory into its cache.
+		##
+		## This is a no-op as far as the program's results go: it reads
+		## nothing, changes nothing, and an index past the end of the list is
+		## fine. Its only possible effect is on speed, and that effect can go
+		## either way. A hint for memory that was about to be loaded anyway,
+		## or that is never used, costs time; a hint issued too late does
+		## nothing. Only use it together with careful measurement, and keep it
+		## only where the measurement shows it helping.
+		##
+		## It tends to pay off when the index is unpredictable, the list is
+		## much larger than the cache, and the index is known some steps
+		## before the item is used, as with a hash table's next bucket.
+		## ```roc
+		## expect List.prefetched([10.U64, 20, 30], 1) == [10, 20, 30]
+		## ```
+		prefetched : List(item), U64 -> List(item)
+		prefetched = |list, index| list_prefetched(list, index)
 
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
@@ -4289,7 +4318,7 @@ Builtin :: [].{
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
-			if index < List.len(list) {
+			if bool_likely(index < List.len(list)) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
 				Err(OutOfBounds)
@@ -5058,9 +5087,7 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
 		clear : List(a) -> List(a)
-		clear = |list| {
-			List.take_first(list, 0)
-		}
+		clear = |list| list_clear(list)
 
 		## Returns the given number of items from the end of the list.
 		## ```roc
@@ -5412,10 +5439,6 @@ Builtin :: [].{
 		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
-		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
-		}
 
 		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool
@@ -6892,7 +6915,6 @@ Builtin :: [].{
 			## expect U8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U8, U8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7619,7 +7641,6 @@ Builtin :: [].{
 			## expect I8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I8, I8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8465,7 +8486,6 @@ Builtin :: [].{
 			## expect U16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U16, U16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9251,7 +9271,6 @@ Builtin :: [].{
 			## expect I16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I16, I16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10138,7 +10157,6 @@ Builtin :: [].{
 			## expect U32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U32, U32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10956,7 +10974,6 @@ Builtin :: [].{
 			## expect I32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I32, I32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11860,7 +11877,6 @@ Builtin :: [].{
 			## expect U64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U64, U64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12740,7 +12756,6 @@ Builtin :: [].{
 			## expect I64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I64, I64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13667,7 +13682,6 @@ Builtin :: [].{
 			## expect U128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U128, U128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14560,7 +14574,6 @@ Builtin :: [].{
 			## expect I128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I128, I128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -15575,7 +15588,6 @@ Builtin :: [].{
 			## expect Dec.order_relative_to(3.0, 2.0) == After
 			## ```
 			order_relative_to : Dec, Dec -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -19248,14 +19260,14 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-					# Compare the index against a limit rather than subtracting from it.
-					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-					# reads repeatedly hoists them out and keeps just the one comparison of
-					# `start` against a precomputed bound. Subtracting the other way round --
-					# `len - start < 16` -- reads the same but depends on `start`, so all of it
-					# stays in the loop.
-					#
-					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						# Compare the index against a limit rather than subtracting from it.
+						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+						# reads repeatedly hoists them out and keeps just the one comparison of
+						# `start` against a precomputed bound. Subtracting the other way round --
+						# `len - start < 16` -- reads the same but depends on `start`, so all of it
+						# stays in the loop.
+						#
+						# Wrapping is safe because the first check has already ruled out `len < 16`.
 						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
@@ -23273,12 +23285,12 @@ u8_repeat = |byte, count| {
 }
 
 u8_append : List(U8), U8 -> List(U8)
-u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve_for_append(list, 1), byte)
 
 u8_concat : List(U8), List(U8) -> List(U8)
 u8_concat = |left, right| {
 	len = u8_list_len(right)
-	var $out = u8_list_reserve(left, len)
+	var $out = u8_list_reserve_for_append(left, len)
 	var $index = 0
 
 	while $index < len {
@@ -23431,6 +23443,8 @@ i128_from_le_bytes_unchecked : List(U8), U64 -> I128
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
 u8_list_reserve : List(U8), U64 -> List(U8)
+
+u8_list_reserve_for_append : List(U8), U64 -> List(U8)
 
 dec_sqrt_unsafe : Dec -> Dec
 
@@ -24042,8 +24056,6 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 		value.rem_by(divisor) == zero
 	}
 
-numeric_compare : item, item -> [Before, Same, After]
-
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
 	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
 range_with_step = |lower, upper, step, upper_bound, direction|
@@ -24646,6 +24658,15 @@ append_utf8_code_point = |out, code_point|
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
 
+# Implemented by the compiler: the same Bool, marking the branch it decides as
+# the one taken in the common case, so the other branch is laid out cold.
+bool_likely : Bool -> Bool
+
+# Implemented by the compiler: the same list, with a hint that the item at this
+# index is about to be used. It reads nothing, and an index outside the list
+# is harmless.
+list_prefetched : List(item), U64 -> List(item)
+
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
 
@@ -24719,6 +24740,11 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
+# Implemented by the compiler, ensures at least spare additional items of
+# capacity ahead of appending them. Unlike list_reserve, growth takes at least
+# the next geometric capacity step, so a run of appends stays amortized-linear.
+list_reserve_for_append : List(item), U64 -> List(item)
+
 # Implemented by the compiler. Appends count items copied from the list
 # itself beginning at start, reading through freshly appended items. The
 # caller has already verified start is in bounds and count is nonzero.
@@ -24739,6 +24765,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler: removes every item, keeping the allocation and
+# its capacity when the list is uniquely owned
+list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.

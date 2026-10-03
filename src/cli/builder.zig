@@ -250,6 +250,7 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMCreateEnumAttribute(ctx: ?*anyopaque, kind: c_uint, value: u64) ?*anyopaque;
     extern fn LLVMGetModuleContext(module: ?*anyopaque) ?*anyopaque;
     extern fn LLVMAddAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, attr: ?*anyopaque) void;
+    extern fn LLVMGetNamedFunction(module: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
     extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
 } else struct {};
 
@@ -346,6 +347,9 @@ const LLVMInternalLinkage: c_int = 8;
 
 /// LLVM-C attribute index for function-level attributes (`~0U`).
 const LLVMAttributeFunctionIndex: c_uint = 0xFFFFFFFF;
+
+/// LLVM-C attribute index for return-value attributes.
+const LLVMAttributeReturnIndex: c_uint = 0;
 
 // LLVM archive kinds (object::Archive::Kind)
 const LLVMArchiveKindGNU: c_int = 0;
@@ -648,6 +652,17 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                     const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
                     if (!app_defs.contains(name_ptr[0..name_len])) {
                         externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
+                    }
+                }
+
+                // The host ABI guarantees `roc_alloc` and `roc_realloc` never
+                // return null, which the builtins' Zig declarations cannot
+                // tell LLVM on their own.
+                const nonnull_kind = externs.LLVMGetEnumAttributeKindForName("nonnull", "nonnull".len);
+                const nonnull_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(module), nonnull_kind, 0);
+                for ([_][*:0]const u8{ builtins.shim_symbols.roc_alloc, builtins.shim_symbols.roc_realloc }) |symbol| {
+                    if (externs.LLVMGetNamedFunction(module, symbol)) |fv| {
+                        externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeReturnIndex, nonnull_attr);
                     }
                 }
                 externs.ZigLLVMRunGlobalDCE(module);

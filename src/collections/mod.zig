@@ -44,6 +44,9 @@ pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
 pub const ScopedBitSet = @import("ScopedBitSet.zig");
 pub const RekeyingHashMap = @import("RekeyingHashMap.zig").RekeyingHashMap;
 
+/// Any/all evaluation over nested groups of leaves on explicit stacks.
+pub const AnyAll = @import("any_all.zig");
+
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const ExposedItemTarget = @import("ExposedItems.zig").ExposedItemTarget;
@@ -153,6 +156,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
+    std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));
     std.testing.refAllDecls(@import("IndexedStack.zig"));
     std.testing.refAllDecls(@import("ScopedBitSet.zig"));

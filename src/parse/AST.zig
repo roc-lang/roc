@@ -40,6 +40,12 @@ decl_index: DeclIndex,
 root_node_idx: u32 = 0,
 tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayList(AST.Diagnostic),
+/// Tokenization failure independent of stored diagnostic capacity.
+tokenize_had_errors: bool = false,
+/// Explicit tokenizer fact; carriage-return normalization is the sole migration.
+tokenize_has_non_carriage_return_errors: bool = false,
+/// Source policy rejection forbids compilation of even independent roots.
+source_rejected: bool = false,
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
@@ -66,7 +72,7 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
 
 /// Returns whether this AST has any diagnostic errors.
 pub fn hasErrors(self: *const AST) bool {
-    return self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
+    return self.source_rejected or self.tokenize_had_errors or self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
 }
 
 /// Returns diagnostic position information for the given region.
@@ -188,7 +194,7 @@ pub fn resolvedDiagnosticToReport(
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
-pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
+pub fn tokenizeDiagnosticToReport(self: *const AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
     return tokenizeReport(diagnostic.tag, diagnostic.region, self.env, allocator, filename);
 }
 
@@ -210,13 +216,22 @@ fn tokenizeReport(
         .UnclosedString => "Unclosed String",
         .NonPrintableUnicodeInStrLiteral => "Nonprintable Unicode in String Literal",
         .InvalidUtf8InSource => "Invalid UTF-8",
+        .BidiControlInSource => "Bidirectional Control in Source",
+        .TooManyTokenizationErrors => "Additional Tokenization Errors",
+        .Utf8ByteOrderMark => "UTF-8 Byte Order Mark",
         .DollarInMiddleOfIdentifier => "Stray Dollar Sign",
         .SingleQuoteTooLong => "Single Quote Too Long",
         .SingleQuoteEmpty => "Single Quote Empty",
         .SingleQuoteUnclosed => "Unclosed Single Quote",
     };
 
+    var bidi_body: [512]u8 = undefined;
     const body = switch (diagnostic.tag) {
+        .BidiControlInSource => blk: {
+            const control = base.bidi.at(source_env.source[region.start.offset..]).?;
+            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable;
+        },
+        .TooManyTokenizationErrors => "Additional tokenization errors were omitted because the diagnostic limit was reached.",
         .MisplacedCarriageReturn => "Carriage return characters (\\r) are not allowed in Roc source code.",
         .AsciiControl => "ASCII control characters are not allowed in Roc source code.",
         .LeadingZero => "Numbers cannot have leading zeros.",
@@ -226,6 +241,7 @@ fn tokenizeReport(
         .UnclosedString => "This string is missing a closing quote.",
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
+        .Utf8ByteOrderMark => "This file starts with a UTF-8 byte order mark (BOM), an invisible encoding marker. Roc source files must use UTF-8 without a BOM. Remove the BOM or save the file as UTF-8 without BOM in your editor.",
         .DollarInMiddleOfIdentifier => "Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.",
         .SingleQuoteTooLong, .SingleQuoteEmpty => "Single-quoted literals must contain exactly one valid UTF-8 codepoint.",
         .SingleQuoteUnclosed => "This single-quoted literal is missing a closing quote.",
@@ -238,7 +254,10 @@ fn tokenizeReport(
         diagnostic.region.end.offset <= source_env.source.len)
     {
         var env = source_env.*;
-        if (env.line_starts.items.items.len == 0) {
+        const owns_line_starts = env.line_starts.items.items.len == 0;
+        if (owns_line_starts) env.line_starts = try @TypeOf(env.line_starts).initCapacity(allocator, 0);
+        defer if (owns_line_starts) env.line_starts.deinit(allocator);
+        if (owns_line_starts) {
             try env.calcLineStarts(allocator);
         }
 
@@ -563,6 +582,7 @@ fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
         .expected_open_curly_after_match => reportParseProblem(ctx, "Expected Match Body", "I was parsing a match expression, and I expected `{` after the matched value.", "Match branches are written inside braces after the expression being matched.", .{ .example = "match result {\n    Ok(x) => x\n    Err(_) => 0\n}" }),
         .expr_unexpected_token => reportParseProblem(ctx, "Unexpected Expression Syntax", "I was parsing an expression, and this token cannot start an expression here.", "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.", .{ .example = "add(1, 2)" }),
         .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
+        .record_field_assignment => reportParseProblem(ctx, "Record Field Uses Assignment", "I found `=` where a record field needs `:`.", "Use a colon between a record field name and its value. Run `roc fmt` to correct this separator.", .{ .example = "{ name: \"Ada\", age: 36 }" }),
         .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
         .optional_field_mark_after_colon => reportParseProblem(ctx, "Invalid Optional Field Syntax", "I was parsing a record type, and this optional field puts the `?` after the `:`.", "Optional fields are written with the `?` before the `:`: `?:` declares the field optional.", .{ .example = "{ name ?: Str }", .show_found = false }),
         .expected_ty_apply_close_round => reportParseProblem(ctx, "Expected Type Argument End", "I was parsing type arguments, and I expected `)`.", "Type applications put their arguments inside parentheses.", .{ .example = "Dict(Str, U64)" }),
@@ -596,8 +616,8 @@ fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
         .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_type => reportParseProblem(ctx, "Expected File Import Type", "I was parsing a file import, and I expected a type annotation.", "File imports must say whether the imported contents are `Str` or `List(U8)`.", .{ .example = "import \"data.bin\" as bytes : List(U8)" }),
         .file_import_invalid_type => reportParseProblem(ctx, "Invalid File Import Type", "I was parsing a file import type, and only `Str` or `List(U8)` is allowed.", "Use `Str` for text files and `List(U8)` for raw bytes.", .{ .example = "import \"data.txt\" as data : Str" }),
-        .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
-        .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
+        .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := [Id(U64)].{\n    zero = Id(0)\n}" }),
+        .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := [Id(U64)].{\n    zero = Id(0)\n}" }),
         .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .where_alias_expected_colon => reportParseProblem(ctx, "Expected Where Alias Colon", "I was parsing a where alias declaration, and I expected `:` after its name.", "A where alias separates its name from its `where` clause with a colon.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
@@ -702,6 +722,7 @@ pub const Diagnostic = struct {
         expr_unexpected_token,
         return_outside_function,
         expected_expr_record_field_name,
+        record_field_assignment,
         optional_field_mark_after_colon,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,

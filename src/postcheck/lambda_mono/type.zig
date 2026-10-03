@@ -132,6 +132,10 @@ pub const Store = struct {
     tags: StoreList(Tag, "tags"),
     fn_variants: StoreList(FnVariant, "fn_variants"),
     declared_fields: StoreList(DeclaredField, "declared_fields"),
+    /// How many times `set` has replaced a type's content. Adding a type
+    /// never changes what an existing type reaches, so an answer computed
+    /// from a type's structure holds while this count is unchanged.
+    sets: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -166,6 +170,7 @@ pub const Store = struct {
 
     pub fn set(self: *Store, id: TypeId, content: Content) void {
         self.types.set(@intFromEnum(id), content);
+        self.sets += 1;
     }
 
     pub fn get(self: *const Store, id: TypeId) Content {

@@ -56,7 +56,11 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
     const idx = try parserCall(&parser);
 
     const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
-    const tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    var tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    errdefer tokenize_diagnostics.deinit(gpa);
+    if (result.extra_messages_dropped != 0) {
+        try tokenize_diagnostics.append(gpa, .{ .tag = .TooManyTokenizationErrors, .region = base.Region.from_raw_offsets(0, 0) });
+    }
 
     // Heap-allocate AST for unified ownership model
     const ast = try gpa.create(AST);
@@ -68,6 +72,9 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
         .decl_index = parser.decl_index,
         .root_node_idx = idx,
         .tokenize_diagnostics = tokenize_diagnostics,
+        .tokenize_had_errors = result.has_errors,
+        .tokenize_has_non_carriage_return_errors = result.has_non_carriage_return_errors,
+        .source_rejected = result.source_rejected,
         .parse_diagnostics = parser.diagnostics,
     };
 
@@ -1285,4 +1292,48 @@ test "a dotted upper where alias candidate without a colon is a parse error" {
 
     var report = try ast.parseDiagnosticToReport(&env, ast.parse_diagnostics.items[0], gpa, "test");
     defer report.deinit();
+}
+
+test "bidi source rejection and omitted diagnostics survive the parser boundary" {
+    const gpa = std.testing.allocator;
+    const source = "# " ++ "\u{202e}" ** 140;
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+    try std.testing.expect(ast.source_rejected);
+    try std.testing.expect(ast.hasErrors());
+    try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(tokenize.Diagnostic.Tag.BidiControlInSource, ast.tokenize_diagnostics.items[0].tag);
+    try std.testing.expectEqual(tokenize.Diagnostic.Tag.TooManyTokenizationErrors, ast.tokenize_diagnostics.items[128].tag);
+    var report = try ast.tokenizeDiagnosticToReport(ast.tokenize_diagnostics.items[0], gpa, "Probe.roc");
+    defer report.deinit();
+}
+
+test "issue 4140: assignment recovery belongs only to record syntax" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, mistakes: usize, is_record: bool }{
+        .{ .source = "r = { x = 1, y: 2 }", .mistakes = 1, .is_record = true },
+        .{ .source = "r = { ..old, x = 1 }", .mistakes = 1, .is_record = true },
+        .{ .source = "r = { x: 1, y = 2 }", .mistakes = 1, .is_record = true },
+        .{ .source = "r = { x = 1, y = 2 }", .mistakes = 2, .is_record = true },
+        .{ .source = "r = { x = call(1, 2) }", .mistakes = 0, .is_record = false },
+        .{ .source = "r = { x = |a, b| a + b }", .mistakes = 0, .is_record = false },
+        .{ .source = "r = { x = 1\nx }", .mistakes = 0, .is_record = false },
+    };
+    for (cases) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+        const ast = try file(gpa, &env);
+        defer ast.deinit();
+        try std.testing.expectEqual(case.mistakes, ast.parse_diagnostics.items.len);
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            try std.testing.expectEqual(AST.Diagnostic.Tag.record_field_assignment, diagnostic.tag);
+            const region = ast.tokenizedRegionToRegion(diagnostic.region);
+            try std.testing.expectEqualStrings("=", case.source[region.start.offset..region.end.offset]);
+        }
+        const stmt = ast.store.getStatement(ast.store.statementSlice(ast.store.getFile().statements)[0]);
+        const body = ast.store.getExpr(stmt.decl.body);
+        try std.testing.expectEqual(case.is_record, body == .record);
+    }
 }

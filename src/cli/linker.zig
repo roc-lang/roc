@@ -13,6 +13,7 @@ const AdHocResign = @import("macho/AdHocResign.zig");
 const DwarfSplice = @import("macho/DwarfSplice.zig");
 const backend = @import("backend");
 const roc_target = @import("roc_target");
+const shim_symbols = @import("builtins").shim_symbols;
 const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
@@ -479,6 +480,13 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Link against system libraries on macOS
             try args.append("-lSystem");
+
+            // ELF resolves an undefined weak reference to null; Mach-O needs
+            // each one the executable leaves undefined named explicitly.
+            for (shim_symbols.in_process_recorder_set) |symbol| {
+                try args.append("-U");
+                try args.append(std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory);
+            }
 
             // Link C++ standard library if Tracy is enabled
             if (build_options.enable_tracy) {
@@ -1479,6 +1487,33 @@ test "macOS non-archive platform files are passed directly" {
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
     _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
+}
+
+test "macOS executables leave the in-process recorders undefined" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .aarch64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    for (shim_symbols.in_process_recorder_set) |symbol| {
+        const mangled = try std.fmt.allocPrint(arena_instance.allocator(), "_{s}", .{symbol});
+        const at = findArg(args.items, mangled) orelse return error.MissingUndefinedRecorder;
+        try std.testing.expect(at > 0);
+        try std.testing.expectEqualStrings("-U", args.items[at - 1]);
+    }
 }
 
 test "native glibc executables name the canonical program interpreter" {

@@ -114,12 +114,26 @@ const Comparer = struct {
         return true;
     }
 
-    fn refs(self: *Comparer, left: Span, right: Span) Allocator.Error!bool {
+    /// Compare two evidence reference spans, and the callable contracts
+    /// they carry, from an explicit work list.
+    fn refs(self: *Comparer, root_left: Span, root_right: Span) Allocator.Error!bool {
+        var pending: std.ArrayList([2]Span) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ root_left, root_right });
+        while (pending.pop()) |pair| {
+            if (!try self.refsSpan(pair[0], pair[1], &pending)) return false;
+        }
+        return true;
+    }
+
+    /// Compare one pair of evidence reference spans; the callable contracts
+    /// each reference carries are queued.
+    fn refsSpan(self: *Comparer, left: Span, right: Span, pending: *std.ArrayList([2]Span)) Allocator.Error!bool {
         if (left.len != right.len) return false;
         const left_refs = self.table.evidence_refs[left.start..][0..left.len];
         const right_refs = self.table.evidence_refs[right.start..][0..right.len];
         for (left_refs, right_refs) |a, b| {
-            if (!try self.refs(a.callable_contracts, b.callable_contracts)) return false;
+            try pending.append(self.allocator, .{ a.callable_contracts, b.callable_contracts });
             if (a.runtime_dictionary != b.runtime_dictionary or std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
             try self.typesPair(a.dispatcher_ty, b.dispatcher_ty);
             switch (a.resolution) {

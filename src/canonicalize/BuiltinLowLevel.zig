@@ -316,6 +316,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("u8_list_get_unsafe")) |ident| {
         try low_level_map.put(ident, .list_get_unsafe);
     }
+    if (env.common.findIdent("list_prefetched")) |ident| {
+        try low_level_map.put(ident, .list_prefetched);
+    }
     if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
         try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
     }
@@ -324,6 +327,15 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
         try low_level_map.put(list_reserve_ident, .list_reserve);
+    }
+    if (env.common.findIdent("Builtin.Bool.not")) |ident| {
+        try low_level_map.put(ident, .bool_not);
+    }
+    if (env.common.findIdent("bool_likely")) |ident| {
+        try low_level_map.put(ident, .bool_likely);
+    }
+    if (env.common.findIdent("list_reserve_for_append")) |ident| {
+        try low_level_map.put(ident, .list_reserve_for_append);
     }
     if (env.common.findIdent("list_append_range_within")) |ident| {
         try low_level_map.put(ident, .list_append_range_within);
@@ -340,8 +352,14 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("u8_list_reserve")) |ident| {
         try low_level_map.put(ident, .list_reserve);
     }
+    if (env.common.findIdent("u8_list_reserve_for_append")) |ident| {
+        try low_level_map.put(ident, .list_reserve_for_append);
+    }
     if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
         try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
+    }
+    if (env.common.findIdent("list_clear")) |ident| {
+        try low_level_map.put(ident, .list_clear);
     }
     if (env.common.findIdent("list_sort_with")) |ident| {
         try low_level_map.put(ident, .list_sort_with);
@@ -493,8 +511,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_lte", .{num_type}, .num_is_lte);
     }
 
-    if (env.common.findIdent("numeric_compare")) |ident| {
-        try low_level_map.put(ident, .compare);
+    // Three-way ordering (every numeric type with a total order)
+    for (non_float_numeric_type_names) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.order_relative_to", .{num_type}, .compare);
     }
 
     // from_str (all numeric types)

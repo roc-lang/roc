@@ -394,6 +394,11 @@ fn snapshotReplacementForModuleWord(word: []const u8) []const u8 {
 fn appendSnapshotSafeMarkdown(allocator: Allocator, out: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
     var index: usize = 0;
     while (index < text.len) {
+        if (base.bidi.at(text[index..])) |control| {
+            try out.appendSlice(allocator, control.visible);
+            index += control.utf8.len;
+            continue;
+        }
         if (index + "module".len <= text.len and
             std.ascii.eqlIgnoreCase(text[index .. index + "module".len], "module"))
         {
@@ -1007,6 +1012,8 @@ fn processSnapshotContent(
         .{ .module_name = module_name },
     );
     defer parse_ast.deinit();
+    // Snapshot evaluation must honor the same whole-source rejection as the CLI.
+    if (parse_ast.source_rejected) return error.ParseFailed;
 
     const builtin_ctx: Check.BuiltinContext = .{
         .bool_stmt = config.builtin_indices.bool_type,
@@ -2047,6 +2054,18 @@ fn escapeHtmlChar(writer: anytype, char: u8) error{WriteFailed}!void {
     }
 }
 
+/// Escape display text without leaving active directional controls in HTML.
+fn escapeHtmlText(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
+    var controls = base.bidi.Iterator{ .bytes = text };
+    var start: usize = 0;
+    while (controls.next()) |occurrence| {
+        for (text[start..occurrence.offset]) |char| try escapeHtmlChar(writer, char);
+        for (occurrence.control.visible) |char| try escapeHtmlChar(writer, char);
+        start = controls.offset;
+    }
+    for (text[start..]) |char| try escapeHtmlChar(writer, char);
+}
+
 /// Generate META section for both markdown and HTML
 fn generateMetaSection(output: *DualOutput, content: *const Content) error{WriteFailed}!void {
     try output.begin_section("META");
@@ -2085,6 +2104,12 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) error{Wri
 
     // HTML SOURCE section - encode source as JavaScript string
     if (output.html_writer) |writer| {
+        try writer.writer.writeAll("<script>window.rocBidiControls = {");
+        for (base.bidi.controls, 0..) |control, i| {
+            if (i != 0) try writer.writer.writeByte(',');
+            try writer.writer.print("\"\\u{X:0>4}\":\"{s}\"", .{ control.codepoint, control.visible });
+        }
+        try writer.writer.writeAll("};</script>\n");
         try writer.writer.writeAll(
             \\                <div class="source-code" id="source-display">
             \\                </div>
@@ -2094,7 +2119,14 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) error{Wri
 
         // Escape the source code for JavaScript string literal
         try writer.writer.writeAll("`");
-        for (content.source) |char| {
+        var source_i: usize = 0;
+        while (source_i < content.source.len) : (source_i += 1) {
+            if (base.bidi.at(content.source[source_i..])) |control| {
+                try writer.writer.print("\\u{X:0>4}", .{control.codepoint});
+                source_i += control.utf8.len - 1;
+                continue;
+            }
+            const char = content.source[source_i];
             switch (char) {
                 '`' => try writer.writer.writeAll("\\`"),
                 '\\' => try writer.writer.writeAll("\\\\"),
@@ -2284,7 +2316,7 @@ fn writeReportingHtmlPayload(output: *DualOutput, payload: []const u8, is_html: 
             try html.writer.writeAll(payload);
         } else {
             try html.writer.writeAll("<pre><code>");
-            for (payload) |char| try escapeHtmlChar(&html.writer, char);
+            try escapeHtmlText(&html.writer, payload);
             try html.writer.writeAll("</code></pre>\n");
         }
     }
@@ -2451,6 +2483,8 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 
 /// Generate FORMATTED section for both markdown and HTML
 fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) SnapshotError!void {
+    // Invalid token streams still get source and diagnostic views, not repaired source.
+    if (parse_ast.tokenize_had_errors or parse_ast.tokenize_diagnostics.items.len != 0) return;
     var formatted: std.Io.Writer.Allocating = .init(output.gpa);
     defer formatted.deinit();
 
@@ -2508,9 +2542,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         );
 
         // Escape HTML in formatted content
-        for (display_content) |char| {
-            try escapeHtmlChar(&writer.writer, char);
-        }
+        try escapeHtmlText(&writer.writer, display_content);
 
         try writer.writer.writeAll(
             \\</pre>
@@ -4697,6 +4729,8 @@ fn renderSnapshotReplTypeProblems(
         .{ .module_name = "repl" },
     );
     defer parse_ast.deinit();
+    // Snapshot evaluation must honor the same whole-source rejection as the CLI.
+    if (parse_ast.source_rejected) return error.ParseFailed;
 
     const builtin_ctx: Check.BuiltinContext = .{
         .bool_stmt = config.builtin_indices.bool_type,
@@ -4891,6 +4925,7 @@ fn renderSnapshotReplTypeProblems(
         error.PageSizeQueryFailed,
         error.ParseError,
         error.ParseFailed,
+        error.ParsingFailed,
         error.PathAlreadyExists,
         error.PathOutsideWorkspace,
         error.PermissionDenied,
@@ -4909,7 +4944,6 @@ fn renderSnapshotReplTypeProblems(
         error.SystemFdQuotaExceeded,
         error.SystemResources,
         error.TempDirUnavailable,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,
@@ -5129,6 +5163,7 @@ fn snapshotReplDefinitionStep(
             error.PageSizeQueryFailed,
             error.ParseError,
             error.ParseFailed,
+            error.ParsingFailed,
             error.PathAlreadyExists,
             error.PathOutsideWorkspace,
             error.PermissionDenied,
@@ -5147,7 +5182,6 @@ fn snapshotReplDefinitionStep(
             error.SystemFdQuotaExceeded,
             error.SystemResources,
             error.TempDirUnavailable,
-            error.TempFileError,
             error.TempFileOpenFailed,
             error.TempFileUnlinkFailed,
             error.TestExpectedEqual,
@@ -5287,6 +5321,7 @@ fn compileAndEvaluateSnapshotReplExpr(
             error.PageSizeQueryFailed,
             error.ParseError,
             error.ParseFailed,
+            error.ParsingFailed,
             error.PathAlreadyExists,
             error.PathOutsideWorkspace,
             error.PermissionDenied,
@@ -5305,7 +5340,6 @@ fn compileAndEvaluateSnapshotReplExpr(
             error.SystemFdQuotaExceeded,
             error.SystemResources,
             error.TempDirUnavailable,
-            error.TempFileError,
             error.TempFileOpenFailed,
             error.TempFileUnlinkFailed,
             error.TestExpectedEqual,
@@ -5467,6 +5501,7 @@ fn snapshotReplExpressionStep(
                             error.PageSizeQueryFailed,
                             error.ParseError,
                             error.ParseFailed,
+                            error.ParsingFailed,
                             error.PathAlreadyExists,
                             error.PathOutsideWorkspace,
                             error.PermissionDenied,
@@ -5485,7 +5520,6 @@ fn snapshotReplExpressionStep(
                             error.SystemFdQuotaExceeded,
                             error.SystemResources,
                             error.TempDirUnavailable,
-                            error.TempFileError,
                             error.TempFileOpenFailed,
                             error.TempFileUnlinkFailed,
                             error.TestExpectedEqual,
@@ -5632,6 +5666,7 @@ fn snapshotReplExpressionStep(
             error.PageSizeQueryFailed,
             error.ParseError,
             error.ParseFailed,
+            error.ParsingFailed,
             error.PathAlreadyExists,
             error.PathOutsideWorkspace,
             error.PermissionDenied,
@@ -5650,7 +5685,6 @@ fn snapshotReplExpressionStep(
             error.SystemFdQuotaExceeded,
             error.SystemResources,
             error.TempDirUnavailable,
-            error.TempFileError,
             error.TempFileOpenFailed,
             error.TempFileUnlinkFailed,
             error.TestExpectedEqual,
@@ -5802,9 +5836,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                         try writer.writer.writeAll("                <hr>\n");
                     }
                     try writer.writer.writeAll("                <div class=\"repl-output\">");
-                    for (repl_output) |char| {
-                        try escapeHtmlChar(&writer.writer, char);
-                    }
+                    try escapeHtmlText(&writer.writer, repl_output);
                     try writer.writer.writeAll("</div>\n");
                 }
             }
@@ -5868,9 +5900,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                             try writer.writer.writeAll("                <hr>\n");
                         }
                         try writer.writer.writeAll("                <div class=\"repl-output\">");
-                        for (expected_output) |char| {
-                            try escapeHtmlChar(&writer.writer, char);
-                        }
+                        try escapeHtmlText(&writer.writer, expected_output);
                         try writer.writer.writeAll("</div>\n");
                     }
                 }
@@ -5889,9 +5919,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                             try writer.writer.writeAll("                <hr>\n");
                         }
                         try writer.writer.writeAll("                <div class=\"repl-output\">");
-                        for (repl_output) |char| {
-                            try escapeHtmlChar(&writer.writer, char);
-                        }
+                        try escapeHtmlText(&writer.writer, repl_output);
                         try writer.writer.writeAll("</div>\n");
                     }
                 }
@@ -6142,4 +6170,11 @@ test "snapshot reporting sections populate both outputs including empty reports"
             }
         }
     }
+}
+
+test "bidi snapshot HTML uses visible markers" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try escapeHtmlText(&output.writer, "<code>\u{202e}</code>");
+    try std.testing.expectEqualStrings("&lt;code&gt;&lt;U+202E RLO&gt;&lt;/code&gt;", output.written());
 }

@@ -92,7 +92,7 @@ test "issue 11730: decoder annotation cannot exclude its required-field error" {
         \\
     ++ decoder);
     defer env.deinit();
-    try env.assertOneTypeError("Type Mismatch");
+    try env.assertOneTypeError("Parser Error Row Missing Tag");
 }
 
 test "issue 11730: nested local record demands survive success projection" {
