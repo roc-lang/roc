@@ -412,6 +412,13 @@ pub const Evaluator = struct {
             },
             .static_data_candidate => |cand| return self.evalExpr(frame, cand.runtime_expr),
             .typed_boundary => |boundary| return self.evalExpr(frame, boundary.value),
+            // A row coercion changes the row a tag value indexes: move each tag
+            // to its same-named tag in the wider row, as a `?` return does.
+            .row_widen => |widen| return try self.convertValue(
+                try self.evalExpr(frame, widen.value),
+                self.program.getExpr(widen.value).ty,
+                expr.ty,
+            ),
             .list => |span| return .{ .list = try self.evalExprSpan(frame, span) },
             .tuple => |span| return .{ .tuple = try self.evalExprSpan(frame, span) },
             .record => |span| return try self.evalRecord(frame, expr.ty, span),

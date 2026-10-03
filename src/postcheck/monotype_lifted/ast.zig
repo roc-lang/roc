@@ -1109,7 +1109,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -2026,6 +2026,7 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
         .static_data_candidate => |candidate| try sink.one(candidate.runtime_expr),
         .comptime_value => |value| try sink.one(value.initializer),
         .typed_boundary => |boundary| try sink.one(boundary.value),
+        .row_widen => |widen| try sink.one(widen.value),
         .nominal, .dbg, .expect => |child| try sink.one(child),
         .return_ => |ret| try sink.one(ret.value),
         .expect_err => |expect_err| try sink.one(expect_err.msg),

@@ -871,6 +871,7 @@ const Lowerer = struct {
             .comptime_value => |value| plan.add(.{ .expr = value.initializer }),
             .static_data_candidate => |candidate| plan.add(.{ .expr = candidate.runtime_expr }),
             .typed_boundary => |boundary| plan.add(.{ .expr = boundary.value }),
+            .row_widen => |widen| plan.add(.{ .expr = widen.value }),
             .uninitialized_payload => |payload| plan.add(.{ .local = payload.condition }),
             .list, .tuple => |items| plan.add(.{ .expr_span = items }),
             .record => |fields| plan.add(.{ .field_span = fields }),
@@ -1000,6 +1001,7 @@ const Lowerer = struct {
                 .runtime_expr = parts[0].get(.expr),
             } },
             .typed_boundary => .{ .typed_boundary = .{ .value = parts[0].get(.expr) } },
+            .row_widen => .{ .row_widen = .{ .value = parts[0].get(.expr) } },
             .@"unreachable" => .@"unreachable",
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
