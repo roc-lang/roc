@@ -1686,5 +1686,7 @@ test "a loop parameter bounded by its loop head keeps a test it does not decide"
         countMarkedShape,
     );
     try std.testing.expect(marked_shape.found);
+    // The one `>=` left is `level >= 10`. `level * 4 >= 55` folds soundly,
+    // since the loop head bounds `level` by 12 inside the body.
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
 }
