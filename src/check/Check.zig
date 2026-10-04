@@ -806,6 +806,14 @@ local_procedure_outer_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef),
 promoted_local_procedures: std.ArrayListUnmanaged(hoist_roots.PromotedLocalProcedure),
 /// Binding patterns of `promoted_local_procedures`.
 promoted_local_procedure_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Constraint callables of dispatch edges whose selected target, or the
+/// target of a dispatch derived from them, is a local procedure that was not
+/// promoted. Settled with `promoted_local_procedure_patterns`.
+contextual_local_dispatch_fn_vars: std.AutoHashMapUnmanaged(Var, void),
+/// Expressions whose evaluation dispatches an edge in
+/// `contextual_local_dispatch_fn_vars`: each edge's introducing expression,
+/// and each lookup that instantiated a scheme requirement it resolves.
+contextual_local_dispatch_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Top-level defs whose zero-arg function result will be observed as an
 /// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
 /// not leave static-dispatch obligations in their immediate result.
@@ -939,6 +947,31 @@ method_binding_envs: ?[]const *const ModuleEnv = null,
 scratch_method_mint_evidence: dispatch_evidence.Scratch = .{},
 scratch_method_mint_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_requirements: std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement) = .empty,
+/// Component obligations of a structural comparison or hash, each linked to
+/// the constraint callable of the comparison or hash it serves. Evaluating
+/// that operation evaluates the component's dispatch. Kept apart from
+/// `dispatch_derivations`, whose lineage is a dispatch target's own.
+component_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
+component_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Whether this module declares a method in a function body. Only such a
+/// method can be a local procedure, so no dispatch selects one otherwise.
+module_declares_local_methods: ?bool = null,
+/// Names of the methods this module declares in function bodies, gathered
+/// with `module_declares_local_methods`.
+local_method_names: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+/// The candidate stack where each dispatch constraint was created, keyed by
+/// its constraint callable. Recorded only in a module that declares a method
+/// in a function body, as the sites a promotion dependency is read from.
+dispatch_candidate_frames: std.AutoHashMapUnmanaged(Var, CandidateFrames) = .empty,
+dispatch_candidate_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
+/// For each type declared in a function body that names a type variable of an
+/// enclosing function, the shallowest candidate depth of such a variable.
+local_type_context_depths: std.AutoHashMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
+/// Type declarations being generated, innermost last.
+type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
+/// The right-hand side of each local declaration, by binding pattern. Built on
+/// first use, and only in a module that declares a method in a function body.
+local_decl_expr_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -1510,6 +1543,27 @@ const DispatchTargetInstantiation = struct {
     target_binding: ModuleEnv.MethodBinding,
     method_name: Ident.Idx,
     method_var: Var,
+    /// The expression that introduced this edge's constraint. A component
+    /// obligation derived for a structural comparison or hash names the
+    /// comparison or hash it serves.
+    intro_expr: ?CIR.Expr.Idx,
+};
+
+const CandidateFrames = struct {
+    start: u32,
+    len: u32,
+};
+
+const TypeDeclGenerationFrame = struct {
+    decl: CIR.Statement.Idx,
+    /// The declaration's own parameters, which a lookup inside it may name
+    /// without depending on any enclosing function.
+    header_args: []const CIR.TypeAnno.Idx,
+    context_depth: ?u32 = null,
+
+    fn noteContextDepth(self: *TypeDeclGenerationFrame, depth: u32) void {
+        self.context_depth = if (self.context_depth) |existing| @min(existing, depth) else depth;
+    }
 };
 
 const DispatchDerivation = struct {
@@ -1763,6 +1817,9 @@ fn registerInstantiatedSchemeRequirement(
     if (parent_constraint_fn_var) |parent_fn_var| {
         try self.recordDispatchDerivations(constraint_range, parent_fn_var);
     }
+    if (instantiation_expr != null) {
+        try self.noteHoistDispatchDependency(requirement.receiver_var, requirement.constraint.fn_name, requirement.constraint.fn_var);
+    }
 
     const receiver_is_flex = self.types.resolveVar(requirement.receiver_var).desc.content == .flex;
     const dispatcher_idx: u32 = @intCast(self.instantiation_dispatchers.items.len);
@@ -1824,6 +1881,13 @@ fn registerInstantiatedAttachedDispatch(
     // there), so the candidate index filters them.
     for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
         try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
+        if (instantiation_expr != null) {
+            if (constraint.origin.literalKind() == null) {
+                try self.noteHoistDispatchDependency(receiver_var, constraint.fn_name, constraint.fn_var);
+            } else {
+                try self.noteLiteralDispatchSite(receiver_var, constraint.fn_name, constraint.fn_var);
+            }
+        }
     }
 }
 
@@ -2039,6 +2103,9 @@ const HoistPromotionDependencyId = enum(u32) { _ };
 const HoistPromotionDependency = struct {
     proof: union(enum) {
         procedure: CIR.Pattern.Idx,
+        /// The constraint callable of a dispatch, available unless it or a
+        /// dispatch derived from it selected an unpromoted local procedure.
+        dispatch: Var,
         both: struct { left: HoistPromotionDependencyId, right: HoistPromotionDependencyId },
     },
     available: bool = false,
@@ -3237,6 +3304,8 @@ fn initAssumePrepared(
         .local_procedure_outer_refs = .empty,
         .promoted_local_procedures = .empty,
         .promoted_local_procedure_patterns = .{},
+        .contextual_local_dispatch_fn_vars = .{},
+        .contextual_local_dispatch_exprs = .{},
         .executable_root_defs = .empty,
         .compile_time_executable_roots = .empty,
         .last_hoist_result = null,
@@ -3400,6 +3469,8 @@ pub fn deinit(self: *Self) void {
     self.local_procedure_outer_refs.deinit(self.gpa);
     self.promoted_local_procedures.deinit(self.gpa);
     self.promoted_local_procedure_patterns.deinit(self.gpa);
+    self.contextual_local_dispatch_fn_vars.deinit(self.gpa);
+    self.contextual_local_dispatch_exprs.deinit(self.gpa);
     self.executable_root_defs.deinit(self.gpa);
     self.compile_time_executable_roots.deinit(self.gpa);
     self.env_pool.deinit();
@@ -3495,6 +3566,14 @@ pub fn deinit(self: *Self) void {
     self.scratch_method_mint_evidence.deinit(self.gpa);
     self.scratch_method_mint_params.deinit(self.gpa);
     self.scratch_method_mint_requirements.deinit(self.gpa);
+    self.component_derivations.deinit(self.gpa);
+    self.component_derivation_by_child_fn_var.deinit(self.gpa);
+    self.local_decl_expr_by_pattern.deinit(self.gpa);
+    self.local_method_names.deinit(self.gpa);
+    self.dispatch_candidate_frames.deinit(self.gpa);
+    self.dispatch_candidate_frame_patterns.deinit(self.gpa);
+    self.local_type_context_depths.deinit(self.gpa);
+    self.type_decl_generation_frames.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
@@ -3587,24 +3666,43 @@ fn noteLocalLookupForLocalProcedures(self: *Self, pattern: CIR.Pattern.Idx) Allo
 
 /// A lookup of a rigid type variable introduced at a shallower candidate
 /// depth names a type variable of a function enclosing the deeper candidates.
+/// Inside a type declaration being generated, a lookup of one of its own
+/// parameters names no enclosing function; any other lookup makes the
+/// declaration name that variable too.
 fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx) void {
-    if (self.local_procedure_candidate_stack.items.len == 0) return;
     const depth = self.rigid_var_candidate_depths.get(rigid_var) orelse 0;
+    if (self.type_decl_generation_frames.items.len > 0) {
+        const frame = &self.type_decl_generation_frames.items[self.type_decl_generation_frames.items.len - 1];
+        if (std.mem.indexOfScalar(CIR.TypeAnno.Idx, frame.header_args, rigid_var) != null) return;
+        frame.noteContextDepth(depth);
+    }
+    if (self.local_procedure_candidate_stack.items.len == 0) return;
     self.markLocalProcedureCandidatesContextualFrom(depth);
 }
 
-/// A reference to a type declared inside a function body makes every
-/// candidate being checked contextual: such a type, and any method it
-/// declares, belongs to the function body that declares it.
+/// A reference to a type declared inside a function body names whatever
+/// enclosing type variables its declaration names. A declaration that names
+/// none is context free; the methods it declares are local bindings like any
+/// other, and a candidate depends on them only through the references and
+/// dispatches recorded for it.
 fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
-    if (self.local_procedure_candidate_stack.items.len == 0) return;
-    if (self.module_type_decls.count() == 0) {
-        for (self.cir.store.sliceStatements(self.cir.type_decls)) |module_decl| {
-            try self.module_type_decls.put(self.gpa, module_decl, {});
-        }
+    if (try self.isModuleTypeDecl(decl_idx)) return;
+    const depth = self.local_type_context_depths.get(decl_idx) orelse return;
+    if (self.type_decl_generation_frames.items.len > 0) {
+        self.type_decl_generation_frames.items[self.type_decl_generation_frames.items.len - 1].noteContextDepth(depth);
     }
-    if (self.module_type_decls.contains(decl_idx)) return;
-    self.markLocalProcedureCandidatesContextualFrom(0);
+    if (self.local_procedure_candidate_stack.items.len == 0) return;
+    self.markLocalProcedureCandidatesContextualFrom(depth);
+}
+
+fn typeDeclHeaderArgs(self: *const Self, decl_idx: CIR.Statement.Idx) []const CIR.TypeAnno.Idx {
+    const header = switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |alias| alias.header,
+        .s_nominal_decl => |nominal| nominal.header,
+        .s_where_alias_decl => |where_alias| where_alias.header,
+        else => return &.{},
+    };
+    return self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args);
 }
 
 /// Decide which local function candidates become procedures of their own. A
@@ -3626,14 +3724,37 @@ fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
         try self.promoted_local_procedure_patterns.put(self.gpa, pattern, {});
     }
 
+    // A dispatch is a reference to the local procedure it selects. Its
+    // candidates are those enclosing the outermost site of its lineage, where
+    // the evidence reaching any generic body it passes through is supplied.
+    var dispatch_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .empty;
+    defer dispatch_refs.deinit(self.gpa);
+    for (self.dispatch_target_instantiations.items) |instantiation| {
+        const pattern = (try self.localProcedureTargetPattern(instantiation.target_env, instantiation.target_binding)) orelse continue;
+        var frames: ?CandidateFrames = null;
+        var current: ?Var = instantiation.constraint_fn_var;
+        while (current) |fn_var| {
+            if (self.dispatch_candidate_frames.get(fn_var)) |recorded| frames = recorded;
+            current = self.dispatchDerivationParent(fn_var);
+        }
+        const site = frames orelse continue;
+        const depth = self.local_pattern_candidate_depths.get(pattern) orelse 0;
+        if (depth >= site.len) continue;
+        for (self.dispatch_candidate_frame_patterns.items[site.start + depth .. site.start + site.len]) |candidate| {
+            try dispatch_refs.append(self.gpa, .{ .candidate = candidate, .referenced = pattern });
+        }
+    }
+
     var changed = true;
     while (changed) {
         changed = false;
-        for (self.local_procedure_outer_refs.items) |outer| {
-            if (!self.promoted_local_procedure_patterns.contains(outer.candidate)) continue;
-            if (self.promoted_local_procedure_patterns.contains(outer.referenced)) continue;
-            _ = self.promoted_local_procedure_patterns.remove(outer.candidate);
-            changed = true;
+        for ([_][]const LocalProcedureOuterRef{ self.local_procedure_outer_refs.items, dispatch_refs.items }) |refs| {
+            for (refs) |outer| {
+                if (!self.promoted_local_procedure_patterns.contains(outer.candidate)) continue;
+                if (self.promoted_local_procedure_patterns.contains(outer.referenced)) continue;
+                _ = self.promoted_local_procedure_patterns.remove(outer.candidate);
+                changed = true;
+            }
         }
     }
 
@@ -3641,6 +3762,468 @@ fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
         if (!self.promoted_local_procedure_patterns.contains(pattern)) continue;
         try self.promoted_local_procedures.append(self.gpa, .{ .pattern = pattern, .expr = candidate.expr });
     }
+
+    try self.finalizeContextualLocalDispatches();
+}
+
+/// Mark every dispatch edge that selected an unpromoted local procedure,
+/// together with each edge it was derived from: evaluating the ancestor
+/// evaluates the derived dispatch, which needs that procedure's declaration
+/// context.
+fn finalizeContextualLocalDispatches(self: *Self) Allocator.Error!void {
+    self.contextual_local_dispatch_fn_vars.clearRetainingCapacity();
+    self.contextual_local_dispatch_exprs.clearRetainingCapacity();
+    for (self.dispatch_target_instantiations.items) |instantiation| {
+        const pattern = (try self.localProcedureTargetPattern(instantiation.target_env, instantiation.target_binding)) orelse continue;
+        if (self.promoted_local_procedure_patterns.contains(pattern)) continue;
+        var current: ?Var = instantiation.constraint_fn_var;
+        while (current) |fn_var| {
+            const entry = try self.contextual_local_dispatch_fn_vars.getOrPut(self.gpa, fn_var);
+            if (entry.found_existing) break;
+            if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
+                if (self.dispatch_target_instantiations.items[raw_index].intro_expr) |expr| {
+                    try self.contextual_local_dispatch_exprs.put(self.gpa, expr, {});
+                }
+            }
+            current = self.dispatchDerivationParent(fn_var);
+        }
+    }
+    // A lookup that instantiated a scheme requirement supplies its evidence,
+    // so evaluating the lookup evaluates the dispatch.
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const expr = dispatcher.instantiation_expr orelse continue;
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
+            if (!self.contextual_local_dispatch_fn_vars.contains(constraint.fn_var)) continue;
+            try self.contextual_local_dispatch_exprs.put(self.gpa, expr, {});
+            break;
+        }
+    }
+}
+
+/// The dispatch this constraint callable's dispatch was derived from: the
+/// parent recorded when its target was selected, its recorded derivation
+/// edge, or the structural comparison or hash it is a component of.
+fn dispatchDerivationParent(self: *const Self, fn_var: Var) ?Var {
+    if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
+        if (self.dispatch_target_instantiations.items[raw_index].parent_constraint_fn_var) |parent| return parent;
+    }
+    if (self.dispatch_derivation_by_child_fn_var.get(fn_var)) |parent| return parent;
+    return self.component_derivation_by_child_fn_var.get(fn_var);
+}
+
+/// A type declared in a block whose methods include an unpromoted local
+/// procedure, with the block that declares it.
+const CapturingLocalType = struct {
+    decl: CIR.Statement.Idx,
+    /// One of its capturing methods, named by the escape report.
+    method: Ident.Idx,
+    block: ?CIR.Expr.Idx = null,
+};
+
+/// POLICY: capturing local types stay in their block (design.md). A type
+/// declared in a block with a method that is an unpromoted local procedure may
+/// not appear in the type of any expression outside that block, because only
+/// code inside the block has the declaration context that method needs. Each
+/// escape is reported where the value leaves the block, and every dispatch
+/// outside the block that would reach such a method becomes a runtime error,
+/// so no later stage meets a method call without its declaration context.
+fn rejectEscapingCapturingLocalTypes(self: *Self) Allocator.Error!void {
+    if (!try self.moduleDeclaresLocalMethods()) return;
+
+    var types_by_decl: std.AutoArrayHashMapUnmanaged(CIR.Statement.Idx, CapturingLocalType) = .empty;
+    defer types_by_decl.deinit(self.gpa);
+    for (self.cir.method_defs.entries.items) |entry| {
+        const pattern = (try self.localProcedureTargetPattern(self.cir, entry.value)) orelse continue;
+        if (self.promoted_local_procedure_patterns.contains(pattern)) continue;
+        const slot = try types_by_decl.getOrPut(self.gpa, entry.key.owner);
+        if (!slot.found_existing) slot.value_ptr.* = .{ .decl = entry.key.owner, .method = entry.key.methodIdent() };
+    }
+    if (types_by_decl.count() == 0) return;
+
+    var walk = LexicalWalk{ .checker = self };
+    defer walk.deinit();
+
+    // The live block declaring each type.
+    try walk.startAtModuleRoots();
+    while (try walk.next()) |expr| {
+        const block = switch (self.cir.store.getExpr(expr)) {
+            .e_block => |block| block,
+            else => continue,
+        };
+        for (self.cir.store.sliceStatements(block.stmts)) |statement| {
+            if (types_by_decl.getPtr(statement)) |local_type| local_type.block = expr;
+        }
+    }
+
+    var inside: LexicalScope = .{};
+    defer inside.deinit(self.gpa);
+    for (types_by_decl.values()) |local_type| {
+        // A declaration whose block was replaced by a checked error is
+        // unreachable, and so is every use of its methods.
+        const block = local_type.block orelse continue;
+        try self.collectLexicalScope(block, &inside);
+        if (try self.findCapturingLocalTypeEscape(local_type.decl, block, &inside)) |escape| {
+            const nominal = self.cir.store.getStatement(local_type.decl).s_nominal_decl;
+            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_local_type_escape = .{
+                .type_name = self.cir.store.getTypeHeader(nominal.header).relative_name,
+                .method_name = local_type.method,
+                .region = self.cir.store.getExprRegion(escape),
+            } });
+            try self.poisonCapturingLocalTypeSite(escape);
+            try self.poisonCapturingLocalTypeUsesOutside(local_type.decl, block, &inside, true);
+        } else {
+            try self.poisonCapturingLocalTypeUsesOutside(local_type.decl, block, &inside, false);
+        }
+    }
+}
+
+/// The expressions and bound patterns of one block's lexical subtree. A
+/// `return` inside it leaves to its enclosing lambda, which may lie outside, so
+/// a return target is not part of the subtree.
+const LexicalScope = struct {
+    exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+    patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
+    /// Pre-order, so the first escape found is the outermost.
+    order: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+
+    fn deinit(self: *LexicalScope, gpa: Allocator) void {
+        self.exprs.deinit(gpa);
+        self.patterns.deinit(gpa);
+        self.order.deinit(gpa);
+    }
+
+    fn clear(self: *LexicalScope) void {
+        self.exprs.clearRetainingCapacity();
+        self.patterns.clearRetainingCapacity();
+        self.order.clearRetainingCapacity();
+    }
+};
+
+/// An explicit-stack pre-order walk over the live expression tree.
+const LexicalWalk = struct {
+    checker: *Self,
+    stack: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+    /// Patterns the popped expression binds, for a caller that collects them.
+    patterns: ?*std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = null,
+
+    fn deinit(self: *LexicalWalk) void {
+        self.stack.deinit(self.checker.gpa);
+    }
+
+    fn startAtModuleRoots(self: *LexicalWalk) Allocator.Error!void {
+        const checker = self.checker;
+        self.stack.clearRetainingCapacity();
+        // Pushed in reverse so the walk visits roots in declaration order.
+        const statements = checker.cir.store.sliceStatements(checker.cir.all_statements);
+        var statement_index = statements.len;
+        while (statement_index > 0) {
+            statement_index -= 1;
+            try checker.visitStatementChildren(statements[statement_index], self.pusher());
+        }
+        const defs = checker.cir.store.sliceDefs(checker.cir.all_defs);
+        var def_index = defs.len;
+        while (def_index > 0) {
+            def_index -= 1;
+            try self.stack.append(checker.gpa, checker.cir.store.getDef(defs[def_index]).expr);
+        }
+    }
+
+    fn startAt(self: *LexicalWalk, root: CIR.Expr.Idx) Allocator.Error!void {
+        self.stack.clearRetainingCapacity();
+        try self.stack.append(self.checker.gpa, root);
+    }
+
+    /// Pop the next expression and schedule its children.
+    fn next(self: *LexicalWalk) Allocator.Error!?CIR.Expr.Idx {
+        const expr = self.stack.pop() orelse return null;
+        try self.pushChildren(expr);
+        return expr;
+    }
+
+    /// Pop the next expression without scheduling its children.
+    fn nextSkippingChildren(self: *LexicalWalk) ?CIR.Expr.Idx {
+        return self.stack.pop();
+    }
+
+    fn pushChildren(self: *LexicalWalk, expr: CIR.Expr.Idx) Allocator.Error!void {
+        const start = self.stack.items.len;
+        try self.checker.visitExprChildren(expr, self.pusher());
+        std.mem.reverse(CIR.Expr.Idx, self.stack.items[start..]);
+    }
+
+    fn pusher(self: *LexicalWalk) Pusher {
+        return .{ .walk = self };
+    }
+
+    const Pusher = struct {
+        walk: *LexicalWalk,
+
+        fn expr(p: Pusher, child: CIR.Expr.Idx) Allocator.Error!void {
+            try p.walk.stack.append(p.walk.checker.gpa, child);
+        }
+
+        fn boundPattern(p: Pusher, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+            const patterns = p.walk.patterns orelse return;
+            try p.walk.checker.collectPatternSubtree(pattern, patterns);
+        }
+
+        fn reassignTarget(_: Pusher, _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn returnTarget(_: Pusher, _: CIR.Expr.Idx) Allocator.Error!void {}
+    };
+};
+
+fn collectPatternSubtree(self: *Self, root: CIR.Pattern.Idx, out: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void)) Allocator.Error!void {
+    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |pattern| {
+        try out.put(self.gpa, pattern, {});
+        try self.pushCirSubpatterns(&pending, pattern);
+    }
+}
+
+fn collectLexicalScope(self: *Self, block: CIR.Expr.Idx, scope: *LexicalScope) Allocator.Error!void {
+    scope.clear();
+    var walk = LexicalWalk{ .checker = self, .patterns = &scope.patterns };
+    defer walk.deinit();
+    try walk.startAt(block);
+    while (try walk.next()) |expr| {
+        try scope.exprs.put(self.gpa, expr, {});
+        try scope.order.append(self.gpa, expr);
+    }
+}
+
+/// The expression through which a value whose type mentions the capturing
+/// local type `decl` leaves its block, or null when no expression outside the
+/// block has such a type.
+/// The first crossing inside the block names the escape: the block's own
+/// value, a reference to a binding from outside, a reassignment of one, or a
+/// return to a lambda outside. Every other route leaves an outside expression
+/// mentioning the type, which names the escape when no crossing does.
+fn findCapturingLocalTypeEscape(self: *Self, decl: CIR.Statement.Idx, block: CIR.Expr.Idx, inside: *const LexicalScope) Allocator.Error!?CIR.Expr.Idx {
+    var mentions = TypeMentionSearch{ .checker = self, .decl = decl };
+    defer mentions.deinit();
+
+    var outside_witness: ?CIR.Expr.Idx = null;
+    var walk = LexicalWalk{ .checker = self };
+    defer walk.deinit();
+    try walk.startAtModuleRoots();
+    while (walk.stack.items.len > 0) {
+        const expr = walk.nextSkippingChildren().?;
+        if (expr == block) {
+            // The block's value is the one outside value its subtree types.
+            if (try mentions.inVar(ModuleEnv.varFrom(expr))) {
+                outside_witness = expr;
+                break;
+            }
+            continue;
+        }
+        if (try mentions.inVar(ModuleEnv.varFrom(expr))) {
+            outside_witness = expr;
+            break;
+        }
+        try walk.pushChildren(expr);
+    }
+    const witness = outside_witness orelse return null;
+
+    var crossings = TypeMentionSearch{ .checker = self, .decl = decl };
+    defer crossings.deinit();
+    if (try crossings.inVar(ModuleEnv.varFrom(block))) {
+        return self.cir.store.getExpr(block).e_block.final_expr;
+    }
+    for (inside.order.items) |expr| {
+        switch (self.cir.store.getExpr(expr)) {
+            .e_lookup_local => |lookup| {
+                if (inside.patterns.contains(lookup.pattern_idx)) continue;
+                if (try crossings.inVarFresh(ModuleEnv.varFrom(lookup.pattern_idx))) return expr;
+            },
+            .e_return => |ret| {
+                if (inside.exprs.contains(ret.lambda)) continue;
+                if (try crossings.inVarFresh(ModuleEnv.varFrom(ret.expr))) return ret.expr;
+            },
+            .e_block => |inner| for (self.cir.store.sliceStatements(inner.stmts)) |statement| {
+                switch (self.cir.store.getStatement(statement)) {
+                    .s_reassign => |reassign| {
+                        if (inside.patterns.contains(reassign.pattern_idx)) continue;
+                        if (try crossings.inVarFresh(ModuleEnv.varFrom(reassign.pattern_idx))) return reassign.expr;
+                    },
+                    .s_return => |ret| {
+                        if (inside.exprs.contains(ret.lambda)) continue;
+                        if (try crossings.inVarFresh(ModuleEnv.varFrom(ret.expr))) return ret.expr;
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+    return witness;
+}
+
+/// Whether solved types mention one capturing local type. A function-body
+/// nominal of this module may hold it in its backing; no other nominal can.
+/// `inVar` shares its visited set across queries, so a walk over many
+/// expressions visits each type node once and reports the first expression
+/// whose type reaches the declaration; `inVarFresh` answers one query alone.
+const TypeMentionSearch = struct {
+    checker: *Self,
+    decl: CIR.Statement.Idx,
+    visited: std.AutoHashMapUnmanaged(Var, void) = .empty,
+    stack: std.ArrayListUnmanaged(Var) = .empty,
+
+    fn deinit(self: *TypeMentionSearch) void {
+        self.visited.deinit(self.checker.gpa);
+        self.stack.deinit(self.checker.gpa);
+    }
+
+    fn inVarFresh(self: *TypeMentionSearch, root: Var) Allocator.Error!bool {
+        self.visited.clearRetainingCapacity();
+        return self.inVar(root);
+    }
+
+    fn inVar(self: *TypeMentionSearch, root: Var) Allocator.Error!bool {
+        const checker = self.checker;
+        const types = checker.types;
+        self.stack.clearRetainingCapacity();
+        try self.stack.append(checker.gpa, root);
+        while (self.stack.pop()) |var_| {
+            const resolved = types.resolveVar(var_);
+            const seen = try self.visited.getOrPut(checker.gpa, resolved.var_);
+            if (seen.found_existing) continue;
+            switch (resolved.desc.content) {
+                .flex, .rigid, .field_presence, .err => {},
+                .alias => |alias| {
+                    try self.stack.appendSlice(checker.gpa, types.sliceAliasArgs(alias));
+                    try self.stack.append(checker.gpa, types.getAliasBackingVar(alias));
+                },
+                .structure => |flat| switch (flat) {
+                    .empty_record, .empty_tag_union => {},
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try self.stack.appendSlice(checker.gpa, types.sliceVars(func.args));
+                        try self.stack.append(checker.gpa, func.ret);
+                    },
+                    .record => |record| {
+                        const fields = types.getRecordFieldsSlice(record.fields);
+                        for (fields.items(.presence)) |presence| try self.stack.append(checker.gpa, presence.typeVar());
+                        try self.stack.append(checker.gpa, record.ext);
+                    },
+                    .tuple => |tuple| try self.stack.appendSlice(checker.gpa, types.sliceVars(tuple.elems)),
+                    .tag_union => |tag_union| {
+                        const tags = types.getTagsSlice(tag_union.tags);
+                        for (tags.items(.args)) |args| try self.stack.appendSlice(checker.gpa, types.sliceVars(args));
+                        try self.stack.append(checker.gpa, tag_union.ext);
+                    },
+                    .nominal_type => |nominal| {
+                        try self.stack.appendSlice(checker.gpa, types.sliceNominalArgs(nominal));
+                        if (checker.getNominalOriginEnv(nominal) != checker.cir) continue;
+                        const source_decl = nominal.sourceDeclOptional() orelse continue;
+                        if (source_decl == @intFromEnum(self.decl)) return true;
+                        if (try checker.isModuleTypeDecl(@enumFromInt(source_decl))) continue;
+                        const backing = checker.nominalDeclBackingTemplate(nominal) orelse continue;
+                        try self.stack.append(checker.gpa, backing);
+                    },
+                },
+            }
+        }
+        return false;
+    }
+};
+
+fn isModuleTypeDecl(self: *Self, decl: CIR.Statement.Idx) Allocator.Error!bool {
+    if (self.module_type_decls.count() == 0) {
+        for (self.cir.store.sliceStatements(self.cir.type_decls)) |module_decl| {
+            try self.module_type_decls.put(self.gpa, module_decl, {});
+        }
+    }
+    return self.module_type_decls.contains(decl);
+}
+
+/// Turn into a runtime error every dispatch outside the declaring block whose
+/// lineage selects a capturing method of `decl`. A lineage's evaluation site
+/// is its outermost dispatch with a site: a target's introducing expression,
+/// or the lookup that instantiated the requirement. Inner sites belong to the
+/// generic bodies the outer site supplies with evidence. Only an escape puts a
+/// value of the type outside its block, so such a site exists only when that
+/// escape was reported.
+fn poisonCapturingLocalTypeUsesOutside(self: *Self, decl: CIR.Statement.Idx, block: CIR.Expr.Idx, inside: *const LexicalScope, escaped: bool) Allocator.Error!void {
+    var instantiation_site_by_fn_var: std.AutoHashMapUnmanaged(Var, CIR.Expr.Idx) = .empty;
+    defer instantiation_site_by_fn_var.deinit(self.gpa);
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const expr = dispatcher.instantiation_expr orelse continue;
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
+            try instantiation_site_by_fn_var.put(self.gpa, constraint.fn_var, expr);
+        }
+    }
+
+    var sites: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer sites.deinit(self.gpa);
+    for (self.dispatch_target_instantiations.items) |instantiation| {
+        if (instantiation.target_env != self.cir) continue;
+        if (!self.methodBindingBelongsTo(instantiation.target_binding, decl)) continue;
+        const pattern = (try self.localProcedureTargetPattern(self.cir, instantiation.target_binding)) orelse continue;
+        if (self.promoted_local_procedure_patterns.contains(pattern)) continue;
+
+        var site: ?CIR.Expr.Idx = null;
+        var current: ?Var = instantiation.constraint_fn_var;
+        while (current) |fn_var| {
+            if (instantiation_site_by_fn_var.get(fn_var)) |expr| {
+                site = expr;
+            } else if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
+                if (self.dispatch_target_instantiations.items[raw_index].intro_expr) |expr| site = expr;
+            }
+            current = self.dispatchDerivationParent(fn_var);
+        }
+        const expr = site orelse continue;
+        if (inside.exprs.contains(expr)) continue;
+        try sites.append(self.gpa, expr);
+    }
+    if (sites.items.len == 0) return;
+
+    // A site under an expression already replaced by a checked error is no
+    // longer part of the program; only a live site outside the block remains.
+    var outside: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    defer outside.deinit(self.gpa);
+    var walk = LexicalWalk{ .checker = self };
+    defer walk.deinit();
+    try walk.startAtModuleRoots();
+    while (walk.nextSkippingChildren()) |expr| {
+        if (expr == block) continue;
+        try outside.put(self.gpa, expr, {});
+        try walk.pushChildren(expr);
+    }
+    for (sites.items) |expr| {
+        if (!outside.contains(expr)) continue;
+        if (!escaped) {
+            std.debug.panic("check invariant violated: a capturing local method was dispatched outside its block without a reported escape", .{});
+        }
+        try self.poisonCapturingLocalTypeSite(expr);
+    }
+}
+
+fn poisonCapturingLocalTypeSite(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!void {
+    switch (self.cir.store.getExpr(expr)) {
+        .e_runtime_error => return,
+        // A function value is erroneous in place; its body stays checked.
+        .e_lambda, .e_closure => {},
+        else => {
+            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                .region = self.cir.store.getExprRegion(expr),
+            } });
+            try self.replaceExprWithRuntimeError(expr, diagnostic_idx);
+        },
+    }
+    try self.erroneous_value_exprs.put(self.gpa, expr, {});
+}
+
+/// Whether a same-module method binding is a method of the type declared by
+/// `decl`.
+fn methodBindingBelongsTo(self: *const Self, binding: ModuleEnv.MethodBinding, decl: CIR.Statement.Idx) bool {
+    for (self.cir.method_defs.entries.items) |entry| {
+        if (entry.key.owner != decl) continue;
+        if (entry.value.type_node_idx == binding.type_node_idx) return true;
+    }
+    return false;
 }
 
 /// Whether a selected root materializes a top-level binding.
@@ -3939,6 +4522,118 @@ fn noteHoistProcedureDependency(self: *Self, pattern: CIR.Pattern.Idx, candidate
     try self.addHoistPromotionDependency(candidate.dependency);
 }
 
+/// A dispatch refers to the target checking selects for it, exactly as a
+/// lookup refers to the binding it names, and that target may be a local
+/// procedure, reached directly or through what the dispatch derives. Only a
+/// module that declares a method in a function body has one to reach. There,
+/// a receiver whose type is already a nominal with a local procedure method
+/// records what a lookup of that procedure's binding would; every other
+/// dispatch records a proof keyed by its constraint callable, read once
+/// targets and promotion settle.
+fn noteHoistDispatchDependency(self: *Self, receiver_var: Var, method_name: Ident.Idx, constraint_fn_var: Var) Allocator.Error!void {
+    try self.recordDispatchCandidateFrames(constraint_fn_var);
+    if (self.hoist_frames.items.len == 0) return;
+    if (!self.hoist_frames.items[self.hoist_frames.items.len - 1].eligible()) return;
+    if (!try self.moduleDeclaresLocalMethods()) return;
+    if (try self.receiverLocalProcedureMethod(receiver_var, method_name)) |pattern| {
+        if (self.local_procedure_candidates.getPtr(pattern)) |candidate| {
+            if (!candidate.contextual) {
+                try self.noteHoistProcedureDependency(pattern, candidate);
+                return;
+            }
+        }
+        self.markCurrentHoistRuntimeDependency();
+        return;
+    }
+    // A proof names a callable that only a committed relation keeps.
+    std.debug.assert(self.probe_depth == 0);
+    const id: HoistPromotionDependencyId = @enumFromInt(self.hoist_promotion_dependencies.items.len);
+    try self.hoist_promotion_dependencies.append(self.gpa, .{ .proof = .{ .dispatch = constraint_fn_var } });
+    try self.addHoistPromotionDependency(id);
+}
+
+/// A literal conversion dispatches like any other constraint, and selects a
+/// local procedure only when this module declares a conversion method of that
+/// name in a function body, so only then is it recorded.
+fn noteLiteralDispatchSite(self: *Self, receiver_var: Var, method_name: Ident.Idx, constraint_fn_var: Var) Allocator.Error!void {
+    if (!try self.moduleDeclaresLocalMethodNamed(method_name)) return;
+    try self.noteHoistDispatchDependency(receiver_var, method_name, constraint_fn_var);
+}
+
+/// Record the candidates enclosing a dispatch constraint's creation. Once
+/// targets settle, a lineage that selects a local procedure makes each of
+/// them depend on that procedure, as a lookup of its binding would.
+fn recordDispatchCandidateFrames(self: *Self, constraint_fn_var: Var) Allocator.Error!void {
+    const stack = self.local_procedure_candidate_stack.items;
+    if (stack.len == 0) return;
+    if (!try self.moduleDeclaresLocalMethods()) return;
+    // A recorded site names a callable that only a committed relation keeps.
+    std.debug.assert(self.probe_depth == 0);
+    const start: u32 = @intCast(self.dispatch_candidate_frame_patterns.items.len);
+    try self.dispatch_candidate_frame_patterns.appendSlice(self.gpa, stack);
+    try self.dispatch_candidate_frames.put(self.gpa, constraint_fn_var, .{ .start = start, .len = @intCast(stack.len) });
+}
+
+/// The local procedure a receiver already of nominal type selects for this
+/// method, if it selects one.
+fn receiverLocalProcedureMethod(self: *Self, receiver_var: Var, method_name: Ident.Idx) Allocator.Error!?CIR.Pattern.Idx {
+    var current = receiver_var;
+    const nominal = while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| break nominal,
+                else => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    };
+    const method = self.lookupStaticDispatchMethodBinding(
+        self.getNominalOriginEnv(nominal),
+        nominal.sourceDeclOptional(),
+        self.cir,
+        method_name,
+    ) orelse return null;
+    return try self.localProcedureTargetPattern(method.env, method.binding);
+}
+
+fn moduleDeclaresLocalMethods(self: *Self) Allocator.Error!bool {
+    if (self.module_declares_local_methods) |declares| return declares;
+    for (self.cir.method_defs.entries.items) |entry| {
+        if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
+        const name = entry.key.methodIdent();
+        for (self.local_method_names.items) |existing| {
+            if (existing.eql(name)) break;
+        } else try self.local_method_names.append(self.gpa, name);
+    }
+    const declares = self.local_method_names.items.len > 0;
+    self.module_declares_local_methods = declares;
+    return declares;
+}
+
+fn moduleDeclaresLocalMethodNamed(self: *Self, name: Ident.Idx) Allocator.Error!bool {
+    if (!try self.moduleDeclaresLocalMethods()) return false;
+    for (self.local_method_names.items) |existing| {
+        if (existing.eql(name)) return true;
+    }
+    return false;
+}
+
+/// The right-hand side of the local declaration binding `pattern`.
+fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Expr.Idx {
+    if (self.local_decl_expr_by_pattern.count() == 0) {
+        var raw_node: u32 = 0;
+        const node_count: u32 = @intCast(self.cir.store.nodes.len());
+        while (raw_node < node_count) : (raw_node += 1) {
+            if (self.cir.store.nodes.get(@enumFromInt(raw_node)).tag != .statement_decl) continue;
+            const decl = self.cir.store.getStatement(@enumFromInt(raw_node)).s_decl;
+            try self.local_decl_expr_by_pattern.put(self.gpa, decl.pattern, decl.expr);
+        }
+    }
+    return self.local_decl_expr_by_pattern.get(pattern);
+}
+
 fn finalizeComptimeConditions(self: *Self) Allocator.Error!void {
     if (self.pending_comptime_conditions.items.len == 0) return;
     // Promotion and root pruning already finalized this authoritative set.
@@ -3947,6 +4642,7 @@ fn finalizeComptimeConditions(self: *Self) Allocator.Error!void {
     for (self.hoist_promotion_dependencies.items, 0..) |*dependency, index| {
         dependency.available = switch (dependency.proof) {
             .procedure => |pattern| self.promoted_local_procedure_patterns.contains(pattern),
+            .dispatch => |fn_var| !self.contextual_local_dispatch_fn_vars.contains(fn_var),
             .both => |both| blk: {
                 std.debug.assert(@intFromEnum(both.left) < index and @intFromEnum(both.right) < index);
                 break :blk self.hoist_promotion_dependencies.items[@intFromEnum(both.left)].available and
@@ -4588,58 +5284,84 @@ fn retirePatternSpanMetadataWithError(self: *Self, patterns: CIR.Pattern.Span, d
     for (self.cir.store.slicePatterns(patterns)) |pattern| try self.retirePatternMetadata(pattern, diagnostic);
 }
 
-fn markHoistInvalidatedStatementSpan(
-    self: *Self,
-    span: CIR.Statement.Span,
+const HoistInvalidationVisitor = struct {
+    checker: *Self,
     work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
-) Allocator.Error!void {
-    for (self.cir.store.sliceStatements(span)) |statement| {
-        try self.markHoistInvalidatedStatementExprs(statement, work);
+
+    fn expr(self: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+        try self.checker.markHoistInvalidatedExpr(child, self.work);
     }
-}
+
+    fn boundPattern(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.checker.retirePatternSubtreeMetadata(pattern);
+    }
+
+    fn reassignTarget(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.checker.retirePatternSubtreeMetadata(pattern);
+    }
+
+    fn returnTarget(self: @This(), lambda: CIR.Expr.Idx) Allocator.Error!void {
+        try self.checker.markHoistInvalidatedExpr(lambda, self.work);
+    }
+};
 
 fn markHoistInvalidatedStatementExprs(
     self: *Self,
     statement: CIR.Statement.Idx,
     work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
 ) Allocator.Error!void {
+    try self.visitStatementChildren(statement, HoistInvalidationVisitor{ .checker = self, .work = work });
+}
+
+fn markHoistInvalidatedExprChildren(
+    self: *Self,
+    expr: CIR.Expr.Idx,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    try self.visitExprChildren(expr, HoistInvalidationVisitor{ .checker = self, .work = work });
+}
+
+/// Visit the direct children of a statement in the source tree: each child
+/// expression, each pattern it binds, the pattern a reassignment writes, and
+/// the lambda a `return` leaves.
+fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visitor: anytype) Allocator.Error!void {
     switch (self.cir.store.getStatement(statement)) {
         .s_decl => |decl| {
-            try self.retirePatternSubtreeMetadata(decl.pattern);
-            try self.markHoistInvalidatedExpr(decl.expr, work);
+            try visitor.boundPattern(decl.pattern);
+            try visitor.expr(decl.expr);
         },
         .s_var => |var_| {
-            try self.retirePatternSubtreeMetadata(var_.pattern_idx);
-            try self.markHoistInvalidatedExpr(var_.expr, work);
+            try visitor.boundPattern(var_.pattern_idx);
+            try visitor.expr(var_.expr);
         },
         .s_reassign => |reassign| {
-            try self.retirePatternSubtreeMetadata(reassign.pattern_idx);
-            try self.markHoistInvalidatedExpr(reassign.expr, work);
+            try visitor.reassignTarget(reassign.pattern_idx);
+            try visitor.expr(reassign.expr);
         },
-        .s_var_uninitialized => |var_| try self.retirePatternSubtreeMetadata(var_.pattern_idx),
-        .s_dbg => |dbg| try self.markHoistInvalidatedExpr(dbg.expr, work),
-        .s_expr => |expr| try self.markHoistInvalidatedExpr(expr.expr, work),
-        .s_expect => |expect| try self.markHoistInvalidatedExpr(expect.body, work),
+        .s_var_uninitialized => |var_| try visitor.boundPattern(var_.pattern_idx),
+        .s_dbg => |dbg| try visitor.expr(dbg.expr),
+        .s_expr => |expr| try visitor.expr(expr.expr),
+        .s_expect => |expect| try visitor.expr(expect.body),
         .s_for => |for_| {
-            try self.retirePatternSubtreeMetadata(for_.patt);
-            try self.markHoistInvalidatedExpr(for_.expr, work);
-            try self.markHoistInvalidatedExpr(for_.body, work);
+            try visitor.boundPattern(for_.patt);
+            try visitor.expr(for_.expr);
+            try visitor.expr(for_.body);
         },
         .s_while => |while_| {
-            try self.markHoistInvalidatedExpr(while_.cond, work);
-            try self.markHoistInvalidatedExpr(while_.body, work);
+            try visitor.expr(while_.cond);
+            try visitor.expr(while_.body);
         },
         .s_infinite_loop => |loop| {
-            try self.markHoistInvalidatedExpr(loop.cond, work);
-            try self.markHoistInvalidatedExpr(loop.body, work);
+            try visitor.expr(loop.cond);
+            try visitor.expr(loop.body);
         },
         .s_breakable_loop => |loop| {
-            try self.markHoistInvalidatedExpr(loop.cond, work);
-            try self.markHoistInvalidatedExpr(loop.body, work);
+            try visitor.expr(loop.cond);
+            try visitor.expr(loop.body);
         },
         .s_return => |ret| {
-            try self.markHoistInvalidatedExpr(ret.expr, work);
-            try self.markHoistInvalidatedExpr(ret.lambda, work);
+            try visitor.expr(ret.expr);
+            try visitor.returnTarget(ret.lambda);
         },
         .s_crash,
         .s_break,
@@ -4654,102 +5376,100 @@ fn markHoistInvalidatedStatementExprs(
     }
 }
 
-fn markHoistInvalidatedExprChildren(
-    self: *Self,
-    expr: CIR.Expr.Idx,
-    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
-) Allocator.Error!void {
+/// Visit the direct children of an expression in the source tree: each child
+/// expression, each pattern it binds, and the lambda a `return` leaves.
+fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Allocator.Error!void {
     switch (self.cir.store.getExpr(expr)) {
-        .e_str => |str| try self.markHoistInvalidatedExprSpan(str.span, work),
-        .e_list => |list| try self.markHoistInvalidatedExprSpan(list.elems, work),
-        .e_tuple => |tuple| try self.markHoistInvalidatedExprSpan(tuple.elems, work),
+        .e_str => |str| for (self.cir.store.sliceExpr(str.span)) |child| try visitor.expr(child),
+        .e_list => |list| for (self.cir.store.sliceExpr(list.elems)) |child| try visitor.expr(child),
+        .e_tuple => |tuple| for (self.cir.store.sliceExpr(tuple.elems)) |child| try visitor.expr(child),
         .e_match => |match| {
-            try self.markHoistInvalidatedExpr(match.cond, work);
+            try visitor.expr(match.cond);
             for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
                 const branch = self.cir.store.getMatchBranch(branch_idx);
                 for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |pattern| {
-                    try self.retirePatternSubtreeMetadata(self.cir.store.getMatchBranchPattern(pattern).pattern);
+                    try visitor.boundPattern(self.cir.store.getMatchBranchPattern(pattern).pattern);
                 }
-                if (branch.guard) |guard| try self.markHoistInvalidatedExpr(guard, work);
-                try self.markHoistInvalidatedExpr(branch.value, work);
+                if (branch.guard) |guard| try visitor.expr(guard);
+                try visitor.expr(branch.value);
             }
         },
         .e_if => |if_| {
             for (self.cir.store.sliceIfBranches(if_.branches)) |branch_idx| {
                 const branch = self.cir.store.getIfBranch(branch_idx);
-                try self.markHoistInvalidatedExpr(branch.cond, work);
-                try self.markHoistInvalidatedExpr(branch.body, work);
+                try visitor.expr(branch.cond);
+                try visitor.expr(branch.body);
             }
-            try self.markHoistInvalidatedExpr(if_.final_else, work);
+            try visitor.expr(if_.final_else);
         },
         .e_call => |call| {
-            try self.markHoistInvalidatedExpr(call.func, work);
-            try self.markHoistInvalidatedExprSpan(call.args, work);
+            try visitor.expr(call.func);
+            for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
         .e_record => |record| {
             for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
-                try self.markHoistInvalidatedExpr(self.cir.store.getRecordField(field_idx).value, work);
+                try visitor.expr(self.cir.store.getRecordField(field_idx).value);
             }
-            if (record.ext) |ext| try self.markHoistInvalidatedExpr(ext, work);
+            if (record.ext) |ext| try visitor.expr(ext);
         },
         .e_block => |block| {
-            try self.markHoistInvalidatedStatementSpan(block.stmts, work);
-            try self.markHoistInvalidatedExpr(block.final_expr, work);
+            for (self.cir.store.sliceStatements(block.stmts)) |statement| try self.visitStatementChildren(statement, visitor);
+            try visitor.expr(block.final_expr);
         },
-        .e_tag => |tag| try self.markHoistInvalidatedExprSpan(tag.args, work),
-        .e_nominal => |nominal| try self.markHoistInvalidatedExpr(nominal.backing_expr, work),
-        .e_nominal_external => |nominal| try self.markHoistInvalidatedExpr(nominal.backing_expr, work),
-        .e_closure => |closure| try self.markHoistInvalidatedExpr(closure.lambda_idx, work),
+        .e_tag => |tag| for (self.cir.store.sliceExpr(tag.args)) |child| try visitor.expr(child),
+        .e_nominal => |nominal| try visitor.expr(nominal.backing_expr),
+        .e_nominal_external => |nominal| try visitor.expr(nominal.backing_expr),
+        .e_closure => |closure| try visitor.expr(closure.lambda_idx),
         .e_lambda => |lambda| {
-            try self.retirePatternSpanMetadata(lambda.args);
-            try self.markHoistInvalidatedExpr(lambda.body, work);
+            for (self.cir.store.slicePatterns(lambda.args)) |arg| try visitor.boundPattern(arg);
+            try visitor.expr(lambda.body);
         },
         .e_binop => |binop| {
-            try self.markHoistInvalidatedExpr(binop.lhs, work);
-            try self.markHoistInvalidatedExpr(binop.rhs, work);
+            try visitor.expr(binop.lhs);
+            try visitor.expr(binop.rhs);
         },
-        .e_unary_minus => |unary| try self.markHoistInvalidatedExpr(unary.expr, work),
-        .e_field_access => |field| try self.markHoistInvalidatedExpr(field.receiver, work),
+        .e_unary_minus => |unary| try visitor.expr(unary.expr),
+        .e_field_access => |field| try visitor.expr(field.receiver),
         .e_method_call => |call| {
-            try self.markHoistInvalidatedExpr(call.receiver, work);
-            try self.markHoistInvalidatedExprSpan(call.args, work);
+            try visitor.expr(call.receiver);
+            for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
         .e_dispatch_call => |call| {
-            try self.markHoistInvalidatedExpr(call.receiver, work);
-            try self.markHoistInvalidatedExprSpan(call.args, work);
+            try visitor.expr(call.receiver);
+            for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
         .e_interpolation => |interpolation| {
-            try self.markHoistInvalidatedExpr(interpolation.first, work);
-            try self.markHoistInvalidatedExprSpan(interpolation.parts, work);
+            try visitor.expr(interpolation.first);
+            for (self.cir.store.sliceExpr(interpolation.parts)) |child| try visitor.expr(child);
         },
         .e_structural_eq => |eq| {
-            try self.markHoistInvalidatedExpr(eq.lhs, work);
-            try self.markHoistInvalidatedExpr(eq.rhs, work);
+            try visitor.expr(eq.lhs);
+            try visitor.expr(eq.rhs);
         },
         .e_structural_hash => |hash| {
-            try self.markHoistInvalidatedExpr(hash.value, work);
-            try self.markHoistInvalidatedExpr(hash.hasher, work);
+            try visitor.expr(hash.value);
+            try visitor.expr(hash.hasher);
         },
         .e_method_eq => |eq| {
-            try self.markHoistInvalidatedExpr(eq.lhs, work);
-            try self.markHoistInvalidatedExpr(eq.rhs, work);
+            try visitor.expr(eq.lhs);
+            try visitor.expr(eq.rhs);
         },
-        .e_type_method_call => |call| try self.markHoistInvalidatedExprSpan(call.args, work),
-        .e_type_dispatch_call => |call| try self.markHoistInvalidatedExprSpan(call.args, work),
-        .e_tuple_access => |access| try self.markHoistInvalidatedExpr(access.tuple, work),
-        .e_dbg => |dbg| try self.markHoistInvalidatedExpr(dbg.expr, work),
-        .e_expect_err => |expect_err| try self.markHoistInvalidatedExpr(expect_err.expr, work),
-        .e_expect => |expect| try self.markHoistInvalidatedExpr(expect.body, work),
+        .e_type_method_call => |call| for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child),
+        .e_type_dispatch_call => |call| for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child),
+        .e_tuple_access => |access| try visitor.expr(access.tuple),
+        .e_dbg => |dbg| try visitor.expr(dbg.expr),
+        .e_expect_err => |expect_err| try visitor.expr(expect_err.expr),
+        .e_expect => |expect| try visitor.expr(expect.body),
         .e_return => |ret| {
-            try self.markHoistInvalidatedExpr(ret.expr, work);
-            try self.markHoistInvalidatedExpr(ret.lambda, work);
+            try visitor.expr(ret.expr);
+            try visitor.returnTarget(ret.lambda);
         },
         .e_for => |for_| {
-            try self.retirePatternSubtreeMetadata(for_.patt);
-            try self.markHoistInvalidatedExpr(for_.expr, work);
-            try self.markHoistInvalidatedExpr(for_.body, work);
+            try visitor.boundPattern(for_.patt);
+            try visitor.expr(for_.expr);
+            try visitor.expr(for_.body);
         },
-        .e_run_low_level => |run| try self.markHoistInvalidatedExprSpan(run.args, work),
+        .e_run_low_level => |run| for (self.cir.store.sliceExpr(run.args)) |child| try visitor.expr(child),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,
@@ -9649,7 +10369,10 @@ fn mkFlexWithFromNumeralConstraint(
         .fn_var = fn_var,
         .origin = .{ .from_literal = .{ .numeral = num_literal_info } },
     };
-    if (source_node != null) try self.recordCurrentExpectDispatchWatcher(fn_var);
+    if (source_node != null) {
+        try self.recordCurrentExpectDispatchWatcher(fn_var);
+        try self.noteLiteralDispatchSite(flex_var, constraint.fn_name, fn_var);
+    }
 
     // Store it in the types store
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -9734,7 +10457,10 @@ fn mkFlexWithFromQuoteConstraint(
         .fn_var = fn_var,
         .origin = .{ .from_literal = .quote },
     };
-    if (source_node != null) try self.recordCurrentExpectDispatchWatcher(fn_var);
+    if (source_node != null) {
+        try self.recordCurrentExpectDispatchWatcher(fn_var);
+        try self.noteLiteralDispatchSite(flex_var, constraint.fn_name, fn_var);
+    }
 
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -10729,6 +11455,7 @@ fn debugAssertNominalDeclTableComplete(self: *const Self) void {
 
 fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     try self.finalizePromotedLocalProcedures();
+    try self.rejectEscapingCapturingLocalTypes();
 
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
@@ -11290,6 +12017,10 @@ fn hoistedRootExprStep(
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
+    // A structural comparison or hash dispatches each component that declares
+    // its own method, and a lookup supplies the evidence of the scheme it
+    // instantiates; either may need an unpromoted local procedure's context.
+    if (self.contextual_local_dispatch_exprs.contains(expr)) return false;
 
     const gpa = self.gpa;
     return switch (self.cir.store.getExpr(expr)) {
@@ -13747,9 +14478,40 @@ fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocat
 /// A constrained or otherwise open dispatcher needs specialization-edge
 /// evidence, so selecting it as a caller-less compile-time root would erase the
 /// evidence scope that gives the dispatch meaning.
+/// A dispatch whose selected target is a method declared inside a function
+/// body calls a local procedure of that body; unless checking promoted that
+/// procedure, a caller-less root has no declaration context in which to call it.
 fn staticDispatchAllowsHoistedRoot(self: *Self, dispatcher_var: Var, callable_var: Var) Allocator.Error!bool {
     if (!self.varIsFunctionType(callable_var) or try self.varIsEffectfulFunction(callable_var)) return false;
+    if (self.contextual_local_dispatch_fn_vars.contains(callable_var)) return false;
     return try self.varIsConcreteHoistedConstType(dispatcher_var);
+}
+
+/// The binding pattern of the local procedure a method binding calls: the
+/// binding's own when it declares a lambda or closure, or the local function
+/// that its chain of local bindings reaches, exactly as the method registry
+/// resolves the binding's target.
+fn localProcedureTargetPattern(self: *Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) Allocator.Error!?CIR.Pattern.Idx {
+    if (env != self.cir) return null;
+    if (self.cir.store.nodes.get(binding.type_node_idx).tag != .statement_decl) return null;
+    const decl = self.cir.store.getStatement(@enumFromInt(@intFromEnum(binding.type_node_idx))).s_decl;
+    var pattern = decl.pattern;
+    var expr = decl.expr;
+    // Each hop follows one local binding, and a chain can visit each at most
+    // once before repeating, so the node count bounds the walk.
+    var remaining: usize = self.cir.store.nodes.len();
+    while (remaining > 0) : (remaining -= 1) {
+        switch (self.cir.store.getExpr(expr)) {
+            .e_lambda, .e_closure => return pattern,
+            .e_lookup_local => |lookup| {
+                if (self.patternIsTopLevel(lookup.pattern_idx)) return null;
+                expr = (try self.localDeclExprForPattern(lookup.pattern_idx)) orelse return null;
+                pattern = lookup.pattern_idx;
+            },
+            else => return null,
+        }
+    }
+    return null;
 }
 
 fn exprHasEffectfulFunctionBody(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
@@ -18721,6 +19483,10 @@ fn runTypeGen(self: *Self, root: TypeGenRequest, env: *Env) std.mem.Allocator.Er
         switch (step) {
             .request => |request| input = try self.beginTypeGen(&frames, request, env),
             .done => |result| {
+                switch (frames.items[frames.items.len - 1]) {
+                    .decl => |decl| try self.finishTypeDeclGeneration(decl.decl_idx),
+                    .anno, .owners => {},
+                }
                 self.finishTypeGenFrame(&frames.items[frames.items.len - 1]);
                 _ = frames.pop();
                 if (frames.items.len == 0) return result;
@@ -18728,6 +19494,18 @@ fn runTypeGen(self: *Self, root: TypeGenRequest, env: *Env) std.mem.Allocator.Er
             },
         }
     }
+}
+
+/// Close a type declaration's generation frame. A local declaration that named
+/// an enclosing function's type variable records the shallowest such depth,
+/// which every later reference to it carries.
+fn finishTypeDeclGeneration(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
+    const frame = self.type_decl_generation_frames.pop().?;
+    std.debug.assert(frame.decl == decl_idx);
+    const depth = frame.context_depth orelse return;
+    if (try self.isModuleTypeDecl(decl_idx)) return;
+    try self.local_type_context_depths.put(self.gpa, decl_idx, depth);
+    try self.noteTypeDeclReferenceForLocalProcedures(decl_idx);
 }
 
 /// Start a request: push its frame, or answer it at once.
@@ -18785,7 +19563,12 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
                 .not_generated => {},
             }
             try frames.ensureUnusedCapacity(self.gpa, 1);
+            try self.type_decl_generation_frames.ensureUnusedCapacity(self.gpa, 1);
             self.setTypeDeclGenerationState(decl_idx, .generating);
+            self.type_decl_generation_frames.appendAssumeCapacity(.{
+                .decl = decl_idx,
+                .header_args = self.typeDeclHeaderArgs(decl_idx),
+            });
             const anno_scope = self.seen_annos.enterScope();
             const outer_type_decl_rigid_vars = self.type_decl_rigid_vars;
             self.type_decl_rigid_vars = .{};
@@ -18799,7 +19582,12 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
             return null;
         },
         .stmt_decl => |decl_idx| {
-            try frames.append(self.gpa, .{ .decl = .{ .decl_idx = decl_idx, .mode = .direct } });
+            try frames.ensureUnusedCapacity(self.gpa, 1);
+            try self.type_decl_generation_frames.append(self.gpa, .{
+                .decl = decl_idx,
+                .header_args = self.typeDeclHeaderArgs(decl_idx),
+            });
+            frames.appendAssumeCapacity(.{ .decl = .{ .decl_idx = decl_idx, .mode = .direct } });
             return null;
         },
         .owners => |owners| {
@@ -18842,6 +19630,7 @@ fn releaseTypeGenFrame(self: *Self, frame: *TypeGenFrame) void {
         .decl => |*decl| {
             if (decl.mode == .ensure) self.setTypeDeclGenerationState(decl.decl_idx, .not_generated);
             self.restoreDeclGenScope(decl);
+            _ = self.type_decl_generation_frames.pop();
         },
         .owners => {},
     }
@@ -28856,6 +29645,7 @@ fn mkBinopConstraint(
         .provenance = constraintProvenance(binop_expr_idx),
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    try self.noteHoistDispatchDependency(lhs_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (binop_expr_idx) |expr_idx| {
         try self.publishBinopDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
@@ -28954,6 +29744,7 @@ fn mkUnaryOp(
         .provenance = constraintProvenance(unary_expr_idx),
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    try self.noteHoistDispatchDependency(arg_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (unary_expr_idx) |expr_idx| {
         try self.publishUnaryDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
@@ -29220,6 +30011,7 @@ fn mkReceiverDispatchConstraint(
         .provenance = constraintProvenance(method_expr_idx),
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    try self.noteHoistDispatchDependency(receiver_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -29257,6 +30049,7 @@ fn mkTypeMethodCallConstraint(
         .provenance = constraintProvenance(method_expr_idx),
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    try self.noteHoistDispatchDependency(dispatcher_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -29329,6 +30122,7 @@ fn mkInterpolationConstraint(
         .interpolation = try self.mkInterpolationMetadata(expr_idx, item_var),
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    try self.noteHoistDispatchDependency(dispatcher_var, method_name, constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -29802,6 +30596,11 @@ fn checkResolvedAssociatedTarget(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
+    // A method declared in a function body is a local binding, and naming it
+    // through its type refers to that binding like any local lookup.
+    if (is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
+        try self.noteLocalLookupForLocalProcedures(self.cir.store.getStatement(@enumFromInt(@intFromEnum(target_node_idx))).s_decl.pattern);
+    }
     if (derivedMethodDef(target_env, target_def_idx)) |derived| {
         try self.checkDerivedMethodReference(expr_idx, expr_var, target_env, is_this_module, derived, region, env);
         return;
@@ -30427,6 +31226,7 @@ const Probe = struct {
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
+    component_derivations_len: usize,
     imported_schemes_len: usize,
 
     fn rollback(self: *Probe) void {
@@ -30494,6 +31294,7 @@ const Probe = struct {
         }
         self.check.probe_depth -= 1;
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
+        self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
             const removed = self.check.imported_schemes.pop().?;
             self.check.discardImportedSchemeMetadata(removed.scheme_var);
@@ -30542,6 +31343,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
+    const component_derivations_len = self.component_derivations.items.len;
     const imported_schemes_len = self.imported_schemes.items.len;
     const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
@@ -30577,6 +31379,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
+        .component_derivations_len = component_derivations_len,
         .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
@@ -36442,6 +37245,14 @@ fn dispatchDerivationParentOutsideClass(
     }
 }
 
+fn shrinkComponentDerivationsTo(self: *Self, new_len: usize) void {
+    while (self.component_derivations.items.len > new_len) {
+        const derivation = self.component_derivations.pop().?;
+        const did_remove = self.component_derivation_by_child_fn_var.remove(derivation.child_fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
 fn shrinkDispatchDerivationsTo(self: *Self, new_len: usize) void {
     while (self.dispatch_derivations.items.len > new_len) {
         const derivation = self.dispatch_derivations.pop().?;
@@ -37658,6 +38469,7 @@ fn instantiateDispatchTargetMethodVar(
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = method_var,
+        .intro_expr = constraintIntroExpr(constraint),
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     return method_var;
@@ -37825,6 +38637,7 @@ fn closeConcreteRecursiveDispatch(
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = ancestor.method_var,
+        .intro_expr = constraintIntroExpr(constraint),
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     return ancestor.method_var;
@@ -40269,6 +41082,9 @@ fn mkDerivedComponentConstraint(
         .provenance = parent_constraint.provenance,
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    try self.component_derivations.ensureUnusedCapacity(self.gpa, 1);
+    try self.component_derivation_by_child_fn_var.putNoClobber(self.gpa, constraint_fn_var, parent_constraint.fn_var);
+    self.component_derivations.appendAssumeCapacity(.{ .child_fn_var = constraint_fn_var, .parent_fn_var = parent_constraint.fn_var });
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(

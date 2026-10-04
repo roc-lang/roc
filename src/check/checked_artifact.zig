@@ -23008,6 +23008,7 @@ pub const CheckedProcedureTemplateTable = struct {
         return .{
             .module_idx = module_idx,
             .by_def = self.by_def,
+            .promoted = self.promoted,
         };
     }
 
@@ -23075,10 +23076,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
 /// A promoted local procedure's template and the binding pattern whose
 /// generalized scheme it publishes.
-pub const PromotedProcedureTemplateEntry = struct {
-    pattern: CIR.Pattern.Idx,
-    template: canonical.ProcedureTemplateRef,
-};
+pub const PromotedProcedureTemplateEntry = static_dispatch.PromotedProcedureTemplateEntry;
 
 fn sortedTemplateIdsContain(ids: []const canonical.CheckedProcedureTemplateId, id: canonical.CheckedProcedureTemplateId) bool {
     const target = @intFromEnum(id);
