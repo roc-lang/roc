@@ -39,6 +39,7 @@ pub fn writeProc(
     if (proc.tail_transform != .none) {
         try writer.print(" transform={s}", .{@tagName(proc.tail_transform)});
     }
+    if (proc.tail_group) |group| try writer.print(" tail_group={d}", .{@intFromEnum(group)});
     try writer.writeAll("\n");
 
     if (proc.body) |body| {

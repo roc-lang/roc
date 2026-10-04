@@ -8893,6 +8893,13 @@ fn packFileBytes(
             withheld += 1;
             continue;
         }
+        // A linking program has no body for an entry, so it sees the entry
+        // outside every call cycle and would reach it with an ordinary call
+        // where the cycle needs a frame-replacing one.
+        if (proc.tail_group != null) {
+            withheld += 1;
+            continue;
+        }
         // Boxy statements index the program's own descriptor sidecar, and a
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
@@ -12008,11 +12015,15 @@ fn cliTestTranscriptEventPayload(event: CliTestTranscriptEvent) []const u8 {
 fn cliTestCacheKey(
     artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
     specialization_strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_version);
     hasher.update(@tagName(specialization_strategy));
+    // A result records what one execution mode did with the tests, including
+    // how long they ran and whether they exhausted its resources.
+    hasher.update(@tagName(opt));
     hasher.update(&artifact_key.bytes);
     var out: [32]u8 = undefined;
     hasher.final(&out);
@@ -12023,9 +12034,20 @@ test "CLI test cache key includes specialization strategy" {
     const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
         .bytes = [_]u8{0x5a} ** 32,
     };
-    const lss_key = cliTestCacheKey(artifact_key, .lss);
-    const boxy_key = cliTestCacheKey(artifact_key, .boxy);
+    const lss_key = cliTestCacheKey(artifact_key, .lss, .dev);
+    const boxy_key = cliTestCacheKey(artifact_key, .boxy, .dev);
     try std.testing.expect(!std.mem.eql(u8, &lss_key, &boxy_key));
+}
+
+test "CLI test cache key includes execution mode" {
+    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
+        .bytes = [_]u8{0x5a} ** 32,
+    };
+    const dev_key = cliTestCacheKey(artifact_key, .lss, .dev);
+    inline for (.{ cli_args.OptLevel.interpreter, cli_args.OptLevel.size, cli_args.OptLevel.speed }) |opt| {
+        const other_key = cliTestCacheKey(artifact_key, .lss, opt);
+        try std.testing.expect(!std.mem.eql(u8, &dev_key, &other_key));
+    }
 }
 
 fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
@@ -12046,6 +12068,7 @@ fn storeCliTestResultsInCache(
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     specialization_strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
     results: []const CliTestResultItem,
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
@@ -12100,7 +12123,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), bytes.items, entries_dir);
+    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -12158,6 +12181,7 @@ fn loadCachedCliTestResults(
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     specialization_strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
     module: BuildEnv.CompiledModuleInfo,
     source_modules: *const CliTestSourceModuleMap,
     test_roots: []const check.CheckedArtifact.RootRequest,
@@ -12166,7 +12190,7 @@ fn loadCachedCliTestResults(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), entries_dir) orelse return null;
+    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), entries_dir) orelse return null;
     defer ctx.gpa.free(data);
 
     var offset: usize = 0;
@@ -13814,7 +13838,7 @@ fn runCheckedArtifactTests(
     }
     summary.modules_with_tests = 1;
 
-    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, results.items);
+    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, opt, results.items);
 
     try module_results.append(ctx.gpa, .{
         .env = module.semantic.env,
@@ -14226,7 +14250,7 @@ fn runCompiledTestPlan(
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
-        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
+        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, opt, fresh_results[lowered_module.planned_index].?);
     }
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
@@ -15573,6 +15597,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             build_env.cache_manager,
             planned.artifact,
             specialization_strategy,
+            args.opt,
             planned.module,
             &source_modules,
             planned.test_roots,

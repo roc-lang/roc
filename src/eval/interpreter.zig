@@ -591,6 +591,22 @@ pub const Interpreter = struct {
         returned: LocalId,
         loop_continue,
         loop_break,
+        /// A frame-replacing call: the procedure's result is whatever this
+        /// call returns, so its own frame ends before the callee's begins.
+        tail_call: TailCall,
+    };
+
+    const TailCall = struct {
+        proc: LirProcSpecId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    };
+
+    /// One procedure activation ends with its result, or with the call that
+    /// replaces it.
+    const ProcStep = union(enum) {
+        result: EvalProcResult,
+        tail_call: TailCall,
     };
 
     const EvalProcResult = struct {
@@ -1482,6 +1498,9 @@ pub const Interpreter = struct {
 
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        const outer_interpreting = base.stack_overflow.interpreting_roc_program;
+        base.stack_overflow.interpreting_roc_program = true;
+        defer base.stack_overflow.interpreting_roc_program = outer_interpreting;
         self.bindBoxyRuntime();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
@@ -2353,6 +2372,9 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Run a procedure to its result. A frame-replacing call ends the
+    /// activation that made it before the callee's begins, so a chain of them
+    /// runs in this one native frame.
     fn evalProcSpec(
         self: *LirInterpreter,
         proc_id: LirProcSpecId,
@@ -2361,6 +2383,21 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         descriptor_bindings: []const EvalDescriptorBinding,
     ) Error!EvalProcResult {
+        var step = try self.evalProcActivation(proc_id, proc_spec, args, arg_layouts, descriptor_bindings);
+        while (true) switch (step) {
+            .result => |result| return result,
+            .tail_call => |call| step = try self.evalProcActivation(call.proc, self.store.getProcSpec(call.proc), call.args, call.arg_layouts, &.{}),
+        };
+    }
+
+    fn evalProcActivation(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        proc_spec: LirProcSpec,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        descriptor_bindings: []const EvalDescriptorBinding,
+    ) Error!ProcStep {
         try self.call_stack.append(self.evalAllocator(), proc_id);
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
@@ -2389,10 +2426,10 @@ pub const Interpreter = struct {
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
-            return .{
+            return .{ .result = .{
                 .value = try self.callHostedProc(proc_id, hosted, normalized_args, param_layouts, proc_spec.ret_layout),
                 .layout = proc_spec.ret_layout,
-            };
+            } };
         }
 
         trace.log(
@@ -2517,6 +2554,7 @@ pub const Interpreter = struct {
         if (trace.enabled) self.debugPrintStmtChain(body, 32);
         const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
+            .tail_call => |call| .{ .tail_call = call },
             .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
@@ -2558,17 +2596,17 @@ pub const Interpreter = struct {
                 // When the coercion truly unwrapped a box, the descriptor must
                 // follow it down to the payload.
                 if (coercion_unwraps) {
-                    break :blk .{
+                    break :blk .{ .result = .{
                         .value = try self.materializeLocalValue(coerced_result, proc_spec.ret_layout),
                         .desc = if (result_desc) |desc| try self.boxyBoxAllocationPayloadDesc(&frame, raw_layout, desc) else null,
                         .layout = proc_spec.ret_layout,
-                    };
+                    } };
                 }
-                break :blk .{
+                break :blk .{ .result = .{
                     .value = try self.materializeLocalValue(coerced_result, raw_layout),
                     .desc = result_desc,
                     .layout = raw_layout,
-                };
+                } };
             },
             .loop_continue => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
@@ -2716,6 +2754,9 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    if (assign.replaces_frame) {
+                        return .{ .tail_call = .{ .proc = assign.proc, .args = arg_values, .arg_layouts = arg_layouts } };
+                    }
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;

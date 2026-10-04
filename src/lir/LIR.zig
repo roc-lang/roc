@@ -1027,6 +1027,10 @@ pub const ProcAbi = enum {
     erased_callable,
 };
 
+/// Identity shared by procedures that reach one another through
+/// frame-replacing calls. It names the group only; it is not a procedure id.
+pub const TailGroupId = enum(u32) { _ };
+
 /// Producer-proven sites and their reserved loop identity, consumed before ARC.
 pub const TailCalls = struct {
     head: CFStmtId,
@@ -1641,6 +1645,12 @@ pub const LirProcSpec = struct {
     tail_calls: ?TailCalls = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// Set by ARC on every procedure that makes or receives a same-SCC tail
+    /// call; procedures connected by such calls share one identity. A value
+    /// passed in memory to a frame-replacing call cannot live in the frame
+    /// being replaced, so a backend that passes arguments that way gives
+    /// every member of a group one storage contract for them.
+    tail_group: ?TailGroupId = null,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.

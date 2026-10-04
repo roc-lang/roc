@@ -191,9 +191,18 @@ const ReturnRewriter = struct {
     /// that call's binding of `target`.
     call_origin: LIR.StmtOrigin,
 
-    pub fn cloneRet(self: *ReturnRewriter, cloner: anytype, value: LIR.LocalId, _: LIR.StmtOrigin) ResourceError!LIR.CFStmtId {
+    pub fn cloneRet(self: *ReturnRewriter, cloner: anytype, value: LIR.LocalId, origin: LIR.StmtOrigin) ResourceError!LIR.CFStmtId {
         const source = try cloner.mapLocal(value);
         if (source == self.target) return self.next;
+        // When the call site only returns the call's result, a return in the
+        // callee is a return in the caller: a tail call in the inlined body
+        // stays directly in front of its return.
+        const continuation = cloner.store.getCFStmt(self.next);
+        if (continuation == .ret and continuation.ret.value == self.target and
+            cloner.store.getLocal(source).layout_idx == cloner.store.getLocal(self.target).layout_idx)
+        {
+            return try cloner.store.addCFStmt(.{ .ret = .{ .value = source } }, origin);
+        }
         return try cloner.store.addCFStmt(.{ .assign_ref = .{
             .target = self.target,
             .op = .{ .local = source },

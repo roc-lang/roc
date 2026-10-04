@@ -290,13 +290,25 @@ pub const MonoLlvmCodeGen = struct {
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     /// Per procedure, the function direct Roc calls target: parameters and
-    /// small results classified into registers under `fastcc`. The packed
+    /// small results classified into registers under `fastCallConv`. The packed
     /// `(ret_ptr, args_ptr)` function in `proc_registry` adapts to it for
     /// every caller that needs the uniform shape.
     fast_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     /// Register placement of the current fast body's result, when it
     /// returns by value rather than through a result pointer.
     fast_ret_registers: ?layout.abi.RegisterPlacement = null,
+    /// Per tail group, the storage its members share for arguments a
+    /// frame-replacing call passes in memory. Such an argument cannot live in
+    /// the frame being replaced, so whoever enters the group with an ordinary
+    /// call supplies this storage and every member passes it along.
+    tail_scratch: std.AutoHashMap(lir.LIR.TailGroupId, TailScratch),
+    /// The current fast body's group storage parameter, if its group has any.
+    current_tail_scratch: ?LlvmBuilder.Value = null,
+    current_tail_group: ?lir.LIR.TailGroupId = null,
+    /// Group storage this function allocated to enter other groups, and the
+    /// function those slots belong to.
+    tail_scratch_slots: std.AutoHashMap(lir.LIR.TailGroupId, LlvmBuilder.Value),
+    tail_scratch_slots_owner: ?LlvmBuilder.Function.Index = null,
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     /// Per-function scratch slot RC-helper calls copy their argument into,
     /// so the argument local's own slot address never escapes into the call.
@@ -559,6 +571,8 @@ pub const MonoLlvmCodeGen = struct {
             .boxy_worker_procs = boxy_worker_procs,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .fast_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .tail_scratch = std.AutoHashMap(lir.LIR.TailGroupId, TailScratch).init(allocator),
+            .tail_scratch_slots = std.AutoHashMap(lir.LIR.TailGroupId, LlvmBuilder.Value).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
@@ -626,6 +640,8 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
         self.fast_registry.deinit();
+        self.tail_scratch.deinit();
+        self.tail_scratch_slots.deinit();
         self.builtin_functions.deinit();
         self.cold_shims.deinit();
         self.clearStaticBytes();
@@ -650,6 +666,9 @@ pub const MonoLlvmCodeGen = struct {
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.proc_registry.clearRetainingCapacity();
         self.fast_registry.clearRetainingCapacity();
+        self.tail_scratch.clearRetainingCapacity();
+        self.tail_scratch_slots.clearRetainingCapacity();
+        self.tail_scratch_slots_owner = null;
         self.builtin_functions.clearRetainingCapacity();
         self.cold_shims.clearRetainingCapacity();
         self.cold_depth = 0;
@@ -1560,6 +1579,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         try self.ensureLocalScratch();
         try self.computeInlineEverywhere(procs);
+        try self.computeTailScratch(procs);
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             try self.declareProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
@@ -1826,7 +1846,7 @@ pub const MonoLlvmCodeGen = struct {
     /// The signature of a procedure's register-passing function: its C-ABI
     /// classification of arguments and result, with an optional trailing
     /// descriptor output pointer. The classification only decides how a
-    /// value splits into scalars; `fastcc` leaves register assignment to
+    /// value splits into scalars; `fastCallConv` leaves register assignment to
     /// LLVM.
     const FastSignature = struct {
         lowered: layout.abi.LoweredCall,
@@ -1835,6 +1855,15 @@ pub const MonoLlvmCodeGen = struct {
         args_start: u32,
         /// Parameter index of the descriptor output pointer, if any.
         desc_index: ?u32,
+        /// Parameter index of the tail group's shared argument storage, and
+        /// that storage's shape, if the group passes any argument in memory.
+        scratch_index: ?u32,
+        scratch: TailScratch,
+    };
+
+    const TailScratch = struct {
+        size: u32 = 0,
+        alignment: u32 = 1,
     };
 
     fn fastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
@@ -1846,7 +1875,88 @@ pub const MonoLlvmCodeGen = struct {
         const args_start = cursor;
         for (lowered.args) |placement| cursor += fastPlacementParamCount(placement);
         const desc_index: ?u32 = if (proc.runtime_ret_desc != null) cursor else null;
-        return .{ .lowered = lowered, .arg_layouts = owned, .args_start = args_start, .desc_index = desc_index };
+        if (desc_index != null) cursor += 1;
+        const scratch: TailScratch = if (proc.tail_group) |group|
+            self.tail_scratch.get(group) orelse llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@intFromEnum(group)})
+        else
+            .{};
+        return .{
+            .lowered = lowered,
+            .arg_layouts = owned,
+            .args_start = args_start,
+            .desc_index = desc_index,
+            .scratch_index = if (scratch.size > 0) cursor else null,
+            .scratch = scratch,
+        };
+    }
+
+    /// Where a frame-replacing call writes each argument its callee takes in
+    /// memory: consecutive, each at its own alignment, from the start of the
+    /// group's storage.
+    const TailScratchCursor = struct {
+        offset: u32 = 0,
+        alignment: u32 = 1,
+
+        fn place(self: *TailScratchCursor, size: u32, alignment: u32) u32 {
+            const at = std.mem.alignForward(u32, self.offset, alignment);
+            self.offset = at + size;
+            self.alignment = @max(self.alignment, alignment);
+            return at;
+        }
+    };
+
+    /// Size every tail group's shared argument storage for its most demanding
+    /// member.
+    fn computeTailScratch(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        self.tail_scratch.clearRetainingCapacity();
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        for (procs) |proc| {
+            const group = proc.tail_group orelse continue;
+            const entry = self.tail_scratch.getOrPut(group) catch return error.OutOfMemory;
+            if (!entry.found_existing) entry.value_ptr.* = .{};
+            if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
+            _ = arena_state.reset(.retain_capacity);
+            const arena = arena_state.allocator();
+            const arg_layouts = try self.procArgLayouts(proc, .explicit);
+            defer self.allocator.free(arg_layouts);
+            const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, proc.ret_layout, false) catch return error.OutOfMemory;
+            var cursor: TailScratchCursor = .{};
+            for (lowered.args, arg_layouts) |placement, arg_layout| {
+                if (placement != .indirect) continue;
+                _ = cursor.place(self.layoutDataSize(arg_layout), @intCast(@max(self.sizeAlignOf(arg_layout).alignment.toByteUnits(), 1)));
+            }
+            entry.value_ptr.size = @max(entry.value_ptr.size, cursor.offset);
+            entry.value_ptr.alignment = @max(entry.value_ptr.alignment, cursor.alignment);
+        }
+    }
+
+    /// The calling convention of register-passing functions. `tailcc`
+    /// guarantees a `musttail` call between functions of different
+    /// signatures; WebAssembly has no such convention.
+    fn fastCallConv(self: *const MonoLlvmCodeGen) LlvmBuilder.CallConv {
+        return if (self.target.cpu.arch.isWasm()) .fastcc else .tailcc;
+    }
+
+    /// The group storage to hand a callee whose signature takes one. A caller
+    /// in the same group passes its own along; any other caller owns a slot
+    /// for that group in its frame.
+    fn tailScratchArg(self: *MonoLlvmCodeGen, callee: LirProcSpec, sig: FastSignature) Error!LlvmBuilder.Value {
+        const group = callee.tail_group orelse llvmInvariantFmt("procedure without a tail group takes tail argument storage", .{});
+        if (self.current_tail_scratch) |own| {
+            if (self.current_tail_group == group) return own;
+        }
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (self.tail_scratch_slots_owner != wip.function) {
+            self.tail_scratch_slots.clearRetainingCapacity();
+            self.tail_scratch_slots_owner = wip.function;
+        }
+        const entry = self.tail_scratch_slots.getOrPut(group) catch return error.OutOfMemory;
+        if (!entry.found_existing) {
+            errdefer _ = self.tail_scratch_slots.remove(group);
+            entry.value_ptr.* = try self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "tail_scratch");
+        }
+        return entry.value_ptr.*;
     }
 
     fn fastPlacementParamCount(placement: layout.abi.Placement) u32 {
@@ -1908,11 +2018,12 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
         if (sig.desc_index != null) try param_types.append(self.allocator, ptr_ty);
+        if (sig.scratch_index != null) try param_types.append(self.allocator, ptr_ty);
 
         const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, try self.fastProcFunctionName(builder, proc_id, proc), .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
-        func.setCallConv(.fastcc, builder);
+        func.setCallConv(self.fastCallConv(), builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
@@ -2015,7 +2126,11 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, wip.arg(2));
         }
-        const result = wip.call(.normal, .fastcc, attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        if (sig.scratch_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "tail_scratch"));
+        }
+        const result = wip.call(.normal, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
         }
@@ -2089,6 +2204,8 @@ pub const MonoLlvmCodeGen = struct {
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
         const outer_fast_ret_registers = self.fast_ret_registers;
+        const outer_tail_scratch = self.current_tail_scratch;
+        const outer_tail_group = self.current_tail_group;
         // Procedure bodies are emitted serially by compileAllProcSpecs. Helper
         // emission saves/restores the active views without owning this storage.
         std.debug.assert(self.deferred_str_capture_count == 0);
@@ -2101,6 +2218,8 @@ pub const MonoLlvmCodeGen = struct {
             self.capture_ptr_arg = outer_capture;
             self.reuse_ptr_arg = outer_reuse;
             self.fast_ret_registers = outer_fast_ret_registers;
+            self.current_tail_scratch = outer_tail_scratch;
+            self.current_tail_group = outer_tail_group;
             self.ret_desc_ptr_arg = outer_ret_desc_ptr;
             self.current_runtime_ret_desc = outer_runtime_ret_desc;
             self.current_ret_layout = outer_ret_layout;
@@ -2164,6 +2283,12 @@ pub const MonoLlvmCodeGen = struct {
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
+
+        self.current_tail_group = proc.tail_group;
+        self.current_tail_scratch = if (fast_sig) |sig|
+            if (sig.scratch_index) |index| wip.arg(index) else null
+        else
+            null;
 
         if (proc.abi == .erased_callable) {
             // Parameter 0 is the public erased ABI's host pointer, unread.
@@ -3429,7 +3554,9 @@ pub const MonoLlvmCodeGen = struct {
             .init_uninitialized => |uninit| {
                 try work.append(wa, .{ .node = uninit.next });
             },
-            .assign_call => |assign| {
+            .assign_call => |assign| if (assign.replaces_frame) {
+                try self.emitFrameReplacingCall(assign.proc, assign.args);
+            } else {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
                 try work.append(wa, .{ .node = assign.next });
             },
@@ -4285,11 +4412,15 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, desc_ptr);
         }
+        if (sig.scratch_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.tailScratchArg(proc, sig));
+        }
         if (is_cold) {
             try attrs_wip.addFnAttr(.cold, builder);
             try attrs_wip.addFnAttr(.@"noinline", builder);
         }
-        const result = wip.call(.normal, .fastcc, attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        const result = wip.call(.normal, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, self.slot(target).ptr, proc.ret_layout);
         }
@@ -4297,6 +4428,80 @@ pub const MonoLlvmCodeGen = struct {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
         }
+    }
+
+    /// A direct call whose callee returns on this procedure's behalf. Every
+    /// argument passed in memory is written into the tail group's shared
+    /// storage, a result returned through a pointer goes straight to this
+    /// procedure's own result pointer, and the call is the function's last
+    /// instruction before its return.
+    fn emitFrameReplacingCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const proc = self.store.getProcSpec(proc_id);
+        const fast = self.fast_registry.get(@intFromEnum(proc_id)) orelse
+            llvmInvariantFmt("frame-replacing call to proc {d} has no register-passing function", .{@intFromEnum(proc_id)});
+        if (proc.runtime_ret_desc != null or self.ret_desc_ptr_arg != null or proc.ret_layout != self.current_ret_layout) {
+            llvmInvariantFmt("frame-replacing call to proc {d} does not share its caller's return contract", .{@intFromEnum(proc_id)});
+        }
+        const arg_locals = self.store.getLocalSpan(args);
+        try self.materializeLocalSpanIfDeferred(arg_locals);
+
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
+
+        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer param_types.deinit(self.allocator);
+        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
+        defer call_args.deinit(self.allocator);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+        const ptr_ty = try self.ptrType();
+
+        if (sig.lowered.ret == .indirect) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, self.ret_ptr_arg orelse return error.CompilationFailed);
+        }
+        var cursor: TailScratchCursor = .{};
+        for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
+            const arg_local = GuardedList.at(arg_locals, i);
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    const scratch = self.current_tail_scratch orelse
+                        llvmInvariantFmt("frame-replacing call passes an argument in memory without group storage", .{});
+                    const size = self.layoutDataSize(arg_layout);
+                    const offset = cursor.place(size, @intCast(@max(self.sizeAlignOf(arg_layout).alignment.toByteUnits(), 1)));
+                    const dst = try self.offsetPtr(scratch, offset);
+                    if (size > 0) try self.copyBytes(dst, self.slot(arg_local).ptr, size, self.alignmentForLayout(arg_layout));
+                    try param_types.append(self.allocator, ptr_ty);
+                    try call_args.append(self.allocator, dst);
+                },
+                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
+            }
+        }
+        if (sig.scratch_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, self.current_tail_scratch orelse
+                llvmInvariantFmt("frame-replacing call into a tail group from outside it", .{}));
+        }
+        const result = wip.call(self.frameReplacingCallKind(), self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        if (sig.lowered.ret == .registers) {
+            _ = wip.ret(result) catch return error.OutOfMemory;
+        } else {
+            _ = wip.retVoid() catch return error.OutOfMemory;
+        }
+    }
+
+    /// `musttail` under `tailcc` is LLVM's guarantee. WebAssembly's backend
+    /// turns a `tail` call in return position into `return_call` when the
+    /// target has the tail-call instructions, and the WebAssembly 1.0
+    /// instruction set has no way to replace a frame at all.
+    fn frameReplacingCallKind(self: *const MonoLlvmCodeGen) LlvmBuilder.Function.Instruction.Call.Kind {
+        if (!self.target.cpu.arch.isWasm()) return .musttail;
+        return if (std.Target.wasm.featureSetHas(self.target.cpu.features, .tail_call)) .tail else .normal;
     }
 
     fn emitErasedCall(

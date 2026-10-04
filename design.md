@@ -1523,7 +1523,10 @@ depth is bounded only by actual native stack memory, and exhaustion is
 reported by whoever owns the executing thread: compile-time evaluation runs on
 compiler threads covered by the stack overflow guard in `src/base`, while
 runtime interpretation runs in the shim/app process, where stack-overflow
-reporting belongs to the platform host. An arbitrary depth budget in release
+reporting belongs to the platform host. The interpreter runs each Roc call on
+the native stack, so while a thread is interpreting a Roc program
+(`interpreting_roc_program`) the guard reports that the program overflowed its
+stack rather than the compiler. An arbitrary depth budget in release
 would make a program's compile-time-evaluability depend on a compiler build
 constant rather than on the program itself, and would let Debug and release
 builds disagree about whether the same program compiles.
@@ -5992,15 +5995,23 @@ not bypass Lambda Solved. All modes therefore consume the same Monotype type
 identities, the same Lambda Solved callable information, and the same direct
 Solved-to-LIR representation decisions.
 
-### Self-Tail Return Continuations
+### Tail Return Continuations
 
-LIR construction owns ordinary self-tail-call proofs. Each procedure builder
-records exact self-call sites and join definitions as statements are emitted,
+LIR construction owns ordinary tail-call proofs. Each procedure builder
+records exact direct-call sites and join definitions as statements are emitted,
 including producer-owned placeholder replacements. After producer fixups,
 finalization resolves only the recorded calls' return continuations. Shared
 suffixes are memoized by statement identity; forwarding cycles do not prove a
 return. The query has no candidate or path-length limit and never walks unrelated
 control flow. Both Solved and Boxy lowering use this same construction contract.
+
+A proven call to the procedure being built is a self-tail site, recorded as
+described below. A proven call to any other procedure has its continuation
+replaced by a `ret` of the call's target, so the tail position is structural:
+the statement after the call returns its result. That is the only form later
+stages read. A pass that moves a body into another procedure keeps the form:
+when the call site it replaces only returns the call's result, a return in the
+moved body stays a return.
 
 A proven continuation returns the call's value unchanged through explicit
 returns, jumps, lexical joins, identity references, join-parameter forwarding
@@ -16432,8 +16443,8 @@ whole call by ABI, so payload reads from them borrow without the callee
 emitting any release for the group.
 
 Tail calls need one rule so that borrow inference never blocks backend
-tail-call lowering. LIR has no tail-call statement; a call is in tail
-position when the next statement returns the call result. Call-graph SCCs
+tail-call lowering. A call is in tail position when the next statement
+returns the call result. Call-graph SCCs
 (computed once, iteratively) feed exactly this rule: every refcounted argument
 of a tail-position call within the same SCC has to outlive replacement of the
 caller frame. This is an exact lifetime constraint, not an ownership demand.
@@ -16450,6 +16461,54 @@ owned-return variant when forwarding a borrowed result would otherwise require
 a retain after the call. Calls that leave the SCC keep their ordinary lifetime
 and mode constraints because they cannot participate in unbounded recursive
 frame growth.
+
+Emission then states the result explicitly. A same-SCC tail call whose callee
+can return on the caller's behalf is emitted with `replaces_frame` set: both
+procedures use the Roc procedure ABI, the callee is not hosted, its result is
+the caller's whole result at the same layout, and neither returns a runtime
+descriptor with it. Emission checks that the statement after such a call is
+the return of its target with no ownership statement between them. Every
+procedure that makes or receives a same-SCC tail call also carries a
+`tail_group`: the connected component of those calls, which ownership variants
+inherit from their source procedure.
+
+### Frame-Replacing Calls
+
+A `replaces_frame` call is a guarantee, not an optimization: a cycle of calls
+that are all in tail position runs in constant stack space in every execution
+mode. Backends do not look for tail positions. They follow the flag, and on a
+flagged call the caller's frame ends before the callee's begins, the callee
+returns directly to the caller's caller, and the statement after the call is
+never emitted. A stack trace taken in the callee therefore does not contain
+the caller, exactly as a loop does not contain its earlier iterations.
+
+What each backend must arrange is where the callee's arguments live once the
+caller's frame is gone.
+
+- The dev backend gives every Roc-ABI procedure ownership of its argument
+  block: the words passed on the stack, followed by storage for every
+  aggregate passed by pointer. The block's size follows from the signature
+  alone. A caller reserves it and the callee removes it on return, so a
+  frame-replacing call can build the next callee's block where its own ends,
+  whatever the two sizes are, and move the return address to match. The block
+  is staged in the dying frame and moved into place after everything else in
+  the frame has been read, because the two overlap when the callee's block is
+  the larger. The part of the teardown that depends on the final callee-saved
+  set and frame size is emitted once per procedure, after its body.
+- The LLVM backend emits `musttail` calls between `tailcc` functions. An
+  argument passed in memory cannot point into the caller's frame, so each tail
+  group whose members take such arguments shares one block of storage for
+  them, passed as a trailing parameter: a caller outside the group allocates
+  it in its own frame, members pass it along, and a frame-replacing call
+  copies each in-memory argument into it. A callee copies its in-memory
+  arguments into its own frame on entry, so the storage is free again by the
+  time the callee makes its own frame-replacing call.
+- The interpreter ends the activation that made the call and starts the
+  callee's in the same native frame.
+
+A procedure with a `tail_group` is never offered to the object cache. A
+program that links a cached entry has no body for it, so it would see the
+entry outside every call cycle and reach it with an ordinary call.
 
 ### RC Planning and Materialization
 

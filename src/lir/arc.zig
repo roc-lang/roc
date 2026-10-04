@@ -716,6 +716,7 @@ fn recordObjectCacheFacts(
             if (callee != caller) tail_targets.set(@intFromEnum(callee));
         }
     }
+    try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
         if (store.getProcSpec(proc).body == null) continue;
@@ -740,6 +741,46 @@ fn recordObjectCacheFacts(
             !solution.availableOutcomeSpanOf(proc).isEmpty() or
             (borrowed != 0 and tail_targets.isSet(proc_index)) or
             specialized_demand;
+    }
+}
+
+/// Stamp the procedures joined by same-SCC tail calls with their group. The
+/// group is the connected component of those calls, named by its
+/// lowest-numbered member; ownership variants inherit their source's group.
+fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
+    const proc_count = store.procSpecCount();
+    const parent = try store.allocator.alloc(u32, proc_count);
+    defer store.allocator.free(parent);
+    for (parent, 0..) |*slot, index| slot.* = @intCast(index);
+    var grouped = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
+    defer grouped.deinit(store.allocator);
+
+    const find = struct {
+        fn root(links: []u32, start: u32) u32 {
+            var current = start;
+            while (links[current] != current) {
+                links[current] = links[links[current]];
+                current = links[current];
+            }
+            return current;
+        }
+    }.root;
+
+    for (0..proc_count) |proc_index| {
+        const caller: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        for (solution.tailCallsOf(caller)) |tail_call| {
+            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            grouped.set(proc_index);
+            grouped.set(@intFromEnum(callee));
+            const caller_root = find(parent, @intCast(proc_index));
+            const callee_root = find(parent, @intFromEnum(callee));
+            if (caller_root < callee_root) parent[callee_root] = caller_root else parent[caller_root] = callee_root;
+        }
+    }
+    var members = grouped.iterator(.{});
+    while (members.next()) |proc_index| {
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        store.getProcSpecPtr(proc).tail_group = @enumFromInt(find(parent, @intCast(proc_index)));
     }
 }
 
@@ -1242,6 +1283,7 @@ const VariantTable = struct {
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
+            .tail_group = source_spec.tail_group,
             .stack_probe = source_spec.stack_probe,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
@@ -3565,7 +3607,7 @@ const Inserter = struct {
 
     /// Whether the callee of a tail call can return on the current
     /// procedure's behalf: both use the Roc procedure ABI, the callee's value
-    /// is the procedure's whole result, and neither publishes a runtime
+    /// is the procedure's whole result, and neither returns a runtime
     /// descriptor alongside it.
     fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
         const caller = self.store.getProcSpec(self.current_proc);
