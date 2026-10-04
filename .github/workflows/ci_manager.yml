@@ -423,6 +423,11 @@ jobs:
           - minici_shard: linux-eval
             valgrind: false
             shim_archive: false
+            llvm_float_bits: false
+            web_wasm: false
+          - minici_shard: linux-simd
+            valgrind: false
+            shim_archive: false
             llvm_float_bits: true
             web_wasm: true
           - minici_shard: linux-harness
