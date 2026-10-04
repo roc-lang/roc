@@ -6018,7 +6018,10 @@ const ProcedureBuilder = struct {
         const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
+        // A declared `to_inspect` decides inspection in this module; the
+        // registry records an override only for an eligible, unrejected
+        // declaration.
+        _ = candidate.method_registry.lookup(key) orelse return null;
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
         // Inspection calls the method at its checked `T -> Str` instance.
         var target = override.target;
@@ -35307,6 +35310,7 @@ const ProcBodyBuilder = struct {
                 .expand => {},
                 .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
                 .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
+                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
                 .helper => {
                     if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
                     const raw = try self.addFrameLocal(.bool);
@@ -35673,6 +35677,9 @@ const ProcBodyBuilder = struct {
         convert: Plan.TypeRepId,
         /// Read the box's payload first.
         unbox: Plan.TypeRepId,
+        /// The component's own method is a rejected declaration: the
+        /// comparison is a checked-error crash.
+        checked_error,
     };
 
     fn derivedStep(self: *ProcBodyBuilder, method: Plan.DerivedMethod, rep_id: Plan.TypeRepId) Allocator.Error!DerivedStep {
@@ -35730,6 +35737,7 @@ const ProcBodyBuilder = struct {
             .call => |index| .{ .call = index },
             .scheme_dictionary => |requirement| .{ .scheme_dictionary = requirement },
             .shared_closed => |closed| .{ .convert = closed },
+            .checked_error => .checked_error,
         };
     }
 
@@ -36296,6 +36304,7 @@ const ProcBodyBuilder = struct {
                 .expand => {},
                 .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
                 .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
+                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
                 .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
                 .convert => |actual| {
                     const converted = try self.addFrameLocalForRep(actual);

@@ -3078,9 +3078,19 @@ const ScopedMethodDispatch = struct {
     }
 };
 
+/// What an exact registry lookup by method name found for a compiler-generated
+/// edge. `rejected` is a declared method whose declaration canonicalization or
+/// checking rejected: it has no runtime target and its diagnostic is already
+/// reported, so the edge is a `checked_error` dispatch, exactly as
+/// `EvidencePass` resolves a checked dispatch that lands on it.
+const MethodLookupResult = union(enum) {
+    target: MethodLookup,
+    rejected,
+};
+
 const ScopedMethodResolution = union(enum) {
     missing,
-    target: MethodLookup,
+    found: MethodLookupResult,
 };
 
 const FunctionShape = struct {
@@ -4248,9 +4258,9 @@ const Builder = struct {
     /// build and never changes the checked outcome.
     scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
     /// Scoped inspect-override resolutions, memoized like
-    /// `scoped_method_targets`. `missing` means inspection renders the
-    /// owner's default form.
-    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
+    /// `scoped_method_targets`. `null` means inspection renders the owner's
+    /// default form.
+    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ?MethodLookup) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -9935,7 +9945,7 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         return try self.lookupMethodTargetByName(scope, owner, method_view.names.methodNameText(method));
     }
 
@@ -9944,25 +9954,25 @@ const Builder = struct {
         scope: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         const method = try self.activeNameStore().internMethodName(method_name);
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_method_targets.get(address)) |resolution| {
             return switch (resolution) {
                 .missing => null,
-                .target => |target| target,
+                .found => |found| found,
             };
         }
 
-        const resolution: ScopedMethodResolution = if (self.findMethodTargetByName(scope, owner, method_name)) |target|
-            .{ .target = target }
+        const resolution: ScopedMethodResolution = if (self.findMethodTargetByName(scope, owner, method_name)) |found|
+            .{ .found = found }
         else
             .missing;
 
         try self.scoped_method_targets.put(self.allocator, address, resolution);
         return switch (resolution) {
             .missing => null,
-            .target => |target| target,
+            .found => |found| found,
         };
     }
 
@@ -9975,23 +9985,11 @@ const Builder = struct {
     ) Allocator.Error!?MethodLookup {
         const method = try self.activeNameStore().internMethodName("to_inspect");
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
-        if (self.scoped_inspect_overrides.get(address)) |resolution| {
-            return switch (resolution) {
-                .missing => null,
-                .target => |target| target,
-            };
-        }
+        if (self.scoped_inspect_overrides.get(address)) |resolution| return resolution;
 
-        const resolution: ScopedMethodResolution = if (self.findInspectOverrideFromStore(scope, &self.program.names, owner)) |target|
-            .{ .target = target }
-        else
-            .missing;
-
+        const resolution = self.findInspectOverrideFromStore(scope, &self.program.names, owner);
         try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
-        return switch (resolution) {
-            .missing => null,
-            .target => |target| target,
-        };
+        return resolution;
     }
 
     /// Selects the view that declares `owner.to_inspect` exactly as method
@@ -10023,9 +10021,12 @@ const Builder = struct {
         const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
-        const found = view.method_registry.lookup(key) orelse return null;
-        const target = found.requireTarget("Monotype inspect lowering");
-        if (!allow_local_proc and target.kind == .local_proc) return null;
+        switch (view.method_registry.lookup(key) orelse return null) {
+            // The registry records no inspect override for a rejected
+            // declaration, so inspection renders the default form below.
+            .rejected => {},
+            .target => |target| if (!allow_local_proc and target.kind == .local_proc) return null,
+        }
         const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
         return .{ .target = .{ .view = view, .target = override.target } };
     }
@@ -10035,7 +10036,7 @@ const Builder = struct {
         scope: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) ?MethodLookup {
+    ) ?MethodLookupResult {
         return self.findMethodTargetByNameFromStore(
             scope,
             &self.program.names,
@@ -10050,14 +10051,14 @@ const Builder = struct {
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) ?MethodLookup {
-        if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |target| return target;
+    ) ?MethodLookupResult {
+        if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |found| return found;
         for (scope.method_lookup_scope) |module_id| {
             const candidate = self.moduleForId(module_id);
             // Only the module declaring a function-body type registers its
             // methods, so a local procedure found here is that owner's exact
             // target; its declaration context comes from the evidence purpose.
-            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |target| return target;
+            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |found| return found;
         }
         return null;
     }
@@ -10069,13 +10070,16 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
         allow_local_proc: bool,
-    ) ?MethodLookup {
+    ) ?MethodLookupResult {
         const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        const found = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
-        const target = found.requireTarget("Monotype lowering");
-        if (!allow_local_proc and target.kind == .local_proc) return null;
-        return .{ .view = view, .target = target };
+        return switch (view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
+            .rejected => .rejected,
+            .target => |target| if (!allow_local_proc and target.kind == .local_proc)
+                null
+            else
+                .{ .target = .{ .view = view, .target = target } },
+        };
     }
 
     fn noteBuiltinTryDef(
@@ -20091,7 +20095,7 @@ const BodyContext = struct {
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         if (self.nameStore() == &self.builder.program.names) {
             return self.builder.lookupMethodTargetByName(
                 self.method_scope,
@@ -20124,7 +20128,7 @@ const BodyContext = struct {
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         return self.lookupMethodTargetByName(
             owner,
             method_view.names.methodNameText(method),
@@ -51741,7 +51745,11 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
         if (self.methodOwnerFromNode(component_node)) |owner| {
-            if (try self.lookupMethodTarget(owner, view, method)) |found| {
+            if (try self.lookupMethodTarget(owner, view, method)) |result| {
+                const found = switch (result) {
+                    .rejected => return .checked_error,
+                    .target => |found| found,
+                };
                 if (found.target.kind == .structural) {
                     return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(found.target.kind.structural) } };
                 }
@@ -58503,10 +58511,7 @@ const BodyContext = struct {
             const children_start = pending.items.len;
             switch (self.graph.content(raw_node)) {
                 .list => {
-                    const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(
-                        .{ .builtin = .list },
-                        structuralDerivationMethodName(mode),
-                    )) orelse Common.invariant("checked method registry is missing the List structural derivation target"));
+                    const lookup = try self.withLocalProcContext(try self.builtinListDerivationLookup(structuralDerivationMethodName(mode)));
                     if (lookup.target.kind == .structural) {
                         Common.invariant("owned List derivation resolved to a structural registry implementation");
                     }
@@ -58529,7 +58534,14 @@ const BodyContext = struct {
                 .named => named: {
                     const named = self.graph.namedNodes(raw_node);
                     if (self.methodOwnerFromNode(raw_node)) |owner| {
-                        if (try self.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |raw_lookup| {
+                        if (try self.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |result| {
+                            // A rejected declaration is this component's
+                            // comparison; emission lowers it to a checked error
+                            // without calling anything or expanding the backing.
+                            const raw_lookup = switch (result) {
+                                .rejected => break :named,
+                                .target => |raw_lookup| raw_lookup,
+                            };
                             const lookup = try self.withLocalProcContext(raw_lookup);
                             switch (lookup.target.kind) {
                                 .structural => |kind| {
@@ -58871,15 +58883,28 @@ const BodyContext = struct {
                 const ty = derive.ty;
                 switch (self.typeStore().get(ty)) {
                     .list => {
-                        const lookup = try self.derivationMethodLookup(ty, ctx.method_name) orelse
-                            Common.invariant(D.missing_component_method_msg);
+                        const lookup = switch (try self.derivationMethodLookup(ty, ctx.method_name) orelse
+                            Common.invariant(D.missing_component_method_msg)) {
+                            .rejected => Common.invariant("builtin List derivation target was a rejected declaration"),
+                            .target => |lookup| lookup,
+                        };
                         if (lookup.target.kind == .structural) {
                             Common.invariant("owned List derivation resolved to a structural registry implementation");
                         }
                         return derivationExpr(try self.derivationMethodCall(D, lookup, ty, derive.operand, ctx), D);
                     },
                     .named => {
-                        if (try self.derivationMethodLookup(ty, ctx.method_name)) |lookup| {
+                        if (try self.derivationMethodLookup(ty, ctx.method_name)) |result| {
+                            const lookup = switch (result) {
+                                // The component's own method is its comparison,
+                                // and its declaration was rejected: the same
+                                // `checked_error` a direct dispatch to it is.
+                                .rejected => return derivationExpr(try self.addExpr(.{
+                                    .ty = ctx.result_ty,
+                                    .data = try self.dispatchCrashData(.checked_error),
+                                }), D),
+                                .target => |lookup| lookup,
+                            };
                             switch (lookup.target.kind) {
                                 .structural => |kind| if (kind != D.structural_kind) {
                                     Common.invariant("structural registry implementation did not match the active derivation");
@@ -59061,10 +59086,23 @@ const BodyContext = struct {
         self: *BodyContext,
         ty: Type.TypeId,
         method_name: []const u8,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         const owner = methodOwnerFromType(self.typeStore(), ty) orelse return null;
-        const lookup = (try self.lookupMethodTargetByName(owner, method_name)) orelse return null;
-        return try self.withLocalProcContext(lookup);
+        return switch ((try self.lookupMethodTargetByName(owner, method_name)) orelse return null) {
+            .rejected => .rejected,
+            .target => |lookup| .{ .target = try self.withLocalProcContext(lookup) },
+        };
+    }
+
+    /// The builtin List method a structural derivation dispatches to. The
+    /// builtin module checks without diagnostics, so its registry declares
+    /// every List derivation method with a target.
+    fn builtinListDerivationLookup(self: *BodyContext, method_name: []const u8) Allocator.Error!MethodLookup {
+        return switch ((try self.lookupMethodTargetByName(.{ .builtin = .list }, method_name)) orelse
+            Common.invariant("checked method registry is missing the List structural derivation target")) {
+            .rejected => Common.invariant("builtin List derivation target was a rejected declaration"),
+            .target => |lookup| lookup,
+        };
     }
 
     /// Dispatch a component to its exact checked method target, shared by every

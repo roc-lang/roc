@@ -1056,6 +1056,10 @@ pub const DerivedComponentDecision = union(enum) {
     /// which checking left at its default; the component is compared as
     /// this closed representation.
     shared_closed: TypeRepId,
+    /// The component type's own method is a declaration that canonicalization
+    /// or checking rejected. Comparing the component is the same
+    /// `checked_error` a direct dispatch to that method is.
+    checked_error,
 };
 
 /// A call to a component type's own `is_eq` or `to_hash` worker, made by a
@@ -13332,16 +13336,17 @@ const Builder = struct {
                     boxyPlanInvariant("derived method reached a type variable without its scheme requirement");
                 try self.recordDerivedDecision(walk, rep_id, .{ .scheme_dictionary = requirement });
             },
-            .list => {
-                const lookup = self.derivedMethodTarget(rep_id, walk.root.method) orelse
-                    boxyPlanInvariant("derived method reached a List without its method");
-                try self.planDerivedComponentCall(walk, rep_id, lookup);
+            .list => switch (self.derivedMethodTarget(rep_id, walk.root.method) orelse
+                boxyPlanInvariant("derived method reached a List without its method")) {
+                .target => |lookup| try self.planDerivedComponentCall(walk, rep_id, lookup),
+                .rejected => boxyPlanInvariant("builtin List derivation target was a rejected declaration"),
             },
             .box => try actions.append(self.allocator, .{ .visit = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep }),
             .nominal => |kind| {
-                if (self.derivedMethodTarget(rep_id, walk.root.method)) |lookup| {
-                    return try self.planDerivedComponentCall(walk, rep_id, lookup);
-                }
+                if (self.derivedMethodTarget(rep_id, walk.root.method)) |found| switch (found) {
+                    .target => |lookup| return try self.planDerivedComponentCall(walk, rep_id, lookup),
+                    .rejected => return try self.recordDerivedDecision(walk, rep_id, .checked_error),
+                };
                 try self.recordDerivedDecision(walk, rep_id, .structural);
                 switch (kind) {
                     .transparent, .builtin_other, .opaque_nominal => {
@@ -13421,14 +13426,17 @@ const Builder = struct {
 
     /// The component type's own method, when it declares one. A derived
     /// marker resolves structurally and expands instead.
-    fn derivedMethodTarget(self: *Builder, rep_id: TypeRepId, method: DerivedMethod) ?MethodTargetLookup {
+    fn derivedMethodTarget(self: *Builder, rep_id: TypeRepId, method: DerivedMethod) ?MethodLookupResult {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const view = self.moduleForId(rep.source_type.module);
         const owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse return null;
-        const lookup = self.lookupMethodTargetByText(view, owner, derivedMethodText(method)) orelse return null;
-        return switch (lookup.target.kind) {
-            .procedure, .local_proc => lookup,
-            .structural => null,
+        const found = self.lookupMethodTargetByText(view, owner, derivedMethodText(method)) orelse return null;
+        return switch (found) {
+            .rejected => found,
+            .target => |lookup| switch (lookup.target.kind) {
+                .procedure, .local_proc => found,
+                .structural => null,
+            },
         };
     }
 
@@ -17747,6 +17755,14 @@ const Builder = struct {
         inspect_evidence: ?static_dispatch.EvidenceNodeId = null,
     };
 
+    /// What an exact registry lookup found. `rejected` is a declared method
+    /// whose declaration canonicalization or checking rejected: it has no
+    /// worker, and a dispatch that lands on it is a `checked_error`.
+    const MethodLookupResult = union(enum) {
+        target: MethodTargetLookup,
+        rejected,
+    };
+
     fn lookupMethodTarget(
         self: *Builder,
         owner_view: ModuleView,
@@ -17755,7 +17771,10 @@ const Builder = struct {
         method: MethodNameId,
     ) ?MethodTargetLookup {
         const method_text = method_view.canonical_names.?.methodNameText(method);
-        return self.lookupMethodTargetByText(owner_view, owner, method_text);
+        return switch (self.lookupMethodTargetByText(owner_view, owner, method_text) orelse return null) {
+            .target => |lookup| lookup,
+            .rejected => boxyPlanInvariant("a checked requirement's method target was a rejected declaration"),
+        };
     }
 
     fn lookupMethodTargetByText(
@@ -17763,7 +17782,7 @@ const Builder = struct {
         owner_view: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_text: []const u8,
-    ) ?MethodTargetLookup {
+    ) ?MethodLookupResult {
         if (self.lookupMethodTargetInView(owner_view, owner_view, owner, method_text)) |target| return target;
         for (self.imports) |imported| {
             const view = moduleViewFromImported(imported);
@@ -17815,7 +17834,9 @@ const Builder = struct {
         const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
         const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect planning");
+        // A declared `to_inspect` decides inspection in this view; the registry
+        // records an override only for an eligible, unrejected declaration.
+        _ = candidate.method_registry.lookup(key) orelse return null;
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
         // Inspection calls the method at its checked `T -> Str` instance.
         var target = override.target;
@@ -17834,13 +17855,15 @@ const Builder = struct {
         owner_view: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_text: []const u8,
-    ) ?MethodTargetLookup {
+    ) ?MethodLookupResult {
         const owner_names = owner_view.canonical_names orelse return null;
         const candidate_names = candidate.canonical_names orelse return null;
         const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
         const candidate_method = candidate_names.lookupMethodName(method_text) orelse return null;
-        const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
-        return .{ .view = candidate, .method = candidate_method, .target = found.requireTarget("boxy planning") };
+        return switch (candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null) {
+            .rejected => .rejected,
+            .target => |target| .{ .target = .{ .view = candidate, .method = candidate_method, .target = target } },
+        };
     }
 
     fn workerSourceForMethodTarget(

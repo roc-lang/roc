@@ -12901,6 +12901,29 @@ declaration, so the distinction lives in the lookup result, not in
 `MethodTargetKind`. `EvidencePass` resolves a `rejected` lookup to
 `checked_error` and adds no second diagnostic at the dispatch site.
 
+Compiler-generated edges that post-check stages select by name through the
+same registry lookup consume its `rejected` answer by the same rule. A
+structural equality or hash component whose own `is_eq` or `to_hash` is a
+rejected declaration compares or hashes as `checked_error`, and synthesized
+evidence that lands on one is `checked_error` evidence, so a derived comparison
+reaching that component (inside a tuple, record, tag payload, or generic
+helper) crashes exactly where a direct dispatch to the method would. Monotype
+emits the crash in derivation lowering; Boxy planning records the component's
+`DerivedComponentDecision.checked_error` and lowering emits the crash from it.
+
+Inspection is the one deliberate exception. When a type's custom `to_inspect`
+is rejected, `Str.inspect` (and `dbg` and `expect` reports) render values of
+that type in the default structural form, at every nesting depth, in both
+specialize=yes and specialize=no. Inspection is never a dispatch to
+`to_inspect`: it calls the method only when the declaration is an inspect
+override (Inspect Overrides), and a rejected declaration has no callable type
+to be one. `MethodRegistry.fromModule` records that decision on the rejected
+key itself (`inspect_override = null` beside `target = null`), and Monotype and
+Boxy consume it through `lookupInspectOverride` exactly as they consume an
+ineligible method's decision; neither stage branches on `rejected` to choose
+inspection's rendering. The program still reports the declaration's diagnostic
+and cannot be mistaken for valid.
+
 Checked-module construction computes the `contains_diagnostic_error` column
 once every source runtime error and rejected binding use is explicit in the
 bodies: after rejected procedure uses are rewritten to `runtime_error` and
