@@ -517,10 +517,10 @@ const LenInvariant = struct {
     died_epoch: u32 = 0,
 };
 
-/// Cross-round bounds of one loop parameter, complete once every jump into
-/// its join was captured in a single round.
-/// Each list holds up to `meet_bound_cap`; storage follows use, since a
-/// procedure persists one of these per loop parameter.
+/// Cross-round bounds of one loop parameter: the bounds every jump into its
+/// join proved in a round, and the invariants assumed and verified across
+/// rounds. Each list holds up to `meet_bound_cap`; storage follows use,
+/// since a procedure persists one of these per loop parameter.
 const LoopBounds = struct {
     items: []StableBound = &.{},
     len: usize = 0,
@@ -529,7 +529,6 @@ const LoopBounds = struct {
     lower_len: usize = 0,
     len_items: []LenInvariant = &.{},
     len_count: usize = 0,
-    complete: bool = false,
 
     fn ensureCapacity(self: *LoopBounds, allocator: Allocator, bounds: usize, lower: usize, invariants: usize) ResourceError!void {
         if (self.items.len < bounds) {
@@ -558,7 +557,7 @@ const LoopBounds = struct {
         allocator.free(self.len_items);
     }
 
-    /// Copy the live prefixes and the completion flag.
+    /// Copy the live prefixes.
     fn assign(dst: *LoopBounds, allocator: Allocator, src: *const LoopBounds) ResourceError!void {
         try dst.ensureCapacity(allocator, src.len, src.lower_len, src.len_count);
         @memcpy(dst.items[0..src.len], src.items[0..src.len]);
@@ -567,7 +566,6 @@ const LoopBounds = struct {
         dst.lower_len = src.lower_len;
         @memcpy(dst.len_items[0..src.len_count], src.len_items[0..src.len_count]);
         dst.len_count = src.len_count;
-        dst.complete = src.complete;
     }
 };
 
@@ -931,10 +929,12 @@ const Pass = struct {
     /// For each join declared inside another join's body, that outer join.
     join_parent: collections.DenseMap(JoinPointId, JoinPointId),
     new_loop_bounds: bool,
-    /// An unverified length invariant was seeded this round: every fact-based
-    /// rewrite is deferred until the assumption is promoted or discarded.
+    /// An unverified invariant was seeded this round: nothing is persisted
+    /// from the round, and a rewrite whose proof rests on an assumption
+    /// (see `proof_assumed`) waits until the assumption is promoted or
+    /// discarded.
     live_pending: bool,
-    /// A provable rewrite was deferred by `live_pending`; forces another round.
+    /// A provable rewrite waited on an assumption; forces another round.
     deferred_rewrites: bool,
     /// Counts the rounds of this procedure that rewrote a statement or
     /// persisted new bounds, so a failed invariant can tell whether the
@@ -977,6 +977,11 @@ const Pass = struct {
     /// Assumption bits of the facts the current fact-graph query relaxed
     /// through; reset by each top-level query.
     query_used: u64 = 0,
+    /// Assumption bits every `proveLe` since the last reset relaxed
+    /// through: a rewrite's proof rests on an unverified assumption
+    /// exactly when this is nonzero after its queries, and only such a
+    /// rewrite waits for the assumption's verification.
+    proof_assumed: u64 = 0,
     /// Pending assumptions seeded so far this round.
     assumption_count: u8 = 0,
     rewrites: u32,
@@ -1719,6 +1724,12 @@ const Pass = struct {
     /// The narrowest offsets make the root-level goal imply the node-level
     /// one for any value in either node's window.
     fn proveLe(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
+        const proven = try self.proveLeQuery(a, b, k);
+        self.proof_assumed |= self.query_used;
+        return proven;
+    }
+
+    fn proveLeQuery(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
@@ -3562,8 +3573,22 @@ const Pass = struct {
             const join_id = self.body_joins.get(head) orelse continue;
             if (!self.live_pending) try self.persistLoopFacts(join_id, state);
             if (state.captures != self.jumpCount(join_id) or state.captures < 2) continue;
+            // Only the join's parameters are seeded from these bounds, so
+            // only theirs are persisted; a candidate for any other local
+            // would sit pending, never assumed, and its admission would
+            // ask for another round for nothing.
+            const join_stmt = self.join_stmts.get(join_id) orelse continue;
+            const params = self.store.getLocalSpan(self.store.getCFStmt(join_stmt).join.params);
             for (state.env.items) |meet| {
                 if (meet.field != null) continue;
+                var is_param = false;
+                for (0..GuardedList.borrowLen(params)) |i| {
+                    if (GuardedList.at(params, i) == meet.local) {
+                        is_param = true;
+                        break;
+                    }
+                }
+                if (!is_param) continue;
                 const key = loopBoundKey(join_id, meet.local);
                 if (self.live_pending) {
                     // Assumption round: the walk ran under unverified seeds,
@@ -3590,7 +3615,6 @@ const Pass = struct {
                 stable.len = 0;
                 stable.lower_len = 0;
                 stable.len_count = 0;
-                stable.complete = true;
                 const previous_bounds = self.loop_bounds.getPtr(key);
                 const old_items: []const StableBound = if (previous_bounds) |prev| prev.items[0..prev.len] else &.{};
                 const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
@@ -3617,40 +3641,47 @@ const Pass = struct {
                     @memcpy(stable.len_items[0..previous.len_count], previous.len_items[0..previous.len_count]);
                     stable.len_count = previous.len_count;
                 }
-                const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
-                const any_bounds = if (is_int) meet.lower_any.slice() else meet.len_bounds_any.slice();
-                for (any_bounds) |bound| {
-                    const candidate = self.lenStable(bound) orelse continue;
-                    // A constant bound below one is what any length already
-                    // satisfies, as is a bound slack enough to hold for any
-                    // pair of values; assuming either would cost a round for
-                    // nothing.
-                    if (candidate.base == .constant and candidate.c >= 0) continue;
-                    if (candidate.c >= std.math.maxInt(i64)) continue;
-                    var known = false;
-                    for (stable.len_items[0..stable.len_count]) |item| {
-                        if (sameLenBase(candidate.base, item.base)) {
-                            known = true;
-                            break;
-                        }
-                    }
-                    if (!known and stable.len_count < meet_bound_cap) {
-                        stable.len_items[stable.len_count] = .{
-                            .base = candidate.base,
-                            .c = candidate.c,
-                            .kind = if (is_int) .value else .length,
-                            .status = .pending,
-                            .hit = false,
-                        };
-                        stable.len_count += 1;
-                        self.new_loop_bounds = true;
-                    }
-                }
+                self.admitLenCandidates(&meet, stable);
                 if (stable.len == 0 and stable.lower_len == 0 and stable.len_count == 0) continue;
                 if (previous_bounds == null or previous_bounds.?.len != stable.len or previous_bounds.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
                 const slot = try self.loop_bounds.getOrPut(key);
                 if (!slot.found_existing) slot.value_ptr.* = .{};
                 try slot.value_ptr.assign(self.allocator, stable);
+            }
+        }
+    }
+
+    /// Admit the bounds some captured edge proves for a parameter as pending
+    /// invariants of its loop, into `stored`, whose invariant list has room
+    /// for `meet_bound_cap`; back edges have not re-derived a candidate
+    /// yet, so the bounds every edge proves would miss it. A constant bound
+    /// below one is what any length already satisfies, as is a bound slack
+    /// enough to hold for any pair of values; assuming either would cost a
+    /// round for nothing.
+    fn admitLenCandidates(self: *Pass, meet: *const EnvMeet, stored: *LoopBounds) void {
+        const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
+        const bounds = if (is_int) meet.lower_any.slice() else meet.len_bounds_any.slice();
+        for (bounds) |bound| {
+            const candidate = self.lenStable(bound) orelse continue;
+            if (candidate.base == .constant and candidate.c >= 0) continue;
+            if (candidate.c >= std.math.maxInt(i64)) continue;
+            var known = false;
+            for (stored.len_items[0..stored.len_count]) |item| {
+                if (sameLenBase(candidate.base, item.base)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known and stored.len_count < meet_bound_cap) {
+                stored.len_items[stored.len_count] = .{
+                    .base = candidate.base,
+                    .c = candidate.c,
+                    .kind = if (is_int) .value else .length,
+                    .status = .pending,
+                    .hit = false,
+                };
+                stored.len_count += 1;
+                self.new_loop_bounds = true;
             }
         }
     }
@@ -3753,7 +3784,6 @@ const Pass = struct {
     /// materialized against this round's nodes.
     fn seedLoopParam(self: *Pass, join_id: JoinPointId, local: LocalId) ResourceError!void {
         const stored = self.loop_bounds.getPtr(loopBoundKey(join_id, local)) orelse return;
-        if (!stored.complete) return;
         if (stored.len_count > 0 and trackedIntMax(self.localLayout(local)) == null) {
             try self.seedLenInvariants(stored, local);
             return;
@@ -4879,12 +4909,10 @@ const Pass = struct {
                         if (self.constValueOf(node)) |count| {
                             // Unreachable invalid-count arms can still be in
                             // LIR before their guarding switch is eliminated.
+                            // A node's window never rests on an assumption,
+                            // so the count needs no verification round.
                             if (count >= 0 and count <= 16) {
-                                if (self.live_pending) {
-                                    self.deferred_rewrites = true;
-                                } else {
-                                    self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
-                                }
+                                self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
                             }
                         }
                     }
@@ -5687,6 +5715,7 @@ const Pass = struct {
 
         // `a < b` holds when `a <= b - 1`; it fails when `b <= a`. The
         // remaining kinds reduce to those two shapes.
+        self.proof_assumed = 0;
         const holds = switch (op) {
             .lt => try self.proveLe(a, b, -1),
             .lte => try self.proveLe(a, b, 0),
@@ -5704,9 +5733,9 @@ const Pass = struct {
             .ne => try self.proveLe(a, b, 0) and try self.proveLe(b, a, 0),
         };
 
-        if ((holds or fails) and self.live_pending) {
-            // The proof may rest on an unverified length assumption; defer
-            // the fold and model the compare as undecided this round.
+        if ((holds or fails) and self.proof_assumed != 0) {
+            // The proof rests on an unverified assumption; defer the fold
+            // and model the compare as undecided this round.
             self.deferred_rewrites = true;
         } else if (holds or fails) {
             try self.recordProof(stmt);
@@ -5758,6 +5787,7 @@ const Pass = struct {
 
         if (try self.foldSameSignConstantChain(stmt, s, args, entry, lhs, rhs, operand_layout, max.?)) return;
 
+        self.proof_assumed = 0;
         var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
         if (!proof.proven) {
             if (self.pathNoOverflowFact(entry.operation, lhs, rhs, operand_layout)) |fact| {
@@ -5776,7 +5806,7 @@ const Pass = struct {
         }
 
         if (entry.mode == .overflows) {
-            if ((proof.proven or always_overflows) and self.live_pending) {
+            if ((proof.proven or always_overflows) and self.proof_assumed != 0) {
                 self.deferred_rewrites = true;
             } else if (proof.proven or always_overflows) {
                 const truth: u16 = @intFromBool(always_overflows);
@@ -5808,7 +5838,7 @@ const Pass = struct {
         }
 
         if (proof.proven and entry.mode != .proven_cannot_overflow) {
-            if (self.live_pending) {
+            if (self.proof_assumed != 0) {
                 self.deferred_rewrites = true;
             } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);
