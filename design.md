@@ -8212,7 +8212,7 @@ row is invisible to every caller: nothing outside the definition can name its
 extension, so no later use can add a field, and the closed row is exactly the
 row module finalization would close. Closing at the boundary lets the codec
 produce its constraints, including its error row, before the definition's type
-is published. A row whose extension is still open when the definition
+is output. A row whose extension is still open when the definition
 generalizes would otherwise close at module finalization and add errors (such
 as `MissingRequiredField(Str)`) to a scheme that callers have already
 instantiated, so callers' exhaustiveness and annotation checks would run
@@ -8240,7 +8240,7 @@ src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
 named rigid record extension). Boundary closure is pinned by
 src/check/test/derived_codec_local_record_row_test.zig and
 test/cli/JsonParseInferredRecordFieldAccess.roc: accepted—a parsed record
-used only through field access publishes its required-field error, and its
+used only through field access outputs its required-field error, and its
 field types stay generic; rejected—a caller's match or annotation that omits
 that error, and a parameter or returned record used only through field access
 (including a nested one), which reports "Record Fields Not Known"; the issue
