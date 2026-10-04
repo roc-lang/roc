@@ -1804,6 +1804,23 @@ const Pass = struct {
 
     // Pre-scan: predecessor counts, jump counts, and assignment counts.
 
+    /// Reserve the per-merge-head maps for every head the procedure has,
+    /// so they never grow during the rounds: their values are sized for
+    /// their caps, and the pass runs on an arena, where a map that grows
+    /// by doubling leaves every earlier copy allocated.
+    fn reserveMergeStorage(self: *Pass) ResourceError!void {
+        var heads: usize = 0;
+        var it = self.pred_counts.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* > 1) heads += 1;
+        }
+        const joins = self.join_stmts.count();
+        try self.merge_states.ensureTotalCapacity(heads + joins);
+        try self.merge_facts.ensureTotalCapacity(heads + joins);
+        try self.merge_env.ensureTotalCapacity(heads + joins);
+        try self.loop_facts.ensureTotalCapacity(joins);
+    }
+
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
         if (self.read_counts) |*counts| counts.deinit();
         self.read_counts = null;
@@ -2183,6 +2200,22 @@ const Pass = struct {
             };
         }
 
+        /// Empty the scan for another build, keeping its memory.
+        fn clear(self: *LoopScan) void {
+            self.stmts.clearRetainingCapacity();
+            self.index_of.clearRetainingCapacity();
+            self.successors.clearRetainingCapacity();
+            self.edges.clearRetainingCapacity();
+            self.pred_start.clearRetainingCapacity();
+            self.preds.clearRetainingCapacity();
+            var jumps = self.jumps_to.iterator();
+            while (jumps.next()) |entry| entry.value_ptr.clearRetainingCapacity();
+            self.join_order.clearRetainingCapacity();
+            self.mark.clearRetainingCapacity();
+            self.pending.clearRetainingCapacity();
+            self.cycle.clearRetainingCapacity();
+        }
+
         fn deinit(self: *LoopScan, allocator: Allocator) void {
             self.stmts.deinit(allocator);
             self.index_of.deinit();
@@ -2221,6 +2254,7 @@ const Pass = struct {
         const scan = &self.loop_scan;
         const gpa = self.allocator;
         const successors = &scan.successors;
+        scan.clear();
         _ = try scan.node(gpa, body);
         var cursor: u32 = 0;
         while (cursor < scan.stmts.items.len) : (cursor += 1) {
@@ -4133,6 +4167,7 @@ const Pass = struct {
         while (round < max_rounds) : (round += 1) {
             self.resetRound();
             try self.prescanProc(proc);
+            if (round == 0) try self.reserveMergeStorage();
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.new_loop_bounds = false;
