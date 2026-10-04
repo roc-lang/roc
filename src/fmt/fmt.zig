@@ -948,18 +948,24 @@ const Formatter = struct {
                         .start = fmt.nodeRegion(@intFromEnum(items[0])).start - 1,
                         .end = i.region.end,
                     };
+                    try fmt.commentBoundary(list_region.start, false);
                     try fmt.formatOrderedCollection(list_region, fmt.ast.store.getCollectionLayout(f.si), .square, AST.ExposedItem.Idx, items, Formatter.formatExposedItem, true);
                 }
                 return fmt.finishStatement(f);
             },
             .file_import => |fi| {
-                try fmt.pushAll("import ");
+                try fmt.pushAll("import");
+                try fmt.commentBoundary(fi.path_tok - 1, true);
                 try fmt.push('"');
                 try fmt.pushTokenText(fi.path_tok);
                 try fmt.push('"');
-                try fmt.pushAll(" as ");
+                try fmt.commentBoundary(fi.name_tok - 1, true);
+                try fmt.pushAll("as");
+                try fmt.commentBoundary(fi.name_tok, true);
                 try fmt.pushTokenText(fi.name_tok);
-                try fmt.pushAll(" : ");
+                try fmt.commentBoundary(fi.name_tok + 1, true);
+                try fmt.push(':');
+                try fmt.commentBoundary(fi.name_tok + 2, true);
                 if (fi.is_bytes) {
                     try fmt.pushAll("List(U8)");
                 } else {
@@ -1281,7 +1287,8 @@ const Formatter = struct {
                 try fmt.pushAll("where");
 
                 // Add opening bracket
-                try fmt.pushAll(" [");
+                try fmt.commentBoundary(clause_coll.region.start + 1, true);
+                try fmt.push('[');
                 if (f.clauses_multiline) {
                     fmt.curr_indent += 1;
                 }
@@ -1319,6 +1326,9 @@ const Formatter = struct {
                 Formatter.discardRegion(result.region);
                 if (f.clauses_multiline) {
                     try fmt.push(',');
+                    if (fmt.ast.tokens.tokenTag(result.region.end) == .Comma and fmt.hasCommentBefore(result.region.end)) {
+                        try fmt.flushCommentsBeforeDiscard(result.region.end);
+                    }
                 }
                 f.next += 1;
                 continue :sw 1;
@@ -1362,6 +1372,7 @@ const Formatter = struct {
         var tok = target.start_tok;
         while (tok <= last_tok) : (tok += 1) {
             const tag = tags[tok];
+            if (tok > target.start_tok) try fmt.commentBoundary(tok, false);
             if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
                 try fmt.push('.');
                 try fmt.pushTokenText(tok);
@@ -1698,6 +1709,9 @@ const Formatter = struct {
             else => {
                 Formatter.discardRegion(result.region);
                 try fmt.endCollectionItem(f.state, f.next + 1 == len);
+                if (f.state.multiline and fmt.ast.tokens.tokenTag(result.region.end) == .Comma and fmt.hasCommentBefore(result.region.end)) {
+                    try fmt.flushCommentsBeforeDiscard(result.region.end);
+                }
                 f.next += 1;
                 continue :sw 1;
             },
@@ -1764,7 +1778,9 @@ const Formatter = struct {
         }
         switch (field.value) {
             .supplied => |v| {
-                try fmt.pushAll(": ");
+                try fmt.commentBoundary(field.name + 1, false);
+                try fmt.push(':');
+                try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(v)).start, true);
                 f.phase = 1;
                 return call(exprFrame(v, .{}));
             },
@@ -1826,10 +1842,22 @@ const Formatter = struct {
                 .text => |text| try fmt.pushTokenText(text.token),
                 .capture => |capture| {
                     try fmt.pushAll("${");
+                    const indent = fmt.curr_indent;
+                    const expanded = fmt.regionHasInteriorComment(capture.region);
+                    if (expanded) {
+                        fmt.curr_indent += 1;
+                        try fmt.commentBoundary(capture.region.start + 1, false);
+                    }
                     if (capture.name) |name| {
                         try fmt.pushTokenText(name);
                     } else {
                         try fmt.push('_');
+                    }
+                    if (expanded) {
+                        try fmt.commentBoundary(capture.region.end - 1, false);
+                        fmt.curr_indent = indent;
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     }
                     try fmt.push('}');
                 },
@@ -2803,12 +2831,14 @@ const Formatter = struct {
                 const branches = fmt.ast.store.matchBranchSlice(m.branches);
                 sw: switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("match ");
+                        try fmt.pushAll("match");
+                        try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(m.expr)).start, true);
                         f.phase = 1;
                         return call(exprFrame(m.expr, .{}));
                     },
                     1 => {
-                        try fmt.pushAll(" {");
+                        try fmt.commentBoundary(result.region.end, true);
+                        try fmt.push('{');
                         fmt.curr_indent += 1;
                         f.locals = .{ .match = .{ .branch_indent = fmt.curr_indent, .next = 0 } };
                         if (branches.len == 0) {
@@ -3445,7 +3475,9 @@ const Formatter = struct {
                     return call(patternFrame(a.pattern));
                 }
                 Formatter.discardRegion(result.region);
-                try fmt.pushAll(" as ");
+                try fmt.commentBoundary(a.name - 1, true);
+                try fmt.pushAll("as");
+                try fmt.commentBoundary(a.name, true);
                 try fmt.pushTokenText(a.name);
                 return done;
             },
@@ -3468,7 +3500,9 @@ const Formatter = struct {
                 }
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
-                    try fmt.pushAll(" as ");
+                    try fmt.commentBoundary(a - 1, true);
+                    try fmt.pushAll("as");
+                    try fmt.commentBoundary(a, true);
                     try fmt.pushTokenText(a);
                 }
             },
@@ -3480,7 +3514,9 @@ const Formatter = struct {
                 }
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
-                    try fmt.pushAll(" as ");
+                    try fmt.commentBoundary(a - 1, true);
+                    try fmt.pushAll("as");
+                    try fmt.commentBoundary(a, true);
                     try fmt.pushTokenText(a);
                 }
             },
@@ -3491,6 +3527,7 @@ const Formatter = struct {
                     try fmt.push('.');
                 }
                 try fmt.pushTokenText(i.ident);
+                try fmt.commentBoundary(i.ident + 1, false);
                 try fmt.pushAll(".*");
             },
             .malformed => |m| {
@@ -3537,6 +3574,7 @@ const Formatter = struct {
             try fmt.pushIndent();
             try fmt.formatTargetEntry(entry_idx);
             try fmt.push(',');
+            if (fmt.ast.tokens.tokenTag(entry.region.end) == .Comma and fmt.hasCommentBefore(entry.region.end)) try fmt.flushCommentsBeforeDiscard(entry.region.end);
         }
 
         fmt.curr_indent = start_indent + 1;
@@ -3587,7 +3625,9 @@ const Formatter = struct {
 
         // Format target name (e.g., x64linux)
         try fmt.pushTokenText(entry.target);
-        try fmt.pushAll(": ");
+        try fmt.commentBoundary(entry.target + 1, false);
+        try fmt.push(':');
+        try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(entry.config)).start, true);
         try fmt.formatTargetConfig(entry.config);
     }
 
@@ -3737,7 +3777,11 @@ const Formatter = struct {
         if (fmt.platform_dependency != null and fmt.platform_dependency.? == idx) {
             const field = fmt.ast.store.getRecordField(idx);
             try fmt.pushTokenText(field.name);
-            try fmt.pushAll(": platform ");
+            try fmt.commentBoundary(field.name + 1, false);
+            try fmt.push(':');
+            try fmt.commentBoundary(field.name + 2, true);
+            try fmt.pushAll("platform");
+            try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(field.value.supplied)).start, true);
             try fmt.formatExprDiscard(field.value.supplied);
             return field.region;
         }
@@ -3844,7 +3888,8 @@ const Formatter = struct {
                     true,
                 );
                 if (multiline) {
-                    try fmt.newline();
+                    try fmt.flushCommentsBeforeDiscard(fmt.ast.store.getCollection(p.packages).region.start);
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
@@ -3944,7 +3989,9 @@ const Formatter = struct {
             try fmt.pushAll("] for ");
         }
         try fmt.pushTokenText(entry.entrypoint_name);
-        try fmt.pushAll(" : ");
+        try fmt.commentBoundary(entry.entrypoint_name + 1, true);
+        try fmt.push(':');
+        try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(entry.type_anno)).start, true);
         try fmt.formatTypeAnnoDiscard(entry.type_anno);
         return entry.region;
     }
@@ -3978,6 +4025,7 @@ const Formatter = struct {
 
         try fmt.pushTokenText(h.name);
         if (h.args.span.len > 0) {
+            try fmt.commentBoundary(h.name + 1, false);
             return collectionFrame(h.region, fmt.ast.store.getCollectionLayout(header), .round, .{ .type_anno = fmt.ast.store.typeAnnoSlice(h.args) });
         }
         return null;
@@ -4105,7 +4153,8 @@ const Formatter = struct {
                 }
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
-                try fmt.pushAll(" :");
+                try fmt.commentBoundary(c.name_tok + 1, true);
+                try fmt.push(':');
                 const anno_region = fmt.nodeRegion(@intFromEnum(c.anno));
                 fmt.curr_indent = start_indent;
                 if (multiline and try fmt.flushContinuationComments(anno_region.start)) {
@@ -4353,6 +4402,9 @@ const Formatter = struct {
                         Formatter.discardRegion(result.region);
                         if (f.items_multiline) {
                             try fmt.push(',');
+                            if (fmt.ast.tokens.tokenTag(result.region.end) == .Comma and fmt.hasCommentBefore(result.region.end)) {
+                                try fmt.flushCommentsBeforeDiscard(result.region.end);
+                            }
                         } else if (f.next < (tags.len - 1) or (t.ext != .closed and !f.drops_open)) {
                             try fmt.pushAll(", ");
                         }
@@ -4404,7 +4456,9 @@ const Formatter = struct {
                             try fmt.pushAll("()");
                         }
 
-                        try fmt.pushAll(if (fn_anno.effectful) " =>" else " ->");
+                        const ret_start = fmt.nodeRegion(@intFromEnum(fn_anno.ret)).start;
+                        try fmt.commentBoundary(ret_start - 1, true);
+                        try fmt.pushAll(if (fn_anno.effectful) "=>" else "->");
                         const ret_region = fmt.nodeRegion(@intFromEnum(fn_anno.ret));
                         if (multiline and try fmt.flushContinuationComments(ret_region.start)) {
                             try fmt.pushIndent();
@@ -4419,6 +4473,7 @@ const Formatter = struct {
                         if (f.next < args.len - 1) {
                             if (multiline) {
                                 try fmt.push(',');
+                                if (fmt.hasCommentBefore(result.region.end)) try fmt.flushCommentsBeforeDiscard(result.region.end);
                             } else {
                                 try fmt.pushAll(", ");
                             }
@@ -4468,6 +4523,16 @@ const Formatter = struct {
 
     fn newline(fmt: *Formatter) error{WriteFailed}!void {
         try fmt.push('\n');
+    }
+
+    /// Emit a syntax boundary's comments without preserving bare source line breaks.
+    fn commentBoundary(fmt: *Formatter, token: Token.Idx, space: bool) error{WriteFailed}!void {
+        if (fmt.hasCommentBefore(token)) {
+            _ = try fmt.flushCommentsBefore(token);
+            try fmt.pushIndent();
+        } else if (space) {
+            try fmt.push(' ');
+        }
     }
 
     /// A continuation's leading comments belong to its indentation level.
@@ -8255,4 +8320,725 @@ test "nested expressions, patterns, types, and statements format on a small nati
     const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
     thread.join();
     try result;
+}
+
+test "issue 12040: inter-token comments case 01" {
+    const source =
+        \\module [User]
+        \\
+        \\User : {
+        \\    name : Str # login handle
+        \\    , age : U64,
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 02" {
+    const source =
+        \\module [total]
+        \\
+        \\total = add(price # in cents
+        \\    , tax)
+        \\
+        \\add = |a, b| a + b
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 03" {
+    const source =
+        \\module [add]
+        \\
+        \\add : U64 # running total
+        \\    , U64 -> U64
+        \\
+        \\add = |a, b| a + b
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 04" {
+    const source =
+        \\module [ports]
+        \\
+        \\ports = [80 # plain HTTP
+        \\    , 443]
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 05" {
+    const source =
+        \\module [Pair]
+        \\
+        \\Pair(first # left element
+        \\    , second) := (first, second)
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 06" {
+    const source =
+        \\module [rest_of]
+        \\
+        \\rest_of = |rows| match rows {
+        \\    [first # skip the header row
+        \\        , .. as rest] => rest
+        \\    _ => []
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 07" {
+    const source =
+        \\module [owner_name]
+        \\
+        \\owner_name = |user| match user {
+        \\    { name # display name
+        \\        , .. } => name
+        \\    _ => "anonymous"
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 08" {
+    const source =
+        \\module [Status]
+        \\
+        \\Status : [Active # serving traffic
+        \\    , Inactive]
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 09" {
+    const source =
+        \\module [Scores]
+        \\
+        \\Scores : Dict(Str # player name
+        \\    , U64)
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 10" {
+    const source =
+        \\module [summarize]
+        \\
+        \\summarize : a -> Str where [a.id : a -> U64 # numeric handle
+        \\    , a.label : a -> Str]
+        \\
+        \\summarize = |_| "none"
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 11" {
+    const source =
+        \\module [server]
+        \\
+        \\server = {
+        \\    host: # DNS name
+        \\        "localhost",
+        \\    port: 8080,
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 12" {
+    const source =
+        \\module [server]
+        \\
+        \\server = {
+        \\    host # DNS name
+        \\        : "localhost",
+        \\    port: 8080,
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 13" {
+    const source =
+        \\module [main]
+        \\
+        \\import json # vendored parser
+        \\    .Parser
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 14" {
+    const source =
+        \\module [main]
+        \\
+        \\import Color exposing # only what we need
+        \\    [to_str]
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 15" {
+    const source =
+        \\module [main]
+        \\
+        \\import Color as Palette exposing # only what we need
+        \\    [to_str]
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 16" {
+    const source =
+        \\module [main]
+        \\
+        \\import "data.json" as # decoded at compile time
+        \\    config : Str
+        \\
+        \\main = config
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 17" {
+    const source =
+        \\module [main]
+        \\
+        \\import "data.json" as config : # decoded at compile time
+        \\    Str
+        \\
+        \\main = config
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 18" {
+    const source =
+        \\module [main]
+        \\
+        \\import # decoded at compile time
+        \\    "data.json" as config : Str
+        \\
+        \\main = config
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 19" {
+    const source =
+        \\module [main]
+        \\
+        \\import Color exposing [Shape # all shape helpers
+        \\    .*]
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 20" {
+    const source =
+        \\module [describe]
+        \\
+        \\describe = |shape| match shape # just two cases
+        \\    {
+        \\        Circle => "circle"
+        \\        _ => "other"
+        \\    }
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 21" {
+    const source =
+        \\module [describe]
+        \\
+        \\describe = |shape| match # normalized earlier
+        \\    shape {
+        \\        Circle => "circle"
+        \\        _ => "other"
+        \\    }
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 22" {
+    const source =
+        \\module [main]
+        \\
+        \\import Color exposing [to_str as # shorter name
+        \\    str_fn]
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 23" {
+    const source =
+        \\module [main]
+        \\
+        \\import Color exposing [to_str # shorter name
+        \\    as str_fn]
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 24" {
+    const source =
+        \\module [describe]
+        \\
+        \\describe = |shape| match shape {
+        \\    Circle(radius) as # keep the whole shape
+        \\        circ => circ
+        \\    _ => shape
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 25" {
+    const source =
+        \\module [describe]
+        \\
+        \\describe = |shape| match shape {
+        \\    Circle(radius) # keep the whole shape
+        \\        as circ => circ
+        \\    _ => shape
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 26" {
+    const source =
+        \\module [run]
+        \\
+        \\run! : List(Str) # exit code
+        \\    => I32
+        \\
+        \\run! = |args| 0
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 27" {
+    const source =
+        \\module [add]
+        \\
+        \\add : U64 # returns the same type
+        \\    -> U64
+        \\
+        \\add = |x| x
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 28" {
+    const source =
+        \\module [render]
+        \\
+        \\render : List(a) -> Str where [a.label # short text
+        \\    : a -> Str]
+        \\
+        \\render = |items| "none"
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 29" {
+    const source =
+        \\module [Box]
+        \\
+        \\Box(a) := List(a) where # comparable elements only
+        \\    [a.eq : a, a -> Bool]
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 30" {
+    const source =
+        \\module [render]
+        \\
+        \\render : List(a) -> Str where # printable elements only
+        \\    [a.label : a -> Str]
+        \\
+        \\render = |items| "none"
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 31" {
+    const source =
+        \\platform "img-convert"
+        \\    requires { convert! : # host callback
+        \\        List(U8) => List(U8) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides {}
+        \\    targets: {}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 32" {
+    const source =
+        \\platform "img-convert"
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides {}
+        \\    targets: { x64mac : # intel macs
+        \\        { inputs: [app] } }
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 33" {
+    const source =
+        \\platform "img-convert"
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides {}
+        \\    targets: {
+        \\        x64mac: { inputs: [app] } # intel macs
+        \\        , arm64mac: { inputs: [app] },
+        \\    }
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 34" {
+    const source =
+        \\app [main] { pf: platform # local checkout
+        \\    "../platform/main.roc" }
+        \\
+        \\main = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 35" {
+    const source =
+        \\package [Greeter] # no external deps
+        \\    {}
+        \\
+        \\greeter = 1
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 36" {
+    const source =
+        \\module [user_id]
+        \\
+        \\user_id = |path| match path {
+        \\    "user-${ # numeric suffix
+        \\        id}" => id
+        \\    _ => "unknown"
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 37" {
+    const source =
+        \\module [user_id]
+        \\
+        \\user_id = |path| match path {
+        \\    "user-${id # numeric suffix
+        \\        }" => id
+        \\    _ => "unknown"
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
+}
+
+test "issue 12040: inter-token comments case 38" {
+    const source =
+        \\module [Pair]
+        \\
+        \\Pair # generic pair
+        \\    (first, second) := (first, second)
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
+        }
+    }
 }
