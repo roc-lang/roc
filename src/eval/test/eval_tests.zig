@@ -22,6 +22,42 @@ const simd_tests = @import("eval_simd_tests.zig");
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
 const core_tests = [_]TestCase{
     .{
+        .name = "issue 12029: a capturing lambda called in tail position replaces its caller's frame",
+        .source =
+        \\{
+        \\    count_down = |n, label| if n == 0 Str.count_utf8_bytes(label) else label |> (|kept| count_down(n - 1, Str.concat(kept, "")))
+        \\    count_down(50_000.U64, "a fairly long label that lives on the heap")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "issue 12029: tail calls between functions run in constant stack",
+        .source_kind = .module,
+        .source =
+        \\is_even : U64 -> Bool
+        \\is_even = |n| if n == 0 True else is_odd(n - 1)
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| if n == 0 False else is_even(n - 1)
+        \\through_capturing_lambda = |n| if n == 0 0 else 0 |> (|_| through_capturing_lambda(n - 1))
+        \\ping : U64, List(U64), Str -> U64
+        \\ping = |n, acc, label| if n == 0 List.len(acc) + Str.count_utf8_bytes(label) else pong(n - 1, List.append(acc, n), label)
+        \\pong : U64, List(U64), Str -> U64
+        \\pong = |n, acc, label| if n == 0 List.len(acc) + Str.count_utf8_bytes(label) else ping(n - 1, acc, Str.concat(label, ""))
+        \\Big : { a : U64, b : U64, c : U64, d : Str }
+        \\big_a : U64, Big -> Big
+        \\big_a = |n, acc| if n == 0 acc else big_b(n - 1, { ..acc, a: acc.a + 1 })
+        \\big_b : U64, Big -> Big
+        \\big_b = |n, acc| if n == 0 acc else big_a(n - 1, { ..acc, b: acc.b + 2 })
+        \\main = {
+        \\    var $scale = 20_000.U64
+        \\    big = big_a($scale * 2, { a: 0, b: 0, c: 7, d: "kept" })
+        \\    is_even($scale * 5) and (through_capturing_lambda($scale * 5) == 0) and (ping($scale * 2, [], "a fairly long label that lives on the heap") == 20_042) and (big.a == 20_000) and (big.b == 40_000) and (big.d == "kept")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "issue 11271: polymorphic record constructions materialize all defaults",
         .source_kind = .module,
         .source =

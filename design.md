@@ -16503,8 +16503,23 @@ caller's frame is gone.
   copies each in-memory argument into it. A callee copies its in-memory
   arguments into its own frame on entry, so the storage is free again by the
   time the callee makes its own frame-replacing call.
+- The WebAssembly backend targets engines without the tail-call
+  instructions, WebAssembly 1.0 included, so it replaces the frame without
+  them. A frame-replacing call stores its callee's arguments and the callee's
+  identity in one static tail area and returns. Every ordinary call to a
+  member of a tail group is followed by a call to that group's driver, which
+  loops while a callee is pending: it loads the callee's arguments from the
+  tail area and calls it. The chain therefore runs in the frame of whoever
+  entered the group. A member copies its aggregate arguments into its own
+  frame on entry, because they may sit in the tail area and the next
+  frame-replacing call overwrites it.
 - The interpreter ends the activation that made the call and starts the
   callee's in the same native frame.
+
+LLVM's WebAssembly target has no calling convention that guarantees a tail
+call between functions of different signatures, so a frame-replacing call
+compiled through LLVM for WebAssembly is an ordinary call followed by a
+return.
 
 A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the
