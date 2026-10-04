@@ -21,6 +21,6 @@ Its type needs all of these:
 
 Without knowing which type it is, there's no way to tell which `foo` method to use.
 
-**Hint:** Add a suffix or a type annotation saying which type it should be.
+**Hint:** None of the built-in number types have a method named `foo`.
 # PROBLEMS
 NIL

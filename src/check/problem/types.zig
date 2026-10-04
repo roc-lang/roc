@@ -699,6 +699,10 @@ pub const UndeterminedType = struct {
     /// The requirement came from a desugared operator, which the report names
     /// instead of its method.
     is_binop: bool,
+    /// For a literal subject: none of the built-in types the literal's kind
+    /// can default to has `method_name`, so an annotation naming a built-in
+    /// type cannot help. Always false for other subjects.
+    builtin_candidates_lack_method: bool = false,
 
     pub const Subject = enum {
         number_literal,

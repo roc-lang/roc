@@ -36453,6 +36453,7 @@ fn reportUndeterminedType(
     // failed requirement.
     var subject: problem.UndeterminedType.Subject = .value;
     var region: Region = self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr);
+    var builtin_candidates_lack_method = false;
     const root = self.types.resolveVar(record.var_).var_;
     literal: for (self.default_decided_records.items[0 .. record_idx + 1]) |candidate| {
         if (self.types.resolveVar(candidate.var_).var_ != root) continue;
@@ -36463,6 +36464,7 @@ fn reportUndeterminedType(
             .quote, .interpolation => .string_literal,
         };
         if (self.firstLiteralRegionInClass(kind, root)) |literal_region| region = literal_region;
+        builtin_candidates_lack_method = try self.builtinLiteralCandidatesLackMethod(kind, constraint.fn_name);
         break :literal;
     }
 
@@ -36473,7 +36475,50 @@ fn reportUndeterminedType(
         .requirements_snapshot = requirements_snapshot,
         .method_name = constraint.fn_name,
         .is_binop = constraint.origin == .desugared_binop,
+        .builtin_candidates_lack_method = builtin_candidates_lack_method,
     } } });
+}
+
+/// Whether no built-in type a literal of `kind` can become has a method named
+/// `method_name`. The candidates are the defaulting oracle's: every numeral
+/// default candidate for a number literal, and the string default (`Str`, the
+/// only built-in string type) for quote and interpolation literals. Each is
+/// looked up through the same method registry dispatch uses. A user nominal
+/// that converts literals of this kind is outside this set, so the answer is
+/// about built-in types only.
+fn builtinLiteralCandidatesLackMethod(
+    self: *Self,
+    kind: StaticDispatchConstraint.LiteralKind,
+    method_name: Ident.Idx,
+) Allocator.Error!bool {
+    switch (literal_defaulting.defaultTargetForKind(kind)) {
+        .dec => {
+            // Building a candidate's nominal content appends to the store;
+            // the lookup only reads it, so nothing built here outlives it.
+            var savepoint = try self.types.createSavepoint();
+            defer self.types.rollbackToSavepoint(&savepoint);
+            for (numeral_default_candidates) |num_kind| {
+                const content = try self.mkNumberTypeContent(num_kind);
+                if (self.builtinNominalHasMethod(content.structure.nominal_type, method_name)) return false;
+            }
+            return true;
+        },
+        .str => {
+            const str_content = self.types.resolveVar(self.str_var).desc.content;
+            if (str_content == .structure and str_content.structure == .nominal_type) {
+                return !self.builtinNominalHasMethod(str_content.structure.nominal_type, method_name);
+            }
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: the builtin Str type is not a nominal type", .{});
+            }
+            unreachable;
+        },
+    }
+}
+
+fn builtinNominalHasMethod(self: *Self, nominal_type: types_mod.NominalType, method_name: Ident.Idx) bool {
+    const owner_env = self.getNominalOriginEnv(nominal_type);
+    return self.lookupStaticDispatchMethodBinding(owner_env, nominal_type.sourceDeclOptional(), self.cir, method_name) != null;
 }
 
 /// The source region of the first literal of `kind` whose dispatch plan

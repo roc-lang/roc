@@ -3393,6 +3393,32 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        if (data.builtin_candidates_lack_method) {
+            const builtin_types: []const u8 = switch (data.subject) {
+                .number_literal => "None of the built-in number types",
+                .string_literal => "None of the built-in string types",
+                .value, .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+            };
+            if (operator) |operator_text| {
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes(builtin_types),
+                    D.bytes("support"),
+                    D.bytes(operator_text).withAnnotation(.binary_operator),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, &report);
+            } else {
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes(builtin_types),
+                    D.bytes("have a method named"),
+                    D.ident(data.method_name).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, &report);
+            }
+            return report;
+        }
+
         const hint: []const u8 = switch (data.subject) {
             .number_literal => "Add a suffix or a type annotation saying which type it should be.",
             .string_literal, .value => "Add a type annotation saying which type it should be.",

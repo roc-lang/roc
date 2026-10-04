@@ -19,13 +19,19 @@ literal_signature = 35.plus("s")
 
 shared_literals = if True 1 else "s"
 
+string_compare = "apple" > "banana"
+
+string_method = "s".foo()
+
 written : Dec
 written = 35
 
 written_method = written.foo()
 ~~~
 # EXPECTED
-MISSING METHOD - defaulted_type_diagnostics.md:18:26:18:29
+MISSING METHOD - defaulted_type_diagnostics.md:22:26:22:29
+TYPE NOT DETERMINED - defaulted_type_diagnostics.md:15:18:15:25
+TYPE NOT DETERMINED - defaulted_type_diagnostics.md:17:17:17:20
 TYPE NOT DETERMINED - defaulted_type_diagnostics.md:9:18:9:20
 TYPE NOT DETERMINED - defaulted_type_diagnostics.md:11:21:11:23
 TYPE MISMATCH - defaulted_type_diagnostics.md:13:34:13:37
@@ -36,7 +42,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
-		(region (start 18 26) (end 18 29))
+		(region (start 22 26) (end 22 29))
 		(headline
 			(reflow "This")
 			(reflow " ")
@@ -44,7 +50,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow " ")
 			(reflow "method is being called on a value whose type doesn't have that method."))
 		(document
-			(source-region (file "defaulted_type_diagnostics.md") (start 18 26) (end 18 29) (annotation error) (line-text "written_method = written.foo()"))
+			(source-region (file "defaulted_type_diagnostics.md") (start 22 26) (end 22 29) (annotation error) (line-text "written_method = written.foo()"))
 			(line-break)
 			(reflow "The value's type, which does not have a method named ")
 			(annotated code "foo")
@@ -66,6 +72,72 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotated code "foo")
 			(reflow " ")
 			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Type Not Determined")
+		(region (start 15 18) (end 15 25))
+		(headline
+			(reflow "Nothing in this program determines the type of this string:"))
+		(document
+			(source-region (file "defaulted_type_diagnostics.md") (start 15 18) (end 15 25) (annotation error) (line-text "string_compare = \"apple\" > \"banana\""))
+			(line-break)
+			(reflow "Its type needs all of these:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "b where [b.is_gt : b, b -> Bool]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated operator ">")
+			(reflow " ")
+			(reflow "to use.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "support")
+			(reflow " ")
+			(annotated operator ">")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Not Determined")
+		(region (start 17 17) (end 17 20))
+		(headline
+			(reflow "Nothing in this program determines the type of this string:"))
+		(document
+			(source-region (file "defaulted_type_diagnostics.md") (start 17 17) (end 17 20) (annotation error) (line-text "string_method = \"s\".foo()"))
+			(line-break)
+			(reflow "Its type needs all of these:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "b where [b.foo : b -> _ret]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "have a method named")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow ".")))
 	(report
 		(severity runtime_error)
 		(title "Type Not Determined")
@@ -93,7 +165,12 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "Add a suffix or a type annotation saying which type it should be.")))
+			(reflow "None of the built-in number types")
+			(reflow " ")
+			(reflow "have a method named")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow ".")))
 	(report
 		(severity runtime_error)
 		(title "Type Not Determined")
@@ -174,6 +251,8 @@ LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpBar,LowerIdent,OpBar,LowerIden
 LowerIdent,OpAssign,Int,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
 LowerIdent,OpAssign,Int,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
 LowerIdent,OpAssign,KwIf,UpperIdent,Int,KwElse,StringStart,StringPart,StringEnd,
+LowerIdent,OpAssign,StringStart,StringPart,StringEnd,OpGreaterThan,StringStart,StringPart,StringEnd,
+LowerIdent,OpAssign,StringStart,StringPart,StringEnd,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
@@ -250,6 +329,20 @@ EndOfFile,
 				(e-int (raw "1"))
 				(e-string
 					(e-string-part (raw "s")))))
+		(s-decl
+			(p-ident (raw "string_compare"))
+			(e-binop (op ">")
+				(e-string
+					(e-string-part (raw "apple")))
+				(e-string
+					(e-string-part (raw "banana")))))
+		(s-decl
+			(p-ident (raw "string_method"))
+			(e-method-call (method ".foo")
+				(receiver
+					(e-string
+						(e-string-part (raw "s"))))
+				(args)))
 		(s-type-anno (name "written")
 			(ty (name "Dec")))
 		(s-decl
@@ -278,6 +371,10 @@ literal_signature = (35).plus("s")
 
 shared_literals = if True 1 else "s"
 
+string_compare = "apple" > "banana"
+
+string_method = "s".foo()
+
 written : Dec
 written = 35
 
@@ -294,12 +391,12 @@ written_method = written.foo()
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-dispatch-call (method "encode") (constraint-fn-var 295)
+				(e-dispatch-call (method "encode") (constraint-fn-var 307)
 					(receiver
-						(e-call (constraint-fn-var 294)
+						(e-call (constraint-fn-var 306)
 							(e-lookup-local
 								(p-assign (ident "f")))
-							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 290)
+							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 302)
 								(args
 									(e-num (value "41"))))))
 					(args))))
@@ -321,12 +418,12 @@ written_method = written.foo()
 						(ty-lookup (name "I64") (builtin)))))))
 	(d-let
 		(p-assign (ident "materialized"))
-		(e-call (constraint-fn-var 315)
+		(e-call (constraint-fn-var 327)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
 					(p-assign (ident "n")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 313)
+				(e-dispatch-call (method "plus") (constraint-fn-var 325)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))
@@ -334,13 +431,13 @@ written_method = written.foo()
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "literal_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 323)
+		(e-dispatch-call (method "foo") (constraint-fn-var 335)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args)))
 	(d-let
 		(p-assign (ident "literal_signature"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 340)
+		(e-dispatch-call (method "plus") (constraint-fn-var 352)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
@@ -355,6 +452,19 @@ written_method = written.foo()
 					(e-runtime-error (tag "erroneous_value_expr"))))
 			(if-else
 				(e-runtime-error (tag "erroneous_value_expr")))))
+	(d-let
+		(p-assign (ident "string_compare"))
+		(e-dispatch-call (method "is_gt") (constraint-fn-var 391)
+			(receiver
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(args
+				(e-runtime-error (tag "erroneous_value_expr")))))
+	(d-let
+		(p-assign (ident "string_method"))
+		(e-dispatch-call (method "foo") (constraint-fn-var 401)
+			(receiver
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(args)))
 	(d-let
 		(p-assign (ident "written"))
 		(e-num (value "35"))
@@ -373,6 +483,8 @@ written_method = written.foo()
 		(patt (type "_b"))
 		(patt (type "_b"))
 		(patt (type "Dec"))
+		(patt (type "Bool"))
+		(patt (type "_b"))
 		(patt (type "Dec"))
 		(patt (type "_b")))
 	(expressions
@@ -381,6 +493,8 @@ written_method = written.foo()
 		(expr (type "_b"))
 		(expr (type "_b"))
 		(expr (type "Dec"))
+		(expr (type "Bool"))
+		(expr (type "_b"))
 		(expr (type "Dec"))
 		(expr (type "_b"))))
 ~~~

@@ -13223,7 +13223,19 @@ head default, or a specialization default materialization—the checker
 reports one `undetermined_type` problem ("type not determined") for that
 class instead of a missing-method or mismatch report against the default
 owner. The report states what the type must support and that nothing in the
-program determines it; the hint asks for a suffix or annotation.
+program determines it. The hint depends on whether a built-in type could
+satisfy the failed requirement. When the class holds a literal, the checker
+looks up the failed method on every built-in type that literal's kind can
+default to—the defaulting oracle's numeral candidates
+(`literal_defaulting.numeral_default_candidates`) for a number, and `Str`,
+the only built-in string type, for a quote or interpolation—through the same
+method registry dispatch uses. If none has it, the hint says that no built-in
+number (or string) type supports the operator or has the method, naming the
+operator for a desugared operator and the method otherwise. The claim is
+scoped to built-in types because a user nominal that converts literals of
+that kind may still have the method. Otherwise, and for a defaulted type that
+holds no literal, the hint asks for a suffix (numbers only) or an annotation.
+The lookup checks the method's existence only, not its signature.
 
 Each defaulting decision records, immediately before it commits, every
 still-flex variable it is about to choose—the gathered open literals and the

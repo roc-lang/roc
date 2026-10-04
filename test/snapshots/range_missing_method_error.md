@@ -39,7 +39,12 @@ TYPE NOT DETERMINED - range_missing_method_error.md:1:5:1:8
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "support")
+			(reflow " ")
+			(annotated operator "..<")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
