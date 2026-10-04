@@ -81,7 +81,6 @@ const MonoTestEnv = struct {
         module_env.common.source = source;
         module_env.module_name = module_name;
         module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-        module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
         const parse_ast = try parse.file(gpa, &module_env.common);
@@ -167,7 +166,6 @@ const MonoTestEnv = struct {
         module_env.common.source = source;
         module_env.module_name = module_name;
         module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-        module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
         const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
@@ -285,7 +283,6 @@ const MonoTestEnv = struct {
         module_env.common.source = source;
         module_env.module_name = module_name;
         module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-        module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
         for (imports) |imp| {
@@ -662,7 +659,6 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.common.source = source;
     module_env.module_name = "Test";
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text("Test"));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     const parse_ast = try parse.file(gpa, &module_env.common);

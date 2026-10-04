@@ -4486,7 +4486,11 @@ const Builder = struct {
         try self.program.source_files.ensureUnusedCapacity(self.allocator, seeds.len);
         try self.program.lowering_modules.ensureUnusedCapacity(self.allocator, seeds.len);
         for (seeds, 0..) |seed, index| {
-            const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
+            const id = try self.program.addSourceFile(.{
+                .name = seed.name,
+                .qualified_name = seed.qualified_name,
+                .module_identity = seed.key.module_identity_hash,
+            });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
             const module_id = try self.program.addLoweringModule(seed.key);
@@ -67991,7 +67995,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, .first, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc" });
+    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc", .module_identity = @splat(0) });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{
