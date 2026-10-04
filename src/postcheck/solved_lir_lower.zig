@@ -14726,6 +14726,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         source_files.appendAssumeCapacity(.{
             .name = name,
             .qualified_name = qualified_name,
+            .module_identity = file.module_identity,
         });
     }
 
@@ -15326,7 +15327,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         errdefer allocator.free(name);
         const qualified_name = try allocator.dupe(u8, "Fixture");
         errdefer allocator.free(qualified_name);
-        try solved.lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name });
+        try solved.lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0) });
     }
     // Derive real function and expression types, rather than synthesizing a
     // materialized read after lowering has already finished.

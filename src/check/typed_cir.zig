@@ -218,10 +218,6 @@ fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
 
         env.display_module_name_idx = try env.insertIdent(base.Ident.for_text(env.module_name));
     }
-
-    if (env.qualified_module_ident.isNone()) {
-        env.qualified_module_ident = env.display_module_name_idx;
-    }
 }
 
 /// Read-only view over one typed CIR module and its explicit checked data.
@@ -274,10 +270,6 @@ pub const Module = struct {
         return self.env().idents;
     }
 
-    pub fn qualifiedModuleIdent(self: @This()) Ident.Idx {
-        return self.env().qualified_module_ident;
-    }
-
     pub fn evaluationOrder(self: @This()) ?*const EvaluationOrder {
         if (self.env().evaluation_order) |evaluation_order| return evaluation_order;
         return null;
@@ -292,8 +284,8 @@ pub const Module = struct {
     }
 
     pub fn name(self: @This()) []const u8 {
-        if (!self.env().qualified_module_ident.isNone()) {
-            return self.getIdent(self.env().qualified_module_ident);
+        if (self.env().qualified_module_name.len != 0) {
+            return self.env().qualified_module_name;
         }
         return self.getIdent(self.env().display_module_name_idx);
     }

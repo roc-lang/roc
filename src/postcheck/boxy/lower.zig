@@ -152,6 +152,7 @@ fn appendSourceFile(
     try files.append(allocator, .{
         .name = module.module_env.module_name,
         .qualified_name = qualified_name,
+        .module_identity = module.key.module_identity_hash,
     });
 }
 
@@ -17846,10 +17847,7 @@ const ProcBodyBuilder = struct {
             } }, self.origin)),
             .break_ => exprDone(try self.lowerBreak()),
             .return_ => |ret| try self.beginReturn(ret.expr, ret.lambda),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
-                .checked_error = true,
-            } }, self.origin)),
+            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -19199,7 +19197,7 @@ const ProcBodyBuilder = struct {
             => null,
         };
         if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
-            return exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin));
+            return exprDone(try self.lowerCheckedRuntimeError());
         };
         return switch (statement.data) {
             .decl => |decl| try self.beginDeclPattern(decl.pattern, decl.expr, next),
@@ -19239,10 +19237,7 @@ const ProcBodyBuilder = struct {
             .crash => |msg| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
             } }, self.origin)),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
-                .checked_error = true,
-            } }, self.origin)),
+            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -19821,6 +19816,15 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The local a loop body lowers into; the loop discards its value. A
+    /// `runtime_error` body produces no value, and the representation plan
+    /// gives its type no representation.
+    fn addLoopBodyResultLocal(self: *ProcBodyBuilder, body_id: checked.CheckedExprId) Allocator.Error!LIR.LocalId {
+        const body_expr = self.module.checked_bodies.expr(body_id);
+        if (body_expr.data == .runtime_error) return try self.addFrameLocal(.zst);
+        return try self.addFrameLocalForType(body_expr.ty);
+    }
+
     /// A loop header re-evaluates its condition before each pass of its body,
     /// which jumps back to the header. The loop is the innermost `break`
     /// target while its body lowers.
@@ -19833,8 +19837,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("checked while condition did not lower to Bool layout");
                 }
 
-                const body_expr = self.module.checked_bodies.expr(task.body_id);
-                const body_result = try self.addFrameLocalForType(body_expr.ty);
+                const body_result = try self.addLoopBodyResultLocal(task.body_id);
                 const loop_result = try self.addFrameLocal(.zst);
 
                 task.join_id = self.freshJoinPointId();
@@ -20135,8 +20138,7 @@ const ProcBodyBuilder = struct {
             task.payload_desc = try self.ensureTagPayloadTargetDescriptorLocal(task.payload, payload_rep);
             task.item = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_item.ty }));
             task.rest = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty }));
-            const body_expr = self.module.checked_bodies.expr(task.for_.body);
-            const body_result = try self.addFrameLocalForType(body_expr.ty);
+            const body_result = try self.addLoopBodyResultLocal(task.for_.body);
 
             var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = task.join_id } }, self.glueOrigin());
             continuation = try self.setLocalInitializeJoinParam(task.iterator_param, task.rest, continuation);
@@ -24988,6 +24990,12 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString(message) },
         } }, self.origin);
+    }
+
+    /// A checked `runtime_error` is code checking rejected and already
+    /// reported; reaching it crashes with the checked-error message.
+    fn lowerCheckedRuntimeError(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerCheckedErrorDispatchInto("runtime error");
     }
 
     fn lowerCheckedErrorDispatchInto(
@@ -44602,7 +44610,6 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
             .module_idx = 0,
             .module_name = module_name,
             .display_module_name = module_name,
-            .qualified_module_name = module_name,
             .kind = .package,
         },
         .checking_context_identity = .{},
@@ -53577,7 +53584,6 @@ fn testModuleIdentity() checked.ModuleIdentity {
         .module_idx = 0,
         .module_name = @enumFromInt(fixtureTableIndex(0)),
         .display_module_name = @enumFromInt(fixtureTableIndex(0)),
-        .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
         .kind = .module,
     };
 }

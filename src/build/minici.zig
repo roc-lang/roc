@@ -105,7 +105,8 @@ const Shard = struct {
 const shards = [_]Shard{
     .{ .name = "source", .host = .linux, .lane = .source },
     .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
-    .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval-host-effects" } },
+    .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "linux-simd", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
     .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .to = "run-test-eval" } },
     .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },

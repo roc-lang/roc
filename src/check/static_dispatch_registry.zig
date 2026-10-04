@@ -803,7 +803,7 @@ pub const MethodRegistry = struct {
 
         const module_env = module.moduleEnvConst();
         const idents = module.identStoreConst();
-        const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module_env.module_name);
 
         for (module.methodDefEntries()) |entry| {
             const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
