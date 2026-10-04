@@ -3310,6 +3310,14 @@ fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvi
     return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
+/// `Builder.const_evidence_memo`'s key: an evidence chain's innermost vector
+/// and its frame count.
+const ConstEvidenceMemoKey = struct {
+    vector: usize,
+    len: usize,
+    frames: usize,
+};
+
 fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) StoredConstFnEvidence {
     return StoredConstFnEvidence.recorded(
         program.constFnEvidence(template.const_evidence),
@@ -4275,6 +4283,9 @@ const Builder = struct {
     /// Owns every materialized `SpecEvidence` tree; freed wholesale with the
     /// builder.
     evidence_arena: std.heap.ArenaAllocator,
+    /// The stored form `constFnEvidence` last produced for each innermost
+    /// evidence vector, which callers lowering one request pass repeatedly.
+    const_evidence_memo: std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence),
 
     /// The store this scope emits restored const expressions into.
     fn constEmit(self: *Builder) *Ast.Program {
@@ -4408,6 +4419,7 @@ const Builder = struct {
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
+            .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
         };
     }
 
@@ -4632,6 +4644,7 @@ const Builder = struct {
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.type_cache.deinit();
+        self.const_evidence_memo.deinit();
         self.evidence_arena.deinit();
         // Workers borrow these views, so they go last.
         self.allocator.free(self.module_views);
@@ -6045,11 +6058,24 @@ const Builder = struct {
             ));
             parent = @intCast(frames.items.len - 1);
         }
-        return StoredConstFnEvidence.init(
+        // The same request's lowering converts one chain several times. A
+        // repeated conversion equal to the last stored form for its innermost
+        // vector is that stored form, with its digest already computed.
+        const key: ConstEvidenceMemoKey = .{
+            .vector = @intFromPtr(evidence.vector.ptr),
+            .len = evidence.vector.len,
+            .frames = frames.items.len,
+        };
+        if (self.const_evidence_memo.get(key)) |stored| {
+            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) return stored;
+        }
+        const stored = StoredConstFnEvidence.init(
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             parent,
         );
+        try self.const_evidence_memo.put(key, stored);
+        return stored;
     }
 
     /// Copy committed evidence out of the growable program lists so a lowered
