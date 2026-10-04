@@ -104,20 +104,22 @@ test "check type - i64 annotation with fractional literal fails type checking" {
 }
 
 test "check type - string plus number should fail" {
-    // Str + number: the `+` operator desugars to calling the `.plus` method on the left operand.
-    // Since Str doesn't have a `plus` method, we get MISSING METHOD before even checking
-    // the from_numeral constraint on the number literal.
+    // String literal + number: the `+` operator desugars to calling the
+    // `.plus` method on the left operand. Nothing determines the string
+    // literal's type and its default has no `plus` method, so the
+    // undetermined string type is reported before the number literal's own
+    // conversion is checked.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "Missing Method");
+    try checkTypesModule(source, .fail_first, "Type Not Determined");
 }
 
 test "check type - string plus string should fail (no plus method)" {
     const source =
         \\x = "hello" + "world"
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Not Determined");
 }
 
 // binop operand type unification //
@@ -4159,9 +4161,10 @@ test "check type - if else - different branch types 3" {
 // rejected—but the diagnostic must not depend on which unify side each literal
 // arrived on. The defaulting oracle (src/types/literal_defaulting.zig)
 // tie-breaks dual-kind vars to `.numeral` for every stage that asks, so BOTH
-// orders default the var toward the numeral head (Dec) and report the quote
+// orders default the var toward the numeral head and report the quote
 // constraint against it: mirror-image programs get the SAME diagnostic (same
-// title, same prose; only the source region differs).
+// title, same prose; only the source region differs). The default the checker
+// chose is never named, because the program never wrote it.
 test "check type - if else - dual-kind literal branches (number first) - stable diagnostic" {
     const source =
         \\x = if True 1 else "s"
@@ -4170,15 +4173,13 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed.
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
         \\```roc
         \\x = if True 1 else "s"
         \\```
         \\                   ^^^
         \\
-        \\The type was determined to be:
-        \\
-        \\    Dec
+        \\**Hint:** Add a type annotation saying which type it should be.
         \\
         \\
         ,
@@ -4193,15 +4194,13 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed.
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
         \\```roc
         \\x = if True "s" else 1
         \\```
         \\            ^^^
         \\
-        \\The type was determined to be:
-        \\
-        \\    Dec
+        \\**Hint:** Add a type annotation saying which type it should be.
         \\
         \\
         ,
@@ -4505,7 +4504,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Not Determined");
 }
 
 // binops
@@ -11984,7 +11983,7 @@ test "check type - shared pending scheme requirement reports once across uses" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
-    try test_env.assertFirstTypeError("Missing Method");
+    try test_env.assertFirstTypeError("Type Not Determined");
 }
 
 test "check type - independent value dispatch sites each receive an ambiguity judgment" {
@@ -13182,18 +13181,18 @@ test "check type - def order independence - residual dispatch report with interf
 // never chose.
 
 fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) TestEnv.TestEnvError!void {
-    var type_mismatch_count: usize = 0;
+    var undetermined_type_count: usize = 0;
     var polymorphic_value_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
-        if (problem == .type_mismatch) {
-            type_mismatch_count += 1;
+        if (problem == .static_dispatch and problem.static_dispatch == .undetermined_type) {
+            undetermined_type_count += 1;
         } else if (problem == .polymorphic_value) {
             polymorphic_value_count += 1;
         } else {
             return error.TestUnexpectedResult;
         }
     }
-    try testing.expectEqual(@as(usize, 1), type_mismatch_count);
+    try testing.expectEqual(@as(usize, 1), undetermined_type_count);
     try testing.expectEqual(@as(usize, 1), polymorphic_value_count);
 }
 
@@ -13408,11 +13407,17 @@ test "check type - failed group default records only the rejected driver" {
     if (comptime std.debug.runtime_safety) {
         try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
     }
+    // Only the rejected numeral driver is reported: its type was never
+    // determined, so it is reported as undetermined rather than as a mismatch
+    // against the default it was given.
     var mismatch_count: usize = 0;
+    var undetermined_type_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
         if (problem == .type_mismatch) mismatch_count += 1;
+        if (problem == .static_dispatch and problem.static_dispatch == .undetermined_type) undetermined_type_count += 1;
     }
-    try testing.expectEqual(@as(usize, 1), mismatch_count);
+    try testing.expectEqual(@as(usize, 0), mismatch_count);
+    try testing.expectEqual(@as(usize, 1), undetermined_type_count);
 }
 
 // PENDING-DISPATCH OWNERSHIP IS BY GROUP IDENTITY. A value-def group checked

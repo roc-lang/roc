@@ -99,6 +99,10 @@ default_source_ctx: *const anyopaque = undefined,
 /// the surrounding polarity and re-asserts the stage-appropriate value before
 /// every child it requests.
 polarity: types_mod.Polarity,
+/// Leave `from_literal` requirements out of where clauses. Set only while
+/// rendering a type as the program wrote it before a default was chosen: a
+/// literal's own conversion is the literal, not a requirement on its type.
+omit_literal_conversion_constraints: bool = false,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
 
@@ -1349,6 +1353,7 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
+    if (self.omit_literal_conversion_constraints and constraint_to_add.origin == .from_literal) return;
     for (self.static_dispatch_constraints.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;

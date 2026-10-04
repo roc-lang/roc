@@ -10162,6 +10162,15 @@ Other solved-graph mutations:
   acquire the merged content, so an extension reaching either operand must
   preserve that operand's pre-merge row meaning before the classes are joined.
   The surviving descriptor slot is not the only overwritten row identity.
+- `markVarDefaultDecided` / `clearVarDefaultDecided`—mechanism: provenance
+  recording that a defaulting decision chose a class, written immediately
+  before the default commits and withdrawn when the decision left the class
+  flex. The write never changes content or links classes; only diagnostics
+  consult it, under Diagnostics About Defaulted Types (below).
+- `snapshotPreDefaultType` (`setVarContent`)—mechanism: restores each
+  default-decided class's recorded pre-default flex content solely to render a
+  diagnostic, under a store savepoint that is always rolled back before
+  returning. No solved type, dispatch decision, or plan metadata observes it.
 - `markNominalBackingStructure`—mechanism: provenance on vars an opening
   of a nominal declaration backing has just minted below its root, written before any
   relation reads them. Unification consults the mark under the declared
@@ -13204,6 +13213,42 @@ copied scheme constraints retain their exact per-edge callable and use-site
 identity, including detached requirements. `CheckedModule` construction
 consumes each `dispatch_target` evidence slot or `rejected_static_dispatches`
 entry and never repeats the compatibility decision.
+
+#### Diagnostics About Defaulted Types
+
+A default is a type the checker chose, not one the program wrote, so no
+diagnostic ever names it. When a requirement fails on a class that a
+defaulting decision chose—literal defaulting, including the shared-literal
+head default, or a specialization default materialization—the checker
+reports one `undetermined_type` problem ("type not determined") for that
+class instead of a missing-method or mismatch report against the default
+owner. The report states what the type must support and that nothing in the
+program determines it; the hint asks for a suffix or annotation.
+
+Each defaulting decision records, immediately before it commits, every
+still-flex variable it is about to choose—the gathered open literals and the
+still-flex variables their method signatures reach, or the materialized
+receiver and the still-flex variables its signatures reach—together with that
+variable's flex content, and sets the class's `default_decided` descriptor
+flag. Unification and mismatch poisoning preserve the flag, as they preserve
+`static_dispatch_rejected`. A record whose class the decision left flex is
+withdrawn along with its flag, since a later relation can still determine it.
+The dispatch failure paths consult only the flag; the record list is read on
+the diagnostic path alone.
+
+The report's type is the class as the program wrote it: every default-decided
+class reachable from the receiver is shown with the union of its recorded
+pre-default requirements, and literal-conversion requirements are omitted,
+since a literal's own conversion is the literal rather than a requirement on
+its type. That restoration is written under a store savepoint that is always
+rolled back, so no solved type changes. The problem is reported once per
+defaulted class, however many of its requirements fail. Its region is the
+class's first literal in source order when the class holds a literal, and
+otherwise the use that owns the failed requirement. A class shared by a string
+literal and a number literal reports that pairing directly, with no
+requirement listing, at the literal whose own conversion failed. Reporting
+does not change rejection: the failing use is still poisoned and the exact
+obligation is still rejected, exactly as for any other dispatch failure.
 
 Requirements instantiated from a candidate method target are conditional on
 that exact parent edge being selected. If checking rejects the parent, its

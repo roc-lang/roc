@@ -677,6 +677,41 @@ pub const StaticDispatch = union(enum) {
     undetermined_codec_type: UndeterminedCodecType,
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
+    undetermined_type: UndeterminedType,
+};
+
+/// A requirement failed on a type that nothing in the program determined: a
+/// defaulting decision chose the type, and the chosen default cannot satisfy
+/// every requirement on it. Reported once per defaulted type, in terms of the
+/// type as the program wrote it—never the default the checker chose, which
+/// the user did not write.
+pub const UndeterminedType = struct {
+    /// Where the undetermined type comes from: the literal itself, or the
+    /// expression that owns the failed requirement.
+    region: base.Region,
+    subject: Subject,
+    /// The type before the default was committed, listing every requirement
+    /// on it. Absent for a shared-literal conflict, whose only requirements
+    /// are the two literals themselves.
+    requirements_snapshot: ?SnapshotContentIdx,
+    /// The requirement whose failure was observed first.
+    method_name: Ident.Idx,
+    /// The requirement came from a desugared operator, which the report names
+    /// instead of its method.
+    is_binop: bool,
+
+    pub const Subject = enum {
+        number_literal,
+        string_literal,
+        value,
+        /// A string literal and a number literal share the type, and the
+        /// failed requirement is the string literal's own conversion; the
+        /// region is that string literal.
+        string_literal_shared_with_number,
+        /// The mirror case: the failed requirement is a number literal's own
+        /// conversion, and the type is shared with a string literal.
+        number_literal_shared_with_string,
+    };
 };
 
 /// Error when a static dispatch method is called on a receiver whose type is an
@@ -742,9 +777,6 @@ pub const DispatcherDoesNotImplMethod = struct {
     num_literal: ?types_mod.NumeralInfo = null,
     /// Source region of the string literal for `from_literal` constraints of kind `quote`
     quote_region: ?base.Region = null,
-    /// True when the dispatcher was a numeric literal that was defaulted to Dec
-    /// because no type annotation was given. Used to add explanatory text in errors.
-    defaulted_from_numeric_literal: bool = false,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

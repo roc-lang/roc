@@ -50,6 +50,7 @@ const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
 const TypeDoesNotSupportMap = problem_mod.TypeDoesNotSupportMap;
 const UndeterminedCodecType = problem_mod.UndeterminedCodecType;
+const UndeterminedType = problem_mod.UndeterminedType;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 const RecursiveDispatch = problem_mod.RecursiveDispatch;
 
@@ -1067,6 +1068,7 @@ pub const ReportBuilder = struct {
                     .undetermined_codec_type => |data| return self.buildUndeterminedCodecType(data),
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                     .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
+                    .undetermined_type => |data| return self.buildUndeterminedType(data),
                 }
             },
             .recursive_alias => |data| {
@@ -2740,20 +2742,9 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        if (data.defaulted_from_numeric_literal) {
-            try D.renderSlice(&.{
-                D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes("This numeric literal was given the type"),
-                D.bytes("Dec").withAnnotation(.inline_code),
-                D.bytes("because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation."),
-            }, self, &report);
-        }
-
         switch (data.dispatcher_type) {
             .nominal => {
-                if (data.defaulted_from_numeric_literal) {
-                    // Already provided a more specific hint above
-                } else if (is_from_binop) {
+                if (is_from_binop) {
                     if (mb_operator) |operator| {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -3339,6 +3330,110 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("A type annotation that names the full type would let the compiler derive it."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for a requirement that failed on a type nothing in the
+    /// program determines. The type is shown as the program wrote it; the
+    /// default the compiler chose for it is never named, because the user
+    /// never wrote it.
+    fn buildUndeterminedType(
+        self: *Self,
+        data: UndeterminedType,
+    ) Allocator.Error!Report {
+        switch (data.subject) {
+            .number_literal, .string_literal, .value => {},
+            .string_literal_shared_with_number, .number_literal_shared_with_string => return self.buildUndeterminedSharedLiteralType(data),
+        }
+
+        var report = try Report.init(self.gpa, "Type Not Determined", "", .runtime_error);
+        errdefer report.deinit();
+        const headline: []const u8 = switch (data.subject) {
+            .number_literal => "Nothing in this program determines the type of this number:",
+            .string_literal => "Nothing in this program determines the type of this string:",
+            .value => "Nothing in this program determines a type this needs:",
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+        };
+        try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.requirements_snapshot.?));
+        try D.renderSlice(&.{D.bytes("Its type needs all of these:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
+        if (operator) |operator_text| {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell which"),
+                D.bytes(operator_text).withAnnotation(.binary_operator),
+                D.bytes("to use."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell which"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method to use."),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const hint: []const u8 = switch (data.subject) {
+            .number_literal => "Add a suffix or a type annotation saying which type it should be.",
+            .string_literal, .value => "Add a type annotation saying which type it should be.",
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+        };
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes(hint),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// A string literal and a number literal must have the same type, and
+    /// nothing in the program says which type that is.
+    fn buildUndeterminedSharedLiteralType(
+        self: *Self,
+        data: UndeterminedType,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
+        errdefer report.deinit();
+        const headline: []const u8 = switch (data.subject) {
+            .string_literal_shared_with_number => "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:",
+            .number_literal_shared_with_string => "This number literal must have the same type as a string literal, and nothing in this program determines a type that can be both:",
+            .number_literal, .string_literal, .value => unreachable,
+        };
+        try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Add a type annotation saying which type it should be."),
         }, self, &report);
 
         return report;

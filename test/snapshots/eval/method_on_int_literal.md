@@ -8,17 +8,19 @@ type=repl
 » 35.foo()
 ~~~
 # OUTPUT
-**Missing Method**
-This `foo` method is being called on a value whose type doesn't have that method.
+**Type Not Determined**
+Nothing in this program determines the type of this number:
 ```roc
 35.foo()
 ```
-   ^^^
+^^
 
-The value's type, which does not have a method named `foo`, is:
+Its type needs all of these:
 
-    Dec
+    a where [a.foo : a -> _ret]
 
-**Hint:** This numeric literal was given the type `Dec` because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+Without knowing which type it is, there's no way to tell which `foo` method to use.
+
+**Hint:** Add a suffix or a type annotation saying which type it should be.
 # PROBLEMS
 NIL

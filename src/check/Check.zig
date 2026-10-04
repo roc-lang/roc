@@ -1046,6 +1046,19 @@ retired_literal_dispatch_plans: std.ArrayListUnmanaged(LiteralDispatchPlan),
 /// drops the entries so a var that merges into the same—by then concrete—
 /// equivalence class later keeps ordinary poison semantics.
 conflicted_default_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Every variable a defaulting decision was about to choose, with the
+/// content it had at that moment: the gathered open literals and the still
+/// flex variables their method signatures reach, and each receiver whose
+/// specialization default is materialized together with the still flex
+/// variables its signatures reach. Each recorded class carries the
+/// `default_decided` descriptor flag, which is what the dispatch paths
+/// consult; this list is read only when a diagnostic about a default-decided
+/// class needs the class's pre-default type (`snapshotPreDefaultType`).
+default_decided_records: std.ArrayListUnmanaged(DefaultDecidedRecord) = .empty,
+/// Records (by recorded var) whose undetermined-type diagnostic was already
+/// reported: a defaulted type is reported once, however many of its
+/// requirements fail.
+undetermined_type_reported: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Tuple field accesses whose receiver was still unresolved when checked.
 /// A later call-site or annotation may resolve the receiver to a concrete tuple;
 /// otherwise the final sweep reports that the tuple arity needs an annotation.
@@ -1503,6 +1516,14 @@ const AmbiguityVerdict = struct {
 const DefaultMaterialization = struct {
     var_: Var,
     target: literal_defaulting.DefaultTarget,
+    constraints: StaticDispatchConstraint.SafeList.Range,
+};
+
+/// One variable a defaulting decision was about to choose, with the flex
+/// content it had just before the default was committed.
+const DefaultDecidedRecord = struct {
+    var_: Var,
+    name: ?Ident.Idx,
     constraints: StaticDispatchConstraint.SafeList.Range,
 };
 
@@ -3609,6 +3630,8 @@ pub fn deinit(self: *Self) void {
     self.open_numeral_literals.deinit(self.gpa);
     self.retired_literal_dispatch_plans.deinit(self.gpa);
     self.conflicted_default_literal_vars.deinit(self.gpa);
+    self.default_decided_records.deinit(self.gpa);
+    self.undetermined_type_reported.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
@@ -14159,6 +14182,9 @@ fn checkInstantiatedStaticDispatchConstraints(
     defer instantiated_fns.deinit();
     var pending_creation_materializations: std.ArrayListUnmanaged(DefaultMaterialization) = .empty;
     defer pending_creation_materializations.deinit(self.gpa);
+    var materialization_footprint = std.AutoHashMap(Var, void).init(self.gpa);
+    defer materialization_footprint.deinit();
+    const materialization_records_start = self.default_decided_records.items.len;
     var dispatchers_indexed: usize = 0;
     var materializations_checked: usize = 0;
     var compatibility_dispatchers_checked: usize = 0;
@@ -14189,6 +14215,17 @@ fn checkInstantiatedStaticDispatchConstraints(
                 }
                 entry.value_ptr.* = materialization.target;
                 try pending_creation_materializations.append(self.gpa, materialization);
+
+                // The materialized default chooses this receiver and, through
+                // the owner's method signatures, every still-flex variable
+                // those signatures reach.
+                try self.recordDefaultDecidedVar(resolved.var_);
+                try self.collectConstraintSignatureReachable(resolved.desc.content.flex.constraints, &materialization_footprint);
+                var footprint_iter = materialization_footprint.keyIterator();
+                while (footprint_iter.next()) |footprint_var| {
+                    if (self.types.resolveVar(footprint_var.*).desc.content != .flex) continue;
+                    try self.recordDefaultDecidedVar(footprint_var.*);
+                }
             }
         }
 
@@ -14225,7 +14262,6 @@ fn checkInstantiatedStaticDispatchConstraints(
                     _ = try self.checkFlexVarConstraintCompatibility(
                         dispatcher.dispatcher_var,
                         env,
-                        is_numeric_default_pass,
                         .{
                             .constraints = dispatcher.constraints,
                             .default_target = target,
@@ -14268,7 +14304,6 @@ fn checkInstantiatedStaticDispatchConstraints(
                     _ = try self.checkFlexVarConstraintCompatibility(
                         materialization.var_,
                         env,
-                        is_numeric_default_pass,
                         .{
                             .constraints = .{
                                 .start = @enumFromInt(constraint_idx),
@@ -14347,7 +14382,11 @@ fn checkInstantiatedStaticDispatchConstraints(
             (default_phase == .ordinary or
                 (materializations_checked == self.default_materializations.items.len and
                     compatibility_dispatchers_checked == self.instantiation_dispatchers.items.len)) and
-            !self.anyPendingSchemeRequirementNewlyGrounded()) return;
+            !self.anyPendingSchemeRequirementNewlyGrounded())
+        {
+            try self.retractUndecidedDefaultRecords(materialization_records_start);
+            return;
+        }
     }
 }
 
@@ -30193,7 +30232,7 @@ fn reportMissingNominalMethodForBinopConstraint(
         .origin = .{ .desugared_binop = .{ .negated = false } },
     };
 
-    try self.reportConstraintError(lhs_var, constraint, .{ .missing_method = .nominal }, env, false, null);
+    try self.reportConstraintError(lhs_var, constraint, .{ .missing_method = .nominal }, env, null);
     try self.markErroneous(expr_var);
 }
 
@@ -33606,13 +33645,13 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     switch (scope) {
         .module => {
             try self.checkInspectedTopLevelValues();
-            try self.checkAllFromNumeralFlexConstraintCompatibility(env, true);
+            try self.checkAllFromNumeralFlexConstraintCompatibility(env);
         },
         // The REPL result expression is not module state; its type may have
         // incompatible constraints (e.g. !3) the module-wide walk over open
         // literal vars would not visit.
         .repl_expr => |expr_idx| {
-            _ = try self.checkFlexVarConstraintCompatibility(ModuleEnv.varFrom(expr_idx), env, true, .{});
+            _ = try self.checkFlexVarConstraintCompatibility(ModuleEnv.varFrom(expr_idx), env, .{});
         },
     }
     try self.validateResolvedOpenNumeralLiterals(env);
@@ -33957,10 +33996,15 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         }
 
         // --- 2. Partition into interference components. ---
+        // Everything this round's commits can choose—each gathered literal and
+        // each still-flex variable a driver's signatures reach—is recorded
+        // with its pre-default content before anything commits.
+        const round_records_start = self.default_decided_records.items.len;
         self.literal_defaulting_component_parent.clearRetainingCapacity();
         self.literal_defaulting_is_driver.clearRetainingCapacity();
         self.literal_defaulting_footprint_owner.clearRetainingCapacity();
         for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
+            try self.recordDefaultDecidedVar(root);
             try self.literal_defaulting_component_parent.append(self.gpa, idx);
             // Seed each literal's own root so any driver whose footprint reaches
             // it is merged into its component. Roots are deduped, so no collision
@@ -33980,6 +34024,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 // pinning. (Union order is irrelevant: unions commute, so the
                 // partition is independent of hash-map iteration order.)
                 if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
+                try self.recordDefaultDecidedVar(fp_var.*);
                 const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
                 if (gop.found_existing) {
                     componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
@@ -34039,6 +34084,8 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         try self.quiesceConstraints(env, true);
         try self.checkInstantiatedStaticDispatchConstraints(env, true, .ordinary);
         try self.quiesceConstraints(env, true);
+
+        try self.retractUndecidedDefaultRecords(round_records_start);
     }
 }
 
@@ -36250,6 +36297,206 @@ fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.
     return default_var;
 }
 
+/// Record a still-flex variable that a defaulting decision is about to choose,
+/// keeping the content it has now so a diagnostic can describe the type the
+/// program wrote. See design.md's "Diagnostics About Defaulted Types".
+fn recordDefaultDecidedVar(self: *Self, var_: Var) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    const flex = switch (resolved.desc.content) {
+        .flex => |flex| flex,
+        .rigid, .alias, .structure, .field_presence, .err => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: a default-decided record must start from an undetermined variable", .{});
+            }
+            unreachable;
+        },
+    };
+    try self.default_decided_records.append(self.gpa, .{
+        .var_ = resolved.var_,
+        .name = flex.name,
+        .constraints = flex.constraints,
+    });
+    try self.types.markVarDefaultDecided(resolved.var_);
+}
+
+/// After a defaulting decision has run, withdraw every record from `start` on
+/// whose class the decision left undetermined: its default never reached it,
+/// so a later relation may still determine it.
+fn retractUndecidedDefaultRecords(self: *Self, start: usize) Allocator.Error!void {
+    var write_idx = start;
+    for (self.default_decided_records.items[start..]) |record| {
+        if (self.types.resolveVar(record.var_).desc.content == .flex) {
+            try self.types.clearVarDefaultDecided(record.var_);
+            continue;
+        }
+        self.default_decided_records.items[write_idx] = record;
+        write_idx += 1;
+    }
+    self.default_decided_records.shrinkRetainingCapacity(write_idx);
+}
+
+/// The latest record of the defaulting decision that chose `var_`'s class,
+/// or null when no default chose it. The descriptor flag answers the common
+/// question in constant time; the record list is searched only when the class
+/// was default-decided, which happens on the diagnostic path.
+fn defaultDecidedRecordFor(self: *const Self, var_: Var) ?usize {
+    if (!self.types.varDefaultDecided(var_)) return null;
+    const root = self.types.resolveVar(var_).var_;
+    var idx = self.default_decided_records.items.len;
+    while (idx > 0) {
+        idx -= 1;
+        if (self.types.resolveVar(self.default_decided_records.items[idx].var_).var_ == root) return idx;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("type checker invariant violated: default-decided class has no default-decided record", .{});
+    }
+    unreachable;
+}
+
+/// Snapshot `var_` as the program wrote it: every class a defaulting decision
+/// chose shows the undetermined content it had before its default was
+/// committed, and literal-conversion requirements—the literal itself, not a
+/// requirement anyone wrote on its type—are left out. The restoration is
+/// written under a store savepoint that is always rolled back, so no solved
+/// type changes.
+fn snapshotPreDefaultType(self: *Self, var_: Var) Allocator.Error!snapshot_mod.SnapshotContentIdx {
+    std.debug.assert(self.probe_depth == 0);
+
+    // A class can hold several recorded variables (a footprint variable that
+    // a later round gathered again, or two recorded classes the default
+    // merged); its pre-default requirements are the union of theirs.
+    var groups: std.AutoArrayHashMapUnmanaged(Var, PreDefaultGroup) = .empty;
+    defer {
+        for (groups.values()) |*group| group.constraints.deinit(self.gpa);
+        groups.deinit(self.gpa);
+    }
+    for (self.default_decided_records.items) |record| {
+        const resolved = self.types.resolveVar(record.var_);
+        if (resolved.desc.content == .flex) continue;
+        const entry = try groups.getOrPut(self.gpa, resolved.var_);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .name = record.name, .constraints = .empty };
+        if (entry.value_ptr.name == null) entry.value_ptr.name = record.name;
+        recorded: for (self.types.sliceStaticDispatchConstraints(record.constraints)) |constraint| {
+            for (entry.value_ptr.constraints.items) |existing| {
+                if (existing.fn_var == constraint.fn_var and existing.fn_name.eql(constraint.fn_name)) continue :recorded;
+            }
+            try entry.value_ptr.constraints.append(self.gpa, constraint);
+        }
+    }
+
+    var savepoint = try self.types.createSavepoint();
+    defer self.types.rollbackToSavepoint(&savepoint);
+    var groups_iter = groups.iterator();
+    while (groups_iter.next()) |entry| {
+        const constraints = try self.types.appendStaticDispatchConstraints(entry.value_ptr.constraints.items);
+        try self.types.setVarContent(entry.key_ptr.*, .{ .flex = .{
+            .name = entry.value_ptr.name,
+            .constraints = constraints,
+        } });
+    }
+
+    self.type_writer.omit_literal_conversion_constraints = true;
+    defer self.type_writer.omit_literal_conversion_constraints = false;
+    return try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+}
+
+const PreDefaultGroup = struct {
+    name: ?Ident.Idx,
+    constraints: std.ArrayListUnmanaged(StaticDispatchConstraint),
+};
+
+/// Report that `constraint` failed on a class a defaulting decision chose.
+/// The diagnostic describes the type as the program wrote it and is reported
+/// once per defaulted type; the caller still poisons the failing use and
+/// rejects the exact obligation.
+fn reportUndeterminedType(
+    self: *Self,
+    record_idx: usize,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    const record = self.default_decided_records.items[record_idx];
+    const reported = try self.undetermined_type_reported.getOrPut(self.gpa, record.var_);
+    if (reported.found_existing) return;
+
+    // A literal's own conversion fails on a defaulted type only when literals
+    // of both kinds share it: the default follows one kind, and the other
+    // literal is the conflict.
+    if (literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint)) |kind| {
+        const shared_subject: problem.UndeterminedType.Subject, const literal_region: Region = switch (kind) {
+            .numeral => .{
+                .number_literal_shared_with_string,
+                if (constraint.origin.numeralInfo()) |info|
+                    info.region
+                else
+                    self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr),
+            },
+            .quote, .interpolation => .{
+                .string_literal_shared_with_number,
+                self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var) orelse
+                    self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr),
+            },
+        };
+        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .undetermined_type = .{
+            .region = literal_region,
+            .subject = shared_subject,
+            .requirements_snapshot = null,
+            .method_name = constraint.fn_name,
+            .is_binop = false,
+        } } });
+        return;
+    }
+
+    // A defaulted type that holds a literal is reported at its first literal
+    // in source order; any other defaulted type at the use that owns the
+    // failed requirement.
+    var subject: problem.UndeterminedType.Subject = .value;
+    var region: Region = self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr);
+    const root = self.types.resolveVar(record.var_).var_;
+    literal: for (self.default_decided_records.items[0 .. record_idx + 1]) |candidate| {
+        if (self.types.resolveVar(candidate.var_).var_ != root) continue;
+        const recorded_constraints = self.types.sliceStaticDispatchConstraints(candidate.constraints);
+        const kind = literal_defaulting.dominantKind(self.literalMethodIdents(), recorded_constraints) orelse continue;
+        subject = switch (kind) {
+            .numeral => .number_literal,
+            .quote, .interpolation => .string_literal,
+        };
+        if (self.firstLiteralRegionInClass(kind, root)) |literal_region| region = literal_region;
+        break :literal;
+    }
+
+    const requirements_snapshot = try self.snapshotPreDefaultType(dispatcher_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .undetermined_type = .{
+        .region = region,
+        .subject = subject,
+        .requirements_snapshot = requirements_snapshot,
+        .method_name = constraint.fn_name,
+        .is_binop = constraint.origin == .desugared_binop,
+    } } });
+}
+
+/// The source region of the first literal of `kind` whose dispatch plan
+/// resolves into the class rooted at `root`. Literal dispatch plans are
+/// recorded at the literal sites in source order.
+fn firstLiteralRegionInClass(self: *Self, kind: StaticDispatchConstraint.LiteralKind, root: Var) ?Region {
+    const plan = self.matchingLiteralDispatchPlan(self.cir.store.literalDispatchPlans(), kind, root) orelse
+        self.matchingLiteralDispatchPlan(self.retired_literal_dispatch_plans.items, kind, root) orelse
+        return null;
+    return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
+}
+
+fn undeterminedTypeUseRegion(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    owner_expr: ?CIR.Expr.Idx,
+) Region {
+    const expr_idx = owner_expr orelse self.constraintSourceExpr(dispatcher_var, constraint) orelse
+        return self.getRegionAt(constraint.fn_var);
+    return self.cir.store.getExprRegion(expr_idx);
+}
+
 /// Candidate order for numeral defaulting, owned by the defaulting oracle
 /// (src/types/literal_defaulting.zig—see its doc for the ordering rationale)
 /// and mapped here into the `CIR.NumKind` values the probe machinery consumes.
@@ -36594,18 +36841,6 @@ fn isBuiltinNumericNominal(self: *Self, var_: Var) bool {
         ident.eql(self.cir.idents.f32_type) or
         ident.eql(self.cir.idents.f64_type) or
         ident.eql(self.cir.idents.dec_type);
-}
-
-/// Whether `var_` resolved to the builtin `Dec` nominal—the canonical head
-/// default a numeral literal falls to. Distinguishes a numeral-defaulted
-/// dispatcher (Dec) from a quote-defaulted one (Str), so the "this numeric
-/// literal was given the type Dec" hint only fires for the former. The hint text
-/// hardcodes `Dec`, so a literal pinned to some other numeric type must not
-/// claim it.
-fn isDecNominal(self: *Self, var_: Var) bool {
-    const resolved = self.types.resolveVar(var_);
-    const nominal = resolved.desc.content.unwrapNominalType() orelse return false;
-    return nominal.ident.ident_idx.eql(self.cir.idents.dec_type);
 }
 
 fn pushReturnConstraintFrame(
@@ -39789,7 +40024,6 @@ fn resumeStaticDispatchDrain(
                             constraint,
                             .{ .missing_method = .rigid },
                             env,
-                            is_numeric_default_pass,
                             failure_expr,
                         );
                         continue;
@@ -39882,7 +40116,6 @@ fn resumeStaticDispatchDrain(
                             constraint,
                             .{ .missing_method = .nominal },
                             env,
-                            is_numeric_default_pass,
                             failure_expr,
                         );
                         continue;
@@ -39916,7 +40149,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .{ .missing_method = .nominal },
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                                 continue;
@@ -39966,7 +40198,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .{ .missing_method = .nominal },
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 ),
                             }
@@ -39980,7 +40211,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .not_nominal,
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                                 continue;
@@ -40017,7 +40247,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .{ .missing_method = .nominal },
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 ),
                             }
@@ -40123,6 +40352,13 @@ fn resumeStaticDispatchDrain(
                             .method_name = constraint.fn_name,
                         },
                     };
+                    // A receiver whose type a default chose fails as an
+                    // undetermined type: the default's own method signature
+                    // is not a type the program wrote, so it is never shown.
+                    const default_record: ?usize = if (self.probe_depth == 0)
+                        self.defaultDecidedRecordFor(deferred_constraint.var_)
+                    else
+                        null;
                     const fn_result = fn_result: {
                         if (self.probe_depth != 0) {
                             break :fn_result try self.runUnify(
@@ -40133,7 +40369,20 @@ fn resumeStaticDispatchDrain(
                             );
                         }
                         if (!self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
-                            break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                            if (default_record == null) {
+                                break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                            }
+                            // The same poisoning as an ordinary mismatch, with
+                            // the undetermined-type diagnostic reported below
+                            // in place of the default owner's signature.
+                            const result = try self.runUnify(
+                                method_var,
+                                constraint.fn_var,
+                                env,
+                                unifyOptionsForContext(fn_ctx, .write_no_report),
+                            );
+                            if (result == .mismatch) try self.types.poisonOnMismatch(method_var, constraint.fn_var);
+                            break :fn_result result;
                         }
                         // This receiver's type is the documented head default,
                         // committed while its method constraints were still
@@ -40141,15 +40390,14 @@ fn resumeStaticDispatchDrain(
                         // failed validation must not retype anything the
                         // relation's argument graph reaches: bracket the unify
                         // in a probe and rewind the store, the deferred queue,
-                        // and the var-pool tails on mismatch. The caller owns
-                        // the mismatch diagnostic (`unifyOwnedRelation`), per
-                        // the store rule that occurrence-directed poisoning
-                        // never runs under an active savepoint; the problem
-                        // and snapshots it records live outside the type store
-                        // and survive the rollback. Success commits—a default
-                        // target that satisfies a constraint is real. An
-                        // enclosing probe takes the explicit non-poisoning path
-                        // above instead of nesting another savepoint.
+                        // and the var-pool tails on mismatch. The undetermined
+                        // type is reported below, after the rollback, per the
+                        // store rule that occurrence-directed poisoning never
+                        // runs under an active savepoint. Success commits—a
+                        // default target that satisfies a constraint is real.
+                        // An enclosing probe takes the explicit non-poisoning
+                        // path above instead of nesting another savepoint.
+                        std.debug.assert(default_record != null);
                         self.probe_var_pool_lens.clearRetainingCapacity();
                         const rank_count = @intFromEnum(env.rank()) + 1;
                         try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
@@ -40165,7 +40413,12 @@ fn resumeStaticDispatchDrain(
                                 env.var_pool.shrinkRank(@enumFromInt(rank_idx), pool_len);
                             }
                         };
-                        const probed_result = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, fn_ctx, .exact);
+                        const probed_result = try self.runUnify(method_var, constraint.fn_var, env, .{
+                            .context = fn_ctx,
+                            .on_mismatch = .write_no_report,
+                            .row_width_relation = .exact,
+                            .field_presence_relation = fieldPresenceRelationForContext(fn_ctx, .exact),
+                        });
                         if (probed_result.isEstablished()) {
                             committed = true;
                             probe.commit();
@@ -40175,6 +40428,11 @@ fn resumeStaticDispatchDrain(
                     switch (fn_result) {
                         .unified => try self.recordSuccessfulStaticDispatch(constraint),
                         .suppressed_by_error, .problem, .mismatch => {
+                            if (fn_result == .mismatch) {
+                                if (default_record) |record_idx| {
+                                    try self.reportUndeterminedType(record_idx, deferred_constraint.var_, constraint, failure_expr);
+                                }
+                            }
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                             try self.markStaticDispatchRejected(constraint);
                         },
@@ -40276,7 +40534,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .{ .missing_method = .nominal },
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                             }
@@ -40345,7 +40602,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .not_nominal,
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                                 continue;
@@ -40423,7 +40679,6 @@ fn resumeStaticDispatchDrain(
                             constraint,
                             .{ .missing_method = .nominal },
                             env,
-                            is_numeric_default_pass,
                             failure_expr,
                         );
                         continue;
@@ -40566,7 +40821,6 @@ fn resumeStaticDispatchDrain(
                                 constraint,
                                 .{ .missing_method = .nominal },
                                 env,
-                                is_numeric_default_pass,
                                 failure_expr,
                             );
                         }
@@ -40630,7 +40884,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .not_nominal,
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                             },
@@ -40640,7 +40893,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .not_nominal,
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                             },
@@ -40658,7 +40910,6 @@ fn resumeStaticDispatchDrain(
                                 constraint,
                                 .not_nominal,
                                 env,
-                                is_numeric_default_pass,
                                 failure_expr,
                             );
                             continue;
@@ -40699,7 +40950,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .not_nominal,
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                             },
@@ -40709,7 +40959,6 @@ fn resumeStaticDispatchDrain(
                                     constraint,
                                     .not_nominal,
                                     env,
-                                    is_numeric_default_pass,
                                     failure_expr,
                                 );
                             },
@@ -40723,7 +40972,6 @@ fn resumeStaticDispatchDrain(
                             constraint,
                             .not_nominal,
                             env,
-                            is_numeric_default_pass,
                             failure_expr,
                         );
                     }
@@ -40758,7 +41006,6 @@ fn resumeStaticDispatchDrain(
                                 constraint,
                                 .not_nominal,
                                 env,
-                                is_numeric_default_pass,
                                 failure_expr,
                             );
                         }
@@ -44981,13 +45228,13 @@ fn relateDerivedParserShape(
 ) Allocator.Error!?DerivedCodecShape {
     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, failure_expr, failure_expr);
         return null;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, failure_expr, failure_expr);
         return null;
     }
 
@@ -45135,7 +45382,7 @@ fn finishImplicitParse(self: *Self, run: *ImplicitParseRun, validation: DerivedP
             try self.poisonConstraintFailure(request.dispatcher_var, request.constraint, env, request.failure_expr);
             try self.markStaticDispatchRejected(request.constraint);
         },
-        .unsupported => try self.reportConstraintErrorAt(request.dispatcher_var, request.constraint, .not_nominal, env, false, request.failure_expr, request.failure_expr),
+        .unsupported => try self.reportConstraintErrorAt(request.dispatcher_var, request.constraint, .not_nominal, env, request.failure_expr, request.failure_expr),
     }
 }
 
@@ -45161,13 +45408,13 @@ fn relateDerivedEncoderShape(
 ) Allocator.Error!?DerivedCodecShape {
     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr);
         return null;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr);
         return null;
     }
 
@@ -45238,7 +45485,7 @@ fn satisfyImplicitEncoderForConstraint(
             try self.poisonConstraintFailure(dispatcher_var, constraint, env, null);
             try self.markStaticDispatchRejected(constraint);
         },
-        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr),
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr),
     }
 }
 
@@ -46368,7 +46615,7 @@ fn reportDerivedParseMissingMethodAt(
     };
     var derived_constraint = constraint;
     derived_constraint.fn_name = method_name;
-    try self.reportConstraintErrorAt(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false, failure_expr, failure_expr);
+    try self.reportConstraintErrorAt(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, failure_expr, failure_expr);
     return .reported_error;
 }
 
@@ -49030,7 +49277,6 @@ fn checkFlexVarConstraintCompatibility(
     self: *Self,
     var_: Var,
     env: *Env,
-    is_numeric_default_pass: bool,
     options: FlexConstraintCompatibilityOptions,
 ) Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
@@ -49119,7 +49365,6 @@ fn checkFlexVarConstraintCompatibility(
                 constraint,
                 .{ .missing_method = .nominal },
                 env,
-                is_numeric_default_pass,
                 options.error_expr,
                 options.error_expr,
             );
@@ -49168,7 +49413,17 @@ fn checkFlexVarConstraintCompatibility(
             commit_probe.commit();
             break :accepted true;
         };
-        if (!target_accepted) {
+        if (!target_accepted) reported: {
+            // A materialized default is a type the program never wrote, so
+            // its failure is reported as the undetermined type it is.
+            if (self.defaultDecidedRecordFor(var_)) |record_idx| {
+                try self.reportUndeterminedType(record_idx, var_, constraint, options.error_expr);
+                try self.poisonConstraintFailureSource(var_, constraint, options.error_expr);
+                try self.markStaticDispatchRejected(constraint);
+                had_error = true;
+                break :reported;
+            }
+
             // Report the signature mismatch against the untouched types the
             // rollback restored: the default owner's declared scheme versus
             // the relation as the program actually constrained it.
@@ -49207,7 +49462,6 @@ fn checkFlexVarConstraintCompatibility(
 fn checkAllFromNumeralFlexConstraintCompatibility(
     self: *Self,
     env: *Env,
-    is_numeric_default_pass: bool,
 ) Allocator.Error!void {
     // Iterate the tracked open-literal worklist, not the whole store;
     // `checkFlexVarConstraintCompatibility` re-resolves and no-ops on non-literal
@@ -49215,7 +49469,7 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
     const literal_count = self.open_literal_vars.items.len;
     var i: usize = 0;
     while (i < literal_count) : (i += 1) {
-        _ = try self.checkFlexVarConstraintCompatibility(self.open_literal_vars.items[i], env, is_numeric_default_pass, .{});
+        _ = try self.checkFlexVarConstraintCompatibility(self.open_literal_vars.items[i], env, .{});
     }
 }
 
@@ -49472,7 +49726,6 @@ fn reportConstraintError(
     constraint: StaticDispatchConstraint,
     kind: ConstraintErrorKind,
     env: *Env,
-    is_numeric_default_pass: bool,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     return self.reportConstraintErrorAt(
@@ -49480,7 +49733,6 @@ fn reportConstraintError(
         constraint,
         kind,
         env,
-        is_numeric_default_pass,
         null,
         owner_expr,
     );
@@ -49495,11 +49747,17 @@ fn reportConstraintErrorAt(
     constraint: StaticDispatchConstraint,
     kind: ConstraintErrorKind,
     env: *Env,
-    is_numeric_default_pass: bool,
     explicit_error_expr: ?CIR.Expr.Idx,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, explicit_error_expr)) return;
+
+    if (self.defaultDecidedRecordFor(dispatcher_var)) |record_idx| {
+        try self.reportUndeterminedType(record_idx, dispatcher_var, constraint, explicit_error_expr orelse owner_expr);
+        try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+        try self.markStaticDispatchRejected(constraint);
+        return;
+    }
 
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const owner_region = self.constraintOwnerRegion(owner_expr);
@@ -49516,11 +49774,6 @@ fn reportConstraintErrorAt(
                     .owner_region = owner_region,
                     .num_literal = constraint.origin.numeralInfo(),
                     .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
-                    // Only a numeral literal defaulted to Dec earns the numeric hint.
-                    // The cascade pass (`is_numeric_default_pass`) also reports errors
-                    // for quote literals defaulted to Str (e.g. `"a" > "b"`); those must
-                    // NOT claim "this numeric literal was given the type Dec".
-                    .defaulted_from_numeric_literal = is_numeric_default_pass and self.isDecNominal(dispatcher_var),
                 },
             },
         },
