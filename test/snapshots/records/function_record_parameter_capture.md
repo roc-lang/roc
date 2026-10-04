@@ -66,7 +66,7 @@ NO CHANGE
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "name"))))
-					(e-interpolation (constraint-fn-var 247) (dispatcher-var 15)
+					(e-interpolation (constraint-fn-var 243) (dispatcher-var 15)
 						(first
 							(e-literal (string "Hello ")))
 						(parts
@@ -88,7 +88,7 @@ NO CHANGE
 									(rest-pattern
 										(p-assign (ident "a")))))))))
 			(field (name "is_adult")
-				(e-dispatch-call (method "is_gte") (constraint-fn-var 259)
+				(e-dispatch-call (method "is_gte") (constraint-fn-var 255)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "age"))))
@@ -97,5 +97,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: b, name: c, ..d } -> { full_record: { age: b, name: c, ..d }, greeting: e, is_adult: Bool } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gte : b, b -> Bool, e.from_interpolation : Str, Iter((_field, Str)) -> e]"))
+(expr (type "{ age: b, name: c, ..d } -> { full_record: { age: b, name: c, ..d }, greeting: e, is_adult: Bool } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gte : b, b -> Bool, e.from_interpolation : List(Str) -> Try(List(_f) -> e, [InvalidInterpolation(Str)])]"))
 ~~~

@@ -5017,6 +5017,8 @@ pub const BoxyRuntime = struct {
         return try self.coerceExplicitRefValueToLayout(hooks, value, actual_layout, expected_layout);
     }
 
+    /// Convert an erased call's argument into the layout its worker reads. The
+    /// call owns its arguments, so the conversion consumes `value`.
     pub fn materializeErasedCallArgument(
         self: *const BoxyRuntime,
         hooks: anytype,
@@ -5025,7 +5027,6 @@ pub const BoxyRuntime = struct {
         desc: ?*const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
-        try self.performBoxyLayoutDrop(hooks, value, actual_layout, desc, .incref, 1, .atomic);
         const materialized = try self.materializeCallResult(
             hooks,
             value,

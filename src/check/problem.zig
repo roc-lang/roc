@@ -104,6 +104,7 @@ pub const ComptimeOrigin = types.ComptimeOrigin;
 pub const ComptimeCrash = types.ComptimeCrash;
 pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
 pub const ComptimeInvalidQuote = types.ComptimeInvalidQuote;
+pub const ComptimeInvalidInterpolation = types.ComptimeInvalidInterpolation;
 pub const ComptimeExpectFailed = types.ComptimeExpectFailed;
 pub const ComptimeEvalError = types.ComptimeEvalError;
 

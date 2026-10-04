@@ -421,7 +421,7 @@ pub const InterpolationData = extern struct {
     method_region_start: u32,
     method_region_end: u32,
     constraint_fn_var_plus_one: u32,
-    step_fn_var_plus_one: u32,
+    assembler_fn_var_plus_one: u32,
     dispatcher_var_plus_one: u32,
 };
 
@@ -1968,10 +1968,10 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
                     null
                 else
                     @enumFromInt(data.constraint_fn_var_plus_one - 1),
-                .step_fn_var = if (data.step_fn_var_plus_one == 0)
+                .assembler_fn_var = if (data.assembler_fn_var_plus_one == 0)
                     null
                 else
-                    @enumFromInt(data.step_fn_var_plus_one - 1),
+                    @enumFromInt(data.assembler_fn_var_plus_one - 1),
                 .dispatcher_var = if (data.dispatcher_var_plus_one == 0)
                     null
                 else
@@ -2465,7 +2465,7 @@ pub fn replaceExprWithInterpolationConstraint(
     parts: CIR.Expr.Span,
     method_name_region: Region,
     constraint_fn_var: types.Var,
-    step_fn_var: types.Var,
+    assembler_fn_var: types.Var,
     dispatcher_var: types.Var,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
@@ -2476,7 +2476,7 @@ pub fn replaceExprWithInterpolationConstraint(
         .method_region_start = method_name_region.start.offset,
         .method_region_end = method_name_region.end.offset,
         .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
-        .step_fn_var_plus_one = @intFromEnum(step_fn_var) + 1,
+        .assembler_fn_var_plus_one = @intFromEnum(assembler_fn_var) + 1,
         .dispatcher_var_plus_one = @intFromEnum(dispatcher_var) + 1,
     });
     var node = Node.init(.expr_interpolation);
@@ -3695,7 +3695,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .method_region_start = e.method_name_region.start.offset,
                 .method_region_end = e.method_name_region.end.offset,
                 .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
-                .step_fn_var_plus_one = if (e.step_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
+                .assembler_fn_var_plus_one = if (e.assembler_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
                 .dispatcher_var_plus_one = if (e.dispatcher_var) |var_| @intFromEnum(var_) + 1 else 0,
             });
             node.setPayload(.{ .expr_interpolation = .{

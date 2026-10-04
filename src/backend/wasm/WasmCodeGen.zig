@@ -8888,6 +8888,17 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
         try self.emitI64Const(@bitCast(proc.rc_ret_lenders));
         try self.emitBoxyCall("roc_boxy_register_proc");
     }
+
+    // An erased worker whose callable values were frozen into static data is
+    // registered here: no packing statement builds those values.
+    for (self.store.getProcSpecs(), 0..) |proc_spec, index| {
+        const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
+        const table_idx = self.proc_table_indices.get(@intCast(index)) orelse wasmInvariantFmt(
+            "WasmCodeGen invariant violated: frozen erased worker {d} missing table index",
+            .{index},
+        );
+        try self.emitErasedProcRegistration(@enumFromInt(index), table_idx, @intCast(builtins.erased_callable.compilerMetadataOffset(try self.layoutStorageByteSize(capture_layout))));
+    }
 }
 
 fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
@@ -11068,9 +11079,18 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         4,
         @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
     );
-    const proc_spec = self.store.getProcSpec(c.proc);
+    try self.emitErasedProcRegistration(c.proc, table_idx, metadata_offset);
+
+    try self.emitLocalGet(payload_ptr);
+}
+
+/// Record an erased worker's return layout, argument layouts, and capture
+/// metadata with the Boxy runtime under its function table index, the value
+/// stored at an erased callable's function-pointer field.
+fn emitErasedProcRegistration(self: *Self, proc_id: LIR.LirProcSpecId, table_idx: u32, metadata_offset: u32) Allocator.Error!void {
+    const proc_spec = self.store.getProcSpec(proc_id);
     try self.emitFunctionTableIndexConst(table_idx);
-    try self.emitI32Const(@intCast(@intFromEnum(c.proc)));
+    try self.emitI32Const(@intCast(@intFromEnum(proc_id)));
     try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
     try self.emitI32Const(@intCast(metadata_offset));
     try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
@@ -11079,8 +11099,6 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.len));
     try self.emitI32Const(0);
     try self.emitBoxyCall("roc_boxy_register_erased_proc");
-
-    try self.emitLocalGet(payload_ptr);
 }
 
 fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {

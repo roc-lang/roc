@@ -197,7 +197,7 @@ match events {
 							(p-assign (ident "#interp_3"))
 							(e-call
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
-								(e-call (constraint-fn-var 395)
+								(e-call (constraint-fn-var 387)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local

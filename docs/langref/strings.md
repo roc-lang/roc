@@ -105,8 +105,9 @@ target type, that type can opt in by defining
 
 Interpolated string literals use
 [`from_interpolation`](static-dispatch#literal-conversion) on the result
-type. The literal segments are `Str` values, and each interpolated value is
-paired with the literal segment that follows it.
+type. It receives the literal's segments as a `List(Str)` before the program
+runs, and returns the function that assembles the interpolated values into
+the result each time the literal runs.
 
 ## String equality and normalization
 

@@ -185,7 +185,6 @@ const ResolvedWorkerBody = union(enum) {
     unimplemented: checked.UnimplementedDeclaration,
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
-    generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
 };
 
 fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
@@ -196,7 +195,6 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
         .unimplemented,
         .generated_codec,
         .generated_field_iterator,
-        .generated_interpolation_step,
         => return false,
     };
     return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
@@ -306,24 +304,9 @@ fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPla
         .nested_expr => |expr_ref| resolveNestedExprWorker(modules, worker.id, expr_ref),
         .generated_codec => |source| resolveGeneratedCodecWorker(modules, worker.id, source),
         .generated_field_iterator => |source| resolveGeneratedFieldIteratorWorker(modules, worker.id, source),
-        .generated_interpolation_step => |source| resolveGeneratedInterpolationStepWorker(modules, worker.id, source),
     };
     resolved.stored_fn = worker.stored_fn;
     return resolved;
-}
-
-fn resolveGeneratedInterpolationStepWorker(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    source: Plan.GeneratedInterpolationStepSource,
-) ResolvedWorker {
-    const module = procedureModuleById(modules, source.step_type.module);
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .body = .{ .generated_interpolation_step = source },
-    };
 }
 
 fn resolveGeneratedFieldIteratorWorker(
@@ -1419,9 +1402,20 @@ const ProcedureBuilder = struct {
         result_rep: Plan.TypeRepId,
         rep: Plan.TypeRepId,
     };
+    /// A frozen callable's captured descriptor: the creating frame built it
+    /// for `source_rep`, the representation it described there, and the
+    /// callable reads it for its own `worker_rep`. `exact` is the static
+    /// descriptor the creating frame stored when it read none of its own
+    /// descriptor bindings.
+    const FrozenDescriptorCapture = struct {
+        worker_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        exact: ?LIR.BoxyTypeDescId = null,
+    };
+
     const FrozenCaptureRecipe = union(enum) {
         value: Plan.TypeRepId,
-        descriptor: Plan.TypeRepId,
+        descriptor: FrozenDescriptorCapture,
         dictionary: Plan.Span,
         literal: u32,
     };
@@ -1474,7 +1468,6 @@ const ProcedureBuilder = struct {
             .intrinsic,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => constructlessOrigin(.derived),
         };
     }
@@ -7669,7 +7662,7 @@ const ProcedureBuilder = struct {
             try getter.bindDescriptorIdentityLocalForRep(binding.scheme_rep, local, true);
             try getter_descriptors.append(self.allocator, .{ .local = local, .materialize = try self.staticDescRefForRep(binding.site_rep) });
         }
-        const site_rep = getter.repForType(expr.ty);
+        const site_rep = getter.repForType(Plan.literalSiteValueType(module.checked_bodies, site.source.expr));
         const frozen_value = try getter.addFrameLocalForRep(initializer.rep);
         const returned_value = try getter.addFrameLocalForRep(site_rep);
         const getter_ret = try self.result.store.addCFStmt(.{ .ret = .{ .value = returned_value } }, origin);
@@ -7721,17 +7714,18 @@ const ProcedureBuilder = struct {
             dictionary_initializer = .{ .local = local, .materialize = try self.staticDictRefForRepWithEvidence(initializer.rep, dictionaries, initializer.method_evidence, 0) };
         };
         const result_value = try proc.addFrameLocalForRep(initializer.rep);
-        const generic_rep = proc.repForType(expr.ty);
+        const generic_rep = proc.repForType(Plan.literalSiteValueType(module.checked_bodies, site.source.expr));
         const generic_value = try proc.addFrameLocalForRepWithFreshDescriptor(generic_rep);
         const done = try self.result.store.addCFStmt(.{ .ret = .{ .value = result_value } }, origin);
         const adapted = try proc.assignRepresentationBoundary(result_value, generic_value, initializer.rep, generic_rep, done);
         var body = switch (expr.data) {
-            .str_from_quote => |quote| try proc.lowerRuntimeQuoteConversionInto(generic_value, site.source.expr, expr.ty, quote.plan, adapted),
+            .str_from_quote => |quote| try proc.lowerRuntimeStringConversionInto(generic_value, site.source.expr, expr.ty, quote.plan, "invalid string literal", adapted),
+            .interpolation => |interpolation| try proc.lowerRuntimeStringConversionInto(generic_value, site.source.expr, interpolation.assembler_ty, interpolation.plan, "invalid string interpolation", adapted),
             .numeral => |numeral| if (initializer.builtin_numeral)
                 try proc.lowerNumFromNumeralInto(result_value, numeral.plan, done)
             else
                 try proc.lowerPendingNumeralConversionInto(generic_value, site.source.expr, expr.ty, numeral.plan, adapted),
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
         };
         if (dictionary_initializer) |dictionary| body = try proc.prependHiddenDictionaryArgMaterialization(&.{dictionary}, body);
         body = try proc.prependStaticDescriptorMaterializationsForSlots(body);
@@ -7754,7 +7748,12 @@ const ProcedureBuilder = struct {
         self.result.literal_roots.items[index] = .{
             .module = module.key,
             .id = @enumFromInt(index),
-            .site = .{ .owner = owner, .checked_expr = @intFromEnum(site.source.expr), .kind = if (expr.data == .numeral) .numeral else .quote },
+            .site = .{ .owner = owner, .checked_expr = @intFromEnum(site.source.expr), .kind = switch (expr.data) {
+                .numeral => .numeral,
+                .str_from_quote => .quote,
+                .interpolation => .interpolation,
+                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("literal root did not name a checked literal conversion"),
+            } },
             .proc = proc_id,
             .ret_layout = ret_layout,
             .plan = constant_plan,
@@ -7773,9 +7772,16 @@ const ProcedureBuilder = struct {
         hash.update(std.mem.asBytes(&identities));
         for (fields) |field| {
             const identity = [_]u32{ @intFromEnum(std.meta.activeTag(field)), switch (field) {
-                .value, .descriptor => |rep| @intFromEnum(rep),
+                .value => |rep| @intFromEnum(rep),
+                .descriptor => |descriptor| @intFromEnum(descriptor.worker_rep),
                 .dictionary => |span| span.start,
                 .literal => |index| index,
+            }, switch (field) {
+                .descriptor => |descriptor| @intFromEnum(descriptor.source_rep),
+                .value, .dictionary, .literal => 0,
+            }, switch (field) {
+                .descriptor => |descriptor| if (descriptor.exact) |id| @intFromEnum(id) + 1 else 0,
+                .value, .dictionary, .literal => 0,
             } };
             hash.update(std.mem.asBytes(&identity));
         }
@@ -7866,7 +7872,6 @@ const ProcedureBuilder = struct {
         unimplemented,
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
-        generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
         generated_evidence_intrinsic: checked.IntrinsicId,
         str_inspect: struct {
             arg: LIR.LocalId,
@@ -7898,22 +7903,7 @@ const ProcedureBuilder = struct {
             .unimplemented => try self.bodySourceForUnimplemented(proc),
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
-            .generated_interpolation_step => |source| try self.bodySourceForGeneratedInterpolationStep(proc, source),
         };
-    }
-
-    fn bodySourceForGeneratedInterpolationStep(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedInterpolationStepSource,
-    ) Allocator.Error!WorkerBodySource {
-        const worker = proc.parent.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated interpolation step worker was not callable");
-        if (function.arg_count != 0 or proc.worker_layout.args.len != 0) {
-            boxyLowerInvariant("generated interpolation step worker was not zero-argument");
-        }
-        return .{ .generated_interpolation_step = source };
     }
 
     fn bodySourceForGeneratedFieldIterator(
@@ -8068,7 +8058,6 @@ const ProcedureBuilder = struct {
             } }, proc.origin),
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
-            .generated_interpolation_step => |source| try self.lowerGeneratedInterpolationStepInto(proc, source, ret_local, ret_stmt),
             .generated_evidence_intrinsic => |intrinsic| try self.lowerGeneratedEvidenceIntrinsicInto(proc, intrinsic, ret_local, ret_stmt),
             .str_inspect => |inspect| blk: {
                 try proc.markLocalDescriptorForType(inspect.arg, inspect.arg_ty);
@@ -8796,259 +8785,6 @@ const ProcedureBuilder = struct {
             .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
             .next = continuation,
         } }, proc.derivedOrigin());
-    }
-
-    /// A generated interpolation iterator's nodes, built one node at a time
-    /// from the last execution-order node; a node's item expressions are
-    /// lowered as a piece of the expression machine.
-    const InterpolationIterState = struct {
-        planned: Plan.GeneratedInterpolationPlan,
-        interpolation: checked.CheckedInterpolation,
-        iter_values: []LIR.LocalId,
-        /// The node being built.
-        index: usize = 0,
-        continuation: LIR.CFStmtId,
-        /// The current node's locals, built before its items are lowered.
-        len: LIR.LocalId = undefined,
-        step: LIR.LocalId = undefined,
-        remaining: LIR.LocalId = undefined,
-        len_rep: Plan.TypeRepId = undefined,
-        item_exprs: [2]checked.CheckedExprId = undefined,
-        /// The current node's nominal wrapper formal scope: the iterator's
-        /// fields live in `Iter`'s shared backing, whose item formal names
-        /// this interpolation's item type only inside the wrapper's scope.
-        scope: ?ProcBodyBuilder.NominalBackingFormalScope = null,
-    };
-
-    fn beginGeneratedInterpolationIter(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        requested_target: LIR.LocalId,
-        requested_target_rep: Plan.TypeRepId,
-        expr_id: checked.CheckedExprId,
-        requested_next: LIR.CFStmtId,
-    ) Allocator.Error!*InterpolationIterState {
-        const interpolation_id = Plan.CheckedExprIdentity{ .module = proc.module.key, .expr = expr_id };
-        const planned = self.plan.generatedInterpolationPlan(interpolation_id, proc.worker_layout.worker) orelse
-            boxyLowerInvariant("generated interpolation operand had no worker plan");
-        // The iterator is built at its planned representation and converted
-        // into the requested one.
-        var target = requested_target;
-        var next = requested_next;
-        if (planned.iter_rep != requested_target_rep) {
-            const exact_target = try proc.addFrameBoundaryTargetLocalForRep(planned.iter_rep);
-            next = try proc.assignRepresentationBoundary(requested_target, exact_target, requested_target_rep, planned.iter_rep, requested_next);
-            target = exact_target;
-        }
-
-        const expr = proc.module.checked_bodies.expr(expr_id);
-        if (expr.data != .interpolation) {
-            boxyLowerInvariant("generated interpolation operand pointed at a non-interpolation expression");
-        }
-        const interpolation = expr.data.interpolation;
-        const iter_values = try self.allocator.alloc(LIR.LocalId, interpolation.parts.len + 1);
-        errdefer self.allocator.free(iter_values);
-        iter_values[0] = target;
-        for (iter_values[1..]) |*iter_value| {
-            iter_value.* = try proc.addFrameBoundaryTargetLocalForRep(planned.iter_rep);
-        }
-        const state = try self.allocator.create(InterpolationIterState);
-        state.* = .{ .planned = planned, .interpolation = interpolation, .iter_values = iter_values, .continuation = next };
-        return state;
-    }
-
-    fn freeInterpolationIterState(self: *ProcedureBuilder, state: *InterpolationIterState) void {
-        self.allocator.free(state.iter_values);
-        self.allocator.destroy(state);
-    }
-
-    /// Build the current node up to its item, returning the item's
-    /// expressions to lower, or finish a node without an item.
-    fn beginGeneratedInterpolationNode(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *InterpolationIterState,
-    ) Allocator.Error!?ProcBodyBuilder.ExprTask {
-        const iter_rep = state.planned.iter_rep;
-        const interpolation = state.interpolation;
-        const index = state.index;
-        const target = state.iter_values[index];
-        const rest: ?LIR.LocalId = if (index < interpolation.parts.len) state.iter_values[index + 1] else null;
-        const planned = state.planned;
-        state.scope = try proc.enterNominalWrapperFormalScopes(iter_rep);
-        const len_child = proc.generatedRecordFieldChild(iter_rep, "len_if_known");
-        const step_child = proc.generatedRecordFieldChild(iter_rep, "step");
-        state.len = try proc.addFrameLocalForRep(len_child.rep);
-        state.step = try proc.addFrameLocalForRep(step_child.rep);
-        state.remaining = try proc.addFrameLocal(.u64);
-        state.len_rep = len_child.rep;
-
-        var continuation = try proc.assignGeneratedParserTwoFieldRecord(
-            target,
-            iter_rep,
-            "len_if_known",
-            state.len,
-            len_child.rep,
-            "step",
-            state.step,
-            step_child.rep,
-            state.continuation,
-        );
-        if (index == interpolation.parts.len) {
-            state.continuation = try self.packGeneratedInterpolationStep(
-                proc,
-                state.step,
-                step_child.rep,
-                planned.done_step,
-                &.{},
-                continuation,
-            );
-            return null;
-        }
-        const step_worker = self.plan.workers.items[@intFromEnum(planned.one_step)];
-        if (step_worker.source != .generated_interpolation_step) {
-            boxyLowerInvariant("generated interpolation One worker had the wrong source kind");
-        }
-        const step_source = step_worker.source.generated_interpolation_step;
-        const payload_type = step_source.one_payload_type orelse
-            boxyLowerInvariant("generated interpolation One worker had no payload type");
-        const payload_rep = proc.repForTypeRef(payload_type);
-        const item_child = proc.generatedRecordFieldChild(payload_rep, "item");
-        const item = try proc.addFrameBoundaryTargetLocalForRep(item_child.rep);
-        const payload = try proc.addFrameBoundaryTargetLocalForRep(payload_rep);
-        const rest_value = rest orelse
-            boxyLowerInvariant("generated interpolation One step had no rest iterator");
-
-        continuation = try self.packGeneratedInterpolationStep(
-            proc,
-            state.step,
-            step_child.rep,
-            planned.one_step,
-            &.{payload},
-            continuation,
-        );
-        continuation = try proc.assignGeneratedParserTwoFieldRecord(
-            payload,
-            payload_rep,
-            "item",
-            item,
-            item_child.rep,
-            "rest",
-            rest_value,
-            planned.iter_rep,
-            continuation,
-        );
-        const item_rep = proc.tupleRepForBoundary(item_child.rep) orelse
-            boxyLowerInvariant("generated interpolation item was not a tuple representation");
-        const item_shape = self.plan.representations.items[@intFromEnum(item_rep)];
-        const part = interpolation.parts[index];
-        state.item_exprs = .{ part.value, part.following_segment };
-        return .{ .exprs_struct = .{
-            .target = item,
-            .target_rep = item_child.rep,
-            .items = &state.item_exprs,
-            .item_reps = self.plan.childSlice(item_shape.children),
-            .next = continuation,
-        } };
-    }
-
-    /// Finish the current node once its item is built.
-    fn finishGeneratedInterpolationNode(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *InterpolationIterState,
-    ) Allocator.Error!void {
-        const index = state.index;
-        try proc.recordAggregateLocalDescriptorEnvironment(state.iter_values[index], state.planned.iter_rep, &.{ state.len, state.step });
-        var continuation = try proc.assignGeneratedIteratorLength(state.len, state.len_rep, .all, state.remaining, state.continuation);
-        continuation = try proc.assignIntLiteral(state.remaining, @intCast(state.interpolation.parts.len - index), continuation);
-        const scope = state.scope.?;
-        state.scope = null;
-        state.continuation = try proc.leaveNominalBackingFormalScope(scope, continuation);
-        state.index += 1;
-    }
-
-    fn packGeneratedInterpolationStep(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        worker_id: Plan.WorkerPlanId,
-        capture_values: []const LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
-        const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
-        defer descriptor_initializers.deinit(self.allocator);
-        var dictionary_initializers = std.ArrayList(ProcBodyBuilder.DictionaryArgLocal).empty;
-        defer dictionary_initializers.deinit(self.allocator);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, worker_id, captures, capture_values, &descriptor_initializers, &dictionary_initializers);
-        defer self.allocator.free(all_capture_values);
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated interpolation step worker was not callable");
-        const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
-        const erased_proc = try self.reserveErasedWorkerProc(worker_id);
-        const result_desc = try proc.exactCallResultDescriptorRef(function.ret);
-        const boundary = try self.generatedCallablePackBoundary(proc, target, target_rep, function, next);
-        const entry = try proc.packGeneratedErasedCallable(
-            boundary.target,
-            erased_proc,
-            worker_id,
-            function.rep,
-            function.ret,
-            result_desc,
-            captures,
-            all_capture_values,
-            worker_layout.erased_capture_layout,
-            boundary.next,
-        );
-        try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, try proc.prependHiddenDictionaryArgMaterialization(dictionary_initializers.items, entry));
-    }
-
-    fn lowerGeneratedInterpolationStepInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedInterpolationStepSource,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated interpolation step worker was not callable");
-        if (!planTypeRefEql(worker.checked_type, source.step_type)) {
-            boxyLowerInvariant("generated interpolation worker type disagreed with its source");
-        }
-        const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        var payload_capture: ?LIR.LocalId = null;
-        for (captures, proc.erased_capture_locals.items) |capture, capture_local| {
-            if (capture.kind != .captured_value) continue;
-            if (payload_capture != null) {
-                boxyLowerInvariant("generated interpolation worker had multiple value captures");
-            }
-            payload_capture = capture_local;
-        }
-        if (source.one_payload_type) |payload_type| {
-            const payload = payload_capture orelse {
-                boxyLowerInvariant("generated interpolation One worker did not have one payload capture");
-            };
-            const payload_rep = proc.repForTypeRef(payload_type);
-            const one = proc.generatedParserTagVariant(function.ret, "One");
-            return try proc.assignGeneratedParserTag(
-                target,
-                function.ret,
-                one,
-                payload,
-                payload_rep,
-                next,
-            );
-        }
-        if (payload_capture != null) {
-            boxyLowerInvariant("generated interpolation Done worker unexpectedly had a value capture");
-        }
-        const done = proc.generatedParserTagVariant(function.ret, "Done");
-        return try proc.assignGeneratedParserZeroTag(target, function.ret, done, next);
     }
 
     fn lowerGeneratedFieldIteratorValueInto(
@@ -16458,7 +16194,6 @@ const ProcBodyBuilder = struct {
                 .parser_constructor, .encoder_constructor => false,
             },
             .generated_field_iterator => true,
-            .generated_interpolation_step => true,
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
         };
 
@@ -16983,7 +16718,6 @@ const ProcBodyBuilder = struct {
                 .parser_constructor, .encoder_constructor => false,
             },
             .generated_field_iterator => true,
-            .generated_interpolation_step => true,
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
         };
 
@@ -17136,7 +16870,6 @@ const ProcBodyBuilder = struct {
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => &.{},
         };
     }
@@ -17301,14 +17034,6 @@ const ProcBodyBuilder = struct {
             state: ?*PlannedCallState = null,
         },
         pattern: PatternTask,
-        /// A compiler-generated iterator over an interpolation's parts.
-        interpolation_iter: struct {
-            target: LIR.LocalId,
-            target_rep: Plan.TypeRepId,
-            expr_id: checked.CheckedExprId,
-            next: LIR.CFStmtId,
-            state: ?*ProcedureBuilder.InterpolationIterState = null,
-        },
         /// Expressions lowered into a struct's fields.
         exprs_struct: struct {
             target: LIR.LocalId,
@@ -17433,7 +17158,7 @@ const ProcBodyBuilder = struct {
         var copy = task;
         switch (copy) {
             .chain => |*chain| chain.current = next,
-            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .if_, .bool_binop, .match_, .match_branch, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call, .pattern, .stored_across, .interpolation_iter, .exprs_struct => |*payload| payload.next = next,
+            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .if_, .bool_binop, .match_, .match_branch, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call, .pattern, .stored_across, .exprs_struct => |*payload| payload.next = next,
         }
         return copy;
     }
@@ -17524,13 +17249,6 @@ const ProcBodyBuilder = struct {
                 if (pattern.state) |state| self.releasePatternState(state);
                 pattern.state = null;
             },
-            .interpolation_iter => |*iter| {
-                if (iter.state) |state| {
-                    if (state.scope) |scope| self.dropNominalBackingFormalScope(scope);
-                    self.parent.freeInterpolationIterState(state);
-                }
-                iter.state = null;
-            },
             .iter_dispatch => |*dispatch| {
                 if (dispatch.snapshot) |snapshot| {
                     self.restoreDescriptorBindings(snapshot);
@@ -17606,7 +17324,6 @@ const ProcBodyBuilder = struct {
             .match_branch => |*t| try self.stepMatchBranch(t, stage, input),
             .planned_call => |*t| try self.stepPlannedWorkerCall(t, stage, input),
             .pattern => |*t| try self.stepPattern(t, input),
-            .interpolation_iter => |*t| try self.stepInterpolationIter(t, input),
             .exprs_struct => |t| try self.beginExprsAsStructWithReps(t.target, t.target_rep, t.items, t.item_reps, t.next),
             .stored_across => |t| try self.beginRestoreStoredConstNodeAcrossBoundary(t.target, t.store_module, t.node, t.stored_type, t.target_rep, t.stored_rep, t.next),
             .chain => |*chain| try self.stepExprChain(chain, input),
@@ -17664,12 +17381,7 @@ const ProcBodyBuilder = struct {
                         literal,
                         chain.current,
                     ),
-                    .generated_interpolation_iter => |expr| return .{ .child = .{ .interpolation_iter = .{
-                        .target = operand.lowered,
-                        .target_rep = operand.storage_arg_rep,
-                        .expr_id = expr,
-                        .next = chain.current,
-                    } } },
+                    .generated_interpolation_segments => |expr| try self.assignInterpolationSegmentsInto(operand.lowered, operand.storage_arg_rep, expr, chain.current),
                 },
                 .boundary_assign => |assign| try self.assignRepresentationBoundary(
                     assign.target,
@@ -17801,7 +17513,7 @@ const ProcBodyBuilder = struct {
             .call => |call| try self.beginDirectCall(target, expr_id, call, expr.ty, next),
             .dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
             .type_dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
-            .interpolation => |interpolation| try self.beginDispatchCall(target, expr_id, interpolation.plan, expr.ty, next),
+            .interpolation => |interpolation| try self.beginInterpolation(target, expr_id, expr.ty, interpolation, next),
             .for_ => |for_| blk: {
                 if (self.isZstLocal(target)) {
                     break :blk .{ .tail = .{ .iterator_for = .{ .target = target, .for_ = forLoop(for_), .next = next } } };
@@ -19333,7 +19045,7 @@ const ProcBodyBuilder = struct {
             .{ .module = self.module.key, .expr = expr_id }
         else switch (source) {
             .nested_expr => |expr_ref| expr_ref,
-            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => null,
         };
         if (closure) |closure_ref| {
             if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
@@ -20783,7 +20495,7 @@ const ProcBodyBuilder = struct {
         if (try self.lowerPlannedLiteralInto(target, expr_id, checked_ty, next)) |body| return exprDone(body);
 
         switch (self.staticDispatchPlan(quote.plan).resolution) {
-            .evidence_dependent, .checked_error, .@"unreachable" => return try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next),
+            .evidence_dependent, .checked_error, .@"unreachable" => return try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
@@ -20798,7 +20510,7 @@ const ProcBodyBuilder = struct {
                 .checked_ty = checked_ty,
                 .next = next,
             } } },
-            .pending => try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next),
+            .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
             .fn_value,
             .discarded,
             .expect,
@@ -20807,23 +20519,27 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn lowerRuntimeQuoteConversionInto(
+    fn lowerRuntimeStringConversionInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
         target_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        invalid_message: []const u8,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginRuntimeQuoteConversion(target, expr_id, target_ty, maybe_plan, next));
+        return try self.runExprStep(try self.beginRuntimeStringConversion(target, expr_id, target_ty, maybe_plan, invalid_message, next));
     }
 
-    fn beginRuntimeQuoteConversion(
+    /// A quote's or an interpolation's conversion called here, its `Try`
+    /// result unwrapped into `target`, whose type is `target_ty`.
+    fn beginRuntimeStringConversion(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
         target_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        invalid_message: []const u8,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const dispatch = self.staticDispatchPlan(maybe_plan);
@@ -20835,10 +20551,68 @@ const ProcBodyBuilder = struct {
             self.repForType(target_ty),
             try_value,
             try_rep,
-            "invalid string literal",
+            invalid_message,
             next,
         );
         return try self.beginDispatchCall(try_value, expr_id, maybe_plan, callable.ret, unwrap);
+    }
+
+    /// An interpolation's value: its assembler, the value of its literal
+    /// conversion, called with the interpolated values as a list.
+    fn beginInterpolation(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        expr_id: checked.CheckedExprId,
+        ty: checked.CheckedTypeId,
+        interpolation: checked.CheckedInterpolation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const assembler_fn = checkedFunctionPayload(self.module, interpolation.assembler_ty);
+        if (assembler_fn.args.len != 1) boxyLowerInvariant("interpolation assembler did not take exactly the values list");
+        const assembler_rep = self.repForType(interpolation.assembler_ty);
+        const assembler = try self.addFrameLocalForRepWithFreshDescriptor(assembler_rep);
+        const values_ty = assembler_fn.args[0];
+        const values_rep = self.repForType(values_ty);
+        const values = try self.addFrameLocalForRepWithFreshDescriptor(values_rep);
+        const call = try self.lowerErasedCallLocalsInto(target, self.repForType(ty), assembler_rep, assembler, &.{values}, &.{values_rep}, next);
+        const convert = if (try self.lowerPlannedLiteralInto(assembler, expr_id, interpolation.assembler_ty, call)) |body|
+            body
+        else
+            try self.lowerRuntimeStringConversionInto(assembler, expr_id, interpolation.assembler_ty, interpolation.plan, "invalid string interpolation", call);
+        return try self.beginList(values, values_ty, interpolation.values, convert);
+    }
+
+    /// An interpolation's literal segments, as the `List(Str)` its conversion
+    /// receives.
+    fn assignInterpolationSegmentsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const interpolation = switch (self.module.checked_bodies.expr(expr_id).data) {
+            .interpolation => |value| value,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("interpolation segments operand referenced a non-interpolation expression"),
+        };
+        const elem_layout = self.localListElemLayout(target);
+        const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, interpolation.segments.len);
+        defer self.parent.allocator.free(elem_locals);
+        for (elem_locals) |*local| local.* = try self.addFrameLocal(elem_layout);
+        const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
+        if (target_desc_info.desc) |desc| self.parent.result.store.setLocalBoxyDesc(target, desc);
+        var continuation = try self.assignList(target, elem_locals, next);
+        continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
+        var index = interpolation.segments.len;
+        while (index > 0) {
+            index -= 1;
+            const literal = switch (self.module.checked_bodies.expr(interpolation.segments[index]).data) {
+                .str_segment => |literal| literal,
+                .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("interpolation segment was not a checked string segment"),
+            };
+            continuation = try self.assignStringLiteral(elem_locals[index], literal, continuation);
+        }
+        return continuation;
     }
 
     fn lowerLiteralConversionResultInto(
@@ -20992,7 +20766,12 @@ const ProcBodyBuilder = struct {
                 .literal_rejection = .{
                     .owner = owner,
                     .checked_expr = @intFromEnum(site.source.expr),
-                    .kind = if (self.module.checked_bodies.expr(site.source.expr).data == .numeral) .numeral else .quote,
+                    .kind = switch (self.module.checked_bodies.expr(site.source.expr).data) {
+                        .numeral => .numeral,
+                        .str_from_quote => .quote,
+                        .interpolation => .interpolation,
+                        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("literal rejection site did not name a checked literal conversion"),
+                    },
                 },
             } }, self.origin);
             const read_message = try self.assignConcreteTagPayloadRead(message, payloads[0].rep, null, error_value, error_rep, variant.name, @intCast(index), 0, 1, rejected);
@@ -23963,10 +23742,17 @@ const ProcBodyBuilder = struct {
         if (self.parent.needsFrozenCallableRecipes()) {
             const fields = try self.parent.allocator.alloc(ProcedureBuilder.FrozenCaptureRecipe, captures.len);
             defer self.parent.allocator.free(fields);
-            for (captures, fields) |capture, *field| {
+            for (captures, capture_desc_sources, hidden_desc_initializers, fields) |capture, desc_source, hidden_desc_initializer, *field| {
                 field.* = switch (capture.kind) {
                     .captured_value => .{ .value = capture.rep },
-                    .hidden_desc => .{ .descriptor = capture.rep },
+                    .hidden_desc => .{ .descriptor = .{
+                        .worker_rep = capture.rep,
+                        .source_rep = desc_source.rep,
+                        .exact = if (hidden_desc_initializer) |initializer| if (initializer.materialize) |materialize| switch (materialize) {
+                            .static => |id| if (initializer.captures.len == 0) id else null,
+                            .local, .runtime, .dict_method_arg, .dict_method_hidden => null,
+                        } else null else null,
+                    } },
                     .hidden_dict => .{ .dictionary = capture.dictionaries },
                     .hidden_literal => .{ .literal = capture.literal_parameter.? },
                 };
@@ -24559,7 +24345,7 @@ const ProcBodyBuilder = struct {
             defer self.parent.allocator.free(fields);
             for (captures, fields) |capture, *field| field.* = switch (capture.kind) {
                 .captured_value => .{ .value = capture.rep },
-                .hidden_desc => .{ .descriptor = capture.rep },
+                .hidden_desc => .{ .descriptor = .{ .worker_rep = capture.rep, .source_rep = capture.rep } },
                 .hidden_dict => .{ .dictionary = capture.dictionaries },
                 .hidden_literal => .{ .literal = capture.literal_parameter.? },
             };
@@ -24618,7 +24404,6 @@ const ProcBodyBuilder = struct {
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => &.{},
         };
     }
@@ -25013,11 +24798,11 @@ const ProcBodyBuilder = struct {
         }
         const lhs = switch (operands[0]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality lhs was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality lhs was not a checked expression operand"),
         };
         const rhs = switch (operands[1]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality rhs was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality rhs was not a checked expression operand"),
         };
         return try self.beginStructuralEq(target, lhs, rhs, self.repForType(dispatch.dispatcher_ty), negated, next);
     }
@@ -25034,11 +24819,11 @@ const ProcBodyBuilder = struct {
         }
         const value = switch (operands[0]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash value was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash value was not a checked expression operand"),
         };
         const hasher = switch (operands[1]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash hasher was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash hasher was not a checked expression operand"),
         };
         return try self.beginStructuralHash(target, value, hasher, next);
     }
@@ -25055,7 +24840,7 @@ const ProcBodyBuilder = struct {
         }
         const value = switch (operands[0]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural inspect operand was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural inspect operand was not a checked expression operand"),
         };
         return try self.beginInspectExpr(target, value, next);
     }
@@ -25152,15 +24937,12 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        // A quote or interpolation conversion's leading argument is concrete
-        // Str. An interpolation's item type is its parts' type, which the
-        // parts describe. The remaining type parameters (the conversion's
-        // result and error) belong to the selected dictionary method, rather
-        // than to an explicit argument at this call.
+        // A quote conversion's argument is concrete Str, and an
+        // interpolation conversion's is its concrete `List(Str)` of segments.
+        // The remaining type parameters (the conversion's result and error)
+        // belong to the selected dictionary method, rather than to an explicit
+        // argument at this call.
         const call_data = self.module.checked_bodies.expr(planned.call.expr).data;
-        if (call_data == .interpolation) {
-            try self.bindInterpolationItemDescriptorArgs(hidden_desc_args, call_data.interpolation, &pre_arg_descriptor_initializers);
-        }
         if (call_data == .str_from_quote or call_data == .interpolation) {
             try self.bindConversionResultDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
@@ -25263,30 +25045,6 @@ const ProcBodyBuilder = struct {
         items[operands.len + 1] = .restore_descriptors;
         snapshot_moved = true;
         return .{ .tail = .{ .chain = .{ .items = items, .current = continuation, .snapshot = descriptor_snapshot } } };
-    }
-
-    /// Every part of an interpolation fills the generated iterator's item
-    /// slot, so the item type is the parts' type and the first part's type
-    /// describes it.
-    fn bindInterpolationItemDescriptorArgs(
-        self: *ProcBodyBuilder,
-        args: []const Plan.DirectCallHiddenDescriptorArg,
-        interpolation: checked.CheckedInterpolation,
-        initializers: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!void {
-        if (interpolation.parts.len == 0) boxyLowerInvariant("checked interpolation had no interpolated parts");
-        const part_rep = self.repForType(self.module.checked_bodies.expr(interpolation.parts[0].value).ty);
-        for (args) |arg| {
-            if (arg.source_arg_index == null or !self.repIsBareDynamic(arg.rep)) continue;
-            const materialization = try self.descriptorMaterializationForKnownRep(part_rep);
-            const local = try self.addFrameLocal(.opaque_ptr);
-            try initializers.append(self.parent.allocator, .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
-            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
-        }
     }
 
     fn bindConversionResultDescriptorArgs(
@@ -25406,7 +25164,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!Plan.TypeRepId {
         const expr_id = switch (operand) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter,
+            .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
             => return planned_rep,
@@ -29003,26 +28761,6 @@ const ProcBodyBuilder = struct {
         /// Bind a literal pattern's value before its equality guard.
         guard_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
     };
-
-    fn stepInterpolationIter(self: *ProcBodyBuilder, task: anytype, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
-        const state = if (task.state) |existing| blk: {
-            existing.continuation = input orelse boxyLowerInvariant("generated interpolation node resumed without its item");
-            try self.parent.finishGeneratedInterpolationNode(self, existing);
-            break :blk existing;
-        } else blk: {
-            const created = try self.parent.beginGeneratedInterpolationIter(self, task.target, task.target_rep, task.expr_id, task.next);
-            task.state = created;
-            break :blk created;
-        };
-        while (state.index < state.iter_values.len) {
-            if (try self.parent.beginGeneratedInterpolationNode(self, state)) |item| return .{ .child = item };
-            try self.parent.finishGeneratedInterpolationNode(self, state);
-        }
-        const stmt = state.continuation;
-        self.parent.freeInterpolationIterState(state);
-        task.state = null;
-        return exprDone(stmt);
-    }
 
     fn stepPattern(self: *ProcBodyBuilder, task: *PatternTask, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
         const allocator = self.parent.allocator;
@@ -34028,7 +33766,8 @@ const ProcBodyBuilder = struct {
         const plan_id = switch (checked_expr.data) {
             .str_from_quote => |quote| quote.plan,
             .numeral => |numeral| numeral.plan,
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
+            .interpolation => |interpolation| interpolation.plan,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
         };
         const dispatch = self.staticDispatchPlan(plan_id);
         const result_desc = try self.exactCallResultDescriptorRef(self.repForType(ty));
@@ -37045,7 +36784,7 @@ const ProcBodyBuilder = struct {
         }
         const literal = switch (operands[0]) {
             .generated_numeral => |lit| lit,
-            .checked_expr, .generated_interpolation_iter, .generated_quote => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
+            .checked_expr, .generated_interpolation_segments, .generated_quote => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
         };
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
             const exact = self.module.module_env.exactNumeral(literal);
@@ -37569,7 +37308,7 @@ const ProcBodyBuilder = struct {
             const fields = try self.parent.allocator.alloc(ProcedureBuilder.FrozenCaptureRecipe, 1 + descriptor_captures.len);
             defer self.parent.allocator.free(fields);
             fields[0] = .{ .value = source_function.rep };
-            for (descriptor_captures, fields[1..]) |capture, *field| field.* = .{ .descriptor = capture.materialize_rep };
+            for (descriptor_captures, fields[1..]) |capture, *field| field.* = .{ .descriptor = .{ .worker_rep = capture.materialize_rep, .source_rep = capture.materialize_rep } };
             try self.parent.recordFrozenCallable(self.worker_layout.worker, source_function.rep, target_function.rep, adapter.proc, adapter.capture_layout, self.erasedCallableOnDrop(adapter.capture_layout), target_function.ret, fields);
         }
 
@@ -43703,6 +43442,49 @@ const ConstPlanBuilder = struct {
         return if (self.active_context) |ctx| evidence.freeze_contexts.items[ctx].callable_types.get(rep).? else evidence.callable_types.get(rep).?;
     }
 
+    /// The descriptor a frozen callable's descriptor capture holds: the one its
+    /// creating frame built. A static descriptor built from none of the frame's
+    /// bindings is held as is, and a closed source representation described
+    /// the capture exactly. Otherwise the frame's bindings filled a generic
+    /// source representation: in its own storage, instantiated by the closed
+    /// type the active freeze context gives a capture the callable reads as a
+    /// bare variable, and otherwise sharing the callable's representation of
+    /// the capture, which the context closes.
+    fn frozenCaptureDescriptor(self: *ConstPlanBuilder, capture: ProcedureBuilder.FrozenDescriptorCapture) Allocator.Error!LIR.BoxyTypeDescId {
+        if (capture.exact) |id| return id;
+        const source = self.plan.representations.items[@intFromEnum(capture.source_rep)];
+        if (!source.contains_dynamic and source.kind != .dynamic) return try self.procedure_builder.typeDescForRep(capture.source_rep);
+        if (self.contextClosedRep(capture.worker_rep)) |closed| {
+            // The callable reads the capture as a bare variable the context
+            // closes; the value keeps its creating representation's storage,
+            // whose variables the closed type instantiates.
+            var sources = StaticDescriptorSourceMap{};
+            defer sources.deinit(self.allocator);
+            var seen = std.AutoHashMap(u64, void).init(self.allocator);
+            defer seen.deinit();
+            try self.procedure_builder.collectStaticDescriptorSourcesForWorkerSource(capture.source_rep, closed, &.{}, .all_worker_descriptors, &sources, &seen);
+            var context = StaticDescInstantiationContext{};
+            defer context.deinit(self.allocator);
+            return try self.procedure_builder.typeDescForWorkerRepWithSourceMap(capture.source_rep, null, &sources, &context);
+        }
+        return try self.closedDescriptor(capture.worker_rep);
+    }
+
+    /// The closed representation the active freeze context binds a bare
+    /// variable representation to.
+    fn contextClosedRep(self: *ConstPlanBuilder, rep: Plan.TypeRepId) ?Plan.TypeRepId {
+        const ctx = self.active_context orelse return null;
+        const info = self.plan.representations.items[@intFromEnum(rep)];
+        if (info.kind != .dynamic) return null;
+        const desc = info.descriptor orelse return null;
+        const evidence = &self.plan.literal_evidence.?;
+        const span = evidence.freeze_contexts.items[ctx].bindings;
+        for (evidence.bindings.items[span.start..][0..span.len]) |binding| {
+            if (self.plan.representations.items[@intFromEnum(binding.scheme_rep)].descriptor == desc) return binding.site_rep;
+        }
+        return null;
+    }
+
     fn closedDescriptor(self: *ConstPlanBuilder, rep: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
         var sources = StaticDescriptorSourceMap{};
         defer sources.deinit(self.allocator);
@@ -43714,7 +43496,13 @@ const ConstPlanBuilder = struct {
             }
         }
         if (self.active_boundary) |boundary| {
-            for (boundary.entries.items) |entry| try sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+            // The active freeze context binds its descriptors to the context's
+            // closed instance; the boundary describes the descriptors it
+            // leaves unbound.
+            for (boundary.entries.items) |entry| {
+                if (sources.get(entry.worker_desc) != null) continue;
+                try sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+            }
         }
         var context = StaticDescInstantiationContext{};
         defer context.deinit(self.allocator);
@@ -44312,7 +44100,7 @@ const ConstPlanBuilder = struct {
                     for (recipe.fields, fields[0..recipe.fields.len], 0..) |field, *out, slot| {
                         out.* = .{ .slot = @intCast(slot), .value = switch (field) {
                             .value => |rep| .{ .value = try self.constPlanForRep(rep) },
-                            .descriptor => |rep| .{ .descriptor = try self.closedDescriptor(rep) },
+                            .descriptor => |descriptor| .{ .descriptor = try self.frozenCaptureDescriptor(descriptor) },
                             .dictionary => |span| blk: {
                                 for (self.plan.directCallHiddenDictionaryArgSlice(context.dictionaries)) |arg| {
                                     if (!std.meta.eql(arg.worker_dictionaries, span)) continue;
@@ -44364,6 +44152,10 @@ const ConstPlanBuilder = struct {
                         .on_drop = .none,
                         .boxy = .{ .key = key, .result_desc = try self.closedDescriptor(recipe.result_rep), .captures = fields },
                     });
+                    const entry_spec = self.result.store.getProcSpecPtr(recipe.entry);
+                    if (entry_spec.static_erased_capture_layout) |recorded| {
+                        if (recorded != recipe.capture_layout) boxyLowerInvariant("frozen erased worker had two capture layouts");
+                    } else entry_spec.static_erased_capture_layout = recipe.capture_layout;
                 }
             }
             self.result.erased_fns.items[@intFromEnum(demand.set)].entries = try entries.toOwnedSlice(self.allocator);
@@ -44646,7 +44438,7 @@ fn expectResolvedWorkerCheckedExpr(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     const body = switch (worker.body) {
         .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step => return error.TestUnexpectedResult,
+        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(expected_body, body.body_id);
     try std.testing.expectEqual(expected_root, body.root_expr);

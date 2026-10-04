@@ -271,6 +271,7 @@ pub const Store = struct {
                     .comptime_crash,
                     .comptime_invalid_numeral,
                     .comptime_invalid_quote,
+                    .comptime_invalid_interpolation,
                     .comptime_expect_failed,
                     .comptime_eval_error,
                     .invalid_numeric_literal,

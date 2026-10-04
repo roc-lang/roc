@@ -429,9 +429,10 @@ pub const Expr = union(enum) {
     /// Compiler-created interpolation dispatch.
     ///
     /// Unlike an ordinary method call, this dispatch is owned by the result
-    /// type of the whole interpolation expression. Runtime arguments are the
-    /// first `Str` segment and a compiler-generated `Iter` over interpolated
-    /// values paired with following `Str` segments.
+    /// type of the whole interpolation expression. The conversion receives the
+    /// literal `Str` segments at compile time and returns an assembler
+    /// (`assembler_fn_var`), which receives the interpolated values, in order,
+    /// as a `List` at runtime.
     e_interpolation: struct {
         first: Expr.Idx,
         /// Flat `(interpolated, following_segment)` pairs. The span length is
@@ -440,7 +441,7 @@ pub const Expr = union(enum) {
         parts: Expr.Span,
         method_name_region: base.Region,
         constraint_fn_var: ?TypeVar = null,
-        step_fn_var: ?TypeVar = null,
+        assembler_fn_var: ?TypeVar = null,
         dispatcher_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.

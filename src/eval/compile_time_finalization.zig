@@ -367,6 +367,7 @@ pub const ProgramSession = struct {
             return lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
                 .roots = consumer_roots,
                 .target_usize = target.target_usize,
+                .erased_capture_prefix = target.erased_capture_prefix,
                 .inline_expects = target.inline_expects,
                 .observers = lir.CheckedPipeline.Observers.fromTarget(target),
                 .lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(target),
@@ -383,6 +384,7 @@ pub const ProgramSession = struct {
         var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
             .roots = consumer_roots,
             .target_usize = target.target_usize,
+            .erased_capture_prefix = target.erased_capture_prefix,
             .inline_expects = target.inline_expects,
             .completed_scalar_values = &scalar_values,
             .frozen_materializer = .{
@@ -743,8 +745,11 @@ fn materializeBoxyLiterals(
     roots: lir.CheckedPipeline.RootRequestSet,
     target: lir.CheckedPipeline.TargetConfig,
 ) FinalizeError!lir.CheckedPipeline.LoweredProgram {
+    // The host program runs in the interpreter, whose erased callables
+    // reserve no capture prefix.
     var host_target = target;
     host_target.target_usize = .native;
+    host_target.erased_capture_prefix = 0;
     host_target.checked_module_state = .checking_finalization;
     var prepared = lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, roots, host_target) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -763,7 +768,7 @@ fn materializeBoxyLiterals(
     if (host.lir_result.literal_roots.items.len != 0)
         try evaluateLoweredRootsWithObservations(allocator, &.{}, modules, &host, 0, .{ .stderr = .{} }, false);
 
-    if (target.target_usize != host_target.target_usize) {
+    if (target.target_usize != host_target.target_usize or target.erased_capture_prefix != host_target.erased_capture_prefix) {
         var runtime_target = target;
         runtime_target.checked_module_state = .checking_finalization;
         var runtime = prepared.lower(runtime_target) catch |err| switch (err) {
@@ -2240,6 +2245,7 @@ fn reportEmbeddedFailure(
         switch (kind) {
             .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{ .message = message_idx, .region = site.region, .origin = origin } }),
             .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{ .message = message_idx, .region = site.region, .origin = origin } }),
+            .interpolation => _ = try store.appendProblem(allocator, .{ .comptime_invalid_interpolation = .{ .message = message_idx, .region = site.region, .origin = origin } }),
         }
     } else {
         const message_idx = try store.putExtraString(embedded.message);
@@ -4151,6 +4157,11 @@ fn reportLiteralRejection(
                 .region = failure_site.region,
                 .origin = try comptimeFailureOrigin(store, failure_site),
             } }),
+            .interpolation => _ = try store.appendProblem(allocator, .{ .comptime_invalid_interpolation = .{
+                .message = message_idx,
+                .region = failure_site.region,
+                .origin = try comptimeFailureOrigin(store, failure_site),
+            } }),
         }
     }
 }
@@ -4161,6 +4172,7 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
         const reported_region = switch (kind) {
             .numeral => if (problem == .comptime_invalid_numeral) problem.comptime_invalid_numeral.region else continue,
             .quote => if (problem == .comptime_invalid_quote) problem.comptime_invalid_quote.region else continue,
+            .interpolation => if (problem == .comptime_invalid_interpolation) problem.comptime_invalid_interpolation.region else continue,
         };
         if (regionsEqual(reported_region, region)) return true;
     }

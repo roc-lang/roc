@@ -450,11 +450,14 @@ pub const LoweringModuleId = enum(u32) {
 pub const LiteralRejectionKind = enum(u8) {
     numeral,
     quote,
+    /// An interpolated string literal, whose conversion sees only the
+    /// literal's segments.
+    interpolation,
 };
 
 /// The source literal a literal-rejection crash reports: the checked
-/// expression, in its owning module, whose `from_numeral` or `from_quote`
-/// conversion returned `Err`.
+/// expression, in its owning module, whose `from_numeral`, `from_quote`, or
+/// `from_interpolation` conversion returned `Err`.
 pub const LiteralRejectionSite = struct {
     owner: LoweringModuleId,
     /// The literal's `CheckedExprId` in `owner`.
@@ -1617,6 +1620,11 @@ pub const LirProcSpec = struct {
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,
+    /// Capture layout of this erased worker's callable values that compile-time
+    /// evaluation froze into static data. No packing statement builds those
+    /// values, so backends register the worker with the Boxy runtime at
+    /// startup, for the capture this layout describes.
+    static_erased_capture_layout: ?layout.Idx = null,
     abi: ProcAbi = .roc,
     /// This callable can be invoked as an external function pointer before a
     /// normal Roc root runs, so its entry must initialize the embedded Boxy

@@ -1416,9 +1416,9 @@ pub const StaticDispatchDispatcher = union(enum) {
 /// Public `StaticDispatchOperand` declaration.
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
-    /// Compiler-generated finite `Iter` for string interpolation. The checked
-    /// expression owns the first segment and flat interpolation parts.
-    generated_interpolation_iter: CheckedExprId,
+    /// The literal segments of the checked interpolation expression, passed
+    /// to `from_interpolation` as a `List(Str)`.
+    generated_interpolation_segments: CheckedExprId,
     generated_numeral: ModuleEnv.NumeralLiteral,
     /// A string literal's post-escape contents, passed to `from_quote` as Str.
     generated_quote: CheckedStringLiteralId,
@@ -2189,15 +2189,11 @@ pub const StaticDispatchPlanTable = struct {
                 .e_interpolation => {
                     const interpolation = expr.data.e_interpolation;
                     if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
-                    const checked_interpolation = checked_expr_data.interpolation;
-                    const args = try allocator.alloc(StaticDispatchOperand, 2);
-                    defer allocator.free(args);
-                    args[0] = .{ .checked_expr = checked_interpolation.first };
-                    args[1] = .{ .generated_interpolation_iter = checked_expr };
+                    const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = checked_expr }};
                     const from_interpolation = try names.internMethodName("from_interpolation");
                     const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
                     const dispatcher_var = interpolation.dispatcher_var orelse unreachable;
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,

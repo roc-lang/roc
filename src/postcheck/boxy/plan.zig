@@ -762,21 +762,6 @@ pub const GeneratedFieldIteratorLink = struct {
     first_step: WorkerPlanId,
 };
 
-/// One zero-argument step worker for a compiler-generated interpolation Iter.
-pub const GeneratedInterpolationStepSource = struct {
-    step_type: CheckedTypeIdentity,
-    one_payload_type: ?CheckedTypeIdentity = null,
-};
-
-/// Exact generated workers selected for one interpolation operand use.
-pub const GeneratedInterpolationPlan = struct {
-    interpolation: CheckedExprIdentity,
-    caller: WorkerPlanId,
-    iter_rep: TypeRepId,
-    one_step: WorkerPlanId,
-    done_step: WorkerPlanId,
-};
-
 /// One renamed record field captured by a generated parser runtime worker.
 pub const GeneratedParserFieldCapture = struct {
     worker: WorkerPlanId,
@@ -874,7 +859,6 @@ pub const WorkerSource = union(enum) {
     nested_expr: CheckedExprIdentity,
     generated_codec: GeneratedCodecSource,
     generated_field_iterator: GeneratedFieldIteratorSource,
-    generated_interpolation_step: GeneratedInterpolationStepSource,
 };
 
 /// Const-store identity of a function value persisted into runtime code.
@@ -924,7 +908,7 @@ pub const WorkerPlan = struct {
 /// Exact producer for one explicit call argument.
 pub const CallOperand = union(enum) {
     checked_expr: checked.CheckedExprId,
-    generated_interpolation_iter: checked.CheckedExprId,
+    generated_interpolation_segments: checked.CheckedExprId,
     generated_numeral: can.ModuleEnv.NumeralLiteral,
     generated_quote: checked.CheckedStringLiteralId,
 };
@@ -1187,7 +1171,6 @@ pub const ProgramPlan = struct {
     generated_parser_tag_union_plans: std.ArrayList(GeneratedParserTagUnionPlan),
     generated_parser_tag_union_record_types: std.ArrayList(CheckedTypeIdentity),
     generated_field_iterator_links: std.ArrayList(GeneratedFieldIteratorLink),
-    generated_interpolations: std.ArrayList(GeneratedInterpolationPlan),
     generated_parser_field_captures: std.ArrayList(GeneratedParserFieldCapture),
     generated_parser_missing_required_fields: std.ArrayList(GeneratedParserMissingRequiredField),
     generated_parser_try_plans: std.ArrayList(GeneratedParserTryPlan),
@@ -1257,7 +1240,6 @@ pub const ProgramPlan = struct {
             .generated_parser_tag_union_plans = .empty,
             .generated_parser_tag_union_record_types = .empty,
             .generated_field_iterator_links = .empty,
-            .generated_interpolations = .empty,
             .generated_parser_field_captures = .empty,
             .generated_parser_missing_required_fields = .empty,
             .generated_parser_try_plans = .empty,
@@ -1342,7 +1324,6 @@ pub const ProgramPlan = struct {
         self.generated_parser_tag_union_plans.deinit(self.allocator);
         self.generated_parser_tag_union_record_types.deinit(self.allocator);
         self.generated_field_iterator_links.deinit(self.allocator);
-        self.generated_interpolations.deinit(self.allocator);
         self.generated_codec_calls.deinit(self.allocator);
         self.derived_component_calls.deinit(self.allocator);
         self.dictionary_method_call_types.deinit(self.allocator);
@@ -1991,17 +1972,6 @@ pub const ProgramPlan = struct {
         return null;
     }
 
-    pub fn generatedInterpolationPlan(
-        self: *const ProgramPlan,
-        interpolation: CheckedExprIdentity,
-        caller: WorkerPlanId,
-    ) ?GeneratedInterpolationPlan {
-        for (self.generated_interpolations.items) |plan| {
-            if (plan.caller == caller and exprRefEql(plan.interpolation, interpolation)) return plan;
-        }
-        return null;
-    }
-
     pub fn iteratorCallPlanFor(
         self: *const ProgramPlan,
         module: checked.ModuleId,
@@ -2021,6 +1991,17 @@ pub const ProgramPlan = struct {
         return null;
     }
 };
+
+/// The type of the value a literal site's conversion produces: a quote's or
+/// numeral's own type, or an interpolation's assembler.
+pub fn literalSiteValueType(bodies: checked.CheckedBodyStoreView, expr_id: checked.CheckedExprId) checked.CheckedTypeId {
+    const expr = bodies.expr(expr_id);
+    return switch (expr.data) {
+        .interpolation => |interpolation| interpolation.assembler_ty,
+        .numeral, .str_from_quote => expr.ty,
+        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("literal site did not name a checked literal conversion"),
+    };
+}
 
 /// Configuration for target-independent Boxy planning.
 pub const AnalyzeOptions = struct {};
@@ -2610,6 +2591,10 @@ const LiteralPlanner = struct {
                 if (capture.kind != .hidden_dict) continue;
                 for (0..capture.dictionaries.len) |offset| try methods.append(allocator, try self.graph.terms.intern(.{ .variable = dictionaryVariable(@enumFromInt(capture.dictionaries.start + @as(u32, @intCast(offset)))) }));
             }
+            // The worker's own callable type follows its captures: a variable
+            // it mentions that no capture carries, such as one only its result
+            // names, is bound by the context too.
+            try types.append(allocator, try self.repTerm(worker.rep));
             const ty = try self.graph.terms.intern(.{ .application = .{ .constructor = std.math.maxInt(u64), .args = types.items } });
             const evidence = try self.graph.terms.intern(.{ .application = .{ .constructor = std.math.maxInt(u64) - 1, .args = methods.items } });
             const site = try self.graph.addObservationSite();
@@ -2624,12 +2609,13 @@ const LiteralPlanner = struct {
         var bindings = std.AutoHashMapUnmanaged(u32, LiteralRequirements.TermId).empty;
         defer bindings.deinit(allocator);
         try self.bindLiteralInstance(pattern, requirement.ty, &bindings);
+        const worker = plan.workers.items[@intFromEnum(worker_id)];
+        const captures = plan.erasedCaptureSlice(worker.erased_captures);
+        const type_args = self.graph.terms.entries.items[@intFromEnum(requirement.ty)].application.args[0..captures.len];
         const binding_start: u32 = @intCast(self.result.bindings.items.len);
         var pairs = bindings.iterator();
         while (pairs.next()) |pair| try self.result.bindings.append(allocator, .{ .scheme_rep = @enumFromInt(pair.key_ptr.*), .site_rep = try self.materializeTerm(pair.value_ptr.*) });
         const binding_span = Span{ .start = binding_start, .len = @as(u32, @intCast(self.result.bindings.items.len)) - binding_start };
-        const worker = plan.workers.items[@intFromEnum(worker_id)];
-        const type_args = self.graph.terms.entries.items[@intFromEnum(requirement.ty)].application.args;
         const methods = self.graph.terms.entries.items[@intFromEnum(requirement.evidence.?)].application.args;
         var args = std.ArrayList(DirectCallHiddenDictionaryArg).empty;
         defer args.deinit(allocator);
@@ -2642,9 +2628,22 @@ const LiteralPlanner = struct {
             var schemes = std.ArrayList(Span).empty;
             defer schemes.deinit(allocator);
             for (0..param.dictionaries.len) |_| {
-                const method = try self.materializeMethod(methods[method_cursor]);
+                const term = methods[method_cursor];
+                const method = try self.materializeMethod(term);
                 method_cursor += 1;
-                try selected.append(allocator, plan.dictionary_method_evidence.items[method]);
+                // The captured dictionary is consumed by this worker's
+                // compiled code, which calls it through the ABI the original
+                // evidence describes: which descriptors its call supplies and
+                // which its slots hold. Only the slots' representations are
+                // closed at this context.
+                const recipe = self.method_recipes.items[@intCast(self.graph.terms.entries.items[@intFromEnum(term)].application.constructor - evidence_namespace)].method;
+                var adapter = plan.dictionary_method_evidence.items[method];
+                adapter.requirement_type = recipe.requirement_type;
+                adapter.requirement_desc_args = recipe.requirement_desc_args;
+                adapter.requirement_desc_sources = recipe.requirement_desc_sources;
+                adapter.requirement_leaf_sources = recipe.requirement_leaf_sources;
+                adapter.hidden_desc_sources = recipe.hidden_desc_sources;
+                try selected.append(allocator, adapter);
                 try schemes.append(allocator, self.closed_method_schemes.get(method).?);
             }
             const span = Span{ .start = @intCast(plan.dictionary_method_evidence.items.len), .len = @intCast(selected.items.len) };
@@ -2713,7 +2712,7 @@ const LiteralPlanner = struct {
             while (binding_entries.next()) |entry| try term_bindings.append(allocator, .{ .variable = entry.key_ptr.*, .term = entry.value_ptr.* });
             var memo = std.AutoHashMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
             defer memo.deinit(allocator);
-            const target_term = try self.typeTerm(typeRef(view, view.checked_bodies.expr(site.source.expr).ty));
+            const target_term = try self.typeTerm(typeRef(view, literalSiteValueType(view.checked_bodies, site.source.expr)));
             const closed_target = try self.graph.terms.substitute(target_term, term_bindings.items, &memo);
             const rep = try self.materializeTerm(closed_target);
             const call_rep = try self.materializeTerm(requirement.ty);
@@ -3180,7 +3179,7 @@ const LiteralPlanner = struct {
             const requirement = self.graph.requirements.items[@intFromEnum(requirement_id)];
             const site = self.site_identities.items[@intFromEnum(requirement.site)];
             const view = self.builder.moduleForId(site.module);
-            const ty = typeRef(view, view.checked_bodies.expr(site.expr).ty);
+            const ty = typeRef(view, literalSiteValueType(view.checked_bodies, site.expr));
             try plan.direct_call_hidden_dict_args.append(allocator, .{
                 .worker_dictionaries = .{},
                 .source_type = ty,
@@ -3246,7 +3245,7 @@ const LiteralPlanner = struct {
                 const requirement = self.graph.requirements.items[@intFromEnum(id)];
                 const site = self.site_identities.items[@intFromEnum(requirement.site)];
                 const view = self.builder.moduleForId(site.module);
-                const ty = typeRef(view, view.checked_bodies.expr(site.expr).ty);
+                const ty = typeRef(view, literalSiteValueType(view.checked_bodies, site.expr));
                 const rep = plan.repForSourceType(ty).?;
                 try plan.hidden_dictionary_params.append(allocator, .{ .source_type = ty, .rep = rep, .dictionaries = .{}, .literal_parameter = @intCast(index) });
                 try plan.erased_captures.append(allocator, .{ .kind = .hidden_literal, .source_type = ty, .rep = rep, .literal_parameter = @intCast(index) });
@@ -3417,10 +3416,6 @@ const LiteralPlanner = struct {
             }
         }
         for (plan.generated_codec_runtime_links.items) |link| try self.builder.recordGeneratedCallable(link.constructor, link.runtime);
-        for (plan.generated_interpolations.items) |interpolation| {
-            try self.builder.recordGeneratedCallable(interpolation.caller, interpolation.one_step);
-            try self.builder.recordGeneratedCallable(interpolation.caller, interpolation.done_step);
-        }
         for (plan.generated_field_iterator_links.items) |link| {
             try self.builder.recordGeneratedCallable(link.intrinsic, link.first_step);
             try self.builder.recordGeneratedCallable(link.first_step, link.first_step);
@@ -3523,6 +3518,7 @@ pub fn analyzeProgram(
     var builder = Builder.init(allocator, input);
     defer builder.deinit();
     try builder.collectQuantifiedVariables();
+    try builder.bindInterpolationItemRepresentations();
 
     if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
         boxyPlanInvariant("root source module count differs from request count");
@@ -3825,6 +3821,34 @@ const Builder = struct {
         for (self.relation_modules) |imported| try self.collectModuleQuantifiedVariables(moduleViewFromImported(imported));
     }
 
+    /// Bind each interpolation's item type to its values' representation
+    /// before any type is analyzed, so every representation built from a
+    /// type mentioning the item, such as a worker's `from_interpolation`
+    /// requirement, already uses it.
+    fn bindInterpolationItemRepresentations(self: *Builder) Allocator.Error!void {
+        try self.bindModuleInterpolationItemRepresentations(self.root_view);
+        for (self.extra_module_views) |view| try self.bindModuleInterpolationItemRepresentations(view);
+        for (self.imports) |imported| try self.bindModuleInterpolationItemRepresentations(moduleViewFromImported(imported));
+        for (self.relation_modules) |imported| try self.bindModuleInterpolationItemRepresentations(moduleViewFromImported(imported));
+    }
+
+    fn bindModuleInterpolationItemRepresentations(self: *Builder, view: ModuleView) Allocator.Error!void {
+        // Every checked interpolation converts through a dispatch plan whose
+        // one operand is its segments.
+        const table = view.static_dispatch_plans;
+        for (table.plans) |plan| {
+            const args = plan.argsSlice(table);
+            if (args.len != 1) continue;
+            switch (args[0]) {
+                .generated_interpolation_segments => |expr| switch (view.checked_bodies.expr(expr).data) {
+                    .interpolation => |interpolation| try self.bindInterpolationItemRepresentation(view, interpolation),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("interpolation segments operand named a non-interpolation expression"),
+                },
+                .checked_expr, .generated_numeral, .generated_quote => {},
+            }
+        }
+    }
+
     fn collectModuleQuantifiedVariables(self: *Builder, view: ModuleView) Allocator.Error!void {
         for (view.checked_procedure_templates.scheme_vars_pool) |variable| {
             try self.quantified_variables.put(typeRef(view, variable), {});
@@ -3950,7 +3974,7 @@ const Builder = struct {
         low_level_after_args: ViewExpr,
         inspect_expr: ViewExpr,
         inspect_expr_methods: ViewExpr,
-        quote_conversion: ConversionSite,
+        string_literal_conversion: ConversionSite,
         numeral_conversion: ConversionSite,
         callable_lookup: ViewExpr,
         callable_lookup_after_const: ViewExpr,
@@ -3966,9 +3990,6 @@ const Builder = struct {
         nested_callable_use: struct { view: ModuleView, target: checked.ResolvedValueId, func: checked.CheckedExprId },
         nested_callable_direct_record: struct { view: ModuleView, func: checked.CheckedExprId, callable_ty: CheckedTypeIdentity },
         dispatch_plan_types: struct { view: ModuleView, plan: ?static_dispatch.StaticDispatchPlanId },
-        generated_interpolation: struct { view: ModuleView, expr: checked.CheckedExprId, iter_ty: checked.CheckedTypeId },
-        generated_interpolation_done: GeneratedInterpolationSteps,
-        generated_interpolation_record: GeneratedInterpolationSteps,
         dispatch_call_target: DispatchCallSite,
         dispatch_call_after_types: DispatchCallSite,
         dispatch_call_after_worker: DispatchCallSite,
@@ -4103,14 +4124,6 @@ const Builder = struct {
         caller: WorkerPlanId,
     };
 
-    const GeneratedInterpolationSteps = struct {
-        identity: CheckedExprIdentity,
-        caller: WorkerPlanId,
-        iter_rep: TypeRepId,
-        source_step_type: CheckedTypeIdentity,
-        one_step: WorkerPlanId = undefined,
-    };
-
     const DispatchCallSite = struct {
         view: ModuleView,
         call_expr: checked.CheckedExprId,
@@ -4203,7 +4216,7 @@ const Builder = struct {
             .parser_record_fields => |state| self.allocator.free(state.fields),
             .encoder_tag_union_body, .encoder_tag_union_payloads, .encoder_tag_union_payload => |state| self.allocator.free(state.row_reps),
             .encoder_record_body, .encoder_record_fields_worker, .encoder_record_rename, .encoder_record_field => |state| self.allocator.free(state.fields),
-            .ensure_worker, .worker_result, .ensure_worker_runtime_link, .ensure_worker_parser_runtime, .ensure_worker_encoder_runtime, .codec_call, .codec_call_checked_subject, .codec_call_finish, .parser_shape, .parser_alias_links, .parser_tag_link, .parser_try_plan, .parser_dict_key_method, .parser_dict_unit_key, .parser_dict_selection, .parser_record, .encoder_shape, .encoder_set, .encoder_sequence, .encoder_sequence_body, .encoder_sequence_elements, .encoder_sequence_item, .encoder_list, .encoder_list_body, .encoder_list_elements, .encoder_thunk, .encoder_dict, .encoder_dict_encode, .encoder_dict_body, .encoder_dict_fields, .encoder_dict_key_thunk, .encoder_dict_value_thunk, .encoder_tag_union, .encoder_record, .inspect_methods, .inspect_override, .worker_body, .worker_root_expr, .field_iterator, .field_iterator_link, .expr, .call_after_args, .block_statement, .lambda_args, .interpolation_after_parts, .derived_root_after_operands, .low_level_after_args, .inspect_expr, .inspect_expr_methods, .quote_conversion, .numeral_conversion, .callable_lookup, .callable_lookup_after_const, .callable_lookup_runtime, .callable_lookup_worker, .callable_lookup_use, .stored_fn_captures, .const_definition, .const_eval_call, .nested_callable_expr_use, .nested_callable_use_for_caller, .nested_callable_use_record, .nested_callable_use, .nested_callable_direct_record, .dispatch_plan_types, .generated_interpolation, .generated_interpolation_done, .generated_interpolation_record, .dispatch_call_target, .dispatch_call_after_types, .dispatch_call_after_worker, .iterator_for, .iterator_call, .iterator_call_after_operands, .iterator_call_after_worker, .analyze_type, .statement, .pattern, .direct_call_target, .direct_call_after_worker, .omitted_defaults, .static_const_node, .static_fn_value, .static_fn_record, .static_fn_captures, .const_fn_capture => {},
+            .ensure_worker, .worker_result, .ensure_worker_runtime_link, .ensure_worker_parser_runtime, .ensure_worker_encoder_runtime, .codec_call, .codec_call_checked_subject, .codec_call_finish, .parser_shape, .parser_alias_links, .parser_tag_link, .parser_try_plan, .parser_dict_key_method, .parser_dict_unit_key, .parser_dict_selection, .parser_record, .encoder_shape, .encoder_set, .encoder_sequence, .encoder_sequence_body, .encoder_sequence_elements, .encoder_sequence_item, .encoder_list, .encoder_list_body, .encoder_list_elements, .encoder_thunk, .encoder_dict, .encoder_dict_encode, .encoder_dict_body, .encoder_dict_fields, .encoder_dict_key_thunk, .encoder_dict_value_thunk, .encoder_tag_union, .encoder_record, .inspect_methods, .inspect_override, .worker_body, .worker_root_expr, .field_iterator, .field_iterator_link, .expr, .call_after_args, .block_statement, .lambda_args, .interpolation_after_parts, .derived_root_after_operands, .low_level_after_args, .inspect_expr, .inspect_expr_methods, .string_literal_conversion, .numeral_conversion, .callable_lookup, .callable_lookup_after_const, .callable_lookup_runtime, .callable_lookup_worker, .callable_lookup_use, .stored_fn_captures, .const_definition, .const_eval_call, .nested_callable_expr_use, .nested_callable_use_for_caller, .nested_callable_use_record, .nested_callable_use, .nested_callable_direct_record, .dispatch_plan_types, .dispatch_call_target, .dispatch_call_after_types, .dispatch_call_after_worker, .iterator_for, .iterator_call, .iterator_call_after_operands, .iterator_call_after_worker, .analyze_type, .statement, .pattern, .direct_call_target, .direct_call_after_worker, .omitted_defaults, .static_const_node, .static_fn_value, .static_fn_record, .static_fn_captures, .const_fn_capture => {},
         }
     }
 
@@ -4500,8 +4513,8 @@ const Builder = struct {
             },
             .interpolation_after_parts => |site| {
                 const interpolation = site.view.checked_bodies.expr(site.expr).data.interpolation;
-                _ = try self.analyzeType(site.view, interpolation.step_fn_ty);
-                try actions.append(self.allocator, .{ .dispatch_call_target = .{ .view = site.view, .call_expr = site.expr, .plan = interpolation.plan } });
+                _ = try self.analyzeType(site.view, interpolation.assembler_ty);
+                try actions.append(self.allocator, .{ .string_literal_conversion = .{ .view = site.view, .expr = site.expr, .plan = interpolation.plan } });
             },
             .derived_root_after_operands => |site| {
                 const bodies = site.view.checked_bodies;
@@ -4548,7 +4561,7 @@ const Builder = struct {
                 const rep = try self.analyzeType(site.view, site.view.checked_bodies.expr(site.expr).ty);
                 try actions.append(self.allocator, .{ .inspect_methods = rep });
             },
-            .quote_conversion => |site| try self.stepQuoteConversion(actions, site),
+            .string_literal_conversion => |site| try self.stepStringLiteralConversion(actions, site),
             .numeral_conversion => |site| try self.stepNumeralConversion(actions, site),
             .callable_lookup => |site| {
                 const expr = site.view.checked_bodies.expr(site.expr);
@@ -4708,24 +4721,6 @@ const Builder = struct {
                 });
             },
             .dispatch_plan_types => |state| try self.stepDispatchPlanTypes(actions, state.view, state.plan),
-            .generated_interpolation => |state| try self.stepGeneratedInterpolation(actions, state.view, state.expr, state.iter_ty),
-            .generated_interpolation_done => |state| {
-                var steps = state;
-                steps.one_step = self.plan_worker_result;
-                try self.pushPlanActions(actions, &.{
-                    .{ .ensure_worker = .{ .source = .{ .generated_interpolation_step = .{
-                        .step_type = steps.source_step_type,
-                    } }, .checked_type = steps.source_step_type, .root_request = null } },
-                    .{ .generated_interpolation_record = steps },
-                });
-            },
-            .generated_interpolation_record => |state| try self.plan.generated_interpolations.append(self.allocator, .{
-                .interpolation = state.identity,
-                .caller = state.caller,
-                .iter_rep = state.iter_rep,
-                .one_step = state.one_step,
-                .done_step = self.plan_worker_result,
-            }),
             .dispatch_call_target => |site| try self.pushPlanActions(actions, &.{
                 .{ .dispatch_plan_types = .{ .view = site.view, .plan = site.plan } },
                 .{ .dispatch_call_after_types = site },
@@ -4842,8 +4837,7 @@ const Builder = struct {
         const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
         const body = if (self.root_module != null and
             source != .generated_codec and
-            source != .generated_field_iterator and
-            source != .generated_interpolation_step)
+            source != .generated_field_iterator)
             self.rootWorkerBody(source)
         else
             null;
@@ -4953,7 +4947,6 @@ const Builder = struct {
                 => {},
             },
             .generated_field_iterator => {},
-            .generated_interpolation_step => {},
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -6052,7 +6045,7 @@ const Builder = struct {
             .break_,
             => {},
             .empty_record => try actions.append(self.allocator, .{ .omitted_defaults = site }),
-            .str_from_quote => |quote| try actions.append(self.allocator, .{ .quote_conversion = .{ .view = view, .expr = expr_id, .plan = quote.plan } }),
+            .str_from_quote => |quote| try actions.append(self.allocator, .{ .string_literal_conversion = .{ .view = view, .expr = expr_id, .plan = quote.plan } }),
             .lookup_local,
             .lookup_external,
             .lookup_required,
@@ -6127,11 +6120,7 @@ const Builder = struct {
             .dbg => |child| try actions.append(self.allocator, .{ .inspect_expr = .{ .view = view, .expr = child } }),
             .field_access => |access| try actions.append(self.allocator, exprAction(view, access.receiver)),
             .interpolation => |interpolation| {
-                try actions.append(self.allocator, exprAction(view, interpolation.first));
-                for (interpolation.parts) |part| {
-                    try actions.append(self.allocator, exprAction(view, part.value));
-                    try actions.append(self.allocator, exprAction(view, part.following_segment));
-                }
+                for (interpolation.values) |value| try actions.append(self.allocator, exprAction(view, value));
                 try actions.append(self.allocator, .{ .interpolation_after_parts = site });
             },
             .structural_eq => |eq| {
@@ -6166,7 +6155,10 @@ const Builder = struct {
         }
     }
 
-    fn stepQuoteConversion(self: *Builder, actions: *std.ArrayList(PlanAction), site: ConversionSite) Allocator.Error!void {
+    /// A quote's or an interpolation's conversion. A conversion with a
+    /// finalized compile-time root reads the root's value; every other one is
+    /// a literal site whose value Boxy's literal planner produces.
+    fn stepStringLiteralConversion(self: *Builder, actions: *std.ArrayList(PlanAction), site: ConversionSite) Allocator.Error!void {
         const view = site.view;
         const expr_id = site.expr;
         const plan_id = site.plan orelse return;
@@ -6178,7 +6170,7 @@ const Builder = struct {
             },
             .checked_error, .@"unreachable" => return try actions.append(self.allocator, dispatch_action),
             .direct_closed, .direct_parametric => {},
-            .direct_pending, .structural => boxyPlanInvariant("quote conversion had an invalid checked dispatch resolution"),
+            .direct_pending, .structural => boxyPlanInvariant("string literal conversion had an invalid checked dispatch resolution"),
         }
         const root_id = view.checked_bodies.literalConversionRoot(expr_id) orelse {
             try self.recordLiteralSite(view, expr_id, plan_id);
@@ -6379,53 +6371,15 @@ const Builder = struct {
         }
         const start = beginPlanSequence(actions);
         defer finishPlanSequence(actions, start);
-        for (operands, callable.args) |operand, formal_ty| {
+        for (operands) |operand| {
             switch (operand) {
                 .checked_expr => |operand_expr| try actions.append(self.allocator, exprAction(view, operand_expr)),
-                .generated_interpolation_iter => |operand_expr| {
-                    try actions.append(self.allocator, exprAction(view, operand_expr));
-                    try actions.append(self.allocator, .{ .generated_interpolation = .{ .view = view, .expr = operand_expr, .iter_ty = formal_ty } });
-                },
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {},
             }
         }
-    }
-
-    fn stepGeneratedInterpolation(self: *Builder, actions: *std.ArrayList(PlanAction), view: ModuleView, expr_id: checked.CheckedExprId, iter_ty: checked.CheckedTypeId) Allocator.Error!void {
-        const caller = self.active_worker orelse
-            boxyPlanInvariant("generated interpolation was planned outside a worker body");
-        const identity = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
-        if (self.plan.generatedInterpolationPlan(identity, caller) != null) return;
-
-        const expr = view.checked_bodies.expr(expr_id);
-        if (expr.data != .interpolation) {
-            boxyPlanInvariant("generated interpolation operand pointed at a non-interpolation expression");
-        }
-        const interpolation = expr.data.interpolation;
-        const iter_rep = try self.analyzeType(view, iter_ty);
-        const step = try self.generatedRecordFieldForRep(iter_rep, "step");
-        const step_function = (self.repQuery().functionChildren(step.rep)) orelse
-            boxyPlanInvariant("generated interpolation iterator step field was not callable");
-        if (step_function.arg_count != 0) {
-            boxyPlanInvariant("generated interpolation iterator step worker was not zero-argument");
-        }
-        const source_step_type = typeRef(view, interpolation.step_fn_ty);
-        const source_step_rep = try self.analyzeType(view, interpolation.step_fn_ty);
-        const source_step_function = (self.repQuery().functionChildren(source_step_rep)) orelse
-            boxyPlanInvariant("checked generated interpolation step type was not callable");
-        if (source_step_function.arg_count != 0) {
-            boxyPlanInvariant("checked generated interpolation step worker was not zero-argument");
-        }
-        const one_payload = try self.generatedTagPayloadForRep(source_step_function.ret, "One");
-        try self.pushPlanActions(actions, &.{
-            .{ .ensure_worker = .{ .source = .{ .generated_interpolation_step = .{
-                .step_type = source_step_type,
-                .one_payload_type = one_payload.source_type,
-            } }, .checked_type = source_step_type, .root_request = null } },
-            .{ .generated_interpolation_done = .{ .identity = identity, .caller = caller, .iter_rep = iter_rep, .source_step_type = source_step_type } },
-        });
     }
 
     fn stepDispatchCallAfterTypes(self: *Builder, actions: *std.ArrayList(PlanAction), site: DispatchCallSite) Allocator.Error!void {
@@ -7031,7 +6985,6 @@ const Builder = struct {
             .procedure_binding,
             .procedure_use,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => unreachable,
         };
         try self.pushPlanActions(actions, &.{
@@ -7202,7 +7155,6 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => boxyPlanInvariant("generated stored capture referenced a non-codec worker"),
         };
         if (capture_id == checked.CaptureId.generatedCheck(0)) {
@@ -8160,7 +8112,6 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => boxyPlanInvariant("generated codec call was planned outside a generated worker"),
         };
         const contract_worker = if (codec.contract_worker) |root|
@@ -8174,7 +8125,6 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => boxyPlanInvariant("generated codec callback contract did not reference a generated worker"),
         };
         const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (codec.kind) {
@@ -8506,7 +8456,6 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => boxyPlanInvariant("generated codec contract worker was not generated"),
         };
     }
@@ -8857,6 +8806,34 @@ const Builder = struct {
         request: RepRequest,
         done: TypeRepId,
     };
+
+    /// Every interpolated value is an item of the assembler's values list, so
+    /// an interpolation's item type is its values' type. Checking relates them
+    /// at each use, so in a generalized body the item is a type variable of its
+    /// own; it shares the first value's representation, and so its descriptor.
+    fn bindInterpolationItemRepresentation(self: *Builder, view: ModuleView, interpolation: checked.CheckedInterpolation) Allocator.Error!void {
+        const assembler = checkedFunctionPayload(view, interpolation.assembler_ty);
+        if (assembler.args.len != 1) boxyPlanInvariant("interpolation assembler did not take exactly the values list");
+        const item_ty = switch (view.checked_types.payload(assembler.args[0])) {
+            .nominal => |nominal| if (nominal.builtin == .list and nominal.args.len == 1)
+                nominal.args[0]
+            else
+                boxyPlanInvariant("interpolation assembler did not take a values list"),
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => boxyPlanInvariant("interpolation assembler did not take a values list"),
+        };
+        switch (view.checked_types.payload(item_ty)) {
+            .flex, .rigid => {},
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return,
+        }
+        if (interpolation.values.len == 0) boxyPlanInvariant("checked interpolation had no interpolated values");
+        const value_rep = try self.analyzeType(view, view.checked_bodies.expr(interpolation.values[0]).ty);
+        const binding = try self.internTypeBinding(typeRef(view, item_ty));
+        if (self.plan.type_reps.items[@intFromEnum(binding)].rep) |existing| {
+            if (existing != value_rep) boxyPlanInvariant("interpolation item had a representation other than its values'");
+            return;
+        }
+        self.plan.type_reps.items[@intFromEnum(binding)].rep = value_rep;
+    }
 
     fn analyzeType(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
         return try self.runRepresentation(.{ .checked = .{ .view = view, .ty = ty, .context = self.host_context } });
@@ -11004,7 +10981,6 @@ const Builder = struct {
         return switch (source) {
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => null,
             .procedure_template,
             .procedure_binding,
@@ -11731,7 +11707,7 @@ const Builder = struct {
                         .intrinsic_wrapper, .hosted_proc, .unimplemented => continue,
                     }
                 },
-                .generated_codec, .generated_field_iterator, .generated_interpolation_step => continue,
+                .generated_codec, .generated_field_iterator => continue,
             };
             const templates = view.checked_procedure_templates;
             for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
@@ -11835,13 +11811,6 @@ const Builder = struct {
                             try self.collectHiddenDescriptorsForRep(field_rep, &pending, &seen_reps, &seen_descs);
                         }
                     },
-                },
-                .generated_interpolation_step => |step| {
-                    if (step.one_payload_type) |payload_type| {
-                        const payload_rep = self.plan.repForSourceType(payload_type) orelse
-                            boxyPlanInvariant("generated interpolation payload capture type was not analyzed");
-                        try self.collectHiddenDescriptorsForRep(payload_rep, &pending, &seen_reps, &seen_descs);
-                    }
                 },
                 .procedure_template,
                 .procedure_binding,
@@ -11998,7 +11967,6 @@ const Builder = struct {
             },
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => null,
         };
     }
@@ -12135,7 +12103,6 @@ const Builder = struct {
             },
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => null,
         };
     }
@@ -12323,8 +12290,7 @@ const Builder = struct {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
             if (self.workerResolvesToHosted(worker.source) or
                 worker.source == .generated_codec or
-                worker.source == .generated_field_iterator or
-                worker.source == .generated_interpolation_step)
+                worker.source == .generated_field_iterator)
             {
                 self.plan.workers.items[worker_index].hidden_dicts = .{};
                 continue;
@@ -12565,18 +12531,6 @@ const Builder = struct {
                         });
                     }
                 },
-                .generated_interpolation_step => |step| {
-                    if (step.one_payload_type) |payload_type| {
-                        const payload_rep = self.plan.repForSourceType(payload_type) orelse
-                            boxyPlanInvariant("generated interpolation payload capture type was not analyzed");
-                        try pending.append(self.allocator, .{
-                            .kind = .captured_value,
-                            .source_type = payload_type,
-                            .rep = payload_rep,
-                            .capture_id = checked.CaptureId.generatedCheck(0),
-                        });
-                    }
-                },
             }
 
             for (self.plan.hiddenDescriptorParamSlice(worker.hidden_descs), 0..) |param, param_index| {
@@ -12777,7 +12731,6 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => boxyPlanInvariant("non-codec callable had an unpersisted stored capture"),
         };
         const contract_expr = codec.contract_expr orelse
@@ -12790,7 +12743,7 @@ const Builder = struct {
         }
         return switch (operands[0]) {
             .checked_expr => |expr| .{ .module = view.key, .expr = expr },
-            .generated_interpolation_iter,
+            .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
             => boxyPlanInvariant("stored generated codec encoding was not a checked expression operand"),
@@ -12799,8 +12752,7 @@ const Builder = struct {
 
     fn workerResolvesToHosted(self: *Builder, source: WorkerSource) bool {
         if (source == .generated_codec or
-            source == .generated_field_iterator or
-            source == .generated_interpolation_step)
+            source == .generated_field_iterator)
         {
             return false;
         }
@@ -12843,7 +12795,7 @@ const Builder = struct {
                     .rep = try self.analyzeType(call_view, actual_expr.ty),
                 };
             },
-            .generated_interpolation_iter,
+            .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
             => .{ .type = call_type, .rep = call_rep },
@@ -13209,7 +13161,7 @@ const Builder = struct {
             },
             // Generated workers take their types from checked contracts
             // rather than from a lexical scheme chain.
-            .generated_codec, .generated_field_iterator, .generated_interpolation_step => return true,
+            .generated_codec, .generated_field_iterator => return true,
         }
     }
 
@@ -13622,8 +13574,7 @@ const Builder = struct {
     fn workerIsStrInspectIntrinsic(self: *Builder, worker_id: WorkerPlanId) bool {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         if (worker.source == .generated_codec or
-            worker.source == .generated_field_iterator or
-            worker.source == .generated_interpolation_step)
+            worker.source == .generated_field_iterator)
         {
             return false;
         }
@@ -17347,7 +17298,6 @@ const Builder = struct {
                 .procedure_use,
                 .nested_expr,
                 .generated_field_iterator,
-                .generated_interpolation_step,
                 => null,
             };
             var call_source: ?u32 = null;
@@ -18013,7 +17963,6 @@ const Builder = struct {
             .nested_expr => |expr_ref| self.nestedExprWorkerBody(expr_ref),
             .generated_codec => boxyPlanInvariant("generated codec worker has no checked procedure body"),
             .generated_field_iterator => boxyPlanInvariant("generated FieldNames iterator worker has no checked procedure body"),
-            .generated_interpolation_step => boxyPlanInvariant("generated interpolation step worker has no checked procedure body"),
         };
     }
 
@@ -18084,7 +18033,6 @@ const Builder = struct {
             .nested_expr,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => null,
         };
     }
@@ -18832,7 +18780,7 @@ const Builder = struct {
         for (operands) |operand| {
             try self.plan.call_operands.append(self.allocator, switch (operand) {
                 .checked_expr => |expr| .{ .checked_expr = expr },
-                .generated_interpolation_iter => |expr| .{ .generated_interpolation_iter = expr },
+                .generated_interpolation_segments => |expr| .{ .generated_interpolation_segments = expr },
                 .generated_numeral => |literal| .{ .generated_numeral = literal },
                 .generated_quote => |literal| .{ .generated_quote = literal },
             });
@@ -19260,7 +19208,6 @@ const Builder = struct {
             .nested_expr => |expr_ref| self.nestedExprDefinitionType(expr_ref),
             .generated_codec => requested_type,
             .generated_field_iterator => requested_type,
-            .generated_interpolation_step => requested_type,
         };
     }
 
@@ -19327,7 +19274,6 @@ const Builder = struct {
             .nested_expr,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => source,
         };
     }
@@ -19366,7 +19312,6 @@ fn workerSourceIsHosted(source: WorkerSource) bool {
         .nested_expr,
         .generated_codec,
         .generated_field_iterator,
-        .generated_interpolation_step,
         => false,
     };
 }
