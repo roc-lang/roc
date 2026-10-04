@@ -105,12 +105,23 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Frame-pointer strategy for this function.
         frame_pointer_policy: FramePointerPolicy = FramePointerPolicy.forTarget(roc_target),
 
+        /// Bytes of caller-allocated argument block this function removes
+        /// from the stack when it returns. An internal Roc procedure owns the
+        /// block holding its stack-passed arguments, so a tail call can
+        /// replace that block with the next callee's.
+        callee_pop: u32 = 0,
+
         /// Computed values (set by emitPrologue, used by emitEpilogue)
         actual_stack_alloc: u32 = 0,
 
         /// Initialize a new frame builder with default settings.
         pub fn init() Self {
             return Self{};
+        }
+
+        /// Set how many bytes of incoming argument block the epilogue pops.
+        pub fn setCalleePop(self: *Self, bytes: u32) void {
+            self.callee_pop = bytes;
         }
 
         /// Set the callee-saved registers that need to be saved/restored.
@@ -186,7 +197,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Emit function epilogue.
         pub fn emitEpilogue(self: *Self, emit: *EmitType) Allocator.Error!void {
             if (!self.usesFramePointer()) {
-                try emit.ret();
+                try self.emitReturn(emit);
                 return;
             }
 
@@ -197,6 +208,51 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             } else {
                 unreachable;
             }
+        }
+
+        /// Return to the caller, removing this function's argument block.
+        fn emitReturn(self: *const Self, emit: *EmitType) Allocator.Error!void {
+            if (self.callee_pop == 0) return emit.ret();
+            if (is_x86_64) {
+                if (self.callee_pop <= std.math.maxInt(u16)) {
+                    try emit.retImm16(@intCast(self.callee_pop));
+                } else {
+                    try emit.pop(.R11);
+                    try emit.addRegImm32(.w64, .RSP, @intCast(self.callee_pop));
+                    try emit.jmpReg(.R11);
+                }
+            } else if (is_aarch64) {
+                if (self.callee_pop <= 4095) {
+                    try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.callee_pop));
+                } else {
+                    try emit.movRegImm64(.IP0, self.callee_pop);
+                    try emit.addRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
+                }
+                try emit.ret();
+            } else {
+                unreachable;
+            }
+        }
+
+        /// AArch64 tail-call exit shared by every frame-replacing call in one
+        /// function. On entry `delta_reg` holds the signed distance from this
+        /// function's entry stack pointer to the callee's, and `target_reg`
+        /// the callee's address. The stack pointer moves from this frame's
+        /// base to the callee's entry value in one step, so the argument
+        /// block already written for the callee is never below it.
+        pub fn emitTailCallExitAarch64(self: *Self, emit: *EmitType, delta_reg: GeneralReg, target_reg: GeneralReg) Allocator.Error!void {
+            if (!is_aarch64) @compileError("emitTailCallExitAarch64 is only meaningful on aarch64");
+            if (self.actual_stack_alloc == 0) {
+                const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
+                const total_frame: u32 = 16 + callee_saved_space + self.stack_size;
+                self.actual_stack_alloc = CC.alignStackSize(total_frame);
+            }
+            try self.emitRestoreCalleeSavedAarch64(emit);
+            try emit.movRegImm64(.IP0, self.actual_stack_alloc);
+            try emit.addRegRegReg(.w64, .IP0, .IP0, delta_reg);
+            try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+            try emit.addRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
+            try emit.brReg(target_reg);
         }
 
         /// Emit only callee-saved register saves (for pre-allocated frame pattern).
@@ -383,7 +439,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             try emit.popReg(.RBP);
 
             // 4. ret
-            try emit.ret();
+            try self.emitReturn(emit);
         }
 
         fn emitSaveCalleeSavedX86_64(self: *const Self, emit: *EmitType) Allocator.Error!void {
@@ -551,7 +607,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
 
             // 3. ret
-            try emit.ret();
+            try self.emitReturn(emit);
         }
 
         fn emitSaveCalleeSavedAarch64(self: *const Self, emit: *EmitType) Allocator.Error!void {

@@ -2892,7 +2892,7 @@ const Inserter = struct {
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.appendSlice(self.solve_allocator, self.death_scratch.items);
                         step.pre_release_extra_reason = .tail_call_frame;
-                        step.replaces_frame = true;
+                        step.replaces_frame = self.sharesReturnContract(assign);
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
                         try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
@@ -3561,6 +3561,21 @@ const Inserter = struct {
         while (iter.next()) |bit| {
             try releases.append(self.solve_allocator, self.releaseDecisionFrom(bit, iter.entry));
         }
+    }
+
+    /// Whether the callee of a tail call can return on the current
+    /// procedure's behalf: both use the Roc procedure ABI, the callee's value
+    /// is the procedure's whole result, and neither publishes a runtime
+    /// descriptor alongside it.
+    fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
+        const caller = self.store.getProcSpec(self.current_proc);
+        const callee = self.store.getProcSpec(call.proc);
+        return caller.abi == .roc and callee.abi == .roc and
+            callee.hosted == null and
+            caller.runtime_ret_desc == null and callee.runtime_ret_desc == null and
+            call.out_desc == null and
+            self.store.getLocal(call.target).layout_idx == caller.ret_layout and
+            callee.ret_layout == caller.ret_layout;
     }
 
     /// Ends the exact ownership state of a caller frame before a same-SCC

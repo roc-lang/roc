@@ -575,6 +575,22 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, 0xC3);
         }
 
+        /// RET imm16 (return and pop imm16 bytes of arguments)
+        pub fn retImm16(self: *Self, bytes: u16) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xC2);
+            try self.buf.appendSlice(self.allocator, &@as([2]u8, @bitCast(bytes)));
+        }
+
+        /// JMP r64 (jump to address in register)
+        pub fn jmpReg(self: *Self, reg: GeneralReg) Allocator.Error!void {
+            // JMP r64: FF /4
+            if (reg.requiresRex()) {
+                try self.buf.append(self.allocator, 0x41); // REX.B
+            }
+            try self.buf.append(self.allocator, 0xFF);
+            try self.buf.append(self.allocator, modRM(0b11, 4, reg.enc())); // /4 = JMP
+        }
+
         /// PUSH r64 (push register onto stack)
         pub fn push(self: *Self, reg: GeneralReg) Allocator.Error!void {
             // PUSH r64: 50+rd (or REX.B 50+rd for R8-R15)

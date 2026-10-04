@@ -938,6 +938,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// base in internal procs that actually receive stack arguments.
         const caller_stack_arg_base_reg: GeneralReg = if (arch == .x86_64) frame_ptr else .X28;
 
+        /// Registers a frame-replacing call hands to the frame teardown: the
+        /// callee's address, and on AArch64 the signed distance from this
+        /// procedure's entry stack pointer to the callee's. Neither carries an
+        /// argument, is callee-saved, or is used by address materialization.
+        const tail_call_target_reg: GeneralReg = if (arch == .x86_64) .R11 else .IP1;
+        const tail_call_delta_reg: GeneralReg = if (arch == .x86_64) .R10 else .X15;
+
         /// Return value registers (first, second, third)
         const ret_reg_0: GeneralReg = if (arch == .x86_64) .RAX else .X0;
         const ret_reg_1: GeneralReg = if (arch == .x86_64) .RDX else .X1;
@@ -1093,6 +1100,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// After generating the proc body, the deferred-prologue path patches all
         /// early return jumps to point to the epilogue.
         early_return_patches: std.ArrayList(usize),
+
+        /// Sites of frame-replacing calls in the proc being compiled. Each
+        /// names the instruction that transfers to the proc's shared frame
+        /// teardown, which is emitted after the body once the callee-saved
+        /// set and frame size are known.
+        tail_exit_patches: std.ArrayList(usize),
+
+        /// Bytes of incoming argument block the proc being compiled owns and
+        /// removes when it returns.
+        current_proc_arg_pop: u32 = 0,
 
         /// Stack of active loop continue targets.
         /// `loop_continue` lowers by jumping to the innermost active loop header.
@@ -1642,6 +1659,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
+                .tail_exit_patches = std.ArrayList(usize).empty,
                 .loop_continue_targets = std.ArrayList(usize).empty,
                 .loop_break_patch_starts = std.ArrayList(usize).empty,
                 .loop_break_patches = std.ArrayList(usize).empty,
@@ -1734,6 +1752,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_call_patches.deinit(self.allocator);
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
+            self.tail_exit_patches.deinit(self.allocator);
             self.loop_continue_targets.deinit(self.allocator);
             self.loop_break_patch_starts.deinit(self.allocator);
             self.loop_break_patches.deinit(self.allocator);
@@ -1790,6 +1809,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_call_patches.clearRetainingCapacity();
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
+            self.tail_exit_patches.clearRetainingCapacity();
             self.loop_continue_targets.clearRetainingCapacity();
             self.loop_break_patch_starts.clearRetainingCapacity();
             self.loop_break_patches.clearRetainingCapacity();
@@ -16680,6 +16700,213 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, call.ret_layout, call.out_desc);
         }
 
+        /// Replace this procedure's frame with a call to `call.proc`, whose
+        /// result this procedure returns unchanged. The callee's argument block
+        /// is built where this procedure's own block ends, the frame is torn
+        /// down, and control jumps to the callee, which then returns straight
+        /// to this procedure's caller.
+        fn generateTailCall(self: *Self, call: anytype) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const proc_spec = self.store.getProcSpec(call.proc);
+            const arg_refs = self.store.getLocalSpan(call.args);
+            const param_refs = self.store.getLocalSpan(proc_spec.args);
+            if (param_refs.len != arg_refs.len or
+                proc_spec.hosted != null or
+                proc_spec.abi != .roc or
+                proc_spec.runtime_ret_desc != null or
+                proc_spec.ret_layout != call.ret_layout or
+                self.early_return_ret_layout != call.ret_layout or
+                self.runtime_ret_desc_ptr_slot != null)
+            {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: frame-replacing call to proc {d} does not share its caller's return contract",
+                    .{@intFromEnum(call.proc)},
+                );
+            }
+
+            const arg_infos_start = self.scratch_arg_infos.top();
+            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
+            for (0..arg_refs.len) |i| {
+                const arg_ref = GuardedList.at(arg_refs, i);
+                const expected_layout = self.localLayout(GuardedList.at(param_refs, i));
+                const raw_arg_loc = try self.emitValueLocal(arg_ref);
+                const exact = self.requireExactValueLocationToLayout(raw_arg_loc, self.localLayout(arg_ref), expected_layout, "tail_call.arg");
+                const arg_loc = self.coerceImmediateToLayout(exact, expected_layout);
+                try self.scratch_arg_infos.append(.{
+                    .loc = arg_loc,
+                    .layout_idx = expected_layout,
+                    .num_regs = self.calcArgRegCount(arg_loc, expected_layout),
+                });
+            }
+            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
+
+            const needs_ret_ptr = self.needsInternalReturnByPointer(call.ret_layout);
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+            const block = self.callArgBlock(arg_infos, pbp_plan.slice, needs_ret_ptr);
+            const callee_pop: i32 = @intCast(block.size());
+            const own_pop: i32 = @intCast(self.current_proc_arg_pop);
+            const delta = own_pop - callee_pop;
+
+            // Every argument is frozen to a slot of this frame first, so no
+            // later step reads a value an earlier step has overwritten.
+            const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
+            defer self.allocator.free(frozen_args);
+            for (arg_infos, 0..) |info, i| {
+                frozen_args[i] = if (info.num_regs == 0)
+                    .{ .stack_offset = 0, .num_regs = 0, .pass_by_ptr = false }
+                else
+                    try self.freezeCallArg(info, pbp_plan.slice[i]);
+            }
+
+            // The callee's block is staged in this frame and moved into place
+            // only once nothing else in the frame is needed: the two can
+            // overlap when the callee's block is larger than this procedure's.
+            const staging: i32 = if (callee_pop > 0) self.codegen.allocStackSlot(@intCast(callee_pop)) else 0;
+            {
+                var reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
+                var word_offset: i32 = 0;
+                var pointee_offset: i32 = @intCast(block.words);
+                for (arg_infos, 0..) |info, i| {
+                    if (info.num_regs == 0) continue;
+                    const frozen = frozen_args[i];
+                    if (frozen.pass_by_ptr) {
+                        const size = self.getLayoutSize(info.layout_idx.?);
+                        try self.copyChunked(scratch_reg, frame_ptr, frozen.stack_offset, frame_ptr, staging + pointee_offset, size);
+                        if (reg_idx < max_arg_regs) {
+                            reg_idx += 1;
+                        } else {
+                            try self.emitTailBlockAddress(scratch_reg, delta + pointee_offset);
+                            try self.emitStore(.w64, frame_ptr, staging + word_offset, scratch_reg);
+                            word_offset += 8;
+                        }
+                        pointee_offset += @intCast(self.pointeeBlockBytes(info.layout_idx.?));
+                        continue;
+                    }
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        if (self.argNeedsI128Abi(info.loc, info.layout_idx) and reg_idx < max_arg_regs and reg_idx % 2 != 0) reg_idx += 1;
+                    }
+                    if (reg_idx + info.num_regs <= max_arg_regs) {
+                        reg_idx += info.num_regs;
+                    } else {
+                        std.debug.assert(info.num_regs == 1);
+                        try self.emitSizedLoadStack(scratch_reg, frozen.stack_offset, frozen.value_size);
+                        try self.emitStore(.w64, frame_ptr, staging + word_offset, scratch_reg);
+                        word_offset += 8;
+                        reg_idx = max_arg_regs;
+                    }
+                }
+            }
+
+            // Load the argument registers. The hidden return pointer is this
+            // procedure's own: the callee writes the caller's result directly.
+            {
+                var reg_idx: u8 = 0;
+                var pointee_offset: i32 = @intCast(block.words);
+                if (needs_ret_ptr) {
+                    try self.emitLoad(.w64, self.getArgumentRegister(0), frame_ptr, self.ret_ptr_slot.?);
+                    reg_idx = 1;
+                }
+                for (arg_infos, 0..) |info, i| {
+                    if (info.num_regs == 0) continue;
+                    const frozen = frozen_args[i];
+                    if (frozen.pass_by_ptr) {
+                        if (reg_idx < max_arg_regs) {
+                            try self.emitTailBlockAddress(self.getArgumentRegister(reg_idx), delta + pointee_offset);
+                            reg_idx += 1;
+                        }
+                        pointee_offset += @intCast(self.pointeeBlockBytes(info.layout_idx.?));
+                        continue;
+                    }
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        if (self.argNeedsI128Abi(info.loc, info.layout_idx) and reg_idx < max_arg_regs and reg_idx % 2 != 0) reg_idx += 1;
+                    }
+                    if (reg_idx + info.num_regs > max_arg_regs) {
+                        reg_idx = max_arg_regs;
+                        continue;
+                    }
+                    if (info.num_regs == 1) {
+                        try self.emitSizedLoadStack(self.getArgumentRegister(reg_idx), frozen.stack_offset, frozen.value_size);
+                    } else {
+                        var ri: u8 = 0;
+                        while (ri < info.num_regs) : (ri += 1) {
+                            try self.emitLoad(.w64, self.getArgumentRegister(reg_idx + ri), frame_ptr, frozen.stack_offset + @as(i32, ri) * 8);
+                        }
+                    }
+                    reg_idx += info.num_regs;
+                }
+            }
+
+            const proc = try self.compiledProcForId(call.proc);
+            if (comptime target.toCpuArch() == .aarch64) {
+                // The save area sits at the bottom of the frame, below the
+                // staging slot, so the block can move before the registers it
+                // holds are restored. Copying from the top down is correct
+                // when the destination overlaps the staging slot from above.
+                var remaining = callee_pop;
+                while (remaining > 0) {
+                    remaining -= 8;
+                    try self.emitLoad(.w64, scratch_reg, frame_ptr, staging + remaining);
+                    try self.emitStore(.w64, self.callerStackArgBaseReg(), delta + remaining, scratch_reg);
+                }
+                try self.codegen.emitLoadImm(tail_call_delta_reg, delta);
+                const anchor = self.codegen.currentOffset();
+                if (proc.code_start == unresolved_proc_code_start) {
+                    try self.codegen.emit.pcRelAddrSequence(tail_call_target_reg, .IP0, 0, 0, false);
+                    try self.pending_proc_addrs.append(self.allocator, .{ .instr_offset = anchor, .target_proc = call.proc });
+                } else {
+                    try self.emitAarch64PcRelAddress(tail_call_target_reg, .IP0, anchor, proc.code_start);
+                    try self.internal_addr_patches.append(self.allocator, .{ .instr_offset = anchor, .target_offset = proc.code_start });
+                    try self.code_refs.append(self.allocator, .{ .site = anchor, .form = .addr, .target = .{ .proc = proc.id } });
+                }
+                try self.tail_exit_patches.append(self.allocator, try self.codegen.emitJump());
+            } else {
+                // Restore the callee-saved registers through the shared
+                // sequence emitted after the body, which returns here.
+                try self.tail_exit_patches.append(self.allocator, self.codegen.currentOffset());
+                try self.codegen.emit.call(@bitCast(@as(i32, 0)));
+                if (own_pop == 0 and callee_pop == 0) {
+                    try self.codegen.emit.movRegReg(.w64, .RSP, .RBP);
+                    try self.codegen.emit.popReg(.RBP);
+                } else {
+                    // The callee's block ends where this procedure's does, so
+                    // its return address sits `delta` bytes above this one's.
+                    // The saved frame pointer and return address are read
+                    // before the block moves over them.
+                    try self.codegen.emit.movRegMem(.w64, .R10, .RBP, 8);
+                    try self.codegen.emit.movRegMem(.w64, .RAX, .RBP, 0);
+                    var remaining = callee_pop;
+                    while (remaining > 0) {
+                        remaining -= 8;
+                        try self.codegen.emit.movRegMem(.w64, .R11, .RBP, staging + remaining);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, incoming_stack_arg_base_offset + delta + remaining, .R11);
+                    }
+                    try self.codegen.emit.leaRegMem(.RSP, .RBP, 8 + delta);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 0, .R10);
+                    try self.codegen.emit.movRegReg(.w64, .RBP, .RAX);
+                }
+                if (proc.code_start == unresolved_proc_code_start) {
+                    try self.emitPendingProcAddress(call.proc, tail_call_target_reg);
+                } else {
+                    try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, tail_call_target_reg);
+                }
+                try self.codegen.emit.jmpReg(tail_call_target_reg);
+            }
+        }
+
+        /// Address of byte `offset` in the block this procedure's own argument
+        /// block begins. A frame-replacing call's block begins `delta` bytes
+        /// into it, which is negative when the callee's block is the larger.
+        fn emitTailBlockAddress(self: *Self, dst: GeneralReg, offset: i32) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                const block_base = self.callerStackArgBaseReg();
+                try self.codegen.emitLoadImm(dst, offset);
+                try self.codegen.emit.addRegRegReg(.w64, dst, block_base, dst);
+            } else {
+                try self.codegen.emit.leaRegMem(dst, frame_ptr, incoming_stack_arg_base_offset + offset);
+            }
+        }
+
         fn generateErasedCall(
             self: *Self,
             closure_local: LocalId,
@@ -17572,6 +17799,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
                 .comptime_call_hooks = self.comptime_hooks,
+                .callee_owns_block = true,
             });
             if (proc.code_start == unresolved_proc_code_start) {
                 try self.emitPendingCallToProc(proc.id);
@@ -20939,6 +21167,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_runtime_ret_desc_ptr_slot = self.runtime_ret_desc_ptr_slot;
             const saved_runtime_ret_desc_local = self.runtime_ret_desc_local;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
+            const saved_current_proc_arg_pop = self.current_proc_arg_pop;
+            const saved_tail_exit_patches_len = self.tail_exit_patches.items.len;
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_identity = self.current_proc_identity;
             const saved_current_proc_frame_locals = self.current_proc_frame_locals;
@@ -20979,6 +21209,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
             self.runtime_ret_desc_local = proc.runtime_ret_desc;
             self.uses_caller_stack_arg_base = false;
+            self.current_proc_arg_pop = 0;
             self.current_proc_name = proc.name;
             self.current_proc_identity = proc.identity;
             self.current_proc_frame_locals = proc.frame_locals;
@@ -21048,6 +21279,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
+                self.current_proc_arg_pop = saved_current_proc_arg_pop;
+                self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_identity = saved_current_proc_identity;
                 self.current_proc_frame_locals = saved_current_proc_frame_locals;
@@ -21125,7 +21358,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 builder.setStackSize(actual_locals);
                 builder.setStackProbeRequired(stack_probe_required);
+                builder.setCalleePop(self.current_proc_arg_pop);
                 try builder.emitEpilogue(&self.codegen.emit);
+            }
+
+            // Frame-replacing calls share the part of the frame teardown that
+            // depends on the final callee-saved set and frame size.
+            const body_tail_exit_offset = self.codegen.currentOffset();
+            if (self.tail_exit_patches.items.len > saved_tail_exit_patches_len) {
+                const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
+                    @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
+                else
+                    @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var builder = CodeGen.DeferredFrameBuilder.init();
+                builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                builder.setStackSize(actual_locals);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try builder.emitTailCallExitAarch64(&self.codegen.emit, tail_call_delta_reg, tail_call_target_reg);
+                } else {
+                    try builder.emitRestoreCalleeSaved(&self.codegen.emit);
+                    try self.codegen.emit.ret();
+                }
             }
 
             const body_end = self.codegen.currentOffset();
@@ -21177,6 +21430,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
                 self.early_return_ret_layout = saved_early_return_ret_layout;
+
+                // Point each frame-replacing call at the shared callee-saved restore.
+                const final_tail_exit = body_tail_exit_offset - body_start + prologue_size + prologue_start;
+                for (self.tail_exit_patches.items[saved_tail_exit_patches_len..]) |site| {
+                    const call_site = site + prologue_size;
+                    const rel: i32 = @intCast(@as(i64, @intCast(final_tail_exit)) - @as(i64, @intCast(call_site + 5)));
+                    self.codegen.patchCall(call_site, rel);
+                }
+                self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
 
                 // Update procedure registry with correct code_start (prologue_start)
                 if (self.proc_registry.getPtr(key)) |entry| {
@@ -21260,6 +21522,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
                 self.early_return_ret_layout = saved_early_return_ret_layout;
 
+                // Point each frame-replacing call at the shared tail exit.
+                const final_tail_exit = body_tail_exit_offset - body_start + prologue_size + prologue_start;
+                for (self.tail_exit_patches.items[saved_tail_exit_patches_len..]) |patch| {
+                    try self.codegen.patchJump(patch + prologue_size, final_tail_exit);
+                }
+                self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
+
                 // Update procedure registry
                 if (self.proc_registry.getPtr(key)) |entry| {
                     entry.code_start = prologue_start;
@@ -21296,6 +21565,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_general = saved_free_general;
             self.codegen.free_float = saved_free_float;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
+            self.current_proc_arg_pop = saved_current_proc_arg_pop;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
             self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
@@ -21501,12 +21771,84 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// CTFE-only call-frame hooks. Emitted after argument values are
             /// frozen to stack slots, before ABI argument registers are loaded.
             comptime_call_hooks: ?ComptimeHooks = null,
+            /// The callee is an internal Roc procedure: it owns its argument
+            /// block and removes it when it returns.
+            callee_owns_block: bool = false,
         };
 
         const PlacedCall = struct {
+            /// Bytes this caller must remove from the stack after the call.
             stack_spill_size: i32,
             comptime_call_entered: bool,
         };
+
+        /// The argument block of an internal Roc procedure call: the words
+        /// passed on the stack, then storage for every aggregate passed by
+        /// pointer. The callee owns the block and pops it on return, so a
+        /// frame-replacing call can rebuild it in place for the next callee.
+        /// Both sizes follow from the signature alone.
+        const ArgBlock = struct {
+            words: u32,
+            pointees: u32,
+
+            fn size(self: ArgBlock) u32 {
+                return std.mem.alignForward(u32, self.words + self.pointees, call_stack_alignment);
+            }
+        };
+
+        fn pointeeBlockBytes(self: *Self, layout_idx: layout.Idx) u32 {
+            return std.mem.alignForward(u32, self.getLayoutSize(layout_idx), 8);
+        }
+
+        fn callArgBlock(self: *Self, arg_infos: []const ArgInfo, pass_by_ptr: []const bool, needs_ret_ptr: bool) ArgBlock {
+            var block: ArgBlock = .{ .words = 0, .pointees = 0 };
+            var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
+            for (arg_infos, 0..) |ai, i| {
+                if (ai.num_regs == 0) continue;
+                const pbp = pass_by_ptr[i];
+                if (pbp) block.pointees += self.pointeeBlockBytes(ai.layout_idx.?);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (!pbp and self.argNeedsI128Abi(ai.loc, ai.layout_idx) and reg_count < max_arg_regs and reg_count % 2 != 0) {
+                        reg_count += 1;
+                    }
+                }
+                const nr: u8 = if (pbp) 1 else ai.num_regs;
+                if (reg_count + nr <= max_arg_regs) {
+                    reg_count += nr;
+                } else {
+                    block.words += @as(u32, nr) * 8;
+                    reg_count = max_arg_regs;
+                }
+            }
+            return block;
+        }
+
+        /// Lower the stack pointer by `size` bytes, touching every page it
+        /// crosses so a reservation of a page or more cannot step over the
+        /// guard page.
+        fn emitReserveStack(self: *Self, size: u32) Allocator.Error!void {
+            var remaining = size;
+            while (remaining >= lir.LIR.stack_probe_page_size) : (remaining -= lir.LIR.stack_probe_page_size) {
+                try self.emitSubStackPtr(lir.LIR.stack_probe_page_size);
+                try self.emitStore(.w64, stack_ptr, 0, scratch_reg);
+            }
+            if (remaining > 0) {
+                try self.emitSubStackPtr(remaining);
+                if (size >= lir.LIR.stack_probe_page_size) try self.emitStore(.w64, stack_ptr, 0, scratch_reg);
+            }
+        }
+
+        fn emitSubStackPtr(self: *Self, size: u32) Allocator.Error!void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (size == lir.LIR.stack_probe_page_size) {
+                    try self.codegen.emit.subRegRegImm12Shifted(.w64, stack_ptr, stack_ptr, 1, true);
+                } else {
+                    try self.codegen.emit.subRegRegImm12(.w64, stack_ptr, stack_ptr, @intCast(size));
+                }
+            } else {
+                try self.codegen.emit.subRegImm32(.w64, stack_ptr, @intCast(size));
+            }
+        }
 
         const FrozenCallArg = struct {
             stack_offset: i32,
@@ -21762,7 +22104,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            var stack_space_size = outgoing_stack_arg_base_offset + stack_arg_bytes;
+            // An internal Roc callee pops its own argument block, so only the
+            // ABI base area in front of it is this caller's to remove.
+            const callee_block_size: i32 = if (config.callee_owns_block)
+                @intCast(self.callArgBlock(arg_infos, config.pass_by_ptr.?, config.needs_ret_ptr).size())
+            else
+                0;
+            var stack_space_size = outgoing_stack_arg_base_offset + if (config.callee_owns_block) callee_block_size else stack_arg_bytes;
 
             // Keep the outgoing argument area ABI-aligned. Padding sits above the
             // final spilled arg so stack arg 0 remains at its ABI-defined offset.
@@ -21798,7 +22146,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Allocate stack space for the callee's spilled arguments only after
             // CTFE hooks have run. The hook call has its own C ABI stack setup.
             if (stack_space_size > 0) {
-                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_space_size);
+                try self.emitReserveStack(@intCast(stack_space_size));
             }
 
             // Place arguments in registers or on stack
@@ -21888,7 +22236,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return .{
-                .stack_spill_size = stack_space_size,
+                .stack_spill_size = stack_space_size - callee_block_size,
                 .comptime_call_entered = comptime_call_entered,
             };
         }
@@ -22229,6 +22577,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var reg_idx: u8 = initial_reg_idx;
             var stack_arg_offset: i32 = incoming_stack_arg_base_offset;
+            var pointee_bytes: u32 = 0;
+            defer self.current_proc_arg_pop = (ArgBlock{
+                .words = @intCast(stack_arg_offset - incoming_stack_arg_base_offset),
+                .pointees = pointee_bytes,
+            }).size();
 
             for (0..param_count) |param_idx| {
                 const num_regs = param_num_regs[param_idx];
@@ -22260,6 +22613,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 if (param_pass_by_ptr[param_idx]) {
+                    pointee_bytes += self.pointeeBlockBytes(self.localLayout(local));
                     var ptr_reg: GeneralReg = undefined;
                     if (reg_idx < max_arg_regs) {
                         ptr_reg = self.getArgumentRegister(reg_idx);
@@ -22918,7 +23272,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = uninit.next });
                         },
 
-                        .assign_call => |assign| {
+                        .assign_call => |assign| if (assign.replaces_frame) {
+                            try self.generateTailCall(.{
+                                .proc = assign.proc,
+                                .args = assign.args,
+                                .ret_layout = self.localLayout(assign.target),
+                            });
+                        } else {
                             const value_loc = try self.generateCall(.{
                                 .proc = assign.proc,
                                 .args = assign.args,
@@ -25228,6 +25588,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .needs_ret_ptr = needs_ret_ptr,
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
+                .callee_owns_block = true,
             });
             try self.emitCallToOffset(.{ .proc = compiled.id }, compiled.code_start);
 
