@@ -5542,19 +5542,21 @@ const Cloner = struct {
         var input: ?CloneResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            switch (try self.stepClone(frame, input)) {
-                .call => |task| {
-                    try frames.append(self.pass.allocator, .{ .task = task });
+            const step = try self.stepClone(frame, input);
+            switch (step) {
+                .call => {
+                    const next = try frames.addOne(self.pass.allocator);
+                    next.* = .{ .task = step.call };
                     input = null;
                 },
-                .tail => |task| {
-                    frame.* = .{ .task = task };
+                .tail => {
+                    frame.* = .{ .task = step.tail };
                     input = null;
                 },
-                .ret => |result| {
-                    _ = frames.pop();
-                    if (frames.items.len == 0) return result;
-                    input = result;
+                .ret => {
+                    frames.items.len -= 1;
+                    if (frames.items.len == 0) return step.ret;
+                    input = step.ret;
                 },
             }
         }
@@ -5586,7 +5588,7 @@ const Cloner = struct {
                 task.new_values.deinit(allocator);
                 task.new_values_owned = false;
             },
-            .loop_value => |*task| if (task.attempt_lists_owned) {
+            .loop_value => |task| if (task.attempt_lists_owned) {
                 task.new_params.deinit(allocator);
                 task.new_initials.deinit(allocator);
                 task.attempt_lists_owned = false;
@@ -5694,7 +5696,7 @@ const Cloner = struct {
 
     fn cloneLoopWithSelectedExit(self: *Cloner, ty: Type.TypeId, loop: @FieldType(Ast.ExprData, "loop_"), selection: LoopExitSelection) Common.LowerError!Ast.ExprId {
         const chain = try self.newChain();
-        return (try self.runClone(try self.wrappedValueTask(.{ .loop_value = .{ .ty = ty, .loop = loop, .bindings = chain, .exit_selection = selection } }, chain))).get(.expr);
+        return (try self.runClone(try self.wrappedValueTask(.{ .loop_value = try self.storedTask(LoopValueTask, .{ .ty = ty, .loop = loop, .bindings = chain, .exit_selection = selection }) }, chain))).get(.expr);
     }
 
     const CloneTask = union(enum) {
@@ -5734,7 +5736,9 @@ const Cloner = struct {
         inline_let_case_join: InlineLetCaseJoinTask,
         finalize_let_case_join: FinalizeLetCaseJoinTask,
         rebuild_let_case_join_value: RebuildLetCaseJoinValueTask,
-        loop_value: LoopValueTask,
+        /// Stored in the cloner's arena: a loop's state is far larger than
+        /// any other task's, and frames copy their task.
+        loop_value: *LoopValueTask,
         block_value: BlockValueTask,
         exit_block_value: ExitBlockValueTask,
         emit_block_with_tail: EmitBlockWithTailTask,
@@ -5767,7 +5771,8 @@ const Cloner = struct {
         if_branch_span: IfBranchSpanTask,
         materialize: MaterializeTask,
         materialize_callable: struct { callable: CallableValue },
-        materialize_worker: MaterializeWorkerTask,
+        /// Stored in the cloner's arena, like `loop_value`.
+        materialize_worker: *MaterializeWorkerTask,
         materialize_with_captures: MaterializeWithCapturesTask,
         value_flow_bind: ValueFlowBindTask,
         collect: CollectTask,
@@ -5802,7 +5807,7 @@ const Cloner = struct {
             .inline_let_case_join => |*task| self.stepInlineLetCaseJoin(frame, task, input),
             .finalize_let_case_join => |*task| self.stepFinalizeLetCaseJoin(frame, task, input),
             .rebuild_let_case_join_value => |*task| self.stepRebuildLetCaseJoinValue(frame, task, input),
-            .loop_value => |*task| self.stepLoopValue(frame, task, input),
+            .loop_value => |task| self.stepLoopValue(frame, task, input),
             .block_value => |*task| self.stepBlockValue(frame, task, input),
             .exit_block_value => |*task| self.stepExitBlockValue(frame, task, input),
             .emit_block_with_tail => |*task| self.stepEmitBlockWithTail(frame, task, input),
@@ -5833,7 +5838,7 @@ const Cloner = struct {
             .if_branch_span => |*task| self.stepIfBranchSpan(frame, task, input),
             .materialize => |*task| self.stepMaterialize(frame, task, input),
             .materialize_callable => |task| self.stepMaterializeCallable(task.callable),
-            .materialize_worker => |*task| self.stepMaterializeWorker(frame, task, input),
+            .materialize_worker => |task| self.stepMaterializeWorker(frame, task, input),
             .materialize_with_captures => |*task| self.stepMaterializeWithCaptures(frame, task, input),
             .value_flow_bind => |*task| self.stepValueFlowBind(frame, task, input),
             .collect => |*task| self.stepCollect(frame, task, input),
@@ -6090,7 +6095,7 @@ const Cloner = struct {
             .loop_ => |loop| {
                 if (frame.cursor != 0) return self.finishExprValue(task, input.?.get(.value));
                 frame.cursor = 1;
-                return .{ .call = .{ .loop_value = .{ .ty = expr.ty, .loop = loop, .bindings = bindings, .exit_selection = null } } };
+                return .{ .call = .{ .loop_value = try self.storedTask(LoopValueTask, .{ .ty = expr.ty, .loop = loop, .bindings = bindings, .exit_selection = null }) } };
             },
             .block => |block| {
                 if (frame.cursor != 0) return self.finishExprValue(task, input.?.get(.value));
@@ -6613,6 +6618,14 @@ const Cloner = struct {
         chain: *BindingChain,
     };
 
+    /// `task` stored in the cloner's arena, for a `CloneTask` variant that
+    /// holds it by pointer.
+    fn storedTask(self: *Cloner, comptime T: type, task: T) Allocator.Error!*T {
+        const stored = try self.arena.allocator().create(T);
+        stored.* = task;
+        return stored;
+    }
+
     fn wrappedValueTask(self: *Cloner, child: CloneTask, chain: *BindingChain) Allocator.Error!CloneTask {
         const stored = try self.arena.allocator().create(CloneTask);
         stored.* = child;
@@ -6909,7 +6922,7 @@ const Cloner = struct {
             .loop_ => |loop| {
                 if (cursor == 0) {
                     const chain = try self.newChain();
-                    return .{ .call = try self.wrappedValueTask(.{ .loop_value = .{ .ty = expr.ty, .loop = loop, .bindings = chain, .exit_selection = null } }, chain) };
+                    return .{ .call = try self.wrappedValueTask(.{ .loop_value = try self.storedTask(LoopValueTask, .{ .ty = expr.ty, .loop = loop, .bindings = chain, .exit_selection = null }) }, chain) };
                 }
                 return self.finishPlainExpr(task, input.?.get(.expr));
             },
@@ -7353,12 +7366,12 @@ const Cloner = struct {
                 // Initial values are in the enclosing scope, before result bindings.
                 const chain = try self.newChain();
                 frame.cursor = 1;
-                return .{ .call = try self.wrappedValueTask(.{ .loop_value = .{
+                return .{ .call = try self.wrappedValueTask(.{ .loop_value = try self.storedTask(LoopValueTask, .{
                     .ty = task.result_ty,
                     .loop = loop_expr.data.loop_,
                     .bindings = chain,
                     .exit_selection = selection,
-                } }, chain) };
+                }) }, chain) };
             },
             1 => {
                 task.loop = input.?.get(.expr);
@@ -11272,7 +11285,7 @@ const Cloner = struct {
         }
     }
 
-    fn stepMaterializeCallable(self: *Cloner, callable: CallableValue) CloneStep {
+    fn stepMaterializeCallable(self: *Cloner, callable: CallableValue) Allocator.Error!CloneStep {
         const fn_ = self.pass.program.getFn(callable.fn_id);
         const captures = self.pass.program.typedLocalSpan(fn_.captures);
         if (captures.len != callable.captures.len) {
@@ -11304,7 +11317,7 @@ const Cloner = struct {
             }
         }
 
-        if (!all_original and self.emit_callable_workers) return .{ .tail = .{ .materialize_worker = .{ .callable = callable } } };
+        if (!all_original and self.emit_callable_workers) return .{ .tail = .{ .materialize_worker = try self.storedTask(MaterializeWorkerTask, .{ .callable = callable }) } };
 
         return .{ .tail = .{ .materialize_with_captures = .{
             .ty = callable.ty,

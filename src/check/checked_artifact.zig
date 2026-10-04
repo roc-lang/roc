@@ -3118,8 +3118,8 @@ pub const StoredCheckedTypePayload = union(enum) {
 /// (`appendTypeIds`/`commitPayload`/…), which may reallocate and dangle it; snapshot
 /// or `dupe` first (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking`
 /// do). The append helpers `assert(!serialized)` to mark that growth boundary.
-fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypePayload) CheckedTypePayload {
-    return switch (stored) {
+fn reconstructCheckedTypePayload(pool_owner: anytype, stored: *const StoredCheckedTypePayload) CheckedTypePayload {
+    return switch (stored.*) {
         .pending => .pending,
         .err => .err,
         .empty_record => .empty_record,
@@ -3272,7 +3272,7 @@ pub const CheckedTypeStoreView = struct {
         if (index >= self.stored_payloads.len) {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
-        return reconstructCheckedTypePayload(self, self.stored_payloads[index]);
+        return reconstructCheckedTypePayload(self, &self.stored_payloads[index]);
     }
 
     /// Looks up a published checked type root by canonical source type key.
@@ -4380,7 +4380,7 @@ pub const CheckedTypeStore = struct {
         if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
-        return reconstructCheckedTypePayload(self, self.payloads.items[index]);
+        return reconstructCheckedTypePayload(self, &self.payloads.items[index]);
     }
 
     /// Append `ids` to `type_id_pool`, returning their range.
@@ -5607,7 +5607,7 @@ pub const CheckedTypeStore = struct {
         allocator: Allocator,
         stored: StoredCheckedTypePayload,
     ) Allocator.Error!CheckedTypePayloadBuild {
-        const read = reconstructCheckedTypePayload(self, stored);
+        const read = reconstructCheckedTypePayload(self, &stored);
         return switch (read) {
             .pending => .pending,
             .err => .err,

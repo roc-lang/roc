@@ -15208,7 +15208,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
         expr_var;
     self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
     state.stage = .body;
-    return .{ .push = .{ .expr = .{ .next = .{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr } } } };
+    return .{ .push = .{ .expr = try self.newExprKernelActivity(.{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr }) } };
 }
 
 fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std.mem.Allocator.Error!void {
@@ -15995,8 +15995,10 @@ const CheckActivity = union(enum) {
     group: GroupActivity,
     /// One definition.
     def: DefActivity,
-    /// One expression tree.
-    expr: ExprKernelActivity,
+    /// One expression tree. Stored by pointer: it can hold a suspended
+    /// expression frame, far larger than any other activity, and the
+    /// activity stack copies its entries.
+    expr: *ExprKernelActivity,
     /// A group's generalization boundary.
     boundary: BoundaryActivity,
     /// The current frame's pending dispatch targets.
@@ -16044,22 +16046,36 @@ fn runCheckActivities(self: *Self, root: CheckActivity, env: *Env) Allocator.Err
         var owned = activity;
         self.abortCheckActivity(&owned, env);
     };
-    try activities.append(self.gpa, root);
+    try self.pushCheckActivity(&activities, root, env);
     var input: ?CheckActivityResult = null;
     while (true) {
         const activity = &activities.items[activities.items.len - 1];
-        switch (try self.stepCheckActivity(activity, input, env)) {
-            .push => |child| {
-                try activities.append(self.gpa, child);
-                input = null;
-            },
-            .done => |result| {
-                _ = activities.pop();
-                if (activities.items.len == 0) return result;
-                input = result;
+        const step = try self.stepCheckActivity(activity, input, env);
+        switch (step) {
+            .push => try self.pushCheckActivity(&activities, step.push, env),
+            .done => {
+                switch (activity.*) {
+                    .expr => |state| self.gpa.destroy(state),
+                    .ensure_group, .group, .def, .boundary, .pending_targets, .predeclared_uses => {},
+                }
+                activities.items.len -= 1;
+                if (activities.items.len == 0) return step.done;
+                input = step.done;
+                continue;
             },
         }
+        input = null;
     }
+}
+
+/// Push `activity`; one that cannot be pushed is aborted.
+fn pushCheckActivity(self: *Self, activities: *std.ArrayList(CheckActivity), activity: CheckActivity, env: *Env) Allocator.Error!void {
+    const slot = activities.addOne(self.gpa) catch |err| {
+        var unstarted = activity;
+        self.abortCheckActivity(&unstarted, env);
+        return err;
+    };
+    slot.* = activity;
 }
 
 fn stepCheckActivity(self: *Self, activity: *CheckActivity, input: ?CheckActivityResult, env: *Env) Allocator.Error!CheckActivityStep {
@@ -16067,7 +16083,7 @@ fn stepCheckActivity(self: *Self, activity: *CheckActivity, input: ?CheckActivit
         .ensure_group => |*state| self.stepEnsureGroup(state),
         .group => |*state| self.stepGroup(state, env),
         .def => |*state| self.stepDef(state, input, env),
-        .expr => |*state| self.stepExprKernel(state, env),
+        .expr => |state| self.stepExprKernel(state, env),
         .boundary => |*state| self.stepBoundary(state, input, env),
         .pending_targets => |*state| self.stepPendingTargets(state, env),
         .predeclared_uses => |*state| self.stepPredeclaredUses(state, env),
@@ -16079,13 +16095,14 @@ fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
     switch (activity.*) {
         .group => |*state| self.gpa.free(state.member_roots),
         .def => |*state| state.restore(self),
-        .expr => |*state| {
+        .expr => |state| {
             if (state.finishing) |*finishing| finishing.frame.deinit();
             while (state.tasks.pop()) |task| {
                 var owned_task = task;
                 self.abortExprTask(&owned_task, env);
             }
             state.tasks.deinit(self.gpa);
+            self.gpa.destroy(state);
         },
         .boundary => |*state| if (state.owns_roots) self.gpa.free(state.roots),
         .ensure_group, .pending_targets, .predeclared_uses => {},
@@ -22313,11 +22330,17 @@ const ExprKernelActivity = struct {
 fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
-    return (try self.runCheckActivities(.{ .expr = .{ .next = .{
+    return (try self.runCheckActivities(.{ .expr = try self.newExprKernelActivity(.{
         .expr = expr_idx,
         .expected = expected,
         .function_owner = function_owner,
-    } } }, env)).doesFx();
+    }) }, env)).doesFx();
+}
+
+fn newExprKernelActivity(self: *Self, next: ExprChildRequest) Allocator.Error!*ExprKernelActivity {
+    const state = try self.gpa.create(ExprKernelActivity);
+    state.* = .{ .next = next };
+    return state;
 }
 
 fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {

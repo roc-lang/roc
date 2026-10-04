@@ -9230,7 +9230,7 @@ const Builder = struct {
         for (nominal.args, mono_args) |checked_arg, mono_arg| {
             try ctx.constrainTypeToMono(checked_arg, mono_arg);
         }
-        const source = ctx.nominalInstantiationSource(nominal) orelse {
+        const source = ctx.nominalInstantiationSource(&nominal) orelse {
             Common.invariant("nominal backing type lowering could not resolve a declaration-backed nominal");
         };
         const arg_nodes = try graph.arena().alloc(NodeId, mono_args.len);
@@ -23964,7 +23964,7 @@ const BodyContext = struct {
     };
 
     fn stepInstNominal(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask, input: ?InstResult) Allocator.Error!InstStep {
-        const nominal = task.nominal;
+        const nominal = &task.nominal;
         switch (frame.cursor) {
             InstNominalCursor.start => {
                 switch (nominal.representation) {
@@ -24318,7 +24318,7 @@ const BodyContext = struct {
 
     fn nominalInstantiationSource(
         self: *BodyContext,
-        nominal: checked.CheckedNominalType,
+        nominal: *const checked.CheckedNominalType,
     ) ?NominalInstantiationSource {
         return switch (nominal.representation) {
             .local_declaration => |id| .{
@@ -24326,7 +24326,7 @@ const BodyContext = struct {
                 .declaration = self.view.types.nominalDeclarationById(id),
             },
             .local_box_payload_capability => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal.*) orelse
                     Common.invariant("local box-payload nominal had no declaration source");
                 break :blk .{
                     .view = lookup.view,
@@ -24341,7 +24341,7 @@ const BodyContext = struct {
                 };
             },
             .imported_box_payload_capability => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal.*) orelse
                     Common.invariant("imported box-payload nominal had no declaration source");
                 break :blk .{
                     .view = lookup.view,
@@ -24349,7 +24349,7 @@ const BodyContext = struct {
                 };
             },
             .builtin => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse break :blk null;
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal.*) orelse break :blk null;
                 break :blk .{
                     .view = lookup.view,
                     .declaration = lookup.declaration,
@@ -26706,8 +26706,8 @@ const BodyContext = struct {
         frames: std.ArrayList(EvidenceFrame) = .empty,
     };
 
-    fn hostedEvidenceTask(root: EvidenceTask) LowerTask {
-        return .{ .hosted_evidence = .{ .root = root } };
+    fn hostedEvidenceTask(self: *BodyContext, root: EvidenceTask) Allocator.Error!LowerTask {
+        return .{ .hosted_evidence = try self.boxLowerTask(HostedEvidenceTask, .{ .root = root }) };
     }
 
     fn stepHostedEvidence(self: *BodyContext, task: *HostedEvidenceTask) Allocator.Error!LowerStep {
@@ -26717,11 +26717,11 @@ const BodyContext = struct {
         }
         return switch (try self.driveEvidence(&task.frames)) {
             .done => |result| .{ .ret = .{ .evidence = result } },
-            .draft_nested => |request| requestLowerTask(request.ctx, .{ .nested_fn = .{
+            .draft_nested => |request| requestLowerTask(request.ctx, .{ .nested_fn = try request.ctx.boxLowerTask(NestedFnTask, .{
                 .expr_id = request.expr,
                 .request_fn_node = request.request_fn_node,
                 .purpose = .draft,
-            } }),
+            }) }),
         };
     }
 
@@ -26755,11 +26755,11 @@ const BodyContext = struct {
         if (task.index < task.drafts.len) {
             const draft = task.drafts[task.index];
             task.index += 1;
-            return requestLowerTask(draft.ctx, .{ .nested_fn = .{
+            return requestLowerTask(draft.ctx, .{ .nested_fn = try draft.ctx.boxLowerTask(NestedFnTask, .{
                 .expr_id = draft.expr,
                 .request_fn_node = draft.request_fn_node,
                 .purpose = .draft,
-            } });
+            }) });
         }
         const then = task.then;
         self.allocator.free(task.drafts);
@@ -27127,18 +27127,25 @@ const BodyContext = struct {
         var input: ?EvidenceResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            switch (try frame.ctx.stepEvidence(frame, input)) {
-                .call => |next| {
-                    try frames.append(self.allocator, .{ .ctx = next.ctx, .task = next.task });
+            const step = try frame.ctx.stepEvidence(frame, input);
+            switch (step) {
+                .call => {
+                    const next = frames.addOne(self.allocator) catch |err| {
+                        var unstarted: EvidenceFrame = .{ .ctx = step.call.ctx, .task = step.call.task };
+                        unstarted.ctx.releaseEvidenceFrame(&unstarted);
+                        return err;
+                    };
+                    next.* = .{ .ctx = step.call.ctx, .task = step.call.task };
                     input = null;
                 },
-                .ret => |result| {
-                    var finished = frames.pop().?;
-                    finished.ctx.releaseEvidenceFrame(&finished);
-                    if (frames.items.len == 0) return .{ .done = result };
-                    input = result;
+                .ret => {
+                    const finished = &frames.items[frames.items.len - 1];
+                    finished.ctx.releaseEvidenceFrame(finished);
+                    frames.items.len -= 1;
+                    if (frames.items.len == 0) return .{ .done = step.ret };
+                    input = step.ret;
                 },
-                .draft_nested => |request| return .{ .draft_nested = request },
+                .draft_nested => return .{ .draft_nested = step.draft_nested },
             }
         }
     }
@@ -27219,25 +27226,25 @@ const BodyContext = struct {
     }
 
     fn stepEvidence(self: *BodyContext, frame: *EvidenceFrame, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
-        return switch (frame.task) {
-            .type_node => |*task| self.stepTypeNode(frame, task, input),
-            .call_evidence => |*task| self.stepCallEvidence(frame, task.expr, task.expected_ty, input),
-            .argument_evidence => |*task| self.stepArgumentEvidence(frame, task, input),
-            .produced_value => |*task| self.stepProducedValue(frame, task, input),
-            .dispatch_result => |*task| self.stepDispatchResult(frame, task, input, true),
-            .callable_dispatch_result => |*task| self.stepDispatchResult(frame, task, input, false),
-            .call_result => |*task| self.stepCallResult(frame, task, input),
-            .direct_call_request => |*task| self.stepDirectCallRequest(frame, task, input),
-            .direct_call_type => |*task| self.stepDirectCallType(frame, task, input),
-            .instantiate_call => |*task| self.stepInstantiateCall(frame, task, input),
-            .instantiate_dispatch => |*task| self.stepInstantiateDispatch(frame, task, input),
-            .field_access => |task| self.stepFieldAccess(frame, task.checked_ty, task.access, task.expected_ty, input),
-            .tuple_access => |task| self.stepTupleAccess(frame, task.checked_ty, task.tuple, task.elem_index, task.expected_ty, input),
-            .completed_result => |task| self.stepCompletedResult(frame, task),
-            .prepare_direct_args => |*task| self.stepPrepareArgs(frame, task, true),
-            .prepare_span => |*task| self.stepPrepareArgs(frame, task, false),
-            .relate => |*task| self.stepRelate(frame, task, input),
-        };
+        switch (frame.task) {
+            .type_node => |*task| return self.stepTypeNode(frame, task, input),
+            .call_evidence => |*task| return self.stepCallEvidence(frame, task.expr, task.expected_ty, input),
+            .argument_evidence => |*task| return self.stepArgumentEvidence(frame, task, input),
+            .produced_value => |*task| return self.stepProducedValue(frame, task, input),
+            .dispatch_result => |*task| return self.stepDispatchResult(frame, task, input, true),
+            .callable_dispatch_result => |*task| return self.stepDispatchResult(frame, task, input, false),
+            .call_result => |*task| return self.stepCallResult(frame, task, input),
+            .direct_call_request => |*task| return self.stepDirectCallRequest(frame, task, input),
+            .direct_call_type => |*task| return self.stepDirectCallType(frame, task, input),
+            .instantiate_call => |*task| return self.stepInstantiateCall(frame, task, input),
+            .instantiate_dispatch => |*task| return self.stepInstantiateDispatch(frame, task, input),
+            .field_access => |task| return self.stepFieldAccess(frame, task.checked_ty, task.access, task.expected_ty, input),
+            .tuple_access => |task| return self.stepTupleAccess(frame, task.checked_ty, task.tuple, task.elem_index, task.expected_ty, input),
+            .completed_result => |task| return self.stepCompletedResult(frame, task),
+            .prepare_direct_args => |*task| return self.stepPrepareArgs(frame, task, true),
+            .prepare_span => |*task| return self.stepPrepareArgs(frame, task, false),
+            .relate => |*task| return self.stepRelate(frame, task, input),
+        }
     }
 
     /// A dispatch expression's result type is instantiated once per lowered
@@ -28666,16 +28673,20 @@ const BodyContext = struct {
         call_expr: struct { expr: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall },
         constructor: ConstructorTask,
         /// A block.
-        block: BlockTask,
+        /// Stored by pointer, like `loop`.
+        block: *BlockTask,
         /// An `if`.
         if_task: IfTask,
         /// A `match`.
         match_task: MatchTask,
         /// `lowerLambdaExprAtNode` and `lowerClosureAtNode`
-        nested_fn: NestedFnTask,
+        /// Stored by pointer, like `loop`: frames copy their task, and these
+        /// two are far larger than every other task.
+        nested_fn: *NestedFnTask,
         /// An evidence computation whose nested-callable drafts lower as
         /// child tasks.
-        hosted_evidence: HostedEvidenceTask,
+        /// Stored by pointer, like `loop`.
+        hosted_evidence: *HostedEvidenceTask,
         /// Lambda and closure operands drafted at their slots, each as a
         /// child task.
         draft_callables: DraftCallablesTask,
@@ -28694,7 +28705,7 @@ const BodyContext = struct {
         /// A divergent expression lowered for its effect.
         divergent: DivergentTask,
         /// A loop statement.
-        loop: LoopTask,
+        loop: *LoopTask,
         /// An iterator method call. Boxed: its method lookup is far larger
         /// than every other task.
         iterator_dispatch: *IteratorDispatchTask,
@@ -29377,12 +29388,12 @@ const BodyContext = struct {
                 if (diverges) return divergentStep(self, body, .{ .at_cell = state.state_cell });
                 const result_node = try state.result_cell.toGraphNode(self.graph);
                 switch (self.view.bodies.expr(body).data) {
-                    .block => |block| return requestLowerTask(self, .{ .block = .{
+                    .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                         .statements = block.statements,
                         .final_expr = block.final_expr,
                         .result_cell = state.state_cell,
                         .tail = .{ .state_result = .{ .state = state, .result_node = result_node } },
-                    } }),
+                    }) }),
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 if (try self.nodeIsProvenUninhabited(result_node)) {
@@ -29398,7 +29409,7 @@ const BodyContext = struct {
             },
             .state_only => |state| {
                 if (diverges) return divergentStep(self, body, .{ .at_cell = state.state_cell });
-                return requestLowerTask(self, .{ .block = self.discardingBlockTask(body, state.state_cell, .{ .state_only = state }) });
+                return requestLowerTask(self, .{ .block = try self.boxDiscardingBlockTask(body, state.state_cell, .{ .state_only = state }) });
             },
         }
     }
@@ -29406,6 +29417,10 @@ const BodyContext = struct {
     /// A body lowered as statements whose final expression is discarded: a
     /// block's statements and final expression, or any other expression as
     /// the final expression of an empty statement list.
+    fn boxDiscardingBlockTask(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, tail: BlockTail) Allocator.Error!*BlockTask {
+        return self.boxLowerTask(BlockTask, self.discardingBlockTask(body, result_cell, tail));
+    }
+
     fn discardingBlockTask(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, tail: BlockTail) BlockTask {
         return switch (self.view.bodies.expr(body).data) {
             .block => |block| .{
@@ -29476,7 +29491,7 @@ const BodyContext = struct {
         switch (self.view.bodies.expr(body).data) {
             .for_ => |for_| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) });
             },
             .if_, .match_ => {
                 task.nested_merge_binders = try self.stateMergeBinders(body);
@@ -29565,7 +29580,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.expr(expr_id);
         if (checked_expr.data == .for_ and !self.checkedExprDivergesInLoweredRuntime(expr_id)) {
             task.stage = .passthrough;
-            return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(checked_expr.data.for_) } } });
+            return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(checked_expr.data.for_) } }) });
         }
         switch (checked_expr.data) {
             .if_, .match_ => {
@@ -29735,15 +29750,15 @@ const BodyContext = struct {
             },
             .for_ => |for_| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) });
             },
             .while_ => |loop| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .condition = .{ .loop = loop, .condition = .checked } } } });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .condition = .{ .loop = loop, .condition = .checked } } }) });
             },
             .infinite_loop, .breakable_loop => |loop| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .condition = .{ .loop = loop, .condition = .always_true } } } });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .condition = .{ .loop = loop, .condition = .always_true } } }) });
             },
             .break_ => return self.finishStatement(task, .{ .expr = try self.breakCurrentLoopExpr() }, .none),
             .return_ => |ret| {
@@ -30079,13 +30094,13 @@ const BodyContext = struct {
             .str => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
             .list => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
             .tuple => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
-            .block => |block| return requestLowerTask(self, .{ .block = .{
+            .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
                 .final_expr = block.final_expr,
                 .result_cell = .{ .sealed = ty },
                 .typed = ty,
                 .as_data = true,
-            } }),
+            }) }),
             .match_ => |match| {
                 task.finish = .expr_as_data;
                 return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } });
@@ -30344,7 +30359,7 @@ const BodyContext = struct {
                                 task.stage = .cond;
                                 return requestLowerTask(self, .{ .expr = .{ .expr = condition.loop.cond } });
                             },
-                            .always_true => return self.beginConditionLoopBody(task),
+                            .always_true => return try self.beginConditionLoopBody(task),
                         }
                     },
                 }
@@ -30393,7 +30408,7 @@ const BodyContext = struct {
             .cond => {
                 task.cond = input.?.exprValue();
                 task.break_body = try self.breakCurrentLoopExpr();
-                return self.beginConditionLoopBody(task);
+                return try self.beginConditionLoopBody(task);
             },
             .body => return self.finishConditionLoop(task, input.?.exprValue()),
         }
@@ -30401,8 +30416,8 @@ const BodyContext = struct {
 
     /// A loop body lowered as statements whose final expression is
     /// discarded, then the loop's continue edge.
-    fn loopBodyStep(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, rest_expr: ?DraftExprId, carries: []const LoopCarry) LowerStep {
-        return requestLowerTask(self, .{ .block = self.discardingBlockTask(body, result_cell, .{ .loop_continue = .{
+    fn loopBodyStep(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, rest_expr: ?DraftExprId, carries: []const LoopCarry) Allocator.Error!LowerStep {
+        return requestLowerTask(self, .{ .block = try self.boxDiscardingBlockTask(body, result_cell, .{ .loop_continue = .{
             .rest_expr = rest_expr,
             .carries = carries,
         } }) });
@@ -30433,7 +30448,7 @@ const BodyContext = struct {
 
         const rest_expr = try self.addExprWithTypeCell(task.iterator_cell, .{ .local = rest_local });
         task.stage = .one_body;
-        const local = item_local orelse return self.loopBodyStep(for_.body, task.loop_cell, rest_expr, task.carries);
+        const local = item_local orelse return try self.loopBodyStep(for_.body, task.loop_cell, rest_expr, task.carries);
         const item_expr = try self.addExprWithTypeCell(item_cell, .{ .local = local });
         const miss = try self.addExprWithTypeCell(task.loop_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
         return requestLowerTask(self, .{ .materialize = .{ .root = .{
@@ -30481,9 +30496,9 @@ const BodyContext = struct {
         } });
     }
 
-    fn beginConditionLoopBody(self: *BodyContext, task: *LoopTask) LowerStep {
+    fn beginConditionLoopBody(self: *BodyContext, task: *LoopTask) Allocator.Error!LowerStep {
         task.stage = .body;
-        return self.loopBodyStep(task.kind.condition.loop.body, task.loop_cell, null, task.carries);
+        return try self.loopBodyStep(task.kind.condition.loop.body, task.loop_cell, null, task.carries);
     }
 
     fn finishConditionLoop(self: *BodyContext, task: *LoopTask, continue_body: DraftExprId) Allocator.Error!LowerStep {
@@ -30854,6 +30869,14 @@ const BodyContext = struct {
         ret: LowerResult,
     };
 
+    /// `task` stored by `ctx`'s allocator, for a `LowerTask` variant that
+    /// holds it by pointer; finishing or releasing its frame frees it.
+    fn boxLowerTask(ctx: *BodyContext, comptime T: type, task: T) Allocator.Error!*T {
+        const boxed = try ctx.allocator.create(T);
+        boxed.* = task;
+        return boxed;
+    }
+
     fn requestLowerTask(ctx: *BodyContext, task: LowerTask) LowerStep {
         return .{ .call = .{ .ctx = ctx, .task = task } };
     }
@@ -30872,16 +30895,23 @@ const BodyContext = struct {
         var input: ?LowerResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            switch (try frame.ctx.stepLower(frame, input)) {
-                .call => |next| {
-                    try frames.append(self.allocator, .{ .ctx = next.ctx, .task = next.task });
+            const step = try frame.ctx.stepLower(frame, input);
+            switch (step) {
+                .call => {
+                    const next = frames.addOne(self.allocator) catch |err| {
+                        var unstarted: LowerFrame = .{ .ctx = step.call.ctx, .task = step.call.task };
+                        unstarted.ctx.releaseLowerFrame(&unstarted);
+                        return err;
+                    };
+                    next.* = .{ .ctx = step.call.ctx, .task = step.call.task };
                     input = null;
                 },
-                .ret => |result| {
-                    var finished = frames.pop().?;
-                    finished.ctx.releaseLowerFrame(&finished);
-                    if (frames.items.len == 0) return result;
-                    input = result;
+                .ret => {
+                    const finished = &frames.items[frames.items.len - 1];
+                    finished.ctx.releaseLowerFrame(finished);
+                    frames.items.len -= 1;
+                    if (frames.items.len == 0) return step.ret;
+                    input = step.ret;
                 },
             }
         }
@@ -31232,13 +31262,20 @@ const BodyContext = struct {
             },
             .span, .prepared_span, .span_at_types, .list_span => |*task| self.releaseSpanTask(task),
             .constructor => |*task| self.releaseConstructorTask(task),
-            .block => |*task| self.releaseBlockTask(task),
+            .block => |task| {
+                self.releaseBlockTask(task);
+                self.allocator.destroy(task);
+            },
             .if_task => |*task| self.releaseIfTask(task),
             .match_task => |*task| self.releaseMatchTask(task),
-            .nested_fn => |*task| self.releaseNestedFnTask(task),
-            .hosted_evidence => |*task| {
+            .nested_fn => |task| {
+                self.releaseNestedFnTask(task);
+                self.allocator.destroy(task);
+            },
+            .hosted_evidence => |task| {
                 releaseEvidenceFrames(&task.frames);
                 task.frames.deinit(self.allocator);
+                self.allocator.destroy(task);
             },
             .draft_callables => |*task| {
                 self.allocator.free(task.drafts);
@@ -31247,7 +31284,10 @@ const BodyContext = struct {
             .value_then_state => |*task| self.releaseValueThenStateTask(task),
             .discarded => |*task| self.releaseDiscardedTask(task),
             .statement => |*task| self.releaseStatementTask(task),
-            .loop => |*task| self.releaseLoopTask(task),
+            .loop => |task| {
+                self.releaseLoopTask(task);
+                self.allocator.destroy(task);
+            },
             .iterator_dispatch => |task| {
                 self.releaseIteratorDispatchTask(task);
                 self.allocator.destroy(task);
@@ -31283,55 +31323,55 @@ const BodyContext = struct {
     }
 
     fn stepLower(self: *BodyContext, frame: *LowerFrame, input: ?LowerResult) Allocator.Error!LowerStep {
-        return switch (frame.task) {
-            .at_type_cell => |*task| self.stepAtTypeCell(frame, task, input),
-            .cell_inner => |*task| self.stepCellInner(frame, task, input),
-            .type_inner => |*task| self.stepTypeInner(frame, task, input),
-            .expr => |*task| self.stepLowerExpr(frame, task, input),
-            .expr_inner => |*task| self.stepExprInner(frame, task, input),
-            .with_type => |*task| self.stepWithType(frame, task, input),
-            .record_at_type => |*task| self.stepRecordAtType(task, input),
-            .dispatch => |*task| self.stepDispatchLower(frame, task, input),
-            .closed_low_level => |*task| self.stepClosedLowLevel(frame, task, input),
-            .closed_procedure => |*task| self.stepClosedProcedure(frame, task, input),
-            .closed_operands_at_types => |*task| self.stepClosedOperandsAtTypes(frame, task, input),
-            .closed_operands_at_node => |*task| self.stepClosedOperandsAtNode(frame, task, input),
-            .prepared_operands => |*task| self.stepPreparedOperands(frame, task, input),
-            .operand_at_type => |*task| self.stepOperandAtType(frame, task, input),
-            .uninhabited_dispatch => |*task| self.stepUninhabitedDispatch(frame, task, input),
-            .uninhabited_call => |*task| self.stepUninhabitedCall(frame, task, input),
-            .span => |*task| self.stepSpan(frame, task, input, .typed_by_expr),
-            .prepared_span => |*task| self.stepSpan(frame, task, input, .at_nodes),
-            .span_at_types => |*task| self.stepSpan(frame, task, input, .at_types),
-            .list_span => |*task| self.stepSpan(frame, task, input, .list_elements),
-            .call => |*task| self.stepCallLower(frame, task, input),
-            .call_expr_at_node => |*task| self.stepCallExprAtNode(frame, task, input),
-            .call_expr => |*task| self.stepCallExpr(frame, task, input),
-            .constructor => |*task| self.stepConstructor(frame, task, input),
-            .block => |*task| self.stepBlock(task, input),
-            .if_task => |*task| self.stepIf(task, input),
-            .match_task => |*task| self.stepMatch(task, input),
-            .nested_fn => |*task| self.stepNestedFn(task, input),
-            .hosted_evidence => |*task| self.stepHostedEvidence(task),
-            .draft_callables => |*task| self.stepDraftCallables(frame, task),
-            .branch_body => |*task| self.stepBranchBody(frame, task, input),
-            .value_then_state => |*task| self.stepValueThenState(task, input),
-            .discarded => |*task| self.stepDiscarded(task, input),
-            .statement => |*task| self.stepStatement(task, input),
-            .return_value => |*task| self.stepReturn(frame, task, input),
-            .inspected => |*task| self.stepInspected(frame, task, input),
-            .divergent => |*task| self.stepDivergent(frame, task, input),
-            .loop => |*task| self.stepLoop(task, input),
-            .iterator_dispatch => |task| self.stepIteratorDispatch(frame, task, input),
-            .materialize => |*task| self.stepMaterialize(task, input),
-            .field_access => |*task| self.stepFieldAccessLower(task, input),
-            .str => |*task| self.stepStr(task, input),
-            .direct_structural => |*task| self.stepDirectStructural(task, input),
-            .inspect_only => |*task| self.stepInspectOnly(task, input),
-            .scheme_alias => |*task| self.stepSchemeAlias(task, input),
-            .callsite_intrinsic => |*task| self.stepCallsiteIntrinsic(task, input),
-            .interpolation_iter => |*task| self.stepInterpolationIter(task, input),
-        };
+        switch (frame.task) {
+            .at_type_cell => |*task| return self.stepAtTypeCell(frame, task, input),
+            .cell_inner => |*task| return self.stepCellInner(frame, task, input),
+            .type_inner => |*task| return self.stepTypeInner(frame, task, input),
+            .expr => |*task| return self.stepLowerExpr(frame, task, input),
+            .expr_inner => |*task| return self.stepExprInner(frame, task, input),
+            .with_type => |*task| return self.stepWithType(frame, task, input),
+            .record_at_type => |*task| return self.stepRecordAtType(task, input),
+            .dispatch => |*task| return self.stepDispatchLower(frame, task, input),
+            .closed_low_level => |*task| return self.stepClosedLowLevel(frame, task, input),
+            .closed_procedure => |*task| return self.stepClosedProcedure(frame, task, input),
+            .closed_operands_at_types => |*task| return self.stepClosedOperandsAtTypes(frame, task, input),
+            .closed_operands_at_node => |*task| return self.stepClosedOperandsAtNode(frame, task, input),
+            .prepared_operands => |*task| return self.stepPreparedOperands(frame, task, input),
+            .operand_at_type => |*task| return self.stepOperandAtType(frame, task, input),
+            .uninhabited_dispatch => |*task| return self.stepUninhabitedDispatch(frame, task, input),
+            .uninhabited_call => |*task| return self.stepUninhabitedCall(frame, task, input),
+            .span => |*task| return self.stepSpan(frame, task, input, .typed_by_expr),
+            .prepared_span => |*task| return self.stepSpan(frame, task, input, .at_nodes),
+            .span_at_types => |*task| return self.stepSpan(frame, task, input, .at_types),
+            .list_span => |*task| return self.stepSpan(frame, task, input, .list_elements),
+            .call => |*task| return self.stepCallLower(frame, task, input),
+            .call_expr_at_node => |*task| return self.stepCallExprAtNode(frame, task, input),
+            .call_expr => |*task| return self.stepCallExpr(frame, task, input),
+            .constructor => |*task| return self.stepConstructor(frame, task, input),
+            .block => |task| return self.stepBlock(task, input),
+            .if_task => |*task| return self.stepIf(task, input),
+            .match_task => |*task| return self.stepMatch(task, input),
+            .nested_fn => |task| return self.stepNestedFn(task, input),
+            .hosted_evidence => |task| return self.stepHostedEvidence(task),
+            .draft_callables => |*task| return self.stepDraftCallables(frame, task),
+            .branch_body => |*task| return self.stepBranchBody(frame, task, input),
+            .value_then_state => |*task| return self.stepValueThenState(task, input),
+            .discarded => |*task| return self.stepDiscarded(task, input),
+            .statement => |*task| return self.stepStatement(task, input),
+            .return_value => |*task| return self.stepReturn(frame, task, input),
+            .inspected => |*task| return self.stepInspected(frame, task, input),
+            .divergent => |*task| return self.stepDivergent(frame, task, input),
+            .loop => |task| return self.stepLoop(task, input),
+            .iterator_dispatch => |task| return self.stepIteratorDispatch(frame, task, input),
+            .materialize => |*task| return self.stepMaterialize(task, input),
+            .field_access => |*task| return self.stepFieldAccessLower(task, input),
+            .str => |*task| return self.stepStr(task, input),
+            .direct_structural => |*task| return self.stepDirectStructural(task, input),
+            .inspect_only => |*task| return self.stepInspectOnly(task, input),
+            .scheme_alias => |*task| return self.stepSchemeAlias(task, input),
+            .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
+            .interpolation_iter => |*task| return self.stepInterpolationIter(task, input),
+        }
     }
 
     fn requestLowerChild(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
@@ -31437,8 +31477,8 @@ const BodyContext = struct {
             .lookup_local => |lookup| return try self.lookupExprAtNodeStep(checked_expr, lookup.resolved, expected_node),
             .lookup_external => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
             .lookup_required => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
-            .lambda => return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = checked_expr, .request_fn_node = expected_node } }),
-            .closure => |closure| return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = checked_expr, .request_fn_node = expected_node, .closure = closure } }),
+            .lambda => return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{ .expr_id = checked_expr, .request_fn_node = expected_node }) }),
+            .closure => |closure| return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{ .expr_id = checked_expr, .request_fn_node = expected_node, .closure = closure }) }),
             .field_access => return requestLowerTask(self, .{ .field_access = .{ .expr = checked_expr, .target = .{ .node = expected_node } } }),
             .tag => |tag| return constructorStep(self, .{ .kind = .{ .tag = tag.name }, .node = expected_node, .children = tag.args }),
             .zero_argument_tag => |tag| return loweredExprStep(try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
@@ -31489,11 +31529,11 @@ const BodyContext = struct {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
             },
-            .block => |block| return requestLowerTask(self, .{ .block = .{
+            .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
                 .final_expr = block.final_expr,
                 .result_cell = cell,
-            } }),
+            }) }),
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = checked_expr, .match = match, .result_cell = cell } }),
             .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = checked_expr, .if_ = if_, .result_cell = cell } }),
             .runtime_error => return loweredExprStep(try self.runtimeCrashExprAtCell(cell, "runtime error")),
@@ -31980,8 +32020,8 @@ const BodyContext = struct {
                 }
                 return requestLowerChild(self, nominal.backing_expr, .{ .sealed = backing_ty });
             },
-            .closure => |closure| return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = expr_id, .request_fn_node = try self.activeNodeFromType(ty), .closure = closure } }),
-            .lambda => return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = expr_id, .request_fn_node = try self.activeNodeFromType(ty) } }),
+            .closure => |closure| return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{ .expr_id = expr_id, .request_fn_node = try self.activeNodeFromType(ty), .closure = closure }) }),
+            .lambda => return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{ .expr_id = expr_id, .request_fn_node = try self.activeNodeFromType(ty) }) }),
             .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
             .dispatch_call,
             .interpolation,
@@ -32024,12 +32064,12 @@ const BodyContext = struct {
             },
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } }),
             .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } }),
-            .block => |block| return requestLowerTask(self, .{ .block = .{
+            .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
                 .final_expr = block.final_expr,
                 .result_cell = .{ .sealed = ty },
                 .typed = ty,
-            } }),
+            }) }),
             .binop,
             .unary_minus,
             .unary_not,
@@ -32047,7 +32087,7 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
-            .for_ => |for_| return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } }),
+            .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
         };
@@ -32273,11 +32313,11 @@ const BodyContext = struct {
             task.draft_index += 1;
             switch (task.plan_args[index]) {
                 .checked_expr => |expr| if (self.isNestedCallableExpr(expr)) {
-                    return requestLowerTask(self, .{ .nested_fn = .{
+                    return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{
                         .expr_id = expr,
                         .request_fn_node = task.callable_args[index],
                         .purpose = .draft,
-                    } });
+                    }) });
                 },
                 .generated_interpolation_iter,
                 .generated_numeral,
@@ -33008,7 +33048,7 @@ const BodyContext = struct {
                     task.fn_node = fn_node;
                     task.fn_nodes = fn_nodes;
                     frame.cursor = direct_args_prepared_cursor;
-                    return requestLowerTask(self, hostedEvidenceTask(.{ .prepare_direct_args = .{
+                    return requestLowerTask(self, try self.hostedEvidenceTask(.{ .prepare_direct_args = .{
                         .expr = checked_expr,
                         .fn_node = fn_node,
                         .checked_exprs = call.args,
@@ -33044,7 +33084,7 @@ const BodyContext = struct {
                 task.fn_node = fn_node;
                 task.fn_nodes = fn_nodes;
                 frame.cursor = indirect_args_prepared_cursor;
-                return requestLowerTask(self, hostedEvidenceTask(.{ .prepare_span = .{
+                return requestLowerTask(self, try self.hostedEvidenceTask(.{ .prepare_span = .{
                     .checked_exprs = call.args,
                     .nodes = fn_nodes.args,
                 } }));
@@ -33774,7 +33814,7 @@ const BodyContext = struct {
                         // boundary whether or not this particular request
                         // happens to be resolved yet.
                         task.stage = .deferred_prepared;
-                        return requestLowerTask(self, hostedEvidenceTask(.{ .prepare_span = .{
+                        return requestLowerTask(self, try self.hostedEvidenceTask(.{ .prepare_span = .{
                             .checked_exprs = task.args,
                             .nodes = callable.args,
                         } }));
@@ -59480,7 +59520,7 @@ const BodyContext = struct {
                                     materialize_run.frames.items[index].continuation = expr;
                                 }
                             },
-                            .iterator_body => |body| return self.loopBodyStep(body.body, body.result_cell, body.rest_expr, body.carries),
+                            .iterator_body => |body| return try self.loopBodyStep(body.body, body.result_cell, body.rest_expr, body.carries),
                         }
                         continue;
                     },

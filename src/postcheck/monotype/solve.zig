@@ -7475,7 +7475,7 @@ pub const GraphTypeFinals = struct {
         return switch (try self.typeEntry(ty)) {
             .done => |sealed| sealed,
             .node => |raw_node| try self.sealNode(raw_node),
-            .build => |source| try self.runSeal(.{ .build = .{ .source = source } }),
+            .build => |source| try self.runSeal(.{ .build = try self.newSealBuild(source) }),
             .transaction => |source| try self.sealInTransaction(source),
         };
     }
@@ -7484,7 +7484,7 @@ pub const GraphTypeFinals = struct {
         return switch (try self.nodeEntry(raw_node)) {
             .done => |sealed| sealed,
             .node => unreachable,
-            .build => |source| try self.runSeal(.{ .build = .{ .source = source } }),
+            .build => |source| try self.runSeal(.{ .build = try self.newSealBuild(source) }),
             .transaction => |source| try self.sealInTransaction(source),
         };
     }
@@ -7500,7 +7500,7 @@ pub const GraphTypeFinals = struct {
             self.evictTransactionSealed();
         }
 
-        const speculative = try self.runSeal(.{ .build = .{ .source = source } });
+        const speculative = try self.runSeal(.{ .build = try self.newSealBuild(source) });
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
         defer result.deinit();
         try self.remapSealedTypes(result);
@@ -7586,7 +7586,9 @@ pub const GraphTypeFinals = struct {
         node: NodeId,
         /// A component type reached from a build.
         ty: Type.TypeId,
-        build: SealBuild,
+        /// Stored by pointer: a build holds a node's whole content, and
+        /// frames copy their task.
+        build: *SealBuild,
     };
 
     /// One component a build seals, or a span it adds, in order.
@@ -7631,23 +7633,33 @@ pub const GraphTypeFinals = struct {
                 self.releaseSealFrame(&frames.items[index]);
             }
         }
-        try frames.append(allocator, .{ .task = root });
+        try self.pushSealFrame(&frames, root);
         var input: ?Type.TypeId = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             const step = try self.stepSeal(frame, input);
             input = null;
             switch (step) {
-                .call => |task| try frames.append(allocator, .{ .task = task }),
-                .tail => |task| frame.task = task,
-                .ret => |sealed| {
-                    var finished = frames.pop().?;
-                    self.releaseSealFrame(&finished);
-                    if (frames.items.len == 0) return sealed;
-                    input = sealed;
+                .call => try self.pushSealFrame(&frames, step.call),
+                .tail => frame.task = step.tail,
+                .ret => {
+                    self.releaseSealFrame(&frames.items[frames.items.len - 1]);
+                    frames.items.len -= 1;
+                    if (frames.items.len == 0) return step.ret;
+                    input = step.ret;
                 },
             }
         }
+    }
+
+    /// Push `task`'s frame; a task whose frame cannot be pushed is released.
+    fn pushSealFrame(self: *GraphTypeFinals, frames: *std.ArrayList(SealFrame), task: SealTask) Allocator.Error!void {
+        const frame = frames.addOne(self.graph.allocator) catch |err| {
+            var unstarted: SealFrame = .{ .task = task };
+            self.releaseSealFrame(&unstarted);
+            return err;
+        };
+        frame.* = .{ .task = task };
     }
 
     const SealStep = union(enum) {
@@ -7658,32 +7670,39 @@ pub const GraphTypeFinals = struct {
 
     fn releaseSealFrame(self: *GraphTypeFinals, frame: *SealFrame) void {
         switch (frame.task) {
-            .build => |*build| {
+            .build => |build| {
                 const allocator = self.graph.allocator;
                 if (build.slot) |slot| self.graph.types.abortRecursive(slot);
                 build.slot = null;
                 build.parts.deinit(allocator);
                 build.results.deinit(allocator);
                 build.spans.deinit(allocator);
+                allocator.destroy(build);
             },
             .node, .ty => {},
         }
     }
 
-    fn entryStep(entry: SealEntry) SealStep {
+    fn newSealBuild(self: *GraphTypeFinals, source: SealSource) Allocator.Error!*SealBuild {
+        const build = try self.graph.allocator.create(SealBuild);
+        build.* = .{ .source = source };
+        return build;
+    }
+
+    fn entryStep(self: *GraphTypeFinals, entry: SealEntry) Allocator.Error!SealStep {
         return switch (entry) {
             .done => |sealed| .{ .ret = sealed },
             .node => |raw_node| .{ .tail = .{ .node = raw_node } },
-            .build => |source| .{ .tail = .{ .build = .{ .source = source } } },
+            .build => |source| .{ .tail = .{ .build = try self.newSealBuild(source) } },
             .transaction => Common.invariant("nested Monotype sealing began a store transaction"),
         };
     }
 
     fn stepSeal(self: *GraphTypeFinals, frame: *SealFrame, input: ?Type.TypeId) Allocator.Error!SealStep {
         return switch (frame.task) {
-            .node => |raw_node| entryStep(try self.nodeEntry(raw_node)),
-            .ty => |ty| entryStep(try self.typeEntry(ty)),
-            .build => |*build| self.stepSealBuild(build, input),
+            .node => |raw_node| try self.entryStep(try self.nodeEntry(raw_node)),
+            .ty => |ty| try self.entryStep(try self.typeEntry(ty)),
+            .build => |build| self.stepSealBuild(build, input),
         };
     }
 
