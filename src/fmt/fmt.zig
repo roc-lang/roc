@@ -8335,7 +8335,7 @@ test "issue 12040: inter-token comments case 01" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8354,7 +8354,7 @@ test "issue 12040: inter-token comments case 02" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8373,7 +8373,7 @@ test "issue 12040: inter-token comments case 03" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8390,7 +8390,7 @@ test "issue 12040: inter-token comments case 04" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8407,7 +8407,7 @@ test "issue 12040: inter-token comments case 05" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8427,7 +8427,7 @@ test "issue 12040: inter-token comments case 06" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8447,7 +8447,7 @@ test "issue 12040: inter-token comments case 07" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8464,7 +8464,7 @@ test "issue 12040: inter-token comments case 08" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8481,7 +8481,7 @@ test "issue 12040: inter-token comments case 09" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8500,7 +8500,7 @@ test "issue 12040: inter-token comments case 10" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8520,7 +8520,7 @@ test "issue 12040: inter-token comments case 11" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8540,7 +8540,7 @@ test "issue 12040: inter-token comments case 12" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8559,7 +8559,7 @@ test "issue 12040: inter-token comments case 13" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8578,7 +8578,7 @@ test "issue 12040: inter-token comments case 14" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8597,7 +8597,7 @@ test "issue 12040: inter-token comments case 15" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8616,7 +8616,7 @@ test "issue 12040: inter-token comments case 16" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8635,7 +8635,7 @@ test "issue 12040: inter-token comments case 17" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8654,7 +8654,7 @@ test "issue 12040: inter-token comments case 18" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8673,7 +8673,7 @@ test "issue 12040: inter-token comments case 19" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8693,7 +8693,7 @@ test "issue 12040: inter-token comments case 20" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8713,7 +8713,7 @@ test "issue 12040: inter-token comments case 21" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8732,7 +8732,7 @@ test "issue 12040: inter-token comments case 22" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8751,7 +8751,7 @@ test "issue 12040: inter-token comments case 23" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8771,7 +8771,7 @@ test "issue 12040: inter-token comments case 24" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8791,7 +8791,7 @@ test "issue 12040: inter-token comments case 25" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8810,7 +8810,7 @@ test "issue 12040: inter-token comments case 26" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8829,7 +8829,7 @@ test "issue 12040: inter-token comments case 27" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8848,7 +8848,7 @@ test "issue 12040: inter-token comments case 28" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8865,7 +8865,7 @@ test "issue 12040: inter-token comments case 29" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8884,7 +8884,7 @@ test "issue 12040: inter-token comments case 30" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8904,7 +8904,7 @@ test "issue 12040: inter-token comments case 31" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8924,7 +8924,7 @@ test "issue 12040: inter-token comments case 32" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8946,7 +8946,7 @@ test "issue 12040: inter-token comments case 33" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8963,7 +8963,7 @@ test "issue 12040: inter-token comments case 34" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -8980,7 +8980,7 @@ test "issue 12040: inter-token comments case 35" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -9000,7 +9000,7 @@ test "issue 12040: inter-token comments case 36" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -9020,7 +9020,7 @@ test "issue 12040: inter-token comments case 37" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
@@ -9037,7 +9037,7 @@ test "issue 12040: inter-token comments case 38" {
     defer std.testing.allocator.free(result);
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '#')) |start| {
+        if (std.mem.findScalar(u8, line, '#')) |start| {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, line[start..]));
         }
     }
