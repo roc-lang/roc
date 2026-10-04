@@ -17846,10 +17846,7 @@ const ProcBodyBuilder = struct {
             } }, self.origin)),
             .break_ => exprDone(try self.lowerBreak()),
             .return_ => |ret| try self.beginReturn(ret.expr, ret.lambda),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
-                .checked_error = true,
-            } }, self.origin)),
+            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -19199,7 +19196,7 @@ const ProcBodyBuilder = struct {
             => null,
         };
         if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
-            return exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin));
+            return exprDone(try self.lowerCheckedRuntimeError());
         };
         return switch (statement.data) {
             .decl => |decl| try self.beginDeclPattern(decl.pattern, decl.expr, next),
@@ -19239,10 +19236,7 @@ const ProcBodyBuilder = struct {
             .crash => |msg| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
             } }, self.origin)),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
-                .checked_error = true,
-            } }, self.origin)),
+            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -24995,6 +24989,12 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString(message) },
         } }, self.origin);
+    }
+
+    /// A checked `runtime_error` is code checking rejected and already
+    /// reported; reaching it crashes with the checked-error message.
+    fn lowerCheckedRuntimeError(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerCheckedErrorDispatchInto("runtime error");
     }
 
     fn lowerCheckedErrorDispatchInto(
