@@ -16517,9 +16517,11 @@ caller's frame is gone.
   callee's in the same native frame.
 
 LLVM's WebAssembly target has no calling convention that guarantees a tail
-call between functions of different signatures, so a frame-replacing call
-compiled through LLVM for WebAssembly is an ordinary call followed by a
-return.
+call between functions of different signatures, so the LLVM backend uses the
+same driver scheme there as the WebAssembly backend: a frame-replacing call
+copies its arguments into static storage, records its callee as pending and
+returns, and every ordinary call to a tail-group member is followed by a call
+to the group's driver with the address of the call's result.
 
 A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the

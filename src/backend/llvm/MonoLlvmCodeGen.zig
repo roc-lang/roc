@@ -310,6 +310,14 @@ pub const MonoLlvmCodeGen = struct {
     /// function those slots belong to.
     tail_scratch_slots: std.ArrayList(?LlvmBuilder.Value) = .empty,
     tail_scratch_slots_owner: ?LlvmBuilder.Function.Index = null,
+    /// WebAssembly has no guaranteed tail call between functions of different
+    /// signatures, so there a frame-replacing call records its callee and
+    /// arguments in static storage and returns, and a driver function run
+    /// after every ordinary call into the tail group calls whatever is
+    /// pending. One driver per tail group and result layout.
+    tail_drivers: std.ArrayList(TailDriver) = .empty,
+    tail_pending_ptr: ?LlvmBuilder.Value = null,
+    tail_args_ptr: ?LlvmBuilder.Value = null,
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     /// Per-function scratch slot RC-helper calls copy their argument into,
     /// so the argument local's own slot address never escapes into the call.
@@ -641,6 +649,8 @@ pub const MonoLlvmCodeGen = struct {
         self.fast_registry.deinit();
         self.tail_scratch.deinit(self.allocator);
         self.tail_scratch_slots.deinit(self.allocator);
+        self.clearTailDrivers();
+        self.tail_drivers.deinit(self.allocator);
         self.builtin_functions.deinit();
         self.cold_shims.deinit();
         self.clearStaticBytes();
@@ -668,6 +678,7 @@ pub const MonoLlvmCodeGen = struct {
         self.tail_scratch.clearRetainingCapacity();
         self.tail_scratch_slots.clearRetainingCapacity();
         self.tail_scratch_slots_owner = null;
+        self.clearTailDrivers();
         self.builtin_functions.clearRetainingCapacity();
         self.cold_shims.clearRetainingCapacity();
         self.cold_depth = 0;
@@ -1583,6 +1594,7 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.is_static_initializer) continue;
             try self.declareProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
+        if (self.usesTailDrivers()) try self.emitTailDrivers(procs);
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
         // A Boxy runtime entry body registers every worker's dispatch thunk,
@@ -1913,6 +1925,8 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.tail_group) |group| group_count = @max(group_count, @as(usize, @intFromEnum(group)) + 1);
         }
         self.tail_scratch.appendNTimes(self.allocator, .{}, group_count) catch return error.OutOfMemory;
+        // Under tail drivers the arguments travel through static storage.
+        if (self.usesTailDrivers()) return;
         var arena_state = std.heap.ArenaAllocator.init(self.allocator);
         defer arena_state.deinit();
         for (procs) |proc| {
@@ -1931,6 +1945,230 @@ pub const MonoLlvmCodeGen = struct {
             }
             entry.size = @max(entry.size, cursor.offset);
             entry.alignment = @max(entry.alignment, cursor.alignment);
+        }
+    }
+
+    const TailDriver = struct {
+        group: lir.LIR.TailGroupId,
+        ret_layout: layout.Idx,
+        function: LlvmBuilder.Function.Index,
+        members: std.ArrayList(LirProcSpecId) = .empty,
+    };
+
+    fn clearTailDrivers(self: *MonoLlvmCodeGen) void {
+        for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
+        self.tail_drivers.clearRetainingCapacity();
+        self.tail_pending_ptr = null;
+        self.tail_args_ptr = null;
+    }
+
+    fn usesTailDrivers(self: *const MonoLlvmCodeGen) bool {
+        return self.target.cpu.arch.isWasm();
+    }
+
+    fn isTailDriverMember(proc: LirProcSpec) bool {
+        return proc.tail_group != null and !proc.is_static_initializer and fastAbiEligible(proc) and proc.runtime_ret_desc == null;
+    }
+
+    fn tailDriverFor(self: *MonoLlvmCodeGen, proc: LirProcSpec) ?*TailDriver {
+        if (!self.usesTailDrivers() or !isTailDriverMember(proc)) return null;
+        for (self.tail_drivers.items) |*driver| {
+            if (driver.group == proc.tail_group.? and driver.ret_layout == proc.ret_layout) return driver;
+        }
+        return null;
+    }
+
+    /// Where a pending frame-replacing call keeps each of its callee's
+    /// arguments in the static argument storage, and the storage one such
+    /// call needs.
+    fn tailArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, offsets: ?[]u32) u32 {
+        var offset: u32 = 0;
+        for (arg_layouts, 0..) |arg_layout, i| {
+            if (offsets) |out| out[i] = offset;
+            offset += std.mem.alignForward(u32, self.layoutDataSize(arg_layout), 16);
+        }
+        return offset;
+    }
+
+    fn tailMemberNumber(driver: *const TailDriver, proc_id: LirProcSpecId) u32 {
+        for (driver.members.items, 0..) |member, index| {
+            if (member == proc_id) return @intCast(index + 1);
+        }
+        llvmInvariantFmt("proc {d} is missing from its tail driver", .{@intFromEnum(proc_id)});
+    }
+
+    /// Declare and define every tail driver. A driver takes the address of
+    /// the result an ordinary call into its group produced. While a member
+    /// has left a call pending, it calls that callee with the arguments in
+    /// static storage and writes the callee's result to the same address.
+    fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        var area_size: u32 = 0;
+        for (procs, 0..) |proc, i| {
+            if (!isTailDriverMember(proc)) continue;
+            const arg_layouts = try self.procArgLayouts(proc, .explicit);
+            defer self.allocator.free(arg_layouts);
+            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null));
+            const driver = self.tailDriverFor(proc) orelse blk: {
+                const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
+                const name = builder.strtabStringFmt("{s}roc_tail_driver.{d}", .{ self.static_symbol_prefix, self.tail_drivers.items.len }) catch return error.OutOfMemory;
+                const function = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
+                function.setLinkage(.internal, builder);
+                function.setCallConv(self.fastCallConv(), builder);
+                self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .ret_layout = proc.ret_layout, .function = function }) catch return error.OutOfMemory;
+                break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
+            };
+            driver.members.append(self.allocator, @enumFromInt(@as(u32, @intCast(i)))) catch return error.OutOfMemory;
+        }
+        if (self.tail_drivers.items.len == 0) return;
+
+        const pending_var = builder.addVariable(
+            builder.strtabStringFmt("{s}roc_tail_pending", .{self.static_symbol_prefix}) catch return error.OutOfMemory,
+            .i32,
+            .default,
+        ) catch return error.OutOfMemory;
+        pending_var.ptrConst(builder).global.setLinkage(.internal, builder);
+        pending_var.setAlignment(LlvmBuilder.Alignment.fromByteUnits(4), builder);
+        pending_var.setInitializer(builder.zeroInitConst(.i32) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+        self.tail_pending_ptr = pending_var.toValue(builder);
+
+        const args_ty = builder.arrayType(@max(area_size, 1), .i8) catch return error.OutOfMemory;
+        const args_var = builder.addVariable(
+            builder.strtabStringFmt("{s}roc_tail_args", .{self.static_symbol_prefix}) catch return error.OutOfMemory,
+            args_ty,
+            .default,
+        ) catch return error.OutOfMemory;
+        args_var.ptrConst(builder).global.setLinkage(.internal, builder);
+        args_var.setAlignment(LlvmBuilder.Alignment.fromByteUnits(16), builder);
+        args_var.setInitializer(builder.zeroInitConst(args_ty) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+        self.tail_args_ptr = args_var.toValue(builder);
+
+        for (self.tail_drivers.items) |*driver| try self.emitTailDriverBody(driver);
+    }
+
+    fn emitTailDriverBody(self: *MonoLlvmCodeGen, driver: *const TailDriver) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = driver.function, .strip = builder.strip }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+        const ptr_ty = try self.ptrType();
+        const pending_ptr = self.tail_pending_ptr.?;
+        const args_ptr = self.tail_args_ptr.?;
+        const result_ptr = wip.arg(0);
+        const i32_align = LlvmBuilder.Alignment.fromByteUnits(4);
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        const check = wip.block(0, "check") catch return error.OutOfMemory;
+        const done = wip.block(0, "done") catch return error.OutOfMemory;
+        const dispatch = wip.block(0, "dispatch") catch return error.OutOfMemory;
+        const invalid = wip.block(0, "invalid") catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = entry };
+        _ = wip.br(check) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = check };
+        const pending = wip.load(.normal, .i32, pending_ptr, i32_align, "") catch return error.OutOfMemory;
+        const none_pending = wip.icmp(.eq, pending, try self.boxyInt(.i32, 0), "") catch return error.OutOfMemory;
+        _ = wip.brCond(none_pending, done, dispatch, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = done };
+        _ = wip.retVoid() catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = invalid };
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+
+        const member_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, driver.members.items.len);
+        defer self.allocator.free(member_blocks);
+        for (member_blocks) |*block| block.* = wip.block(0, "member") catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = dispatch };
+        _ = wip.store(.normal, try self.boxyInt(.i32, 0), pending_ptr, i32_align) catch return error.OutOfMemory;
+        var switch_inst = wip.@"switch"(pending, invalid, @intCast(member_blocks.len), .none) catch return error.OutOfMemory;
+        for (member_blocks, 0..) |block, index| {
+            switch_inst.addCase(builder.intConst(.i32, index + 1) catch return error.OutOfMemory, block, &wip) catch return error.OutOfMemory;
+        }
+        switch_inst.finish(&wip);
+
+        for (driver.members.items, member_blocks) |member, block| {
+            wip.cursor = .{ .block = block };
+            const proc = self.store.getProcSpec(member);
+            const fast = self.fast_registry.get(@intFromEnum(member)) orelse return error.CompilationFailed;
+            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena_state.deinit();
+            const sig = try self.fastSignature(arena_state.allocator(), proc);
+            const offsets = try self.allocator.alloc(u32, sig.arg_layouts.len);
+            defer self.allocator.free(offsets);
+            _ = self.tailArgOffsets(sig.arg_layouts, offsets);
+
+            var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+            defer param_types.deinit(self.allocator);
+            var call_args = std.ArrayList(LlvmBuilder.Value).empty;
+            defer call_args.deinit(self.allocator);
+            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+            defer attrs_wip.deinit(builder);
+
+            if (sig.lowered.ret == .indirect) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, result_ptr);
+            }
+            for (sig.lowered.args, sig.arg_layouts, offsets) |placement, arg_layout, offset| {
+                switch (placement) {
+                    .none => {},
+                    .indirect => {
+                        try param_types.append(self.allocator, ptr_ty);
+                        try call_args.append(self.allocator, try self.offsetPtr(args_ptr, offset));
+                    },
+                    .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, try self.offsetPtr(args_ptr, offset), arg_layout),
+                }
+            }
+            const result = wip.call(.normal, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+            if (sig.lowered.ret == .registers) {
+                try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, result_ptr, proc.ret_layout);
+            }
+            _ = wip.br(check) catch return error.OutOfMemory;
+        }
+        try self.finishCurrentWipFunction();
+    }
+
+    /// After an ordinary call to a tail-group member has written its result
+    /// to `result_ptr`, run whatever frame-replacing call it left pending.
+    fn emitTailDrive(self: *MonoLlvmCodeGen, proc: LirProcSpec, result_ptr: LlvmBuilder.Value) Error!void {
+        const driver = self.tailDriverFor(proc) orelse return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        _ = wip.call(.normal, self.fastCallConv(), .none, driver.function.typeOf(self.builder.?), driver.function.toValue(self.builder.?), &.{result_ptr}, "") catch return error.OutOfMemory;
+    }
+
+    /// The WebAssembly form of a frame-replacing call: leave the callee and
+    /// its arguments pending for the group's driver and return. The value
+    /// returned is never read; the driver writes the callee's result over it.
+    fn emitPendingTailCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const proc = self.store.getProcSpec(proc_id);
+        const driver = self.tailDriverFor(proc) orelse
+            llvmInvariantFmt("frame-replacing call to proc {d} outside a tail group", .{@intFromEnum(proc_id)});
+        const arg_locals = self.store.getLocalSpan(args);
+        try self.materializeLocalSpanIfDeferred(arg_locals);
+        const arg_layouts = try self.procArgLayouts(proc, .explicit);
+        defer self.allocator.free(arg_layouts);
+        if (arg_layouts.len != arg_locals.len) return error.CompilationFailed;
+        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        defer self.allocator.free(offsets);
+        _ = self.tailArgOffsets(arg_layouts, offsets);
+        for (arg_layouts, offsets, 0..) |arg_layout, offset, i| {
+            const size = self.layoutDataSize(arg_layout);
+            if (size == 0) continue;
+            try self.copyBytes(try self.offsetPtr(self.tail_args_ptr.?, offset), self.slot(GuardedList.at(arg_locals, i)).ptr, size, self.alignmentForLayout(arg_layout));
+        }
+        _ = wip.store(.normal, try self.boxyInt(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
+        if (self.fast_ret_registers) |registers| {
+            const ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
+            _ = wip.ret((builder.zeroInitConst(ret_ty) catch return error.OutOfMemory).toValue()) catch return error.OutOfMemory;
+        } else {
+            _ = wip.retVoid() catch return error.OutOfMemory;
         }
     }
 
@@ -2137,6 +2375,7 @@ pub const MonoLlvmCodeGen = struct {
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
         }
+        try self.emitTailDrive(proc, ret_ptr);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -4427,6 +4666,7 @@ pub const MonoLlvmCodeGen = struct {
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, self.slot(target).ptr, proc.ret_layout);
         }
+        try self.emitTailDrive(proc, self.slot(target).ptr);
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
@@ -4439,6 +4679,7 @@ pub const MonoLlvmCodeGen = struct {
     /// procedure's own result pointer, and the call is the function's last
     /// instruction before its return.
     fn emitFrameReplacingCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
+        if (self.usesTailDrivers()) return self.emitPendingTailCall(proc_id, args);
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const proc = self.store.getProcSpec(proc_id);
@@ -4490,21 +4731,12 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, self.current_tail_scratch orelse
                 llvmInvariantFmt("frame-replacing call into a tail group from outside it", .{}));
         }
-        const result = wip.call(self.frameReplacingCallKind(), self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        const result = wip.call(.musttail, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             _ = wip.ret(result) catch return error.OutOfMemory;
         } else {
             _ = wip.retVoid() catch return error.OutOfMemory;
         }
-    }
-
-    /// `musttail` under `tailcc` is LLVM's guarantee. WebAssembly's backend
-    /// turns a `tail` call in return position into `return_call` when the
-    /// target has the tail-call instructions, and the WebAssembly 1.0
-    /// instruction set has no way to replace a frame at all.
-    fn frameReplacingCallKind(self: *const MonoLlvmCodeGen) LlvmBuilder.Function.Instruction.Call.Kind {
-        if (!self.target.cpu.arch.isWasm()) return .musttail;
-        return if (std.Target.wasm.featureSetHas(self.target.cpu.features, .tail_call)) .tail else .normal;
     }
 
     fn emitErasedCall(
