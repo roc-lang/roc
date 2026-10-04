@@ -2337,6 +2337,11 @@ const Lowerer = struct {
                         const func = l.solved.types.rootContent(source).func;
                         for (l.solved_types.span(func.args)) |arg| try self.add(.{ .ty = try l.lowerType(arg) });
                         try self.add(.{ .ty = try l.lowerType(func.ret) });
+                        if (content == .erased_fn) {
+                            const abi_func = l.solved.types.rootContent(l.erasedAbiFn(source)).func;
+                            for (l.solved_types.span(abi_func.args)) |arg| try self.add(.{ .ty = try l.lowerType(arg) });
+                            try self.add(.{ .ty = try l.lowerType(abi_func.ret) });
+                        }
                     }
                 },
             }
@@ -3962,7 +3967,7 @@ const Lowerer = struct {
                         if (callable_content == .lambda_set) {
                             return .{ .call = .{ .members = .{ .members = callable_content.lambda_set, .abi = .finite, .solved_fn_ty = root } } };
                         } else if (callable_content == .erased) {
-                            return .{ .call = .{ .members = .{ .members = callable_content.erased.members, .abi = .erased, .solved_fn_ty = root } } };
+                            return .{ .call = .{ .members = .{ .members = callable_content.erased.members, .abi = .erased, .solved_fn_ty = self.erasedAbiFn(root) } } };
                         }
                         return Common.invariant("function callable slot was unresolved before direct Lambda Mono");
                     },
@@ -3973,7 +3978,7 @@ const Lowerer = struct {
                     .zst => return try self.finishTypeVar(task, .zst),
                     .erased => |erased| {
                         frame.cursor = TypeVarCursor.callable;
-                        return .{ .call = .{ .members = .{ .members = erased.members, .abi = .erased, .solved_fn_ty = null } } };
+                        return .{ .call = .{ .members = .{ .members = erased.members, .abi = .erased, .solved_fn_ty = erased.abi_fn } } };
                     },
                     .lambda_set => |members| {
                         frame.cursor = TypeVarCursor.callable;
@@ -7890,23 +7895,32 @@ const Lowerer = struct {
         arg_exprs: anytype,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        const arg_tys = try self.lowerCallableArgTypes(callee_ty);
+        // The erased ABI is the function type the callee's callable was
+        // erased from, which may differ from the type the call site views the
+        // callee through. Arguments convert to the ABI's argument types, and
+        // the ABI's result converts to the call's result type, at explicit
+        // typed boundaries.
+        const view_fn_ty = self.callable_source_fn_map.get(callee_ty) orelse
+            Common.invariant("erased value call lacked source function type");
+        const abi_fn_ty = self.erasedAbiFn(view_fn_ty);
+        const arg_tys = try self.lowerSolvedFnArgTypes(abi_fn_ty);
         defer self.allocator.free(arg_tys);
 
         const args = try self.lowerExprsToTempsAtTypes(arg_exprs, arg_tys);
         defer args.deinit(self.allocator);
         const callee = try self.addTemp(callee_ty);
-        const result_layout = try self.layoutOfType(result_ty);
+        const abi_ret_ty = try self.lowerSolvedFnRetType(abi_fn_ty);
+        const abi_ret_layout = try self.layoutOfType(abi_ret_ty);
         const target_layout = self.result.store.getLocal(target).layout_idx;
-        const call_target = if (target_layout == result_layout)
+        const call_target = if (abi_ret_ty == result_ty and target_layout == abi_ret_layout)
             target
         else
-            try self.addTemp(result_ty);
+            try self.addTemp(abi_ret_ty);
         const after_call = if (call_target == target)
             next
         else
-            try self.assignTypedBoundary(where, target, result_ty, call_target, result_ty, next);
-        const reuse_closure = try self.erasedResultDemand(result_ty) == .single_slot;
+            try self.assignTypedBoundary(where, target, result_ty, call_target, abi_ret_ty, next);
+        const reuse_closure = try self.erasedResultDemand(abi_ret_ty) == .single_slot;
         const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .closure = callee,
@@ -9493,10 +9507,22 @@ const Lowerer = struct {
         return try self.lowerSolvedFnArgTypes(spec.solved_fn_ty);
     }
 
-    fn lowerCallableArgTypes(self: *Lowerer, ty: Type.TypeId) Common.LowerError![]Type.TypeId {
-        const solved_fn_ty = self.callable_source_fn_map.get(ty) orelse
-            Common.invariant("callable value call lacked source function type");
-        return try self.lowerSolvedFnArgTypes(solved_fn_ty);
+    fn lowerSolvedFnRetType(self: *Lowerer, solved_fn_ty: SolvedType.TypeVarId) Common.LowerError!Type.TypeId {
+        const content = self.solved.types.rootContent(solved_fn_ty);
+        if (content != .func) Common.invariant("call result lowering saw a non-function source type");
+        return try self.lowerType(content.func.ret);
+    }
+
+    /// The function type whose argument and result types are the ABI of the
+    /// erased callable in `fn_ty`'s callable slot. An erased requirement
+    /// Monotype imported as a bare digest has no recorded function, so its
+    /// ABI is `fn_ty` itself.
+    fn erasedAbiFn(self: *const Lowerer, fn_ty: SolvedType.TypeVarId) SolvedType.TypeVarId {
+        const content = self.solved.types.rootContent(fn_ty);
+        if (content != .func) Common.invariant("erased ABI lookup saw a non-function type");
+        const callable = self.solved.types.rootContent(content.func.callable);
+        if (callable != .erased) Common.invariant("erased ABI lookup saw a non-erased callable");
+        return self.solved.types.root(callable.erased.abi_fn orelse fn_ty);
     }
 
     fn lowerSolvedFnArgTypes(self: *Lowerer, solved_fn_ty: SolvedType.TypeVarId) Common.LowerError![]Type.TypeId {

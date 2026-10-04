@@ -69,6 +69,7 @@ const UnifyFinishAction = union(enum) {
         rhs: Type.TypeVarId,
         source_fn_ty: Type.names.TypeDigest,
         members: Type.Span,
+        abi_fn: ?Type.TypeVarId,
     },
     set_left_lambda_set_link_right: struct {
         lhs: Type.TypeVarId,
@@ -1283,7 +1284,7 @@ const Solver = struct {
                 if (children.component_tys.count() != self.lifted.patSpan(tag.payloads).len) Common.invariant("tag pattern payload arity differs from its checked type");
             },
             .nominal => |backing| {
-                if (self.hasGeneratedOpaquePatOwner(pat_id) or try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
+                if (try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
                     const backing_index = @intFromEnum(backing);
                     if (self.generated_backing_pats[backing_index]) return;
                     self.generated_backing_pats[backing_index] = true;
@@ -1343,21 +1344,14 @@ const Solver = struct {
         }
     }
 
-    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
-        const content = self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty);
-        if (std.meta.activeTag(content) != .named) return false;
-        const backing = content.named.backing orelse return false;
-        return backing.authority == .generated_private;
-    }
-
     fn unifyGeneratedOpaqueBacking(self: *Solver, generated_ty: Type.TypeVarId, expected_ty: Type.TypeVarId) Allocator.Error!void {
         const generated = self.program.types.rootCompressed(generated_ty);
         const expected = self.program.types.rootCompressed(expected_ty);
         if (generated == expected) return;
-        // The caller reached this path only through a pattern whose named
-        // backing carries generated-private authority. Preserve that explicit
-        // producer-owned backing deterministically; structural size is not an
-        // authority signal.
+        // The caller reached this path only through the backing pattern of a
+        // `Fields` or `Field` nominal, whose backing is compiler-generated.
+        // Preserve that explicit generated backing deterministically;
+        // structural size is not an authority signal.
         self.program.types.set(expected, .{ .link = generated });
     }
 
@@ -1544,6 +1538,7 @@ const Solver = struct {
                         const erased = try types.add(.{ .erased = .{
                             .source_fn_ty = try self.solvedTypeDigest(root),
                             .members = .empty(),
+                            .abi_fn = root,
                         } });
                         try self.unify(func.callable, erased);
                     }
@@ -2147,6 +2142,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = left_erased.abi_fn orelse right_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
@@ -2159,6 +2155,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = left_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
@@ -2176,6 +2173,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = right_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = right_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
@@ -2297,6 +2295,7 @@ const Solver = struct {
                 self.program.types.set(set.lhs, .{ .erased = .{
                     .source_fn_ty = set.source_fn_ty,
                     .members = set.members,
+                    .abi_fn = set.abi_fn,
                 } });
                 self.program.types.set(set.rhs, .{ .link = set.lhs });
             },
@@ -2660,6 +2659,17 @@ const Solver = struct {
                         self.program.types.spanItem(public_named.args, 0),
                         self.program.types.spanItem(private_named.args, 0),
                     );
+                    // A public iterator viewing a generated representation
+                    // receives its callable evidence through the backings,
+                    // exactly as the unifying relation transfers it.
+                    if (public_named.backing) |public_backing| if (private_named.backing) |private_backing| {
+                        if (public_backing.authority == .checked_public and private_backing.authority == .generated_private) {
+                            if (public_backing.use != private_backing.use) {
+                                Common.invariant("generated-private iterator evidence relation received different backing uses");
+                            }
+                            try self.pushRelate(stack, public_backing.ty, private_backing.ty);
+                        }
+                    };
                 }
             },
         }

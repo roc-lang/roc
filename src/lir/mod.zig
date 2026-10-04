@@ -62,6 +62,8 @@ pub const ArcSig = @import("arc_sig.zig");
 pub const ArcSolve = @import("arc_solve.zig");
 /// Debug borrow certifier for ARC-complete LIR.
 pub const ArcCertify = @import("arc_certify.zig");
+/// The ownership unit an owned erased call transfers.
+pub const ErasedOwner = @import("erased_owner.zig");
 /// Field takes from dying aggregates, solved between ARC borrow inference
 /// and RC statement emission.
 pub const ArcDismantle = @import("arc_dismantle.zig");
