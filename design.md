@@ -17794,7 +17794,7 @@ alias, or a committed field take, each alias or take being one of the cell's
 incoming edges alongside its explicit initializations; whichever arm ran,
 the cell's value is accounted for, and the use order stops at each
 redefinition. A take carries the field's stored unit into the cell exactly
-as it would into a single-definition target, so an arm such as the fallback
+as it would into a single-definition target, so an arm such as the default
 of `List.set(rec.field, i, x) ?? rec.field` keeps the field's origin; when
 the use order rejects any take into a cell, that definition is foreign and
 the cell has no tracked origin. A solved-borrowed alias

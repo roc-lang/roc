@@ -10786,7 +10786,7 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
 // Repro for https://github.com/roc-lang/roc/issues/12063
 //
 // The early `return` keeps `step` out of line, so `main` reads `pair.a` from
-// the call's record result, and the `??` fallback assigns that field straight
+// the call's record result, and the default arm of `??` assigns that field straight
 // into the loop's join result cell. The take still moves the record's unit
 // into the cell, so the list `main` hands around the loop through `step` stays
 // unique and its `List.set` needs no runtime uniqueness check.
