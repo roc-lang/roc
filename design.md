@@ -17789,10 +17789,15 @@ suffix that several paths reach into one copy per path, so the procedure the
 certifier reads binds such a target once on each path. A join
 result cell—the parameter a conditional's arms assign directly before
 jumping to the join, often declared by several nested joins—keeps a
-tracked origin when every definition is a birth, a join declaration, or an
-alias, each alias being one of the cell's incoming edges alongside its
-explicit initializations; whichever arm ran, the cell's value is accounted
-for, and the use order stops at each redefinition. A solved-borrowed alias
+tracked origin when every definition is a birth, a join declaration, an
+alias, or a committed field take, each alias or take being one of the cell's
+incoming edges alongside its explicit initializations; whichever arm ran,
+the cell's value is accounted for, and the use order stops at each
+redefinition. A take carries the field's stored unit into the cell exactly
+as it would into a single-definition target, so an arm such as the fallback
+of `List.set(rec.field, i, x) ?? rec.field` keeps the field's origin; when
+the use order rejects any take into a cell, that definition is foreign and
+the cell has no tracked origin. A solved-borrowed alias
 is a view of its source rather than a holder: a view that is only read is a
 read of the source, and a view that some statement consumes is retained
 there and hands the retained unit on, so it follows the alias rule. A
