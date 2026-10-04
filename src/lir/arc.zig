@@ -1685,6 +1685,9 @@ const ArcPlanStep = struct {
     unique_args: u64 = 0,
     low_level_selection: ?LowLevelSelection = null,
     retain_call_result: bool = false,
+    /// The call is a same-SCC tail call whose caller frame owns nothing once
+    /// the call starts.
+    replaces_frame: bool = false,
     call_callee: ?LIR.LirProcSpecId = null,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     variant_request: ?VariantRequestId = null,
@@ -1711,6 +1714,7 @@ const ArcPlanStep = struct {
         self.unique_args = 0;
         self.low_level_selection = null;
         self.retain_call_result = false;
+        self.replaces_frame = false;
         self.call_callee = null;
         self.call_demanded = arc_sig.RcSig.all_owned;
         self.variant_request = null;
@@ -2349,6 +2353,12 @@ const Inserter = struct {
             } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
+                if (step.replaces_frame) {
+                    const returned = self.store.getCFStmt(next);
+                    if (returned != .ret or returned.ret.value != assign.target) {
+                        arcInvariant("ARC frame-replacing call was not immediately followed by the return of its result");
+                    }
+                }
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
                     .proc = if (step.variant_request) |request|
@@ -2359,6 +2369,7 @@ const Inserter = struct {
                     .result_desc = assign.result_desc,
                     .out_desc = assign.out_desc,
                     .is_cold = assign.is_cold,
+                    .replaces_frame = step.replaces_frame,
                     .next = next,
                 } }, origin);
             },
@@ -2881,6 +2892,7 @@ const Inserter = struct {
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.appendSlice(self.solve_allocator, self.death_scratch.items);
                         step.pre_release_extra_reason = .tail_call_frame;
+                        step.replaces_frame = true;
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
                         try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);

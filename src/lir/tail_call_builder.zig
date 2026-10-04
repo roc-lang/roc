@@ -1,6 +1,6 @@
 //! Procedure-local return-continuation proofs owned by LIR construction.
 //!
-//! Statement emission records self calls and join definitions. Finalization
+//! Statement emission records direct calls and join definitions. Finalization
 //! resolves only those calls' forwarding continuations, memoizing shared
 //! suffixes. No control-flow walk, path enumeration, or proof budget is needed.
 const std = @import("std");
@@ -61,15 +61,12 @@ pub fn reset(self: *Self, proc: LIR.LirProcSpecId) void {
 /// Called by the statement producer, including when filling a placeholder.
 pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator.Error!void {
     std.debug.assert(!self.published);
-    const proc = self.proc.?;
     switch (stmt) {
         .join => |join| {
             try self.joins.put(join.id, join.body);
             self.next_join = @max(self.next_join, @intFromEnum(join.id) + 1);
         },
-        .assign_call => |call| if (call.proc == proc) {
-            try self.calls.append(self.allocator, id);
-        },
+        .assign_call => try self.calls.append(self.allocator, id),
         .init_uninitialized,
         .assign_ref,
         .assign_literal,
@@ -117,30 +114,37 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
     }
 }
 
-/// Publish the exact self-tail sites after all producer fixups are complete.
-/// The linked list lives in the call nodes, so body-shard relocation carries
-/// the proof along with the calls without another store-wide side table.
+/// Publish the exact tail sites after all producer fixups are complete.
+/// Self-tail sites are linked through the call nodes, so body-shard relocation
+/// carries the proof along with the calls without another store-wide side
+/// table. A proven tail call to any other procedure returns its value
+/// directly: its continuation is replaced by a `ret` of the call target, which
+/// is the form ARC's frame-replacement rule reads.
 pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCalls {
     std.debug.assert(!self.published);
     const proc = self.proc.?;
-    self.published = true;
+    const ret_layout = store.getProcSpec(proc).ret_layout;
     var head: ?LIR.CFStmtId = null;
     for (self.calls.items) |id| {
         const stmt = store.getCFStmt(id);
         // A producer can move a provisional call and retire its old node.
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;
-        std.debug.assert(call.proc == proc);
         if (call.tail_call != null) continue;
         // A runtime result descriptor is another call output; forwarding the
         // value alone does not establish that descriptor's return contract.
         if (call.out_desc != null) continue;
-        if (try self.returnedLocal(store, call.next)) |returned| {
-            if (returned != call.target) continue;
+        const returned = try self.returnedLocal(store, call.next) orelse continue;
+        if (returned != call.target) continue;
+        if (call.proc == proc) {
             store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
             head = id;
+        } else if (store.getCFStmt(call.next) != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = call.target } }, store.stmtOrigin(id));
+            store.getCFStmtPtr(id).assign_call.next = ret;
         }
     }
+    self.published = true;
     return if (head) |first| .{ .head = first, .loop = @enumFromInt(self.next_join) } else null;
 }
 

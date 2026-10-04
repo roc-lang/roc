@@ -1118,6 +1118,11 @@ pub const CFStmt = union(enum) {
         /// Producer-proven self-tail site, linked for procedure finalization.
         /// Consumed before ARC; no backend tail-call inference is required.
         tail_call: ?struct { next: ?CFStmtId } = null,
+        /// Set by ARC emission on a call to a procedure in the caller's own
+        /// call-graph SCC whose next statement returns `target`: the caller
+        /// frame owns nothing afterwards, so every backend must replace that
+        /// frame with the callee's instead of growing the stack.
+        replaces_frame: bool = false,
         next: CFStmtId,
     },
     assign_call_erased: struct {

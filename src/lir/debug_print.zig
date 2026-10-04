@@ -131,6 +131,7 @@ const Printer = struct {
                     }
                     if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
+                    if (s.replaces_frame) try writer.writeAll(" replaces_frame");
                     try writer.writeByte('\n');
                     current = s.next;
                 },
