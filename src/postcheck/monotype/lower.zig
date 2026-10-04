@@ -52112,7 +52112,23 @@ const BodyContext = struct {
             // selection itself needs no graph-driven fixpoint here.
             try self.relateMaterializedEvidenceConstraint(target_ctx, param, entry);
             const contracts = evidenceCallableContracts(entry);
-            if (contracts.len != 0) {
+            if (contracts.len == 0 and entry == .target) {
+                // Checking omits side-vector evidence when each independent
+                // callable can derive it from the selected target. The schema
+                // still records every callable relation, including variables
+                // absent from the scheme root; relate each to a fresh instance
+                // of the declaration rather than the primary use's signature.
+                var independent_target = entry.target.*;
+                independent_target.instantiation = null;
+                independent_target.substitution = null;
+                const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
+                for (callables) |callable| {
+                    var contract_param = param;
+                    contract_param.callable_ty = callable;
+                    contract_param.callable_contracts = .{};
+                    try self.relateTargetToConstraint(&independent_target, target_ctx, contract_param);
+                }
+            } else if (contracts.len != 0) {
                 if (contracts.len != param.callable_contracts.len) Common.invariant("callable contracts differed from their checked schema");
                 const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
                 for (contracts, callables) |contract_entry, callable| {

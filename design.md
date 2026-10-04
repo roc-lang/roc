@@ -12780,7 +12780,12 @@ specialization evidence. Boxy gives each independent callable contract its own
 hidden dictionary, so one target worker can be invoked with different adapters
 and nested dictionaries. The checked owner parameter and contract index identify
 those dictionaries across forwarding and lexical capture. Side vectors are interned and omitted when all selected
-target schemas authorize callable derivation. Target-owned nested evidence
+target schemas authorize callable derivation. Omitting an evidence payload does
+not omit its callable relation: Monotype relates every independent callable
+recorded in the schema to a fresh instantiation of the selected declaration,
+including variables reachable only through those callables, before sealing a
+specialization. The primary use's instantiated signature and substitution do
+not constrain independent uses. Target-owned nested evidence
 remains explicit for Boxy's per-call dictionary contracts. Forwarding
 remaps contract indexes through explicit checked references, never carrying an
 enclosing schema's side-vector positions into a different schema. Consumers
