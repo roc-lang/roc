@@ -92,6 +92,7 @@ const CapturingLocalTypeEscape = problem_mod.CapturingLocalTypeEscape;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
+const PolymorphicValueAnnotation = problem_mod.PolymorphicValueAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
@@ -1100,6 +1101,9 @@ pub const ReportBuilder = struct {
             },
             .polymorphic_var_annotation => |data| {
                 return self.buildPolymorphicVarAnnotationReport(data);
+            },
+            .polymorphic_value_annotation => |data| {
+                return self.buildPolymorphicValueAnnotationReport(data);
             },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
@@ -5273,6 +5277,99 @@ pub const ReportBuilder = struct {
             D.bytes("to let the type be inferred from how the"),
             D.bytes("var").withAnnotation(.inline_code),
             D.bytes("is used."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildPolymorphicValueAnnotationReport(self: *Self, data: PolymorphicValueAnnotation) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Value Is Not Polymorphic", "", .runtime_error);
+        errdefer report.deinit();
+
+        const name_text: ?[]const u8 = if (data.name_region) |name_region|
+            try report.addOwnedString(self.source[name_region.start.offset..name_region.end.offset])
+        else
+            null;
+        if (name_text) |name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The type annotation on"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("says it can be used at many types, but"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("is not a function, so it can only have one type."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This type annotation says its value can be used at many types, but the value is not a function, so it can only have one type."),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceHighlightRegion(&report, data.region);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (data.writes_named_variable and data.writes_open_extension) {
+            try D.renderSlice(&.{
+                D.bytes("If you want me to infer its type, write"),
+                D.bytes("_").withAnnotation(.inline_code),
+                D.bytes("in place of each type variable and remove each"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes(", or write a concrete type.").withNoPrecedingSpace(),
+            }, self, &report);
+        } else if (data.writes_named_variable) {
+            try D.renderSlice(&.{
+                D.bytes("If you want me to infer its type, write"),
+                D.bytes("_").withAnnotation(.inline_code),
+                D.bytes("in place of each type variable, or write a concrete type."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("If you want me to infer its type, remove each"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes(", or write a concrete type.").withNoPrecedingSpace(),
+            }, self, &report);
+        }
+
+        const name = name_text orelse return report;
+        const type_text = self.source[data.type_region.start.offset..data.type_region.end.offset];
+        const rhs_text = self.source[data.rhs_region.start.offset..data.rhs_region.end.offset];
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("If you want to use it at many types, make it a function that takes"),
+            D.bytes("{}").withAnnotation(.inline_code),
+            D.bytes(":").withNoPrecedingSpace(),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        var suggestion = std.ArrayList(u8).empty;
+        defer suggestion.deinit(self.gpa);
+        try suggestion.print(self.gpa, "{s} : {{}} -> ", .{name});
+        if (data.type_is_function) {
+            try suggestion.print(self.gpa, "({s})", .{type_text});
+        } else {
+            try suggestion.appendSlice(self.gpa, type_text);
+        }
+        if (data.where_region) |where_region| {
+            try suggestion.appendSlice(self.gpa, self.source[where_region.start.offset..where_region.end.offset]);
+            try suggestion.append(self.gpa, ']');
+        }
+        // A multi-line body is elided rather than re-indented.
+        const rhs_info = self.module_env.calcRegionInfo(data.rhs_region);
+        if (rhs_info.start_line_idx == rhs_info.end_line_idx) {
+            try suggestion.print(self.gpa, "\n{s} = |{{}}| {s}", .{ name, rhs_text });
+        } else {
+            try suggestion.print(self.gpa, "\n{s} = |{{}}| ...", .{name});
+        }
+        try report.document.addCodeBlock(try report.addOwnedString(suggestion.items));
+        try report.document.addLineBreak();
+
+        const call_text = try std.fmt.allocPrint(self.gpa, "{s}({{}})", .{name});
+        defer self.gpa.free(call_text);
+        try D.renderSlice(&.{
+            D.bytes("Then call it as"),
+            D.bytes(try report.addOwnedString(call_text)).withAnnotation(.inline_code),
+            D.bytes("wherever you use it."),
         }, self, &report);
         return report;
     }

@@ -4614,8 +4614,8 @@ fn loadWhereClauseSpan(store: *const NodeStore, idx: u32) CIR.WhereClause.Span {
 }
 
 /// Whether a type annotation mentions a type variable (a user-written var like
-/// `a`, or an anonymous open-extension var from `..`). This is the pre-filter
-/// for value generalization.
+/// `a`, or an anonymous open-extension var from `..`), introduced by the
+/// annotation or looked up from an enclosing one.
 fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
     return switch (anno) {
         .rigid_var, .rigid_var_lookup => true,
@@ -4626,7 +4626,8 @@ fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
 
 /// Whether a type annotation *introduces* a type variable (`.rigid_var`), not
 /// one it references from an enclosing scope. Detects a variable the
-/// annotation introduces but cannot bind (rejected on a mutable `var`).
+/// annotation introduces but its binding cannot quantify (rejected on a
+/// mutable `var` and on a value binding that does not generalize).
 fn introducesTypeVar(anno: CIR.TypeAnno) ?bool {
     return switch (anno) {
         .rigid_var => true,

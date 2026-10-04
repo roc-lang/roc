@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A top-level annotated value carrying a static-dispatch where-constraint is rejected as a polymorphic value, since top-level values can't have free type variables (tier-2)
+description=A top-level value annotation with a where-constrained type variable is rejected: a value that is not a function cannot be polymorphic
 type=file
 ~~~
 # SOURCE
@@ -13,25 +13,53 @@ items = []
 main! = |_| {}
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - generalize_annotated_value_constrained.md:4:1:4:6
+VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_constrained.md:3:1:3:43
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Polymorphic Value")
-		(region (start 4 1) (end 4 6))
+		(title "Value Is Not Polymorphic")
+		(region (start 3 1) (end 3 43))
 		(headline
-			(reflow "This top-level value still has an unresolved polymorphic type."))
+			(reflow "The type annotation on")
+			(reflow " ")
+			(annotated code "items")
+			(reflow " ")
+			(reflow "says it can be used at many types, but")
+			(reflow " ")
+			(annotated code "items")
+			(reflow " ")
+			(reflow "is not a function, so it can only have one type."))
 		(document
-			(source-region (file "generalize_annotated_value_constrained.md") (start 4 1) (end 4 6) (annotation error) (line-text "items = []"))
+			(source-region (file "annotated_value_not_polymorphic_constrained.md") (start 3 1) (end 3 43) (annotation error) (line-text "items : List(a) where [a.to_str : a -> Str]"))
 			(line-break)
 			(line-break)
-			(reflow "Its type is:")
+			(reflow "If you want me to infer its type, write")
+			(reflow " ")
+			(annotated code "_")
+			(reflow " ")
+			(reflow "in place of each type variable, or write a concrete type.")
 			(line-break)
-			(annotated code-block "List(a) where [a.to_str : a -> Str]")
 			(line-break)
-			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+			(reflow "If you want to use it at many types, make it a function that takes")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ":")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "items : {} -> List(a) where [a.to_str : a -> Str]")
+			(line-break)
+			(indent 1)
+			(text "items = |{}| []")
+			(annotation-end)
+			(line-break)
+			(reflow "Then call it as")
+			(reflow " ")
+			(annotated code "items({})")
+			(reflow " ")
+			(reflow "wherever you use it."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -84,7 +112,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "items"))
-		(e-empty_list)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-rigid-var (name "a")))
@@ -104,9 +132,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(a) where [a.to_str : a -> Str]"))
+		(patt (type "List(_b)"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(a) where [a.to_str : a -> Str]"))
+		(expr (type "List(_b)"))
 		(expr (type "_arg -> {}"))))
 ~~~

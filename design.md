@@ -779,6 +779,9 @@ checker recovery. The recovery rules:
   becomes a runtime error itself, like the source of any other rejected
   dispatch.
 - An effectful top-level value's right-hand side is erroneous.
+- A value binding whose annotation is rejected for introducing a type
+  variable the binding cannot quantify is checked without the annotation, and
+  its right-hand side is erroneous (Value Bindings Generalize By Expression).
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
   runtime error. The rejected relation has no lowering.
@@ -3433,7 +3436,8 @@ invariant violation).
 
 Annotated schemes come before any body. A pre-pass declares a standalone
 generalized scheme from every eligible annotation (a simple `.assign` binding
-whose annotation has no `_` hole): the annotation's type is generated once in
+whose annotation has no `_` hole and is not rejected by Value Bindings
+Generalize By Expression): the annotation's type is generated once in
 place, deep-copied into disjoint orphan vars, generalized, and the annotation
 nodes are reset so the def's own body check generates them again exactly as
 always. A reference to an annotated def—by name or by dispatch—before or
@@ -3469,7 +3473,9 @@ calling a polymorphic function is a monotype even when that result contains a
 function. In particular, `mk : {} -> (a -> a)` permits separate calls to `mk`
 to choose separate `a`s, but one stored result of `mk({})` cannot subsequently
 be called at two different types. Roc has no rank-2 or rank-n interpretation
-under which that returned function could itself retain `forall a`.
+under which that returned function could itself retain `forall a`, and no
+annotation gives it one: `id : a -> a` on `id = mk({})` is rejected (Value
+Bindings Generalize By Expression).
 
 Call checking exposes the instantiated callee's formal parameter slots BEFORE
 checking argument expressions. A known function already supplies that arity
@@ -3607,6 +3613,91 @@ another lambda's constraints, by construction. Rank bookkeeping is therefore
 strictly stack-shaped: unification only ever runs while the frame owning its
 vars is active, and `addVarToRank`'s debug guard is a regression tripwire
 rather than a reachable condition.
+
+### Value Bindings Generalize By Expression
+
+Adding an annotation may only make a binding's type less flexible, never more.
+Whether a binding generalizes is therefore decided by its right-hand side
+alone, never by its annotation (`Check.shouldGeneralize`,
+`Check.bindingRhsGeneralizes`); this follows Roc RFC 0010 ("Let-generalization:
+Let's not?"), except that number literals do not generalize either:
+
+- A binding whose right-hand side is a function definition (a lambda, a
+  closure, an annotation-only signature, a hosted lambda, or a derived method)
+  generalizes.
+- A value alias, whose right-hand side is a bare reference to another binding
+  (local, imported, or associated, as in `shorthand = FooBar.myfunc`),
+  generalizes. The reference does no work, and it is exactly as polymorphic
+  as the binding it names.
+- Every other value binding is weak: it has one type, shared by every use.
+  This includes `empty = []`, `id = mk({})`, a number literal ("weak top-level
+  literal rejects second use at different type", below), and a conditional,
+  match, or block whose value is a lambda.
+
+An expression-position function generalizes only where its consumer
+instantiates it: a binding's right-hand side, or a stored-value construction
+edge. A lambda that is a direct call operand, or that supplies an enclosing
+block's, conditional's, or match's value, is consumed by that expression and
+is not generalized on its own (`checking_forwarded_result`); a closure's lambda
+takes the closure's position. Generalizing such a lambda would merge its
+quantified variables into the enclosing expression's type and give that
+expression a scheme, and Monotype would meet a nested function whose scheme
+belongs to no binding it lowers (issue 12016). Its variables instead stay at
+the enclosing rank, so `f = if c |x| x else |x| x` is weak, and a record
+field or list item holding such a conditional stores the lambdas without a
+construction edge.
+
+An annotation cannot make a weak binding polymorphic. An annotation on a weak
+binding that introduces a type variable, named (`a`, `_a`) or an anonymous
+`..`, claims a polymorphism the binding does not have and is rejected with
+`polymorphic_value_annotation` ("Value Is Not Polymorphic"):
+
+- `empty : List(a)` / `empty = []`, `id : a -> a` / `id = mk({})`,
+  `f : a -> a` / `f = if c |x| x else |x| x`, `pair : (List(a), U8)`, and a
+  local `xs : List(b)` whose `b` no enclosing annotation introduced are all
+  rejected.
+- A type variable the annotation looks up from an enclosing annotation is not
+  introduced by it: inside `f : a -> List(a)`, a local `empty : List(a)` /
+  `empty = []` is accepted, because the enclosing binding quantifies `a`.
+- An `_` hole is inferred, and a concrete annotation (`empty : List(U8)`)
+  introduces nothing, so both are accepted.
+- A where clause constrains a variable the annotation introduces, so a value
+  annotation with one is rejected through that variable.
+- An implicitly opened row extension (an extensionless tag union in an output
+  position, Polarity) is not written, so it is not rejected: on a weak value it
+  is the one weak row the Polarity table's VALUE row describes. An explicit
+  `..` is written. In an output position it means exactly what its absence
+  means, so on a value binding it can only ask for a quantified row; it is
+  rejected, and the report says to remove it.
+
+The report never names a type the program did not write: it quotes the
+annotation, suggests writing `_` in place of each type variable (or removing
+each `..`) or a concrete type, and, for a named binding, the thunk built from
+the program's own text (`empty : {} -> List(a)` / `empty = |{}| []`) to call
+as `empty({})` where the binding must be used at many types.
+
+Recovery follows Every Rejection Is Explicit Recovery. Rejection is decided
+before any body is checked (`Check.rejectTopLevelValueAnnotations`, and at a
+local declaration before its right-hand side), and a rejected annotation is not
+applied anywhere (`Check.appliedAnnotation`): no scheme is predeclared from it,
+the binding is checked as an unannotated binding of its right-hand side, and it
+keeps the type its right-hand side infers, so no `.err` enters a solved class
+the binding shares. Its right-hand side is then retired as a runtime error,
+and, as an unannotated binding of an erroneous value, its name is erroneous,
+so every use becomes a runtime error: a program reaching the binding crashes
+there, and code that does not reach it runs. Uses relate to the inferred type
+like any unannotated binding's uses, so using the binding at two types also
+reports the ordinary mismatch.
+
+Both sides are pinned in `src/check/test/value_binding_generalization_test.zig`
+and `src/check/test/issue_12016_test.zig`. Accepted: annotated syntactic
+functions used at two types, value aliases, concrete annotations, `_` holes, a
+local annotation naming only an enclosing variable, the thunk form used at two
+types, and the issue 12016 program. Rejected: each annotation listed above;
+an unannotated weak value used at two types is an ordinary mismatch.
+`test/echo/value_annotation_not_polymorphic.roc` runs a program past its
+unreached rejected bindings until it reaches one and crashes there, and
+`test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.
 
 ## Checked Boundary
 
@@ -7383,9 +7474,12 @@ rules:
 | A VALUE binding | ONE weak flex shared by every use in the module, grounded to `[]` after the module solves (`Check.closeWeakValueImplicitOpenExts`) | Uses may widen the shared row, and what accumulates is what every later use sees |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
-A value binding generalizes only when its annotation writes a type variable,
-exactly as before; a host boundary opts out because the host is a fixed ABI
-rather than a Roc producer participating in unification.
+A value binding generalizes only when its right-hand side does (Value
+Bindings Generalize By Expression), so a FUNCTION row covers functions and
+value aliases and the VALUE row covers every other value binding; an
+annotation never moves a binding between the two. A host boundary opts out
+because the host is a fixed ABI rather than a Roc producer participating in
+unification.
 
 The annotation still BOUNDS the definition—widening happens only at
 instantiation sites. When the definition's body pass generates its annotation,
@@ -7505,8 +7599,9 @@ workers never share mutable analysis state.
 The VALUE row above is the pre-polarity behaviour of an inferred value
 (`x = Boom`) extended to annotated ones: the value's body is bounded by the
 audit, and a later annotated use listing fewer tags than the shared row has
-accumulated is rejected by its own audit. Writing `..` on the value opts into
-a quantified row, as it always has. Grounding those extensions is safe because
+accumulated is rejected by its own audit. Writing `..` on a weak value is
+rejected (Value Bindings Generalize By Expression): a value cannot quantify a
+row. Grounding those extensions is safe because
 nothing in the module can widen them further, and the closed row is exactly
 what the annotation produced before polarity, so importers and Monotype's
 stored constants see the type they always did (an extension that meanwhile

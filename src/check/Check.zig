@@ -598,6 +598,12 @@ checking_call_arg: bool = false,
 /// A lambda in this position is immediately executed by the call, so references
 /// in its body remain strict dependencies of the surrounding value.
 checking_immediate_callee: bool = false,
+/// True when checking the expression that supplies an enclosing block's,
+/// conditional's, or match's value. The enclosing expression consumes that
+/// value as its own, so a standalone lambda here is not generalized: a
+/// generalized lambda would give the enclosing expression a scheme, and only
+/// a value binding may quantify.
+checking_forwarded_result: bool = false,
 /// The callee expression of the call whose callee is being checked.
 direct_callee_expr: ?CIR.Expr.Idx = null,
 /// Set when that callee names a compiler-derived associated method; the call
@@ -715,6 +721,11 @@ implicit_parse_requests: std.ArrayListUnmanaged(ImplicitParseRequest) = .empty,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Patterns of value bindings whose annotation writes a type variable the
+/// binding cannot quantify (design.md "Value Bindings Generalize By
+/// Expression"). The annotation is reported and not applied, so the binding
+/// is checked as an unannotated one, and its right-hand side is retired.
+rejected_value_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Default expressions rejected by a finalize judgment (effectful,
 /// parameter-constraining) with the problem already reported. Explicit
 /// evidence for `checkDefaultRestrictions`: the residue walk skips them and
@@ -3291,6 +3302,7 @@ fn initAssumePrepared(
         .weak_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
+        .rejected_value_annotations = .empty,
         .rejected_default_exprs = .empty,
         .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
@@ -3448,6 +3460,7 @@ pub fn deinit(self: *Self) void {
     self.codec_row_demand_tags.deinit(self.gpa);
     self.implicit_parse_requests.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.rejected_value_annotations.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_promotion_dependencies.deinit(self.gpa);
@@ -11400,6 +11413,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // between groups always points at an already-checked (or pre-declared)
     // def; dispatch-discovered dependencies resolve at group boundaries.
     try self.setupCheckOrder();
+    try self.rejectTopLevelValueAnnotations();
     try self.predeclareAnnotatedDefSchemes(&env);
     const group_count: u32 = @intCast(self.check_order.?.sccs.len);
     var group_index: u32 = 0;
@@ -16192,7 +16206,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     // Check the annotation, if it exists
     const platform_required = self.platform_required_defs.get(def_idx);
     const expectation = blk: {
-        if (def.annotation) |annotation_idx| {
+        if (self.appliedAnnotation(def.pattern, def.annotation)) |annotation_idx| {
             break :blk Expected.fromAnnotation(annotation_idx);
         } else if (platform_required) |required| {
             break :blk Expected.none().withExpectedType(.{
@@ -16237,7 +16251,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
     // The annotation bounds the definition's body: a tag it produces beyond
     // an implicitly opened union is an error (design.md "Polarity").
-    state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(def.annotation);
+    state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
     state.stage = .body;
     return .{ .push = .{ .expr = .{ .next = .{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr } } } };
 }
@@ -16249,35 +16263,30 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     const ptrn_var = ModuleEnv.varFrom(def.pattern);
     const expr_var = ModuleEnv.varFrom(def.expr);
     const def_expr = self.cir.store.getExpr(def.expr);
-    const def_is_function = state.def_is_function;
     const platform_required = self.platform_required_defs.get(def_idx);
-    // A function, a pure signature, and a value alias generalize regardless
-    // of any written `..`, so a `..` in their output positions is redundant;
-    // on a value it is the opt-in to a quantified row.
-    const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
-    const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
-    const annotation_generalizes = generalizes_regardless or
-        (if (def.annotation) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
-    try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, def.annotation, annotation_generalizes);
-    if (def.annotation) |annotation_idx| {
+    // A function, a pure signature, and a value alias generalize, so a `..`
+    // in their output positions is redundant. Every other value binding is
+    // weak (design.md "Value Bindings Generalize By Expression").
+    const binding_generalizes = bindingRhsGeneralizes(&self.cir.store, def_expr);
+    const applied_annotation = self.appliedAnnotation(def.pattern, def.annotation);
+    try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, applied_annotation, binding_generalizes);
+    if (applied_annotation) |annotation_idx| {
         try self.auditImplicitOpenExts(
             annotation_idx,
-            generalizes_regardless,
+            binding_generalizes,
             def.expr,
         );
 
-        // A top-level value binding that does not generalize (not a function,
-        // not a pure signature, not a value alias, and no written type
-        // variable) shares its implicitly opened rows weakly with every use;
-        // whatever is still open after the module solves is grounded to `[]`
+        // A top-level value binding that does not generalize shares its
+        // implicitly opened rows weakly with every use; whatever is still
+        // open after the module solves is grounded to `[]`
         // (`closeWeakValueImplicitOpenExts`).
-        if (!annotation_generalizes) {
+        if (!binding_generalizes) {
             if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
                 if (range.len > 0) try self.weak_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
         }
-    }
-    if (def.annotation) |annotation_idx| {
+
         if (platform_required) |required| {
             // The platform uses the definition as a caller does, so it may
             // relate the definition's rows at a wider union.
@@ -16290,6 +16299,12 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
             );
         }
     }
+    // A rejected annotation retires its binding: the right-hand side, checked
+    // without the annotation, becomes a runtime error, and as an unannotated
+    // binding of an erroneous value its name is erroneous.
+    if (self.rejected_value_annotations.contains(def.pattern)) {
+        try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+    }
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
             .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
@@ -16300,11 +16315,11 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     // A platform requirement is the def's explicit expected type even when the
     // source has no annotation. Only truly unconstrained crashing defs default
     // to unit; otherwise this would overwrite the requirement type with `{}`.
-    if (def.annotation == null and platform_required == null and try self.exprAlwaysCrashes(def.expr)) {
+    if (applied_annotation == null and platform_required == null and try self.exprAlwaysCrashes(def.expr)) {
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
     }
     if (self.erroneous_value_exprs.contains(def.expr)) {
-        if (def.annotation == null) try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+        if (applied_annotation == null) try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
         // Destructuring a runtime error binds nothing, so every name the
         // pattern introduces is erroneous, annotated or not.
         if (self.cir.store.getPattern(def.pattern) != .assign) try self.markPatternBindingsErroneous(def.pattern);
@@ -16387,6 +16402,27 @@ fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
+/// Reject every top-level value annotation that writes a type variable its
+/// binding cannot quantify (`valueAnnotationIsRejected`), before any scheme is
+/// predeclared or any body is checked, so no reference to the binding ever
+/// sees the annotation.
+fn rejectTopLevelValueAnnotations(self: *Self) std.mem.Allocator.Error!void {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        const def = self.cir.store.getDef(def_idx);
+        const annotation_idx = def.annotation orelse continue;
+        if (!self.valueAnnotationIsRejected(annotation_idx, def.expr)) continue;
+        try self.rejectValueAnnotation(def.pattern, annotation_idx, def.expr);
+    }
+}
+
+/// The annotation a binding is checked against: its written annotation,
+/// unless that annotation was rejected (`rejected_value_annotations`).
+fn appliedAnnotation(self: *const Self, pattern_idx: CIR.Pattern.Idx, annotation: ?CIR.Annotation.Idx) ?CIR.Annotation.Idx {
+    if (self.rejected_value_annotations.contains(pattern_idx)) return null;
+    return annotation;
+}
+
 /// Declare every annotated top-level def's scheme from its annotation, before
 /// any body is checked. A reference to an annotated def—by name or by
 /// dispatch—then instantiates the scheme and never requires the referenced
@@ -16408,14 +16444,16 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
 /// Whether a def's annotation can be declared as a standalone scheme before
 /// its body is checked: a simple `.assign` binding whose annotation has no
 /// `_` inference hole (a hole is inferred from the body, so the annotation
-/// alone does not determine the scheme). Defs that fail this are simply
-/// checked in graph order like unannotated defs.
+/// alone does not determine the scheme) and that was not rejected
+/// (`rejected_value_annotations`). Defs that fail this are simply checked in
+/// graph order like unannotated defs.
 fn annotationIsPredeclarableScheme(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     annotation_idx: CIR.Annotation.Idx,
 ) bool {
     if (self.cir.store.getPattern(pattern_idx) != .assign) return false;
+    if (self.rejected_value_annotations.contains(pattern_idx)) return false;
     return !self.cir.store.getAnnotation(annotation_idx).contains_underscore;
 }
 
@@ -16438,7 +16476,7 @@ fn predeclareHoledAnnotationSchemes(
     const hole_rank = env.rank();
     for (defs) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        const annotation_idx = def.annotation orelse continue;
+        const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse continue;
         if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) continue;
         if (self.predeclared_slots.contains(annotation_idx)) continue;
         const scheme_var = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
@@ -23220,6 +23258,9 @@ const ExprCheckFrame = struct {
     nested_expected: Expected,
     is_call_arg: bool,
     is_immediate_callee: bool,
+    /// This expression supplies an enclosing block's, conditional's, or
+    /// match's value (`checking_forwarded_result`).
+    is_forwarded_result: bool,
     is_binding_rhs: bool,
     /// The pattern this expression is the right-hand side of, if any.
     binding_pattern: ?CIR.Pattern.Idx,
@@ -23419,6 +23460,7 @@ fn beginExprCheckFrame(
         .nested_expected = expected,
         .is_call_arg = false,
         .is_immediate_callee = false,
+        .is_forwarded_result = false,
         .is_binding_rhs = false,
         .binding_pattern = null,
         .previous_instantiation_source = previous_instantiation_source,
@@ -23449,6 +23491,8 @@ fn beginExprCheckFrame(
     frame.is_immediate_callee = self.checking_immediate_callee;
     self.checking_immediate_callee = false;
     self.instantiation_is_immediate_callee = frame.is_immediate_callee;
+    frame.is_forwarded_result = self.checking_forwarded_result;
+    self.checking_forwarded_result = false;
 
     // Consume the binding-RHS flag: it applies only to this expression.
     frame.is_binding_rhs = self.checking_binding_rhs;
@@ -23470,7 +23514,7 @@ fn beginExprCheckFrame(
     if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
-        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg);
+        self.shouldGeneralize(expr, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
     if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
 
     if (frame.should_generalize) {
@@ -23886,26 +23930,30 @@ fn storedValueVar(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Alloca
     return try self.instantiateBindingVar(source_var, env, .use_last_var, .{ .nested_function_use = expr_idx });
 }
 
-/// Install the call-position flags one child's frame consumes, returning the
-/// flags to restore once that child completes.
-fn scopeChildCallPosition(self: *Self, is_call_arg: bool, is_immediate_callee: bool) CallPositionFlags {
+/// Install the position flags one child's frame consumes, returning the flags
+/// to restore once that child completes.
+fn scopeChildCallPosition(self: *Self, is_call_arg: bool, is_immediate_callee: bool, is_forwarded_result: bool) CallPositionFlags {
     const saved: CallPositionFlags = .{
         .call_arg = self.checking_call_arg,
         .immediate_callee = self.checking_immediate_callee,
+        .forwarded_result = self.checking_forwarded_result,
     };
     self.checking_call_arg = is_call_arg;
     self.checking_immediate_callee = is_immediate_callee;
+    self.checking_forwarded_result = is_forwarded_result;
     return saved;
 }
 
 fn restoreCallPosition(self: *Self, saved: CallPositionFlags) void {
     self.checking_call_arg = saved.call_arg;
     self.checking_immediate_callee = saved.immediate_callee;
+    self.checking_forwarded_result = saved.forwarded_result;
 }
 
 const CallPositionFlags = struct {
     call_arg: bool,
     immediate_callee: bool,
+    forwarded_result: bool,
 };
 
 /// Progress through a fixed sequence of operands that all use the same
@@ -25326,7 +25374,7 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, state: *BlockCheck, env: *Env,
 
     // Check the final expression
     state.phase = .final_expr;
-    state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee);
+    state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee, true);
     return .{ .child = .{
         .expr = block.final_expr,
         .expected = if (state.statements.diverges)
@@ -25543,9 +25591,14 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             decl.func_name_saved = true;
             self.enclosing_func_name = self.getPatternIdent(decl_stmt.pattern);
 
-            // Check the annotation, if it exists
+            // Check the annotation, if it exists and is not rejected.
+            if (decl_stmt.anno) |annotation_idx| {
+                if (self.valueAnnotationIsRejected(annotation_idx, decl_stmt.expr)) {
+                    try self.rejectValueAnnotation(decl_stmt.pattern, annotation_idx, decl_stmt.expr);
+                }
+            }
             decl.expectation = blk: {
-                if (decl_stmt.anno) |annotation_idx| {
+                if (self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno)) |annotation_idx| {
                     break :blk statement_expected.withAnnotation(annotation_idx);
                 } else {
                     break :blk statement_expected;
@@ -25582,7 +25635,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 self.suppress_generalize_expr = decl_stmt.expr;
                 self.active_scheme_root = decl_pattern_var;
             }
-            decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(decl_stmt.anno);
+            decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
         },
         .s_var => |var_stmt| {
@@ -25758,19 +25811,23 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             std.debug.assert(self.suppress_generalize_expr == null);
-            const decl_annotation_generalizes = decl.decl_is_fn or
-                (if (decl_stmt.anno) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
-            try self.endBoundedAnnotationRows(decl.saved_bounding_annotation, decl_stmt.anno, decl_annotation_generalizes);
+            const applied_annotation = self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno);
+            try self.endBoundedAnnotationRows(decl.saved_bounding_annotation, applied_annotation, decl.decl_is_fn);
             // The annotation bounds the definition (see `DefActivity`).
-            if (decl_stmt.anno) |annotation_idx| {
+            if (applied_annotation) |annotation_idx| {
                 try self.auditImplicitOpenExts(
                     annotation_idx,
                     decl.decl_is_fn,
                     decl_stmt.expr,
                 );
             }
+            // A rejected annotation retires its binding, as at the top level
+            // (see `finishDef`).
+            if (self.rejected_value_annotations.contains(decl_stmt.pattern)) {
+                try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+            }
             try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
-            if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
+            if (applied_annotation == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                 try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
             }
             try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
@@ -26570,7 +26627,7 @@ fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *
     if (frame.suppress_group_member_generalize) {
         self.suppress_generalize_expr = closure.lambda_idx;
     }
-    state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee);
+    state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee, frame.is_forwarded_result);
     return .{ .child = .{
         .expr = closure.lambda_idx,
         .expected = frame.nested_expected,
@@ -27573,8 +27630,8 @@ fn abortIfCheck(self: *Self, state: IfCheck) void {
 /// Request one branch condition or body. Conditions are never in call
 /// position; a branch body supplies the conditional's value and so inherits
 /// its call position.
-fn requestIfChild(self: *Self, state: *IfCheck, expr_idx: CIR.Expr.Idx, expected: Expected, is_call_arg: bool, is_immediate_callee: bool) ExprStep {
-    state.saved_call_position = self.scopeChildCallPosition(is_call_arg, is_immediate_callee);
+fn requestIfChild(self: *Self, state: *IfCheck, expr_idx: CIR.Expr.Idx, expected: Expected, is_call_arg: bool, is_immediate_callee: bool, is_forwarded_result: bool) ExprStep {
+    state.saved_call_position = self.scopeChildCallPosition(is_call_arg, is_immediate_callee, is_forwarded_result);
     return .{ .child = .{ .expr = expr_idx, .expected = expected } };
 }
 
@@ -27608,7 +27665,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_first_cond => {
                 state.phase = .after_first_cond;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                return self.requestIfChild(state, first_branch.cond, expected.forStatement(), false, false);
+                return self.requestIfChild(state, first_branch.cond, expected.forStatement(), false, false, false);
             },
             .after_first_cond => {
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
@@ -27629,7 +27686,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_first_body => {
                 state.phase = .after_first_body;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                return self.requestIfChild(state, first_branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee);
+                return self.requestIfChild(state, first_branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_first_body => {
                 const first_branch_idx = branches[0];
@@ -27660,7 +27717,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_cond => {
                 state.phase = .after_branch_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false);
+                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
             },
             .after_branch_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
@@ -27673,7 +27730,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_body => {
                 state.phase = .after_branch_body;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee);
+                return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_branch_body => {
                 const branch_idx = branches[state.branch_index];
@@ -27712,7 +27769,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_cond => {
                 state.phase = .after_remaining_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false);
+                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
             },
             .after_remaining_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -27725,7 +27782,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_body => {
                 state.phase = .after_remaining_body;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee);
+                return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_remaining_body => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -27738,7 +27795,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .schedule_final_else => {
                 state.phase = .after_final_else;
-                return self.requestIfChild(state, if_.final_else, expected.forBranchBody(), is_call_arg, is_immediate_callee);
+                return self.requestIfChild(state, if_.final_else, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_final_else => {
                 if (shortCircuitOperator(if_.origin)) |operator| {
@@ -28262,7 +28319,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
 fn requestMatchBranchValue(self: *Self, task: *ExprTask, state: *MatchCheck, branch: CIR.Expr.Match.Branch) ExprStep {
     const frame = &task.frame;
     state.phase = .value;
-    state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee);
+    state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee, true);
     return .{ .child = .{ .expr = branch.value, .expected = frame.nested_expected.forBranchBody() } };
 }
 
@@ -28742,53 +28799,135 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 }
 
 /// Should this expression generalize in its current binding context—i.e. push
-/// a rank so the generalizer can quantify its free vars? Three independent paths
-/// qualify; they are checked in order so the annotation scan runs only when the
-/// cheaper structural checks miss:
+/// a rank so the generalizer can quantify its free vars? The decision reads
+/// only the expression and its position, never an annotation (design.md
+/// "Value Bindings Generalize By Expression"). Two paths qualify:
 ///
 ///   - **A function def.** Generalized at the inner lambda level only, not the
 ///     outer `e_closure` wrapper (which delegates to `e_lambda`'s own checkExpr),
-///     and not a direct call argument—those are consumed immediately, and
-///     generalizing one lets its vars escape into the enclosing value.
+///     not a direct call argument, and not the value of an enclosing block,
+///     conditional, or match—those are consumed by the enclosing expression,
+///     and generalizing one lets its vars escape into the enclosing value.
 ///   - **A value alias**—a binding whose RHS is a bare reference to an already-
 ///     generalized scheme (e.g. `shorthand = FooBar.myfunc`). The reference is
 ///     non-expansive: it does no work and can hide no `dbg`/`expect`, so it raises
 ///     none of the duplicate-work/effect concerns that restrict generalization to
-///     syntactic functions. The referenced scheme is a generalized function or
-///     annotated value (numeric literals use the separate defaulting path), never
-///     a bare number or tag union. Restricted to binding-RHS position so bare
-///     lookups in arbitrary subexpressions aren't generalized out from under their
+///     syntactic functions. Restricted to binding-RHS position so bare lookups in
+///     arbitrary subexpressions aren't generalized out from under their
 ///     surrounding context.
-///   - **An annotated value binding** whose annotation introduces a free type var
-///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
-///     quantify exactly the generalizable vars—with none (e.g. a concrete
-///     annotation) the generalize call is a no-op and the value stays monomorphic.
 fn shouldGeneralize(
     self: *const Self,
     expr: CIR.Expr,
-    annotation: ?CIR.Annotation.Idx,
     is_binding_rhs: bool,
     is_call_arg: bool,
+    is_forwarded_result: bool,
 ) bool {
-    if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
-    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
-    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+    if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg and !is_forwarded_result) return true;
+    return is_binding_rhs and isValueAlias(expr);
 }
 
-/// True when a value binding generalizes to its annotated scheme: it sits in
-/// binding-RHS position (only a binding's own right-hand side qualifies; a call
-/// argument never generalizes on its own) and has an annotation introducing a
-/// type variable. The polymorphic annotation is the opt-in, honored regardless
-/// of whether the RHS does work (an expansive definition pays per-specialization—
-/// the cost the author chose by writing the scheme).
-fn isGeneralizableValueBinding(
-    self: *const Self,
-    annotation: ?CIR.Annotation.Idx,
-    is_binding_rhs: bool,
-) bool {
-    if (!is_binding_rhs) return false;
-    const annotation_idx = annotation orelse return false;
-    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+/// A bare reference to another binding, local, imported, or associated
+/// (`FooBar.myfunc`).
+fn isValueAlias(expr: CIR.Expr) bool {
+    return expr == .e_lookup_local or
+        expr == .e_lookup_external or
+        expr == .e_lookup_associated_local or
+        expr == .e_lookup_associated or
+        expr == .e_lookup_associated_resolved;
+}
+
+/// Whether a binding whose right-hand side is `expr` generalizes: a function
+/// def or a value alias (see `shouldGeneralize`). Every other value binding is
+/// weak, whatever its annotation says.
+fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
+    return isFunctionDef(store, expr) or isValueAlias(expr);
+}
+
+/// Whether a binding's annotation writes a type variable the binding cannot
+/// quantify: the binding does not generalize (`bindingRhsGeneralizes`), and
+/// the annotation introduces a type variable, named or an anonymous `..`. A
+/// type variable the annotation looks up from an enclosing annotation belongs
+/// to that enclosing binding, and an `_` hole is inferred, so neither counts.
+fn valueAnnotationIsRejected(self: *const Self, annotation_idx: CIR.Annotation.Idx, rhs: CIR.Expr.Idx) bool {
+    if (bindingRhsGeneralizes(&self.cir.store, self.cir.store.getExpr(rhs))) return false;
+    return self.cir.store.getAnnotation(annotation_idx).introduces_type_var;
+}
+
+/// Report a value binding's rejected annotation and record its pattern, so
+/// the binding is checked without the annotation (`appliedAnnotation`). The
+/// right-hand side is retired once it is checked.
+fn rejectValueAnnotation(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    annotation_idx: CIR.Annotation.Idx,
+    rhs: CIR.Expr.Idx,
+) Allocator.Error!void {
+    const annotation = self.cir.store.getAnnotation(annotation_idx);
+    const written = try self.annotationWrittenTypeVariables(annotation.anno);
+    const type_region = self.cir.store.getTypeAnnoRegion(annotation.anno);
+    const where_region = self.annotationWhereRegion(annotation, type_region);
+    _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_value_annotation = .{
+        .name_region = if (self.cir.store.getPattern(pattern_idx) == .assign) self.cir.store.getPatternRegion(pattern_idx) else null,
+        .region = .{
+            .start = (annotation.name_region orelse type_region).start,
+            .end = (where_region orelse type_region).end,
+        },
+        .type_region = type_region,
+        .where_region = where_region,
+        .type_is_function = self.cir.store.getTypeAnno(annotation.anno) == .@"fn",
+        .rhs_region = self.cir.store.getExprRegion(rhs),
+        .writes_open_extension = written.open_extension,
+        .writes_named_variable = written.named_variable,
+    } });
+    try self.rejected_value_annotations.put(self.gpa, pattern_idx, {});
+}
+
+/// The source of an annotation's where clause, from the end of its type
+/// through the end of its last clause, for its report.
+fn annotationWhereRegion(self: *const Self, annotation: CIR.Annotation, type_region: Region) ?Region {
+    const where_span = annotation.where orelse return null;
+    var end = type_region.end;
+    for (self.cir.store.sliceWhereClauses(where_span)) |where_idx| {
+        const clause_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx));
+        if (clause_region.end.offset > end.offset) end = clause_region.end;
+    }
+    return .{ .start = type_region.end, .end = end };
+}
+
+/// Which kinds of type variable an annotation introduces, for its report.
+fn annotationWrittenTypeVariables(self: *Self, root: CIR.TypeAnno.Idx) Allocator.Error!struct { open_extension: bool, named_variable: bool } {
+    var open_extension = false;
+    var named_variable = false;
+    var pending: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |anno_idx| {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .rigid_var => |rigid| {
+                if (rigid.name.eql(self.cir.idents.open_ext)) open_extension = true else named_variable = true;
+            },
+            .apply => |a| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(a.args)),
+            .tag_union => |tu| {
+                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tu.tags));
+                if (tu.ext) |ext| try pending.append(self.gpa, ext);
+            },
+            .tag => |t| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(t.args)),
+            .tuple => |t| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(t.elems)),
+            .record => |r| {
+                for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                    try pending.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
+                }
+                if (r.ext) |ext| try pending.append(self.gpa, ext);
+            },
+            .@"fn" => |f| {
+                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(f.args));
+                try pending.append(self.gpa, f.ret);
+            },
+            .parens => |p| try pending.append(self.gpa, p.anno),
+            .rigid_var_lookup, .underscore, .lookup, .malformed => {},
+        }
+    }
+    return .{ .open_extension = open_extension, .named_variable = named_variable };
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {

@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 ConsList(a) := [Nil, Node(ConsList(a))]
 
-empty : ConsList(_a)
+empty : ConsList(_)
 empty = ConsList.Nil
 ~~~
 # EXPECTED
@@ -17,7 +17,7 @@ NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,CloseSquare,
-LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NamedUnderscore,CloseRound,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
 EndOfFile,
 ~~~
@@ -41,7 +41,7 @@ EndOfFile,
 		(s-type-anno (name "empty")
 			(ty-apply
 				(ty (name "ConsList"))
-				(underscore-ty-var (raw "_a"))))
+				(_)))
 		(s-decl
 			(p-ident (raw "empty"))
 			(e-tag (raw "ConsList.Nil")))))
@@ -59,7 +59,7 @@ NO CHANGE
 			(e-tag (name "Nil")))
 		(annotation
 			(ty-apply (name "ConsList") (local)
-				(ty-rigid-var (name "_a")))))
+				(ty-underscore))))
 	(s-nominal-decl
 		(ty-header (name "ConsList")
 			(ty-args
@@ -74,12 +74,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "ConsList(_a)")))
+		(patt (type "ConsList(a)")))
 	(type_decls
 		(nominal (type "ConsList(a)")
 			(ty-header (name "ConsList")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "ConsList(_a)"))))
+		(expr (type "ConsList(a)"))))
 ~~~

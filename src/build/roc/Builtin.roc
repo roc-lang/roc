@@ -279,7 +279,7 @@ Builtin :: [].{
 						if Str.is_empty(json_trim_start(rest)) {
 							Ok(parsed.value)
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 				}
 			}
@@ -296,7 +296,7 @@ Builtin :: [].{
 						if Str.is_empty(json_trim_start(rest)) {
 							Ok(parsed.value)
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 				}
 			}
@@ -315,14 +315,14 @@ Builtin :: [].{
 							if Str.is_empty(json_trim_start(rest)) {
 								Ok(parsed.value)
 							} else {
-								Err(Json.invalid_json)
+								Err(Json.invalid_json({}))
 							}
 					}
 				}
 			}
 
-			invalid_json : [InvalidJson(Str), ..]
-			invalid_json = InvalidJson("Invalid JSON")
+			invalid_json : {} -> [InvalidJson(Str)]
+			invalid_json = |{}| InvalidJson("Invalid JSON")
 
 			parse_json_bool : Str -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_bool = |raw| {
@@ -334,7 +334,7 @@ Builtin :: [].{
 				} else if Str.is_eq(parts.value, "false") {
 					Ok({ value: False, rest: JsonState.Input(json_trim_start(parts.after)) })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -346,7 +346,7 @@ Builtin :: [].{
 				if Str.is_eq(parts.value, "null") {
 					Ok(JsonState.Input(json_trim_start(parts.after)))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -359,7 +359,7 @@ Builtin :: [].{
 				if Str.starts_with(trimmed, "[") {
 					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "[")))))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -387,13 +387,13 @@ Builtin :: [].{
 						if JsonEncoding.allows_trailing_commas(encoding) {
 							Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]")))))
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					} else {
 						Ok(Continue(JsonState.Input(after_comma)))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -405,7 +405,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, "[") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(trimmed, "["))
@@ -414,10 +414,10 @@ Builtin :: [].{
 					if Str.starts_with(after_open, "]") {
 						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_open, "]"))))
 					} else {
-						Err(Json.invalid_json)
+						Err(Json.invalid_json({}))
 					}
 				} else if Str.starts_with(after_open, "]") {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					Ok(JsonState.Input(after_open))
 				}
@@ -428,7 +428,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, ",") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ","))))
@@ -454,7 +454,7 @@ Builtin :: [].{
 					}
 				}
 
-				Err(Json.invalid_json)
+				Err(Json.invalid_json({}))
 			}
 
 			## Parse a JSON integer or float scalar with a numeric prefix parser. The prefix
@@ -468,14 +468,14 @@ Builtin :: [].{
 				parsed = parse_prefix(trimmed)
 
 				if parsed.err != 0 {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				rest_len = Str.count_utf8_bytes(parsed.rest)
 				ends_scalar = rest_len == 0 or is_json_scalar_delimiter(str_get_utf8_byte_unsafe(parsed.rest, 0))
 
 				if !ends_scalar {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				token = match Str.drop_last_bytes(trimmed, rest_len) {
@@ -488,7 +488,7 @@ Builtin :: [].{
 				if is_json_literal(token) {
 					Ok({ value: parsed.value, rest: JsonState.Input(json_trim_start(parsed.rest)) })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -500,10 +500,10 @@ Builtin :: [].{
 				if Json.is_json_number(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -632,7 +632,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
@@ -647,10 +647,10 @@ Builtin :: [].{
 				if Json.is_json_unsigned_int_literal(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -661,10 +661,10 @@ Builtin :: [].{
 				if Json.is_json_signed_int_literal(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -675,10 +675,10 @@ Builtin :: [].{
 				if Json.is_json_number(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -835,7 +835,7 @@ Builtin :: [].{
 				if Str.starts_with(trimmed, "{") {
 					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "{")))))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -873,7 +873,7 @@ Builtin :: [].{
 				}
 
 				if !Str.starts_with(trimmed, ",") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
@@ -883,7 +883,7 @@ Builtin :: [].{
 						after_record = json_trim_start(Str.drop_prefix(after_comma, "}"))
 						return Ok(Done(JsonState.Input(after_record)))
 					} else {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 				}
 
@@ -893,7 +893,7 @@ Builtin :: [].{
 			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_object_key = |remaining| {
 				if !Str.starts_with(remaining, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				key_parts = Json.split_json_string_tail(Str.drop_prefix(remaining, "\""))?
@@ -901,7 +901,7 @@ Builtin :: [].{
 				after_key = json_trim_start(key_parts.after)
 
 				if !Str.starts_with(after_key, ":") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
@@ -962,7 +962,7 @@ Builtin :: [].{
 							if Json.is_json_scalar(scalar_parts.value) {
 								Ok(JsonState.Input(json_trim_start(scalar_parts.after)))
 							} else {
-								Err(Json.invalid_json)
+								Err(Json.invalid_json({}))
 							}
 						}
 					}
@@ -973,7 +973,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				var $after_field = json_trim_start(Str.drop_prefix(remaining, "{"))
@@ -984,14 +984,14 @@ Builtin :: [].{
 
 				while True {
 					if !Str.starts_with($after_field, "\"") {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 
 					after_skipped_key = skip_json_string_tail(Str.drop_prefix($after_field, "\""))?
 					after_key = json_trim_start(after_skipped_key)
 
 					if !Str.starts_with(after_key, ":") {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 
 					after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
@@ -1006,7 +1006,7 @@ Builtin :: [].{
 							}
 
 							if !Str.starts_with(after_value_trimmed, ",") {
-								return Err(Json.invalid_json)
+								return Err(Json.invalid_json({}))
 							}
 
 							after_comma = json_trim_start(Str.drop_prefix(after_value_trimmed, ","))
@@ -1015,7 +1015,7 @@ Builtin :: [].{
 								if JsonEncoding.allows_trailing_commas(encoding) {
 									return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "}"))))
 								} else {
-									return Err(Json.invalid_json)
+									return Err(Json.invalid_json({}))
 								}
 							}
 
@@ -1030,7 +1030,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "[") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				var $after_value = json_trim_start(Str.drop_prefix(remaining, "["))
@@ -1051,7 +1051,7 @@ Builtin :: [].{
 							}
 
 							if !Str.starts_with(after_nested_value_trimmed, ",") {
-								return Err(Json.invalid_json)
+								return Err(Json.invalid_json({}))
 							}
 
 							after_comma = json_trim_start(Str.drop_prefix(after_nested_value_trimmed, ","))
@@ -1060,7 +1060,7 @@ Builtin :: [].{
 								if JsonEncoding.allows_trailing_commas(encoding) {
 									return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]"))))
 								} else {
-									return Err(Json.invalid_json)
+									return Err(Json.invalid_json({}))
 								}
 							}
 
@@ -1086,19 +1086,19 @@ Builtin :: [].{
 							start_payloads: Json.start_string_tag_payloads,
 							next_payload: Json.next_string_tag_payload,
 							finish_payloads: Json.finish_string_tag_payloads,
-							missing: Json.invalid_json,
+							missing: Json.invalid_json({}),
 						},
 					)
 				}
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
 
 				if !Str.starts_with(after_open, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				key_split = Json.split_json_string_tail(Str.drop_prefix(after_open, "\""))
@@ -1109,17 +1109,17 @@ Builtin :: [].{
 						after_key = json_trim_start(key_parts.after)
 
 						if !Str.starts_with(after_key, ":") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						payload = json_trim_start(Str.drop_prefix(after_key, ":"))
 
 						if Str.starts_with(payload, "}") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						if Str.starts_with(payload, ",") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						parsed = ParseTagUnionSpec.parse(
@@ -1131,7 +1131,7 @@ Builtin :: [].{
 								start_payloads: |state, count| Json.start_object_tag_payloads(encoding, state, count),
 								next_payload: |state, index, count| Json.next_object_tag_payload(encoding, state, index, count),
 								finish_payloads: |state, count| Json.finish_object_tag_payloads(encoding, state, count),
-								missing: Json.invalid_json,
+								missing: Json.invalid_json({}),
 							},
 						)?
 
@@ -1139,20 +1139,20 @@ Builtin :: [].{
 							Input(after_payload) => Json.finish_tag_payload(encoding, parsed.value, after_payload)
 						}
 					}
-					Err(_) => Err(Json.invalid_json)
+					Err(_) => Err(Json.invalid_json({}))
 				}
 			}
 
 			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json)
+				if count == 0 Ok(state) else Err(Json.invalid_json({}))
 
 			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
-			next_string_tag_payload = |_, _, _| Err(Json.invalid_json)
+			next_string_tag_payload = |_, _, _| Err(Json.invalid_json({}))
 
 			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json)
+				if count == 0 Ok(state) else Err(Json.invalid_json({}))
 
 			## A multi-payload tag writes its payloads as a JSON array, which is
 			## a fixed-arity sequence, so it reads back through the tuple
@@ -1176,7 +1176,7 @@ Builtin :: [].{
 			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_object_tag_payload = |encoding, state, index, count|
 				if count <= 1 {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					JsonEncoding.parse_tuple_next(encoding, state, index, count)
 				}
@@ -1208,10 +1208,10 @@ Builtin :: [].{
 						}
 					}
 
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
-				Err(Json.invalid_json)
+				Err(Json.invalid_json({}))
 			}
 
 			consume_empty_json_object : Str -> Try({ after : Str }, [InvalidJson(Str)])
@@ -1219,7 +1219,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
@@ -1227,7 +1227,7 @@ Builtin :: [].{
 				if Str.starts_with(after_open, "}") {
 					Ok({ after: Str.drop_prefix(after_open, "}") })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -1464,7 +1464,7 @@ Builtin :: [].{
 
 				if $found {
 					if $index == 0 {
-						Err(Json.invalid_json)
+						Err(Json.invalid_json({}))
 					} else {
 						value = match Str.drop_last_bytes(raw, len - $index) {
 							Ok(v) => v
@@ -1477,7 +1477,7 @@ Builtin :: [].{
 						Ok({ value, after })
 					}
 				} else if $index == 0 {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					Ok({ value: raw, after: "" })
 				}
@@ -1511,7 +1511,7 @@ Builtin :: [].{
 							rest = json_trim_start(string_parts.after)
 							Ok({ value: string_parts.value, rest: JsonState.Input(rest) })
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					}
 				}
@@ -1703,7 +1703,7 @@ Builtin :: [].{
 						trimmed = json_trim_start(raw)
 
 						if !Str.starts_with(trimmed, ":") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ":"))))
@@ -1720,7 +1720,7 @@ Builtin :: [].{
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
 
 			invalid_value : JsonEncoding, JsonState -> [InvalidJson(Str)]
-			invalid_value = |_, _| Json.invalid_json
+			invalid_value = |_, _| Json.invalid_json({})
 
 			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|
@@ -1894,7 +1894,7 @@ Builtin :: [].{
 						} else if Str.is_eq(parts.value, "false") {
 							Ok({ value: False, rest: parts.rest })
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					}
 				}

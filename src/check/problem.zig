@@ -95,6 +95,7 @@ pub const CapturingLocalTypeEscape = types.CapturingLocalTypeEscape;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
+pub const PolymorphicValueAnnotation = types.PolymorphicValueAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulComptimeExpression = types.EffectfulComptimeExpression;
 pub const EffectfulExpect = types.EffectfulExpect;

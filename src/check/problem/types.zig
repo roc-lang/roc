@@ -47,6 +47,7 @@ pub const Problem = union(enum) {
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
+    polymorphic_value_annotation: PolymorphicValueAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_comptime_expression: EffectfulComptimeExpression,
     effectful_expect: EffectfulExpect,
@@ -211,6 +212,31 @@ pub const AssociatedItemNotFound = struct {
 /// bound—the variable must have a concrete type.
 pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
+};
+
+/// A value binding whose annotation introduces a type variable. Only a binding
+/// whose right-hand side is a function (or a value alias) generalizes, so this
+/// binding has exactly one type and cannot quantify the variable.
+pub const PolymorphicValueAnnotation = struct {
+    /// The binding's name as written, when its pattern is a plain identifier.
+    name_region: ?base.Region,
+    /// The whole annotation, name included.
+    region: base.Region,
+    /// The annotated type alone, for the suggested thunk signature.
+    type_region: base.Region,
+    /// The annotation's where clause, from the end of its type through the
+    /// end of its last clause (the closing `]` is not included), for the
+    /// suggested thunk signature.
+    where_region: ?base.Region,
+    /// Whether the annotated type is itself a function type, which the
+    /// suggested thunk signature must parenthesize.
+    type_is_function: bool,
+    /// The binding's right-hand side, for the suggested thunk body.
+    rhs_region: base.Region,
+    /// Whether the annotation writes an anonymous `..` extension.
+    writes_open_extension: bool,
+    /// Whether the annotation writes a named type variable.
+    writes_named_variable: bool,
 };
 
 /// A top-level value definition performs effects while initializing.

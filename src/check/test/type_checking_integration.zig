@@ -2862,19 +2862,18 @@ test "check type - tag union - tag typo hint on an inline output union" {
 
 test "check type - tag union - tag typo hint on an explicit open ext" {
     // An anonymous `..` in an output position is generated like absence, so
-    // it carries the same hint. On a value binding it never warns redundant,
-    // so this is the only problem.
+    // it carries the same hint, and on a function it is also redundant.
     const source =
-        \\color : [Red, Green, Blue, ..]
-        \\color = Greeen
+        \\to_color : Str -> [Red, Green, Blue, ..]
+        \\to_color = |_| Greeen
     ;
-    try checkTypesModule(source, .fail_with,
+    try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
         \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
-        \\color = Greeen
+        \\to_color = |_| Greeen
         \\```
-        \\        ^^^^^^
+        \\               ^^^^^^
         \\
         \\It has the type:
         \\
@@ -2888,7 +2887,19 @@ test "check type - tag union - tag typo hint on an explicit open ext" {
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
         \\
-    );
+        ,
+        \\**Redundant Open Tag Union**
+        \\This tag union has an explicit `..`, but it is already implicitly open.
+        \\```roc
+        \\to_color : Str -> [Red, Green, Blue, ..]
+        \\```
+        \\                                     ^^
+        \\
+        \\
+        \\Tag unions in output positions, like the return type of a function, are automatically open. Remove the `..` or bind it to a named type variable like `..others` if you want to refer to the extension elsewhere.
+        \\
+        \\
+    } }, "");
 }
 
 test "check type - tag union - no tag typo hint without a close match" {
@@ -2982,13 +2993,13 @@ test "check type - large open tag union annotation preserves all tags" {
     // into the types store rather than read from a stale scratch slice.
     const lo = "abcdefghijklmnopqrstuvwxyz";
     const source = comptime blk: {
-        var s: []const u8 = "foo : [";
+        var s: []const u8 = "foo : {} -> [";
         var i: usize = 0;
         while (i < 80) : (i += 1) {
             s = s ++ "T" ++ &[_]u8{ lo[i / 26], lo[i % 26] };
             if (i < 79) s = s ++ ", ";
         }
-        s = s ++ ", ..ext]\nfoo = Taa";
+        s = s ++ ", ..ext]\nfoo = |{}| Taa";
         break :blk s;
     };
     var test_env = try TestEnv.init("Test", source);
@@ -5444,12 +5455,12 @@ test "check type - crash" {
 test "check type - issue 10244 - crash body satisfies annotated function type" {
     // Repro for https://github.com/roc-lang/roc/issues/10244
     const source =
-        \\fun : a -> a
+        \\fun : Str -> Str
         \\fun = {
         \\  crash "NYI"
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "fun" } }, "a -> a");
+    try checkTypesModule(source, .{ .pass = .{ .def = "fun" } }, "Str -> Str");
 }
 
 test "check type - if with all crash branches makes following code unreachable" {
@@ -6266,10 +6277,12 @@ test "check type - scoped type variables - fail" {
         \\  result
         \\}
     ;
+    // `c` is not in scope, so the annotation introduces it, and `result` is a
+    // value binding, which cannot quantify it.
     try checkTypesModule(
         source,
         .fail,
-        "Type Mismatch",
+        "Value Is Not Polymorphic",
     );
 }
 
@@ -9864,18 +9877,19 @@ test "check type - polarity - a defaulted field use at the annotated width is cl
     try test_env.assertNoErrors();
 }
 
-test "check type - polarity - value with explicit open ext generalizes" {
-    // `..` on a value annotation is the opt-in to a quantified row (as on
-    // main): each use instantiates it fresh.
+test "check type - polarity - a thunk's open row is instantiated per use" {
+    // A value cannot quantify a row (`..` on a value annotation is rejected),
+    // but a thunk's implicitly open output row is instantiated fresh by each
+    // call.
     const source =
-        \\e : [Boom, ..]
-        \\e = Boom
+        \\e : {} -> [Boom]
+        \\e = |{}| Boom
         \\
         \\use_a : Str -> [A, Boom]
-        \\use_a = |_| e
+        \\use_a = |_| e({})
         \\
         \\use_b : Str -> [B, Boom]
-        \\use_b = |_| e
+        \\use_b = |_| e({})
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
@@ -10221,14 +10235,14 @@ test "check type - polarity - named ext in output position does not warn" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [Fail, Ok, ..others]");
 }
 
-test "check type - polarity - explicit anonymous ext on a value does not warn" {
-    // On a value binding `..` is the opt-in to a quantified row (it is what
-    // makes the value generalize), so it is not redundant.
+test "check type - polarity - explicit anonymous ext on a value is rejected" {
+    // A value binding cannot quantify a row, so `..` on its annotation claims
+    // a polymorphism it does not have.
     const source =
         \\e : [Boom, ..]
         \\e = Boom
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[Boom]");
+    try checkTypesModule(source, .fail, "Value Is Not Polymorphic");
 }
 
 test "check type - polarity - explicit anonymous ext in an input position does not warn" {

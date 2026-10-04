@@ -252,6 +252,7 @@ pub const Store = struct {
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,
+                    .polymorphic_value_annotation,
                     .effectful_top_level,
                     .effectful_comptime_expression,
                     .effectful_expect,

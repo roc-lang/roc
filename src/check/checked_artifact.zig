@@ -10039,7 +10039,7 @@ test "checked output structurally interns independent closed function graphs" {
 test "checker marks exhaustiveness-defaulted empty payload provenance" {
     const TestEnv = @import("test/TestEnv.zig");
     const source =
-        \\x : Try(I64, _err)
+        \\x : Try(I64, _)
         \\x = Ok(42)
         \\
         \\result : I64
