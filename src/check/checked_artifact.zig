@@ -20195,7 +20195,15 @@ const EvidencePass = struct {
                 .err, .field_presence => return .{ .resolved = .checked_error },
                 .flex => |flex| return self.resolveVarObligation(resolved.var_, dispatcher_ty, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
                 .rigid => |rigid| return self.resolveVarObligation(resolved.var_, dispatcher_ty, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
-                .alias, .structure => {
+                // A transparent alias dispatches exactly as its backing does
+                // (design.md "Type Alias Invariant"), including a backing that
+                // is a where-constrained variable. `dispatcher_ty` stays the
+                // alias root, which is a transparent view of that backing.
+                .alias => |alias| {
+                    dispatcher_var = self.types.getAliasBackingVar(alias);
+                    continue :redirect;
+                },
+                .structure => {
                     if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                         if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
                             return switch (found) {

@@ -862,3 +862,37 @@ test "where clause - partial method result hole preserves explicit purity" {
     defer test_env.deinit();
     try test_env.assertFirstTypeError("Type Mismatch");
 }
+
+// https://github.com/roc-lang/roc/issues/12022
+// https://github.com/roc-lang/roc/issues/12023
+
+const alias_receiver_item =
+    \\Item := [Item(U64)].{
+    \\    score : Item -> U64
+    \\    score = |Item.Item(n)| n
+    \\}
+    \\
+    \\Wrapper(a) : a
+    \\
+;
+
+test "where clause - a receiver typed by a transparent alias of the constrained variable dispatches through it" {
+    var test_env = try TestEnv.init("Test", alias_receiver_item ++
+        \\score_wrapped : Wrapper(a) -> U64 where [a.score : a -> U64]
+        \\score_wrapped = |value| value.score()
+        \\
+        \\answer = score_wrapped(Item.Item(42))
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("score_wrapped", "Wrapper(a) -> U64 where [a.score : a -> U64]");
+    try test_env.assertDefType("answer", "U64");
+}
+
+test "where clause - a receiver typed by a transparent alias of an unconstrained variable has no method" {
+    var test_env = try TestEnv.init("Test", alias_receiver_item ++
+        \\score_wrapped : Wrapper(a) -> U64
+        \\score_wrapped = |value| value.score()
+    );
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Missing Method");
+}

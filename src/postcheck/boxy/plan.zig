@@ -6442,6 +6442,10 @@ const Builder = struct {
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
         const dispatcher_rep = try self.analyzeType(view, dispatch.dispatcher_ty);
+        // A transparent alias dispatches through its backing, so the
+        // dispatcher's dictionaries are those of its alias-unwrapped
+        // representation.
+        const dictionary_rep = self.repQuery().dictionaryArgumentIdentityRep(dispatcher_rep);
         if (structuralCodecDispatchWorker(view, dispatch)) |codec| {
             // The checked plan selected the compiler-generated codec for this
             // structural dispatcher; the call runs that codec's constructor.
@@ -6464,19 +6468,19 @@ const Builder = struct {
                 break :blk dictionary.dispatch_requirement orelse
                     boxyPlanInvariant("checked dictionary owner had no method requirement");
             } else blk: {
-                try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
+                try self.recordActiveWorkerDictionaryUse(dictionary_rep);
                 break :blk null;
             };
-            if (scheme_requirement == null and self.plan.representations.items[@intFromEnum(dispatcher_rep)].dictionaries.len == 0) {
+            if (scheme_requirement == null and self.plan.representations.items[@intFromEnum(dictionary_rep)].dictionaries.len == 0) {
                 try self.registerStructuralDispatchDerivation(view, caller, dispatch, dispatcher_rep);
             }
-            if (scheme_requirement != null or self.plan.representations.items[@intFromEnum(dispatcher_rep)].dictionaries.len != 0) {
+            if (scheme_requirement != null or self.plan.representations.items[@intFromEnum(dictionary_rep)].dictionaries.len != 0) {
                 const call_ref = CheckedExprIdentity{ .module = view.key, .expr = site.call_expr };
                 if (self.plan.dictionaryDispatchPlanForCall(call_ref, caller) == null) {
                     try self.plan.dictionary_dispatches.append(self.allocator, .{
                         .call = call_ref,
                         .caller = caller,
-                        .dispatcher_rep = dispatcher_rep,
+                        .dispatcher_rep = dictionary_rep,
                         .scheme_requirement = scheme_requirement,
                         .method = dispatch.method,
                         .source_fn_type = typeRef(view, dispatch.callable_ty),
@@ -6617,7 +6621,7 @@ const Builder = struct {
         const dispatcher_rep = try self.analyzeType(view, site.call.dispatcher_ty);
         const evidence = directDispatchEvidence(view.static_dispatch_plans, site.call.resolution);
         if (evidence == null) {
-            try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
+            try self.recordActiveWorkerDictionaryUse(self.repQuery().dictionaryArgumentIdentityRep(dispatcher_rep));
         }
         const selected = evidence orelse return;
         const lookup = self.dispatchMethodTargetLookup(
