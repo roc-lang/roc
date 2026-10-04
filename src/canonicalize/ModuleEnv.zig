@@ -1048,12 +1048,15 @@ module_name: []const u8,
 /// The module's bare name as an interned identifier (e.g., "Color").
 /// Used for display, type module validation, and method name construction.
 display_module_name_idx: Ident.Idx,
-/// Package-qualified module display name (e.g., "pf.Color"). Display-only; identity
-/// comparisons use content-based module identities (see `module_identities`).
-/// Which package a module belongs to is workspace information, so the
-/// coordinator records this once the module is canonicalized; a cache hit
-/// restores what was recorded then. Canonicalization never reads it.
-qualified_module_ident: Ident.Idx,
+/// Package-qualified module display name (e.g., "pf.Color"), borrowed from
+/// the coordinator's module state. Display-only; identity comparisons use
+/// content-based module identities (see `module_identities`). Which package a
+/// module belongs to is workspace information, so it is runtime-only like
+/// `module_name`: it is never serialized, and the coordinator records it on
+/// every environment it installs for the module, whether canonicalized or
+/// checked, fresh or loaded from a cache. Empty for environments built outside
+/// the coordinator; `qualifiedModuleName` then reports the bare name.
+qualified_module_name: []const u8,
 /// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
 /// deep content hash (see `base.module_identity`). Entry ids are the
 /// `origin_module` values stored on nominal/alias types in this env's type
@@ -1528,7 +1531,6 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
     self.display_module_name_idx = try self.insertIdent(Ident.for_text(module_name));
-    self.qualified_module_ident = self.display_module_name_idx; // Default to bare name; coordinator later records the package-qualified name
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
@@ -1580,7 +1582,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .import_identities = .{},
         .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
-        .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
+        .qualified_module_name = "", // Recorded by the coordinator
         .module_identities = .{},
         .module_identity_displays = .{},
         .self_module_identity = base.ModuleIdentity.Idx.NONE,
@@ -4510,7 +4512,7 @@ pub const Serialized = extern struct {
     import_identities: collections.SafeList(base.ModuleIdentity.Idx).Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
-    qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
+    display_module_name_idx_padding: u32 = 0,
     module_identities: base.SerialStringInterner.Serialized,
     module_identity_displays: collections.SafeList(Ident.Idx).Serialized,
     self_module_identity_reserved: u32,
@@ -4548,21 +4550,24 @@ pub const Serialized = extern struct {
     comptime {
         const renamed_fields = [_]collections.serde_validation.FieldRename{
             .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
-            .{ .owner = "qualified_module_ident", .serialized = "qualified_module_ident_reserved" },
             .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
             .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
             .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
         };
         const serialized_only_fields = [_][]const u8{
+            "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
             "self_module_identity_padding", // Fixed-width padding for the reserved identity slot.
             "runtime_prepared_padding", // Fixed-width padding for the serialized bool.
             "_reserved_flags", // Format-reserved bytes for fields removed from ModuleEnv.
             "_padding", // Tail padding kept explicit and zeroed for deterministic bytes.
         };
+        const owner_only_fields = [_][]const u8{
+            "qualified_module_name", // Workspace information, recorded by the coordinator.
+        };
         collections.serde_validation.assertBidirectionalFieldSet(
             Self,
             Serialized,
-            &.{},
+            &owner_only_fields,
             &serialized_only_fields,
             &renamed_fields,
         );
@@ -4625,7 +4630,7 @@ pub const Serialized = extern struct {
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
-        self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
+        self.display_module_name_idx_padding = 0;
         try self.module_identities.serialize(&env.module_identities, allocator, writer);
         try self.module_identity_displays.serialize(&env.module_identity_displays, allocator, writer);
         self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
@@ -4706,7 +4711,7 @@ pub const Serialized = extern struct {
             .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
             .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
@@ -4782,7 +4787,7 @@ pub const Serialized = extern struct {
             .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
             .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
@@ -4859,7 +4864,7 @@ pub const Serialized = extern struct {
             .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             // Copy so the display list can grow if runtime type copies add identities.
             .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
@@ -4952,7 +4957,7 @@ pub const Serialized = extern struct {
             .import_identities = try self.import_identities.deserializeWithCopy(base_addr, gpa),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = module_identities,
             .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
             .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
@@ -5805,15 +5810,15 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
-/// The coordinator-assigned package-qualified module identifier (e.g.
+/// The coordinator-assigned package-qualified module name (e.g.
 /// `pf.Utils`), unique across the build's packages. Module identity
 /// comparisons in diagnostics must use this rather than the bare module
 /// name, which can collide between packages. Environments constructed
-/// outside the coordinator (unit tests) have no qualified ident; they are
+/// outside the coordinator (unit tests) have no qualified name; they are
 /// single-module worlds, so the bare name is their qualified name.
 pub fn qualifiedModuleName(self: *const Self) []const u8 {
-    if (self.qualified_module_ident.isNone()) return self.module_name;
-    return self.getIdent(self.qualified_module_ident);
+    if (self.qualified_module_name.len == 0) return self.module_name;
+    return self.qualified_module_name;
 }
 
 /// Builds a mapping from platform for-clause alias ident indices to the

@@ -127,7 +127,6 @@ fn moduleIdentity(byte: u8) CheckedArtifact.ModuleIdentity {
         .module_idx = byte,
         .module_name = @enumFromInt(@as(u32, byte)),
         .display_module_name = @enumFromInt(@as(u32, byte + 1)),
-        .qualified_module_name = @enumFromInt(@as(u32, byte + 2)),
         .kind = .app,
     };
 }

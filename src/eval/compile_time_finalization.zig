@@ -4642,12 +4642,12 @@ const ComptimeFailureSite = struct {
 /// declaring module's name and resolved position, with the consuming root as
 /// the local region.
 ///
-/// Module identity is the package-qualified name (`pf.Utils`), never the bare
-/// display name: two packages may both contain a `Utils`, and matching by
-/// bare name would render the foreign module's byte offsets against this
-/// module's source. The rendered origin stays human-readable: the bare
-/// display name, or the qualified name when the bare name coincides with the
-/// finalized module's and would not identify the declaring module.
+/// Module identity is the module's content identity, never a name: two
+/// packages may both contain a `Utils`, and matching by bare name would render
+/// the foreign module's byte offsets against this module's source. The
+/// rendered origin stays human-readable: the bare display name, or the
+/// qualified name when the bare name coincides with the finalized module's and
+/// would not identify the declaring module.
 fn comptimeFailureSiteFrom(
     module: *const checked.CheckedModuleArtifact,
     root_region: base.Region,
@@ -4658,12 +4658,8 @@ fn comptimeFailureSiteFrom(
     const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
     const file = failed_file orelse return .{ .region = root_region, .foreign = null };
     const env = module.moduleEnvConst();
-    // Resolve source-table names in this environment's interner before comparing
-    // identities; indices from another module's store are not interchangeable.
-    if (env.common.idents.lookup(base.Ident.for_text(file.qualified_name))) |qualified_ident| {
-        if (qualified_ident.eql(env.qualified_module_ident)) {
-            return .{ .region = failed_region orelse root_region, .foreign = null };
-        }
+    if (@as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(module.module_identity.stable_hash))) {
+        return .{ .region = failed_region orelse root_region, .foreign = null };
     }
     const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(file.name))) |display_ident|
         display_ident.eql(env.display_module_name_idx)
@@ -4689,6 +4685,7 @@ fn comptimeFailureSiteFromLoc(
         (if (loc.hasLocation()) .{
             .name = lir_store.sourceFileName(loc.file),
             .qualified_name = lir_store.sourceFileQualifiedName(loc.file),
+            .module_identity = lir_store.sourceFileModuleIdentity(loc.file),
         } else null)
     else
         null;

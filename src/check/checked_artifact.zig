@@ -212,7 +212,6 @@ pub const ModuleIdentity = struct {
     module_idx: u32,
     module_name: canonical.ModuleNameId,
     display_module_name: canonical.ModuleNameId,
-    qualified_module_name: canonical.ModuleNameId,
     kind: ModuleEnv.ModuleKind,
 };
 
@@ -9254,13 +9253,11 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
 
     const module_name_id = try names.internModuleName(module_env.module_name);
     const display_module_name = try names.internModuleIdent(module.identStoreConst(), module_env.display_module_name_idx);
-    const qualified_module_name = try names.internModuleIdent(module.identStoreConst(), module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module.moduleIndex(),
         .module_name = module_name_id,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
@@ -10119,7 +10116,6 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .module_idx = 1,
         .module_name = builtin_module_name,
         .display_module_name = builtin_module_name,
-        .qualified_module_name = builtin_module_name,
         .kind = builtin_env.module_kind,
     };
 
@@ -22715,7 +22711,7 @@ pub const CheckedProcedureTemplateTable = struct {
         var by_def = std.ArrayList(static_dispatch.ProcedureTemplateLookupEntry).empty;
         errdefer by_def.deinit(allocator);
 
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
@@ -22837,7 +22833,7 @@ pub const CheckedProcedureTemplateTable = struct {
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!void {
         if (promoted_local_procedures.len == 0) return;
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
         const entries = try allocator.alloc(PromotedProcedureTemplateEntry, promoted_local_procedures.len);
         errdefer allocator.free(entries);
         try self.templates.ensureUnusedCapacity(allocator, promoted_local_procedures.len);
@@ -22920,7 +22916,7 @@ pub const CheckedProcedureTemplateTable = struct {
         try self.templates.ensureTotalCapacityPrecise(allocator, self.templates.items.len + roots.len);
         try entry_wrappers.wrappers.ensureTotalCapacityPrecise(allocator, entry_wrappers.wrappers.items.len + roots.len);
 
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
 
         for (roots) |root| {
             const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
@@ -22992,6 +22988,7 @@ pub const CheckedProcedureTemplateTable = struct {
         return .{
             .module_idx = module_idx,
             .by_def = self.by_def,
+            .promoted = self.promoted,
         };
     }
 
@@ -23059,10 +23056,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
 /// A promoted local procedure's template and the binding pattern whose
 /// generalized scheme it publishes.
-pub const PromotedProcedureTemplateEntry = struct {
-    pattern: CIR.Pattern.Idx,
-    template: canonical.ProcedureTemplateRef,
-};
+pub const PromotedProcedureTemplateEntry = static_dispatch.PromotedProcedureTemplateEntry;
 
 fn sortedTemplateIdsContain(ids: []const canonical.CheckedProcedureTemplateId, id: canonical.CheckedProcedureTemplateId) bool {
     const target = @intFromEnum(id);
@@ -33425,7 +33419,6 @@ pub const CheckedModuleArtifact = struct {
         module_idx: u32,
         module_name: canonical.ModuleNameId,
         display_module_name: canonical.ModuleNameId,
-        qualified_module_name: canonical.ModuleNameId,
         kind: ModuleEnv.ModuleKind.Serialized,
 
         pub fn encode(identity: ModuleIdentity) ModuleIdentitySerialized {
@@ -33434,7 +33427,6 @@ pub const CheckedModuleArtifact = struct {
                 .module_idx = identity.module_idx,
                 .module_name = identity.module_name,
                 .display_module_name = identity.display_module_name,
-                .qualified_module_name = identity.qualified_module_name,
                 .kind = ModuleEnv.ModuleKind.Serialized.encode(identity.kind),
             };
         }
@@ -33445,7 +33437,6 @@ pub const CheckedModuleArtifact = struct {
                 .module_idx = self.module_idx,
                 .module_name = self.module_name,
                 .display_module_name = self.display_module_name,
-                .qualified_module_name = self.qualified_module_name,
                 .kind = self.kind.decode(),
             };
         }
@@ -36951,13 +36942,11 @@ pub fn checkedModuleKeyFromTypedModule(
     defer canonical_names.deinit();
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
-    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module_idx,
         .module_name = module_name,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
 
@@ -36998,13 +36987,11 @@ pub fn publishFromTypedModule(
     errdefer canonical_names.deinit();
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
-    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module_idx,
         .module_name = module_name,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
     // Intern this module's content identity up front so later publication
@@ -37742,7 +37729,6 @@ fn expectProvidedExportKind(
         .module_idx = builtin_module.moduleIndex(),
         .module_name = builtin_module_name,
         .display_module_name = builtin_module_name,
-        .qualified_module_name = builtin_module_name,
         .kind = builtin_env.module_kind,
     };
     const builtin_key = CheckedModuleArtifactKey.compute(
@@ -37863,13 +37849,11 @@ fn expectProvidedExportKind(
 
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.display_module_name_idx);
-    const qualified_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module.moduleIndex(),
         .module_name = module_name,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
 
@@ -38714,7 +38698,6 @@ test "relation projection preserves anonymous row identity and provenance" {
             .module_idx = 1,
             .module_name = module_name,
             .display_module_name = module_name,
-            .qualified_module_name = module_name,
             .kind = .app,
         },
         .checking_context_identity = .{},
@@ -38965,7 +38948,6 @@ test "artifact views are read-only projections" {
             .module_idx = 0,
             .module_name = test_module,
             .display_module_name = test_module,
-            .qualified_module_name = test_module,
             .kind = .package,
         },
         .checking_context_identity = .{},
@@ -39118,7 +39100,6 @@ fn testVisibilityImportedView(
             // Method-scope collection reads only the stable identity hash.
             .module_name = undefined,
             .display_module_name = undefined,
-            .qualified_module_name = undefined,
             .kind = .package,
         },
         .public_api_dependencies = public_api_dependencies,
@@ -39193,7 +39174,6 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
         // Method-scope collection reads only the stable identity hash.
         .module_name = undefined,
         .display_module_name = undefined,
-        .qualified_module_name = undefined,
         .kind = .package,
     };
     var scope = try collectMethodLookupScope(gpa, current, current_identity, &available, &relations, &direct);
@@ -39854,7 +39834,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .module_idx = 9,
         .module_name = @enumFromInt(1),
         .display_module_name = @enumFromInt(2),
-        .qualified_module_name = @enumFromInt(3),
         .kind = .module,
     };
     var key = CheckedModuleArtifactKey{};
@@ -40132,8 +40111,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x3B, 0xF0, 0x08, 0xC1, 0x3C, 0xF0, 0xD1, 0x5A, 0x97, 0x6D, 0xD8, 0x86, 0x2C, 0xC6, 0x29, 0x0F,
-        0x4F, 0x3C, 0xEB, 0x3F, 0x65, 0x17, 0x1B, 0x31, 0x75, 0xA8, 0x1C, 0xE2, 0x75, 0xC4, 0xCD, 0x56,
+        0xBC, 0x37, 0x57, 0xDF, 0x8F, 0x70, 0xBF, 0xDA, 0x19, 0xE7, 0x28, 0xBD, 0xBE, 0xC7, 0x3F, 0x45,
+        0x9A, 0xB6, 0x17, 0x90, 0x01, 0x60, 0x3F, 0xE5, 0xC2, 0x2C, 0xFE, 0x0F, 0x5C, 0x3D, 0x76, 0xAF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

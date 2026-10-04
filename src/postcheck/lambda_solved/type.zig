@@ -106,6 +106,11 @@ pub const Content = union(enum) {
     erased: struct {
         source_fn_ty: names.TypeDigest,
         members: Span = .empty(),
+        /// The function type this callable was erased from. Its argument and
+        /// result types are the erased ABI: every member entry is specialized
+        /// at it, and every erased call converts to and from it. Null for an
+        /// erased requirement Monotype imported as a bare digest.
+        abi_fn: ?TypeVarId = null,
     },
     zst,
     /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet

@@ -2724,6 +2724,12 @@ pub fn compute(
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
                 try result.owned_only_takes.put(gpa, read.stmt, take);
+                // A target solved owned holds its own unit in every emission;
+                // the take only spares its retain. Only a target solved
+                // borrowed needs its binding overridden to owned, and a
+                // borrowed binding has exactly one defining read, so exactly
+                // one parameter root authorizes the override.
+                if (!solution.isBorrowed(read.target)) continue;
                 const target_index = @intFromEnum(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
                 if (prior != no_index and prior != @intFromEnum(activation_root)) {

@@ -88,6 +88,7 @@ const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
 const DerivedMethodValueUse = problem_mod.DerivedMethodValueUse;
+const CapturingLocalTypeEscape = problem_mod.CapturingLocalTypeEscape;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -1121,6 +1122,9 @@ pub const ReportBuilder = struct {
             },
             .derived_method_value_use => |data| {
                 return self.buildDerivedMethodValueUseReport(data);
+            },
+            .capturing_local_type_escape => |data| {
+                return self.buildCapturingLocalTypeEscapeReport(data);
             },
             .unsupported_generated_method => |data| {
                 return self.buildUnsupportedGeneratedMethodReport(data);
@@ -5158,6 +5162,30 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Give that declaration a value body, or stop referring to it here."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildCapturingLocalTypeEscapeReport(self: *Self, data: CapturingLocalTypeEscape) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Local Type Escapes Its Block", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("This lets a value of type"),
+            D.ident(data.type_name).withAnnotation(.inline_code),
+            D.bytes("leave the block that declares that type."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Its"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method uses local values or types of the function body around that block, so values of type"),
+            D.ident(data.type_name).withAnnotation(.inline_code),
+            D.bytes("can only be used inside the block that declares it."),
         }, self, &report);
         return report;
     }

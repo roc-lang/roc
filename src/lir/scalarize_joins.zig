@@ -37,6 +37,7 @@ const std = @import("std");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const erased_owner = @import("erased_owner.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -309,11 +310,17 @@ const Pass = struct {
 
     /// Every round that changes the procedure rewrites at least one
     /// parameter or build out of existence, so the rounds reach a fixed point.
+    /// Field reads that become aliases change which allocation an owned
+    /// erased call's closure resolves to, so a changed procedure's reuse
+    /// sources are resolved again afterward.
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ScalarizeError!void {
+        var changed = false;
         while (true) {
             const body = rewritableProcBody(self.store, proc_id) orelse break;
             if (!try self.scalarizeProc(proc_id, body)) break;
+            changed = true;
         }
+        if (changed) try erased_owner.resolveProcReuseSources(self.allocator, self.store, self.layouts, proc_id);
     }
 
     fn deinit(self: *Pass) void {

@@ -4486,7 +4486,11 @@ const Builder = struct {
         try self.program.source_files.ensureUnusedCapacity(self.allocator, seeds.len);
         try self.program.lowering_modules.ensureUnusedCapacity(self.allocator, seeds.len);
         for (seeds, 0..) |seed, index| {
-            const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
+            const id = try self.program.addSourceFile(.{
+                .name = seed.name,
+                .qualified_name = seed.qualified_name,
+                .module_identity = seed.key.module_identity_hash,
+            });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
             const module_id = try self.program.addLoweringModule(seed.key);
@@ -10050,7 +10054,10 @@ const Builder = struct {
         if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |target| return target;
         for (scope.method_lookup_scope) |module_id| {
             const candidate = self.moduleForId(module_id);
-            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, false)) |target| return target;
+            // Only the module declaring a function-body type registers its
+            // methods, so a local procedure found here is that owner's exact
+            // target; its declaration context comes from the evidence purpose.
+            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |target| return target;
         }
         return null;
     }
@@ -52070,7 +52077,23 @@ const BodyContext = struct {
             // selection itself needs no graph-driven fixpoint here.
             try self.relateMaterializedEvidenceConstraint(target_ctx, param, entry);
             const contracts = evidenceCallableContracts(entry);
-            if (contracts.len != 0) {
+            if (contracts.len == 0 and entry == .target) {
+                // Checking omits side-vector evidence when each independent
+                // callable can derive it from the selected target. The schema
+                // still records every callable relation, including variables
+                // absent from the scheme root; relate each to a fresh instance
+                // of the declaration rather than the primary use's signature.
+                var independent_target = entry.target.*;
+                independent_target.instantiation = null;
+                independent_target.substitution = null;
+                const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
+                for (callables) |callable| {
+                    var contract_param = param;
+                    contract_param.callable_ty = callable;
+                    contract_param.callable_contracts = .{};
+                    try self.relateTargetToConstraint(&independent_target, target_ctx, contract_param);
+                }
+            } else if (contracts.len != 0) {
                 if (contracts.len != param.callable_contracts.len) Common.invariant("callable contracts differed from their checked schema");
                 const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
                 for (contracts, callables) |contract_entry, callable| {
@@ -67913,7 +67936,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, .first, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc" });
+    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc", .module_identity = @splat(0) });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{
