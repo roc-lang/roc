@@ -1542,13 +1542,6 @@ const Pass = struct {
         return best;
     }
 
-    /// Tightest provable constant upper bound of a root node, following fact
-    /// edges forward: from `r <= x + c` and a bound on `x`, `r` is bounded.
-    fn hiConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
-        try self.relaxFresh(start, .forward);
-        return self.hiConstReached(start);
-    }
-
     /// Tightest provable constant lower bound of a root node, following fact
     /// edges backward: from `x <= r + c` and a bound on `x`, `r` is bounded.
     fn loConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
