@@ -301,13 +301,14 @@ pub const MonoLlvmCodeGen = struct {
     /// frame-replacing call passes in memory. Such an argument cannot live in
     /// the frame being replaced, so whoever enters the group with an ordinary
     /// call supplies this storage and every member passes it along.
-    tail_scratch: std.AutoHashMap(lir.LIR.TailGroupId, TailScratch),
+    /// Indexed by tail group.
+    tail_scratch: std.ArrayList(TailScratch) = .empty,
     /// The current fast body's group storage parameter, if its group has any.
     current_tail_scratch: ?LlvmBuilder.Value = null,
     current_tail_group: ?lir.LIR.TailGroupId = null,
     /// Group storage this function allocated to enter other groups, and the
     /// function those slots belong to.
-    tail_scratch_slots: std.AutoHashMap(lir.LIR.TailGroupId, LlvmBuilder.Value),
+    tail_scratch_slots: std.ArrayList(?LlvmBuilder.Value) = .empty,
     tail_scratch_slots_owner: ?LlvmBuilder.Function.Index = null,
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     /// Per-function scratch slot RC-helper calls copy their argument into,
@@ -571,8 +572,6 @@ pub const MonoLlvmCodeGen = struct {
             .boxy_worker_procs = boxy_worker_procs,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .fast_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .tail_scratch = std.AutoHashMap(lir.LIR.TailGroupId, TailScratch).init(allocator),
-            .tail_scratch_slots = std.AutoHashMap(lir.LIR.TailGroupId, LlvmBuilder.Value).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
@@ -640,8 +639,8 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
         self.fast_registry.deinit();
-        self.tail_scratch.deinit();
-        self.tail_scratch_slots.deinit();
+        self.tail_scratch.deinit(self.allocator);
+        self.tail_scratch_slots.deinit(self.allocator);
         self.builtin_functions.deinit();
         self.cold_shims.deinit();
         self.clearStaticBytes();
@@ -1876,10 +1875,10 @@ pub const MonoLlvmCodeGen = struct {
         for (lowered.args) |placement| cursor += fastPlacementParamCount(placement);
         const desc_index: ?u32 = if (proc.runtime_ret_desc != null) cursor else null;
         if (desc_index != null) cursor += 1;
-        const scratch: TailScratch = if (proc.tail_group) |group|
-            self.tail_scratch.get(group) orelse llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@intFromEnum(group)})
-        else
-            .{};
+        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
+            if (@intFromEnum(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@intFromEnum(group)});
+            break :blk self.tail_scratch.items[@intFromEnum(group)];
+        } else .{};
         return .{
             .lowered = lowered,
             .arg_layouts = owned,
@@ -1909,12 +1908,16 @@ pub const MonoLlvmCodeGen = struct {
     /// member.
     fn computeTailScratch(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         self.tail_scratch.clearRetainingCapacity();
+        var group_count: usize = 0;
+        for (procs) |proc| {
+            if (proc.tail_group) |group| group_count = @max(group_count, @as(usize, @intFromEnum(group)) + 1);
+        }
+        self.tail_scratch.appendNTimes(self.allocator, .{}, group_count) catch return error.OutOfMemory;
         var arena_state = std.heap.ArenaAllocator.init(self.allocator);
         defer arena_state.deinit();
         for (procs) |proc| {
             const group = proc.tail_group orelse continue;
-            const entry = self.tail_scratch.getOrPut(group) catch return error.OutOfMemory;
-            if (!entry.found_existing) entry.value_ptr.* = .{};
+            const entry = &self.tail_scratch.items[@intFromEnum(group)];
             if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
             _ = arena_state.reset(.retain_capacity);
             const arena = arena_state.allocator();
@@ -1926,8 +1929,8 @@ pub const MonoLlvmCodeGen = struct {
                 if (placement != .indirect) continue;
                 _ = cursor.place(self.layoutDataSize(arg_layout), @intCast(@max(self.sizeAlignOf(arg_layout).alignment.toByteUnits(), 1)));
             }
-            entry.value_ptr.size = @max(entry.value_ptr.size, cursor.offset);
-            entry.value_ptr.alignment = @max(entry.value_ptr.alignment, cursor.alignment);
+            entry.size = @max(entry.size, cursor.offset);
+            entry.alignment = @max(entry.alignment, cursor.alignment);
         }
     }
 
@@ -1949,14 +1952,14 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         if (self.tail_scratch_slots_owner != wip.function) {
             self.tail_scratch_slots.clearRetainingCapacity();
+            self.tail_scratch_slots.appendNTimes(self.allocator, null, self.tail_scratch.items.len) catch return error.OutOfMemory;
             self.tail_scratch_slots_owner = wip.function;
         }
-        const entry = self.tail_scratch_slots.getOrPut(group) catch return error.OutOfMemory;
-        if (!entry.found_existing) {
-            errdefer _ = self.tail_scratch_slots.remove(group);
-            entry.value_ptr.* = try self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "tail_scratch");
+        const storage = &self.tail_scratch_slots.items[@intFromEnum(group)];
+        if (storage.* == null) {
+            storage.* = try self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "tail_scratch");
         }
-        return entry.value_ptr.*;
+        return storage.*.?;
     }
 
     fn fastPlacementParamCount(placement: layout.abi.Placement) u32 {
