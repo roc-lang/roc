@@ -519,15 +519,56 @@ const LenInvariant = struct {
 
 /// Cross-round bounds of one loop parameter, complete once every jump into
 /// its join was captured in a single round.
+/// Each list holds up to `meet_bound_cap`; storage follows use, since a
+/// procedure persists one of these per loop parameter.
 const LoopBounds = struct {
-    items: [meet_bound_cap]StableBound = undefined,
+    items: []StableBound = &.{},
     len: usize = 0,
     /// Lower bounds `base <= value + c` of an integer parameter.
-    lower_items: [meet_bound_cap]StableBound = undefined,
+    lower_items: []StableBound = &.{},
     lower_len: usize = 0,
-    len_items: [meet_bound_cap]LenInvariant = undefined,
+    len_items: []LenInvariant = &.{},
     len_count: usize = 0,
     complete: bool = false,
+
+    fn ensureCapacity(self: *LoopBounds, allocator: Allocator, bounds: usize, lower: usize, invariants: usize) ResourceError!void {
+        if (self.items.len < bounds) {
+            const grown = try allocator.alloc(StableBound, bounds);
+            @memcpy(grown[0..self.len], self.items[0..self.len]);
+            allocator.free(self.items);
+            self.items = grown;
+        }
+        if (self.lower_items.len < lower) {
+            const grown = try allocator.alloc(StableBound, lower);
+            @memcpy(grown[0..self.lower_len], self.lower_items[0..self.lower_len]);
+            allocator.free(self.lower_items);
+            self.lower_items = grown;
+        }
+        if (self.len_items.len < invariants) {
+            const grown = try allocator.alloc(LenInvariant, invariants);
+            @memcpy(grown[0..self.len_count], self.len_items[0..self.len_count]);
+            allocator.free(self.len_items);
+            self.len_items = grown;
+        }
+    }
+
+    fn deinit(self: *LoopBounds, allocator: Allocator) void {
+        allocator.free(self.items);
+        allocator.free(self.lower_items);
+        allocator.free(self.len_items);
+    }
+
+    /// Copy the live prefixes and the completion flag.
+    fn assign(dst: *LoopBounds, allocator: Allocator, src: *const LoopBounds) ResourceError!void {
+        try dst.ensureCapacity(allocator, src.len, src.lower_len, src.len_count);
+        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
+        dst.len = src.len;
+        @memcpy(dst.lower_items[0..src.lower_len], src.lower_items[0..src.lower_len]);
+        dst.lower_len = src.lower_len;
+        @memcpy(dst.len_items[0..src.len_count], src.len_items[0..src.len_count]);
+        dst.len_count = src.len_count;
+        dst.complete = src.complete;
+    }
 };
 
 /// Fixed-capacity list of synthesized bounds.
@@ -931,6 +972,8 @@ const Pass = struct {
     entry_scratch: *LoopFacts,
     persist_scratch: *LoopFacts,
     env_scratch: *MergeEnvBounds,
+    /// A loop parameter's bounds under construction, sized for the caps.
+    bounds_scratch: LoopBounds,
     /// Assumption bits of the facts the current fact-graph query relaxed
     /// through; reset by each top-level query.
     query_used: u64 = 0,
@@ -965,6 +1008,9 @@ const Pass = struct {
         env_scratch.* = .{};
         try env_scratch.ensureCapacity(allocator, merge_env_persist_cap);
         errdefer env_scratch.deinit(allocator);
+        var bounds_scratch = LoopBounds{};
+        try bounds_scratch.ensureCapacity(allocator, meet_bound_cap, meet_bound_cap, meet_bound_cap);
+        errdefer bounds_scratch.deinit(allocator);
         return .{
             .store = store,
             .layouts = layouts,
@@ -1034,6 +1080,7 @@ const Pass = struct {
             .entry_scratch = entry_scratch,
             .persist_scratch = persist_scratch,
             .env_scratch = env_scratch,
+            .bounds_scratch = bounds_scratch,
             .rewrites = 0,
             .proof_records = .empty,
             .proof_facts = .empty,
@@ -1064,15 +1111,10 @@ const Pass = struct {
         self.jump_records.deinit(self.allocator);
         self.freeMergeStates();
         self.merge_states.deinit();
-        var loop_facts_it = self.loop_facts.valueIterator();
-        while (loop_facts_it.next()) |facts| facts.deinit(self.allocator);
-        var merge_facts_it = self.merge_facts.valueIterator();
-        while (merge_facts_it.next()) |facts| facts.deinit(self.allocator);
-        var merge_env_it = self.merge_env.valueIterator();
-        while (merge_env_it.next()) |env| env.deinit(self.allocator);
         self.body_joins.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
+        self.freePersisted();
         self.loop_bounds.deinit();
         self.loop_facts.deinit();
         self.merge_facts.deinit();
@@ -1114,6 +1156,7 @@ const Pass = struct {
         self.allocator.destroy(self.persist_scratch);
         self.env_scratch.deinit(self.allocator);
         self.allocator.destroy(self.env_scratch);
+        self.bounds_scratch.deinit(self.allocator);
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
         if (self.read_counts) |*counts| counts.deinit();
@@ -1920,6 +1963,19 @@ const Pass = struct {
     }
 
     // Pre-scan: predecessor counts, jump counts, and assignment counts.
+
+    /// Free the storage of every persisted list, before the maps that hold
+    /// them are cleared or dropped.
+    fn freePersisted(self: *Pass) void {
+        var bounds_it = self.loop_bounds.valueIterator();
+        while (bounds_it.next()) |bounds| bounds.deinit(self.allocator);
+        var loop_facts_it = self.loop_facts.valueIterator();
+        while (loop_facts_it.next()) |facts| facts.deinit(self.allocator);
+        var merge_facts_it = self.merge_facts.valueIterator();
+        while (merge_facts_it.next()) |facts| facts.deinit(self.allocator);
+        var merge_env_it = self.merge_env.valueIterator();
+        while (merge_env_it.next()) |env| env.deinit(self.allocator);
+    }
 
     /// Reserve the per-merge-head maps for every head the procedure has,
     /// so they never grow during the rounds: the pass runs on an arena,
@@ -2773,7 +2829,8 @@ const Pass = struct {
         }
 
         if (state.captures == 0) {
-            try state.facts.appendSlice(self.allocator, self.facts.items);
+            try state.facts.ensureTotalCapacityPrecise(self.allocator, self.facts.items.len);
+            state.facts.appendSliceAssumeCapacity(self.facts.items);
             var it = self.path_env.iterator();
             while (it.next()) |kv| {
                 if (state.env.items.len >= merge_env_cap) break;
@@ -3529,7 +3586,11 @@ const Pass = struct {
                     continue;
                 }
 
-                var stable = LoopBounds{ .complete = true };
+                const stable = &self.bounds_scratch;
+                stable.len = 0;
+                stable.lower_len = 0;
+                stable.len_count = 0;
+                stable.complete = true;
                 const previous_bounds = self.loop_bounds.getPtr(key);
                 const old_items: []const StableBound = if (previous_bounds) |prev| prev.items[0..prev.len] else &.{};
                 const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
@@ -3587,7 +3648,9 @@ const Pass = struct {
                 }
                 if (stable.len == 0 and stable.lower_len == 0 and stable.len_count == 0) continue;
                 if (previous_bounds == null or previous_bounds.?.len != stable.len or previous_bounds.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
-                try self.loop_bounds.put(key, stable);
+                const slot = try self.loop_bounds.getOrPut(key);
+                if (!slot.found_existing) slot.value_ptr.* = .{};
+                try slot.value_ptr.assign(self.allocator, stable);
             }
         }
     }
@@ -4285,6 +4348,7 @@ const Pass = struct {
         const proc = self.store.getProcSpec(proc_id);
         if (proc.body == null or proc.hosted != null) return;
 
+        self.freePersisted();
         self.loop_bounds.clearRetainingCapacity();
         self.progress_epoch = 0;
         self.loop_facts.clearRetainingCapacity();
