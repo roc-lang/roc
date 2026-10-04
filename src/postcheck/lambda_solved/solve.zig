@@ -1283,7 +1283,7 @@ const Solver = struct {
                 if (children.component_tys.count() != self.lifted.patSpan(tag.payloads).len) Common.invariant("tag pattern payload arity differs from its checked type");
             },
             .nominal => |backing| {
-                if (self.hasGeneratedOpaquePatOwner(pat_id) or try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
+                if (try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
                     const backing_index = @intFromEnum(backing);
                     if (self.generated_backing_pats[backing_index]) return;
                     self.generated_backing_pats[backing_index] = true;
@@ -1343,21 +1343,14 @@ const Solver = struct {
         }
     }
 
-    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
-        const content = self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty);
-        if (std.meta.activeTag(content) != .named) return false;
-        const backing = content.named.backing orelse return false;
-        return backing.authority == .generated_private;
-    }
-
     fn unifyGeneratedOpaqueBacking(self: *Solver, generated_ty: Type.TypeVarId, expected_ty: Type.TypeVarId) Allocator.Error!void {
         const generated = self.program.types.rootCompressed(generated_ty);
         const expected = self.program.types.rootCompressed(expected_ty);
         if (generated == expected) return;
-        // The caller reached this path only through a pattern whose named
-        // backing carries generated-private authority. Preserve that explicit
-        // producer-owned backing deterministically; structural size is not an
-        // authority signal.
+        // The caller reached this path only through the backing pattern of a
+        // `Fields` or `Field` nominal, whose backing is compiler-generated.
+        // Preserve that explicit generated backing deterministically;
+        // structural size is not an authority signal.
         self.program.types.set(expected, .{ .link = generated });
     }
 
