@@ -148,7 +148,6 @@ fn classifyTestHelperError(err: helpers.TestHelperError) TestHelperErrorKind {
         error.MemfdCreateFailed,
         error.FtruncateFailed,
         error.InvalidHandle,
-        error.WindowsSDKNotFound,
         error.CompilationFailed,
         error.NoBitcodeModules,
         error.UnsupportedLlvmTriple,

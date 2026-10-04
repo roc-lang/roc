@@ -556,6 +556,18 @@ The `app` placeholder represents the compiled Roc application. The order files a
 
 The default behaviour for `roc build` without a `--target` flag is the first compatible target in the `targets` section.
 
+Linking uses only the listed `inputs` and Roc's own objects. Nothing is taken from the machine running the build: no system C runtime, SDK, or default library is searched for, on any target. A Windows target (`x64win`, `arm64win`, `x64mingw`, `arm64mingw`) therefore lists everything a Windows link needs:
+
+- the entry point the linker infers, `mainCRTStartup` (or `_DllMainCRTStartup` for a `Shared` output), from a startup object or archive;
+- whatever C runtime the host calls into;
+- import libraries for `kernel32` and `ntdll`, which Roc's runtime imports from, and for any other DLL the host uses.
+
+```roc
+x64win: { inputs: ["host.lib", app, "startup.lib", "ucrtbase.lib", "kernel32.lib", "ntdll.lib"] },
+```
+
+An import library can be generated from a module-definition file with `zig dlltool -m i386:x86-64 -d kernel32.def -l kernel32.lib`. Because no input comes from an installed toolchain, a Windows target builds the same on a machine without Visual Studio and when cross-compiling.
+
 ### Hosted type modules
 
 A platform's type modules can declare _hosted_ functions, which are implemented by the platform's

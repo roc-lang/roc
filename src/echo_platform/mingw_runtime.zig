@@ -5,6 +5,11 @@ pub const libraries = [_][]const u8{
     "libmingw32.lib",
     "zigc.lib",
     "compiler_rt.lib",
+} ++ import_libraries;
+
+/// UCRT and Win32 import libraries. They name DLL exports and carry no
+/// compiled code, so the matching MSVC target links the same files.
+pub const import_libraries = [_][]const u8{
     "api-ms-win-crt-conio-l1-1-0.lib",
     "api-ms-win-crt-convert-l1-1-0.lib",
     "api-ms-win-crt-environment-l1-1-0.lib",

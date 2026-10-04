@@ -1048,7 +1048,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.UnsupportedTarget,
         error.UnsupportedWatchMode,
         error.WasmOutputWriteFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
@@ -1236,7 +1235,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.UnsupportedTarget,
         error.UnsupportedWatchMode,
         error.WasmOutputWriteFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => {
