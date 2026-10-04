@@ -6227,13 +6227,18 @@ const AliasExpansionContext = struct {
     pub fn hash(_: AliasExpansionContext, key: AliasExpansionKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, key.statement);
-        hasher.update(std.mem.sliceAsBytes(key.args));
+        std.hash.autoHash(&hasher, key.args.len);
+        for (key.args) |arg| std.hash.autoHash(&hasher, arg);
         return hasher.final();
     }
 
     /// Whether both keys expand the same alias at the same argument roots.
     pub fn eql(_: AliasExpansionContext, a: AliasExpansionKey, b: AliasExpansionKey) bool {
-        return a.statement == b.statement and std.mem.eql(CheckedTypeId, a.args, b.args);
+        if (a.statement != b.statement or a.args.len != b.args.len) return false;
+        for (a.args, b.args) |left, right| {
+            if (left != right) return false;
+        }
+        return true;
     }
 };
 
@@ -10019,12 +10024,13 @@ fn checkPublishedNominalBacking(
     const module = modules.module(0);
     const module_env = module.moduleEnvConst();
 
+    const nominal_ident = module_env.getIdentStoreConst().lookup(Ident.for_text(nominal_name)) orelse return error.TestUnexpectedResult;
     const backing_anno = blk: {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             const statement = module_env.store.getStatement(statement_idx);
             if (statement != .s_nominal_decl) continue;
             const header = module_env.store.getTypeHeader(statement.s_nominal_decl.header);
-            if (!std.mem.eql(u8, module_env.getIdent(header.relative_name), nominal_name)) continue;
+            if (header.relative_name != nominal_ident) continue;
             break :blk statement.s_nominal_decl.anno;
         }
         return error.TestUnexpectedResult;

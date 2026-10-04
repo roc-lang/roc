@@ -11497,7 +11497,7 @@ inside an otherwise correctly substituted outer backing template.
 Declaration output expands every local alias reference, applied or bare, by
 walking the alias body syntax; a bare reference binds the alias's formals to
 the alias's own formal roots. An expansion depends only on the alias and the
-roots bound to its formals, so a module publishes it once and every later
+roots bound to its formals, so a module outputs it once and every later
 reference shares that root. A nominal backing has no use-site polarity, so
 every extensionless tag union it reaches closes as written, exactly as the
 checker closes it. The alias declaration's own root is never the backing's
