@@ -685,7 +685,45 @@ const MergeEnvBounds = struct {
         @memcpy(dst.items[0..src.len], src.items[0..src.len]);
         dst.len = src.len;
     }
+
+    /// Whether two meets persist the same bounds for the same locals. The
+    /// entries and the bounds within one are compared as sets: their order
+    /// follows the walk that produced them, which a seeded fact's position
+    /// can shift from round to round without any bound changing.
+    fn sameBounds(previous: *const MergeEnvBounds, current: *const MergeEnvBounds) bool {
+        if (previous.len != current.len) return false;
+        for (current.items[0..current.len]) |new| {
+            var matched = false;
+            for (previous.items[0..previous.len]) |old| {
+                if (old.local != new.local) continue;
+                matched = sameBoundSet(old.bounds[0..old.len], new.bounds[0..new.len]) and
+                    sameBoundSet(old.lower[0..old.lower_len], new.lower[0..new.lower_len]);
+                break;
+            }
+            if (!matched) return false;
+        }
+        return true;
+    }
 };
+
+/// Whether two short bound lists hold the same bounds in any order.
+fn sameBoundSet(previous: []const StableBound, current: []const StableBound) bool {
+    return previous.len == current.len and boundsWithin(current, previous) and boundsWithin(previous, current);
+}
+
+fn boundsWithin(inner: []const StableBound, outer: []const StableBound) bool {
+    for (inner) |bound| {
+        var found = false;
+        for (outer) |other| {
+            if (std.meta.eql(bound, other)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
 
 const Pass = struct {
     store: *LirStore,
@@ -759,10 +797,13 @@ const Pass = struct {
     /// values shares one root for the round.
     sum_roots: std.AutoHashMap(u64, NodeId),
     sums: std.ArrayList(SumRoot),
-    /// Every root that is a sum root or an operand of one this round: the
-    /// only roots the sums' derived facts touch, so a query reaching none
-    /// of them cannot be changed by deriving those facts.
-    sum_ends: collections.DenseMap(NodeId, void),
+    /// Per root, whether it is a sum root or an operand of one this round:
+    /// the only roots the sums' derived facts touch, so a query reaching
+    /// none of them cannot be changed by deriving those facts. Indexed by
+    /// root; grown as sums appear.
+    sum_ends: std.ArrayList(bool),
+    /// Whether the last `relaxFrom` reached a root `sum_ends` marks.
+    reached_sum_end: bool = false,
     /// A fact was added or rewound since the sums' operand facts were last
     /// derived, so a query first re-derives them from the current path.
     sums_dirty: bool = false,
@@ -818,9 +859,9 @@ const Pass = struct {
     /// grown as roots appear.
     fwd_heads: std.ArrayList(u32),
     bwd_heads: std.ArrayList(u32),
-    /// Scratch for `dedupeFacts`.
+    /// The facts seeded into the region so far, while `seeding`.
     fact_seen: std.AutoHashMap(FactKey, void),
-    fact_scratch: std.ArrayList(Fact),
+    seeding: bool = false,
     /// Positions of stable facts by identity, for the stabilizations and
     /// the merge meets. Scratch, cleared by each user.
     stable_index: std.AutoHashMap(StableFactKey, u32),
@@ -890,7 +931,7 @@ const Pass = struct {
             .seeded_param_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
-            .sum_ends = collections.DenseMap(NodeId, void).init(allocator),
+            .sum_ends = .empty,
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .path_len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -913,7 +954,6 @@ const Pass = struct {
             .fwd_heads = .empty,
             .bwd_heads = .empty,
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
-            .fact_scratch = .empty,
             .stable_index = std.AutoHashMap(StableFactKey, u32).init(allocator),
             .stable_scratch = stable_scratch,
             .entry_scratch = entry_scratch,
@@ -963,7 +1003,7 @@ const Pass = struct {
         self.seeded_param_roots.deinit();
         self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
-        self.sum_ends.deinit();
+        self.sum_ends.deinit(self.allocator);
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
         self.path_len_roots.deinit();
@@ -980,7 +1020,6 @@ const Pass = struct {
         self.fwd_heads.deinit(self.allocator);
         self.bwd_heads.deinit(self.allocator);
         self.fact_seen.deinit();
-        self.fact_scratch.deinit(self.allocator);
         self.stable_index.deinit();
         self.allocator.destroy(self.stable_scratch);
         self.allocator.destroy(self.entry_scratch);
@@ -1006,7 +1045,7 @@ const Pass = struct {
         self.seeded_param_root_set.clearRetainingCapacity();
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
-        self.sum_ends.clearRetainingCapacity();
+        @memset(self.sum_ends.items, false);
         self.path_value_roots.clearRetainingCapacity();
         self.path_len_roots.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -1185,24 +1224,24 @@ const Pass = struct {
         };
     }
 
-    /// Drop repeats among the facts a region starts with. The same fact
-    /// arrives from several seeds (global facts, the raw meet, the stable
-    /// meet, persisted loop facts), and repeats would only spend the fact
-    /// cap and slow every query.
-    fn dedupeFacts(self: *Pass) ResourceError!void {
+    /// Begin seeding a region's facts: the same fact arrives from several
+    /// seeds (global facts, the raw meet, the stable meet, persisted loop
+    /// facts), and a repeat would spend the fact cap and slow the merge
+    /// meets, so seeds are deduplicated as they arrive.
+    fn beginSeeding(self: *Pass) void {
         self.fact_seen.clearRetainingCapacity();
-        self.fact_scratch.clearRetainingCapacity();
-        for (self.facts.items) |fact| {
-            const gop = try self.fact_seen.getOrPut(.{ .a = fact.a, .b = fact.b, .c = fact.c, .assumed = fact.assumed });
-            if (gop.found_existing) continue;
-            try self.fact_scratch.append(self.allocator, fact);
-        }
-        if (self.fact_scratch.items.len == self.facts.items.len) return;
-        self.truncateFacts(0);
-        for (self.fact_scratch.items) |fact| try self.pushFact(fact);
+        self.seeding = true;
+    }
+
+    fn endSeeding(self: *Pass) void {
+        self.seeding = false;
     }
 
     fn addFact(self: *Pass, fact: Fact) ResourceError!void {
+        if (self.seeding) {
+            const gop = try self.fact_seen.getOrPut(.{ .a = fact.a, .b = fact.b, .c = fact.c, .assumed = fact.assumed });
+            if (gop.found_existing) return;
+        }
         if (self.facts.items.len >= max_facts) return;
         try self.pushFact(fact);
         if (self.sums.items.len > 0 and !self.refreshing_sums) self.sums_dirty = true;
@@ -1258,6 +1297,7 @@ const Pass = struct {
         self.query_queue.clearRetainingCapacity();
         try self.query_best.put(start, .{ .c = 0, .queued = true });
         try self.query_queue.append(self.allocator, start);
+        self.reached_sum_end = self.isSumEnd(start);
         var next: usize = 0;
         while (next < self.query_queue.items.len) : (next += 1) {
             const node = self.query_queue.items[next];
@@ -1302,6 +1342,7 @@ const Pass = struct {
                     if (self.query_best.count() >= query_visit_cap) continue;
                     try self.query_best.put(other, .{ .c = next_acc, .assumed = acc_assumed | fact.assumed, .queued = true });
                     self.query_used |= fact.assumed;
+                    if (self.isSumEnd(other)) self.reached_sum_end = true;
                 }
                 try self.query_queue.append(self.allocator, other);
             }
@@ -1309,21 +1350,15 @@ const Pass = struct {
     }
 
     /// `relaxFrom` with the sums' derived facts current for the walk: the
-    /// derivation is redone, and the walk with it, only when a reached root
-    /// is one those facts touch, since otherwise they cannot extend it.
+    /// derivation is redone only when the walk reaches a root those facts
+    /// touch, since otherwise they cannot extend it; a walk that reached
+    /// one is then redone, unless its start is such a root, which is known
+    /// before walking.
     fn relaxFresh(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
+        if (self.sums_dirty and !self.refreshing_sums and self.isSumEnd(start)) try self.refreshSumOperandFacts();
         const used_before = self.query_used;
         try self.relaxFrom(start, direction);
-        if (!self.sums_dirty or self.refreshing_sums) return;
-        var touches = false;
-        var it = self.query_best.iterator();
-        while (it.next()) |entry| {
-            if (self.sum_ends.contains(entry.key_ptr.*)) {
-                touches = true;
-                break;
-            }
-        }
-        if (!touches) return;
+        if (!self.sums_dirty or self.refreshing_sums or !self.reached_sum_end) return;
         try self.refreshSumOperandFacts();
         self.query_used = used_before;
         try self.relaxFrom(start, direction);
@@ -1410,6 +1445,17 @@ const Pass = struct {
         return acc.c + shift;
     }
 
+    fn markSumEnd(self: *Pass, root: NodeId) ResourceError!void {
+        if (root >= self.sum_ends.items.len) {
+            try self.sum_ends.appendNTimes(self.allocator, false, root + 1 - self.sum_ends.items.len);
+        }
+        self.sum_ends.items[root] = true;
+    }
+
+    fn isSumEnd(self: *const Pass, root: NodeId) bool {
+        return root < self.sum_ends.items.len and self.sum_ends.items[root];
+    }
+
     /// Node for the mathematical sum of two dynamic values, or null when they
     /// share a root. The operand roots identify one sum root per round; each
     /// use relates that root to both operands and, through the current
@@ -1427,9 +1473,9 @@ const Pass = struct {
             const root = (try self.freshRoot(na.lo + nb.lo, na.hi + nb.hi)) orelse return null;
             try self.sum_roots.put(key, root);
             try self.sums.append(self.allocator, .{ .root = root, .a = ra, .b = rb });
-            try self.sum_ends.put(root, {});
-            try self.sum_ends.put(ra, {});
-            try self.sum_ends.put(rb, {});
+            try self.markSumEnd(root);
+            try self.markSumEnd(ra);
+            try self.markSumEnd(rb);
             break :blk root;
         };
         try self.refreshSumOperandFacts();
@@ -2310,6 +2356,25 @@ const Pass = struct {
         }
     }
 
+    /// Whether two persisted fact lists hold the same facts, with the same
+    /// assumptions and growth, in any order. A list's order follows the
+    /// walk that captured it, and a merge seeded from another merge's
+    /// persisted facts inherits that order a round late, so along a chain
+    /// of joins the order keeps shifting while the facts stand still.
+    fn sameStableFacts(self: *Pass, previous: *const LoopFacts, current: *const LoopFacts) ResourceError!bool {
+        if (previous.len != current.len) return false;
+        self.stable_index.clearRetainingCapacity();
+        for (previous.items[0..previous.len], 0..) |fact, i| {
+            const gop = try self.stable_index.getOrPut(stableFactKey(fact));
+            if (!gop.found_existing) gop.value_ptr.* = @intCast(i);
+        }
+        for (current.items[0..current.len]) |fact| {
+            const at = self.stable_index.get(stableFactKey(fact)) orelse return false;
+            if (!std.meta.eql(previous.items[at], fact)) return false;
+        }
+        return true;
+    }
+
     /// Keep in `kept` only the facts `other` also holds, each with both
     /// sides' assumptions.
     fn intersectStableFacts(self: *Pass, kept: *LoopFacts, other: *const LoopFacts) ResourceError!void {
@@ -2617,7 +2682,7 @@ const Pass = struct {
         // captured in the head's own region; the stable meet is what edges
         // from other regions agree on. Values bind first so the stable facts
         // materialize against the nodes the region reads.
-        for (state.facts.items) |fact| try self.pushFact(fact);
+        for (state.facts.items) |fact| try self.addFact(fact);
         try self.seedEnvFromMeet(state, null);
         try self.seedStableFacts(&state.stable);
     }
@@ -2925,15 +2990,7 @@ const Pass = struct {
         if (stable.len == 0) return;
         const entry = try self.merge_facts.getOrPut(head);
         if (entry.found_existing) {
-            const previous = entry.value_ptr;
-            if (previous.len != stable.len) {
-                self.new_loop_bounds = true;
-            } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
-                if (!std.meta.eql(old, new)) {
-                    self.new_loop_bounds = true;
-                    break;
-                }
-            }
+            if (!try self.sameStableFacts(entry.value_ptr, stable)) self.new_loop_bounds = true;
         } else self.new_loop_bounds = true;
         entry.value_ptr.assign(stable);
     }
@@ -3001,27 +3058,7 @@ const Pass = struct {
         if (stable.len == 0) return;
         const entry = try self.merge_env.getOrPut(head);
         if (entry.found_existing) {
-            const previous = entry.value_ptr;
-            if (previous.len != stable.len) {
-                self.new_loop_bounds = true;
-            } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
-                if (old.local != new.local or old.len != new.len or old.lower_len != new.lower_len) {
-                    self.new_loop_bounds = true;
-                    break;
-                }
-                for (old.bounds[0..old.len], new.bounds[0..new.len]) |ob, nb| {
-                    if (!std.meta.eql(ob, nb)) {
-                        self.new_loop_bounds = true;
-                        break;
-                    }
-                }
-                for (old.lower[0..old.lower_len], new.lower[0..new.lower_len]) |ob, nb| {
-                    if (!std.meta.eql(ob, nb)) {
-                        self.new_loop_bounds = true;
-                        break;
-                    }
-                }
-            }
+            if (!entry.value_ptr.sameBounds(stable)) self.new_loop_bounds = true;
         } else self.new_loop_bounds = true;
         entry.value_ptr.assign(stable);
     }
@@ -3432,7 +3469,7 @@ const Pass = struct {
     fn reachableBounds(self: *Pass, node_id: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
         const node = self.nodes.items[node_id];
-        try self.relaxFrom(node.root, .forward);
+        try self.relaxFresh(node.root, .forward);
         // One bound per reached root, at the tightest slack the walk found.
         var bounds: QueryBounds = .{};
         var it = self.query_best.iterator();
@@ -3531,7 +3568,7 @@ const Pass = struct {
     fn lenLowerBounds(self: *Pass, len_node: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
         const node = self.nodes.items[len_node];
-        try self.relaxFrom(node.root, .backward);
+        try self.relaxFresh(node.root, .backward);
         // One bound per reached root, at the tightest slack the walk found.
         var bounds: QueryBounds = .{};
         var it = self.query_best.iterator();
@@ -3947,9 +3984,10 @@ const Pass = struct {
             self.truncateFacts(0);
             self.no_overflow_facts.clearRetainingCapacity();
             self.frames.clearRetainingCapacity();
-            for (self.global_facts.items) |fact| try self.pushFact(fact);
+            self.beginSeeding();
+            for (self.global_facts.items) |fact| try self.addFact(fact);
             try self.seedFromMerge(head);
-            try self.dedupeFacts();
+            self.endSeeding();
             try self.frames.append(self.allocator, .{
                 .stmt = head,
                 .facts_len = self.facts.items.len,
