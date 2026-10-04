@@ -387,7 +387,14 @@ const SumRoot = struct {
     root: NodeId,
     a: NodeId,
     b: NodeId,
+    /// The previous sum touching this sum's root, `a`, and `b`, in that
+    /// order, under `Pass.sum_heads`; `no_sum` ends each chain.
+    prev: [3]u32 = .{ no_sum, no_sum, no_sum },
+    /// `Pass.fact_epoch` when this sum's facts were last stated on the
+    /// path; another value means they may be missing or stale.
+    fresh: u32 = 0,
 };
+const no_sum: u32 = std.math.maxInt(u32);
 
 /// Constant bounds of a root under the path facts, with the assumptions
 /// each bound's derivation touched.
@@ -810,20 +817,25 @@ const Pass = struct {
     /// values shares one root for the round.
     sum_roots: std.AutoHashMap(u64, NodeId),
     sums: std.ArrayList(SumRoot),
-    /// Per root, whether it is a sum root or an operand of one this round:
-    /// the only roots the sums' derived facts touch, so a query reaching
-    /// none of them cannot be changed by deriving those facts. Indexed by
-    /// root; grown as sums appear.
-    sum_ends: std.ArrayList(bool),
+    /// Per root, the most recent sum whose root or operand it is this
+    /// round, or `no_sum`: the sums' derived facts touch only these roots,
+    /// so a query reaching none of them cannot be changed by deriving
+    /// them. Indexed by root; grown as sums appear.
+    sum_heads: std.ArrayList(u32),
+    /// Sums whose facts the current query needs stated, by index.
+    refresh_set: std.ArrayList(u32),
+    /// Per sum, the `refresh_stamp` under which it joined `refresh_set`.
+    refresh_marks: std.ArrayList(u32),
+    refresh_stamp: u32 = 0,
+    /// Counts the changes to the path's facts (a fact added outside a
+    /// refresh, or the path rewound) that can date a sum's stated facts.
+    fact_epoch: u32 = 1,
     /// Per root in the sums' closure, its bounds from `boundSumRoots`.
     root_bounds: collections.DenseMap(NodeId, RootBounds),
     /// Per path fact, whether `boundSumRoots` has gathered it.
     edge_gathered: std.ArrayList(bool),
-    /// Whether the last `relaxFrom` reached a root `sum_ends` marks.
+    /// Whether the last `relaxFrom` reached a root `sum_heads` lists.
     reached_sum_end: bool = false,
-    /// A fact was added or rewound since the sums' operand facts were last
-    /// derived, so a query first re-derives them from the current path.
-    sums_dirty: bool = false,
     refreshing_sums: bool = false,
     /// Reassignable locals bound to a root (their value, or their list's
     /// length term) this round. A loop whose body never assigns such a
@@ -948,7 +960,9 @@ const Pass = struct {
             .seeded_param_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
-            .sum_ends = .empty,
+            .sum_heads = .empty,
+            .refresh_set = .empty,
+            .refresh_marks = .empty,
             .root_bounds = collections.DenseMap(NodeId, RootBounds).init(allocator),
             .edge_gathered = .empty,
             .sums = .empty,
@@ -1022,7 +1036,9 @@ const Pass = struct {
         self.seeded_param_roots.deinit();
         self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
-        self.sum_ends.deinit(self.allocator);
+        self.sum_heads.deinit(self.allocator);
+        self.refresh_set.deinit(self.allocator);
+        self.refresh_marks.deinit(self.allocator);
         self.root_bounds.deinit();
         self.edge_gathered.deinit(self.allocator);
         self.sums.deinit(self.allocator);
@@ -1066,7 +1082,8 @@ const Pass = struct {
         self.seeded_param_root_set.clearRetainingCapacity();
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
-        @memset(self.sum_ends.items, false);
+        self.refresh_marks.clearRetainingCapacity();
+        @memset(self.sum_heads.items, no_sum);
         self.path_value_roots.clearRetainingCapacity();
         self.path_len_roots.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -1207,34 +1224,75 @@ const Pass = struct {
         return @max(-slack_limit, @min(slack_limit, x));
     }
 
-    /// Relate every sum root to its operands under the current path's facts:
-    /// each operand sits below the sum by the other operand's proven floor
-    /// and above it by the other's proven ceiling. A guard `pos + span <=
-    /// len` followed by `span >= 5` thereby puts `pos` five below the length.
+    /// State the facts of the sums in `refresh_set` on the path: each
+    /// operand sits below the sum by the other operand's proven floor and
+    /// above it by the other's proven ceiling. A guard `pos + span <= len`
+    /// followed by `span >= 5` thereby puts `pos` five below the length.
     ///
-    /// The floors and ceilings are the fixpoint of the facts around the sums
-    /// together with the sums' own relations (a sum's ceiling is its
+    /// The floors and ceilings are the fixpoint of the facts around these
+    /// sums together with their own relations (a sum's ceiling is its
     /// operands' ceilings added, an operand's ceiling the sum's less the
     /// other operand's floor), found by `boundSumRoots`, so one derivation
-    /// states each sum's facts at their tightest.
-    fn refreshSumOperandFacts(self: *Pass) ResourceError!void {
-        self.sums_dirty = false;
+    /// states each sum's facts at their tightest. Only the sums a query
+    /// reaches are stated: a round's sums come from every region walked,
+    /// and most touch nothing on the current path.
+    fn refreshSums(self: *Pass) ResourceError!void {
         self.refreshing_sums = true;
         defer self.refreshing_sums = false;
         try self.boundSumRoots();
-        for (self.sums.items) |sum| {
+        for (self.refresh_set.items) |index| {
+            const sum = &self.sums.items[index];
             const a = self.root_bounds.get(sum.a).?;
             const b = self.root_bounds.get(sum.b).?;
             _ = try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -b.lo, .origin = .meet, .assumed = b.lo_assumed });
             _ = try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -a.lo, .origin = .meet, .assumed = a.lo_assumed });
             _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = b.hi, .origin = .meet, .assumed = b.hi_assumed });
             _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.b, .c = a.hi, .origin = .meet, .assumed = a.hi_assumed });
+            sum.fresh = self.fact_epoch;
         }
     }
 
-    /// Tightest constant bounds of the sum roots, their operands, and the
-    /// roots those rest on, into `root_bounds`. The roots are the closure
-    /// of the sums' roots over the fact links in both directions, each
+    /// Begin gathering sums into `refresh_set`.
+    fn beginRefreshSet(self: *Pass) ResourceError!void {
+        self.refresh_set.clearRetainingCapacity();
+        self.refresh_stamp +%= 1;
+        if (self.refresh_marks.items.len < self.sums.items.len) {
+            try self.refresh_marks.appendNTimes(self.allocator, 0, self.sums.items.len - self.refresh_marks.items.len);
+        }
+    }
+
+    /// Gather the sums touching `root` whose facts are not current.
+    fn gatherStaleSums(self: *Pass, root: NodeId) ResourceError!void {
+        if (root >= self.sum_heads.items.len) return;
+        var index = self.sum_heads.items[root];
+        while (index != no_sum) {
+            const sum = self.sums.items[index];
+            if (sum.fresh != self.fact_epoch and self.refresh_marks.items[index] != self.refresh_stamp) {
+                self.refresh_marks.items[index] = self.refresh_stamp;
+                try self.refresh_set.append(self.allocator, index);
+            }
+            index = sum.prev[sumSlot(sum, root)];
+        }
+    }
+
+    /// Which of a sum's three roots `root` is, as an index into `prev`.
+    fn sumSlot(sum: SumRoot, root: NodeId) usize {
+        if (sum.root == root) return 0;
+        if (sum.a == root) return 1;
+        return 2;
+    }
+
+    /// State the facts of the stale sums touching any of `roots`.
+    fn refreshSumsTouching(self: *Pass, roots: []const NodeId) ResourceError!void {
+        try self.beginRefreshSet();
+        for (roots) |root| try self.gatherStaleSums(root);
+        if (self.refresh_set.items.len != 0) try self.refreshSums();
+    }
+
+    /// Tightest constant bounds of the `refresh_set` sums' roots, their
+    /// operands, and the roots those rest on, into `root_bounds`. The roots
+    /// are the closure of the sums' roots over the fact links in both
+    /// directions, each
     /// fact relaxed both ways: from `a <= b + c`, `a`'s ceiling is at most
     /// `b`'s plus `c` and `b`'s floor at least `a`'s less `c`. A constant
     /// root ends the closure: its bound is its value, and a fact onward
@@ -1249,7 +1307,8 @@ const Pass = struct {
         self.query_edges.clearRetainingCapacity();
         self.edge_gathered.clearRetainingCapacity();
         try self.edge_gathered.appendNTimes(self.allocator, false, self.facts.items.len);
-        for (self.sums.items) |sum| {
+        for (self.refresh_set.items) |index| {
+            const sum = self.sums.items[index];
             for ([_]NodeId{ sum.root, sum.a, sum.b }) |root| {
                 if (try self.ensureRootBounds(root)) try self.query_queue.append(self.allocator, root);
             }
@@ -1310,8 +1369,8 @@ const Pass = struct {
                     changed = true;
                 }
             }
-            for (self.sums.items) |sum| {
-                if (try self.relaxSum(sum)) changed = true;
+            for (self.refresh_set.items) |index| {
+                if (try self.relaxSum(self.sums.items[index])) changed = true;
             }
         }
     }
@@ -1410,7 +1469,7 @@ const Pass = struct {
         }
         if (self.facts.items.len >= max_facts) return;
         try self.pushFact(fact);
-        if (self.sums.items.len > 0 and !self.refreshing_sums) self.sums_dirty = true;
+        if (!self.refreshing_sums) self.fact_epoch +%= 1;
     }
 
     /// Append a fact to the path and link it under both of its roots.
@@ -1432,6 +1491,7 @@ const Pass = struct {
 
     /// Drop the facts above `len`, unlinking each from its roots.
     fn truncateFacts(self: *Pass, len: usize) void {
+        if (self.facts.items.len > len) self.fact_epoch +%= 1;
         while (self.facts.items.len > len) {
             const fact = self.facts.pop().?;
             const link = self.fact_links.pop().?;
@@ -1515,19 +1575,24 @@ const Pass = struct {
         }
     }
 
-    /// `relaxFrom` with the sums' derived facts current for the walk: the
-    /// derivation is redone only when the walk reaches a root those facts
-    /// touch, since otherwise they cannot extend it; a walk that reached
-    /// one is then redone, unless its start is such a root, which is known
-    /// before walking.
+    /// `relaxFrom` with the facts of the sums it touches stated on the
+    /// path: the walk is redone after stating the stale sums among the
+    /// roots it reached, until it reaches none, since a sum's facts cannot
+    /// extend a walk that reaches no root of it. The sums touching the
+    /// start are stated before the first walk.
     fn relaxFresh(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
-        if (self.sums_dirty and !self.refreshing_sums and self.isSumEnd(start)) try self.refreshSumOperandFacts();
+        if (!self.refreshing_sums) try self.refreshSumsTouching(&.{start});
         const used_before = self.query_used;
-        try self.relaxFrom(start, direction);
-        if (!self.sums_dirty or self.refreshing_sums or !self.reached_sum_end) return;
-        try self.refreshSumOperandFacts();
-        self.query_used = used_before;
-        try self.relaxFrom(start, direction);
+        while (true) {
+            try self.relaxFrom(start, direction);
+            if (self.refreshing_sums or !self.reached_sum_end) return;
+            try self.beginRefreshSet();
+            var it = self.query_best.iterator();
+            while (it.next()) |entry| try self.gatherStaleSums(entry.key_ptr.*);
+            if (self.refresh_set.items.len == 0) return;
+            try self.refreshSums();
+            self.query_used = used_before;
+        }
     }
 
     /// Tightest constant upper bound of a root from the roots a forward
@@ -1607,15 +1672,17 @@ const Pass = struct {
         return acc.c + shift;
     }
 
-    fn markSumEnd(self: *Pass, root: NodeId) ResourceError!void {
-        if (root >= self.sum_ends.items.len) {
-            try self.sum_ends.appendNTimes(self.allocator, false, root + 1 - self.sum_ends.items.len);
+    /// Link the sum at `index` under one of its roots.
+    fn linkSum(self: *Pass, index: u32, slot: usize, root: NodeId) ResourceError!void {
+        if (root >= self.sum_heads.items.len) {
+            try self.sum_heads.appendNTimes(self.allocator, no_sum, root + 1 - self.sum_heads.items.len);
         }
-        self.sum_ends.items[root] = true;
+        self.sums.items[index].prev[slot] = self.sum_heads.items[root];
+        self.sum_heads.items[root] = index;
     }
 
     fn isSumEnd(self: *const Pass, root: NodeId) bool {
-        return root < self.sum_ends.items.len and self.sum_ends.items[root];
+        return root < self.sum_heads.items.len and self.sum_heads.items[root] != no_sum;
     }
 
     /// Node for the mathematical sum of two dynamic values, or null when they
@@ -1634,30 +1701,36 @@ const Pass = struct {
         const root = self.sum_roots.get(key) orelse blk: {
             const root = (try self.freshRoot(na.lo + nb.lo, na.hi + nb.hi)) orelse return null;
             try self.sum_roots.put(key, root);
+            const index: u32 = @intCast(self.sums.items.len);
             try self.sums.append(self.allocator, .{ .root = root, .a = ra, .b = rb });
-            try self.markSumEnd(root);
-            try self.markSumEnd(ra);
-            try self.markSumEnd(rb);
+            try self.linkSum(index, 0, root);
+            try self.linkSum(index, 1, ra);
+            try self.linkSum(index, 2, rb);
             break :blk root;
         };
-        try self.refreshSumOperandFacts();
-        for (self.sums.items) |other| {
-            if (other.root == root) continue;
-            const pair: [2]NodeId = if (other.a == ra)
-                .{ rb, other.b }
-            else if (other.b == ra)
-                .{ rb, other.a }
-            else if (other.a == rb)
-                .{ ra, other.b }
-            else if (other.b == rb)
-                .{ ra, other.a }
-            else
-                continue;
-            if (try self.slackLe(pair[0], pair[1])) |c| {
-                _ = try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
-            }
-            if (try self.slackLe(pair[1], pair[0])) |c| {
-                _ = try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
+        try self.refreshSumsTouching(&.{ root, ra, rb });
+        // The sums sharing an operand are the ones chained under `ra` or
+        // `rb` as an operand; one chained under both is this sum itself.
+        for ([_]NodeId{ ra, rb }) |shared| {
+            var index = self.sum_heads.items[shared];
+            while (index != no_sum) {
+                const other = self.sums.items[index];
+                index = other.prev[sumSlot(other, shared)];
+                if (other.root == root or other.root == shared) continue;
+                const pair: [2]NodeId = if (other.a == ra)
+                    .{ rb, other.b }
+                else if (other.b == ra)
+                    .{ rb, other.a }
+                else if (other.a == rb)
+                    .{ ra, other.b }
+                else
+                    .{ ra, other.a };
+                if (try self.slackLe(pair[0], pair[1])) |c| {
+                    _ = try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
+                }
+                if (try self.slackLe(pair[1], pair[0])) |c| {
+                    _ = try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
+                }
             }
         }
         const off_lo = self.offLoOf(lhs) + self.offLoOf(rhs);
@@ -1782,7 +1855,6 @@ const Pass = struct {
     }
 
     fn rewindTo(self: *Pass, facts_len: usize, no_overflow_facts_len: usize, undo_len: usize) ResourceError!void {
-        if (self.sums.items.len > 0) self.sums_dirty = true;
         self.truncateFacts(facts_len);
         self.no_overflow_facts.shrinkRetainingCapacity(no_overflow_facts_len);
         while (self.undo.items.len > undo_len) {
