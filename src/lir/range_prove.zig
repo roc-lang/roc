@@ -389,6 +389,15 @@ const SumRoot = struct {
     b: NodeId,
 };
 
+/// Constant bounds of a root under the path facts, with the assumptions
+/// each bound's derivation touched.
+const RootBounds = struct {
+    lo: i128,
+    hi: i128,
+    lo_assumed: u64,
+    hi_assumed: u64,
+};
+
 /// Saved path-environment entry for backtracking.
 const Undo = struct {
     local: LocalId,
@@ -806,6 +815,10 @@ const Pass = struct {
     /// none of them cannot be changed by deriving those facts. Indexed by
     /// root; grown as sums appear.
     sum_ends: std.ArrayList(bool),
+    /// Per root in the sums' closure, its bounds from `boundSumRoots`.
+    root_bounds: collections.DenseMap(NodeId, RootBounds),
+    /// Per path fact, whether `boundSumRoots` has gathered it.
+    edge_gathered: std.ArrayList(bool),
     /// Whether the last `relaxFrom` reached a root `sum_ends` marks.
     reached_sum_end: bool = false,
     /// A fact was added or rewound since the sums' operand facts were last
@@ -936,6 +949,8 @@ const Pass = struct {
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .sum_ends = .empty,
+            .root_bounds = collections.DenseMap(NodeId, RootBounds).init(allocator),
+            .edge_gathered = .empty,
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .path_len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -1008,6 +1023,8 @@ const Pass = struct {
         self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
         self.sum_ends.deinit(self.allocator);
+        self.root_bounds.deinit();
+        self.edge_gathered.deinit(self.allocator);
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
         self.path_len_roots.deinit();
@@ -1194,26 +1211,171 @@ const Pass = struct {
     /// each operand sits below the sum by the other operand's proven floor
     /// and above it by the other's proven ceiling. A guard `pos + span <=
     /// len` followed by `span >= 5` thereby puts `pos` five below the length.
+    ///
+    /// The floors and ceilings are the fixpoint of the facts around the sums
+    /// together with the sums' own relations (a sum's ceiling is its
+    /// operands' ceilings added, an operand's ceiling the sum's less the
+    /// other operand's floor), found by `boundSumRoots`, so one derivation
+    /// states each sum's facts at their tightest.
     fn refreshSumOperandFacts(self: *Pass) ResourceError!void {
         self.sums_dirty = false;
         self.refreshing_sums = true;
         defer self.refreshing_sums = false;
-        var i: usize = 0;
-        while (i < self.sums.items.len) : (i += 1) {
-            const sum = self.sums.items[i];
-            self.query_used = 0;
-            const lo_b = try self.loConstOfRoot(sum.b);
-            try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -lo_b, .origin = .meet, .assumed = self.query_used });
-            self.query_used = 0;
-            const lo_a = try self.loConstOfRoot(sum.a);
-            try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -lo_a, .origin = .meet, .assumed = self.query_used });
-            self.query_used = 0;
-            const hi_b = try self.hiConstOfRoot(sum.b);
-            try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = hi_b, .origin = .meet, .assumed = self.query_used });
-            self.query_used = 0;
-            const hi_a = try self.hiConstOfRoot(sum.a);
-            try self.addFactOnce(.{ .a = sum.root, .b = sum.b, .c = hi_a, .origin = .meet, .assumed = self.query_used });
+        try self.boundSumRoots();
+        for (self.sums.items) |sum| {
+            const a = self.root_bounds.get(sum.a).?;
+            const b = self.root_bounds.get(sum.b).?;
+            _ = try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -b.lo, .origin = .meet, .assumed = b.lo_assumed });
+            _ = try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -a.lo, .origin = .meet, .assumed = a.lo_assumed });
+            _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = b.hi, .origin = .meet, .assumed = b.hi_assumed });
+            _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.b, .c = a.hi, .origin = .meet, .assumed = a.hi_assumed });
         }
+    }
+
+    /// Tightest constant bounds of the sum roots, their operands, and the
+    /// roots those rest on, into `root_bounds`. The roots are the closure
+    /// of the sums' roots over the fact links in both directions, each
+    /// fact relaxed both ways: from `a <= b + c`, `a`'s ceiling is at most
+    /// `b`'s plus `c` and `b`'s floor at least `a`'s less `c`. A constant
+    /// root ends the closure: its bound is its value, and a fact onward
+    /// from it could only tighten that into a contradiction. The sums'
+    /// relations relax alongside the facts, and everything repeats until
+    /// nothing moves, at most `query_visit_cap` times, which ends it on a
+    /// negative cycle. Each bound carries the assumptions of the facts
+    /// that produced it.
+    fn boundSumRoots(self: *Pass) ResourceError!void {
+        self.root_bounds.clearRetainingCapacity();
+        self.query_queue.clearRetainingCapacity();
+        self.query_edges.clearRetainingCapacity();
+        self.edge_gathered.clearRetainingCapacity();
+        try self.edge_gathered.appendNTimes(self.allocator, false, self.facts.items.len);
+        for (self.sums.items) |sum| {
+            for ([_]NodeId{ sum.root, sum.a, sum.b }) |root| {
+                if (try self.ensureRootBounds(root)) try self.query_queue.append(self.allocator, root);
+            }
+        }
+        var next: usize = 0;
+        while (next < self.query_queue.items.len) : (next += 1) {
+            const node = self.query_queue.items[next];
+            const own = self.nodes.items[node];
+            if (own.lo == own.hi) continue;
+            if (node >= self.fwd_heads.items.len) continue;
+            for ([_]Direction{ .forward, .backward }) |direction| {
+                var index = switch (direction) {
+                    .forward => self.fwd_heads.items[node],
+                    .backward => self.bwd_heads.items[node],
+                };
+                while (index != no_fact) {
+                    const fact_index = index;
+                    const fact = self.facts.items[fact_index];
+                    const link = self.fact_links.items[fact_index];
+                    const other = switch (direction) {
+                        .forward => fact.b,
+                        .backward => fact.a,
+                    };
+                    index = switch (direction) {
+                        .forward => link.fwd_prev,
+                        .backward => link.bwd_prev,
+                    };
+                    if (try self.ensureRootBounds(other)) try self.query_queue.append(self.allocator, other);
+                    // A fact between two closure roots is met from both
+                    // ends and gathered once.
+                    if (!self.edge_gathered.items[fact_index]) {
+                        self.edge_gathered.items[fact_index] = true;
+                        try self.query_edges.append(self.allocator, fact_index);
+                    }
+                }
+            }
+        }
+        var passes: usize = 0;
+        var changed = true;
+        while (changed and passes < query_visit_cap) : (passes += 1) {
+            changed = false;
+            for (self.query_edges.items) |index| {
+                const fact = self.facts.items[index];
+                const b_bounds = self.root_bounds.get(fact.b).?;
+                const a_bounds = self.root_bounds.get(fact.a).?;
+                const hi_through = clampSlack(b_bounds.hi + fact.c);
+                if (hi_through < a_bounds.hi) {
+                    const a = self.root_bounds.getPtr(fact.a).?;
+                    a.hi = hi_through;
+                    a.hi_assumed = b_bounds.hi_assumed | fact.assumed;
+                    changed = true;
+                }
+                const lo_through = clampSlack(a_bounds.lo - fact.c);
+                if (lo_through > b_bounds.lo) {
+                    const b = self.root_bounds.getPtr(fact.b).?;
+                    b.lo = lo_through;
+                    b.lo_assumed = a_bounds.lo_assumed | fact.assumed;
+                    changed = true;
+                }
+            }
+            for (self.sums.items) |sum| {
+                if (try self.relaxSum(sum)) changed = true;
+            }
+        }
+    }
+
+    /// Relax one sum's relations between its root and operands; whether a
+    /// bound moved.
+    fn relaxSum(self: *Pass, sum: SumRoot) ResourceError!bool {
+        const a = self.root_bounds.get(sum.a).?;
+        const b = self.root_bounds.get(sum.b).?;
+        const root = self.root_bounds.get(sum.root).?;
+        var moved = false;
+        const root_hi = clampSlack(a.hi + b.hi);
+        if (root_hi < root.hi) {
+            const r = self.root_bounds.getPtr(sum.root).?;
+            r.hi = root_hi;
+            r.hi_assumed = a.hi_assumed | b.hi_assumed;
+            moved = true;
+        }
+        const root_lo = clampSlack(a.lo + b.lo);
+        if (root_lo > root.lo) {
+            const r = self.root_bounds.getPtr(sum.root).?;
+            r.lo = root_lo;
+            r.lo_assumed = a.lo_assumed | b.lo_assumed;
+            moved = true;
+        }
+        const after = self.root_bounds.get(sum.root).?;
+        const a_hi = clampSlack(after.hi - b.lo);
+        if (a_hi < a.hi) {
+            const p = self.root_bounds.getPtr(sum.a).?;
+            p.hi = a_hi;
+            p.hi_assumed = after.hi_assumed | b.lo_assumed;
+            moved = true;
+        }
+        const b_hi = clampSlack(after.hi - a.lo);
+        if (b_hi < b.hi) {
+            const p = self.root_bounds.getPtr(sum.b).?;
+            p.hi = b_hi;
+            p.hi_assumed = after.hi_assumed | a.lo_assumed;
+            moved = true;
+        }
+        const a_lo = clampSlack(after.lo - b.hi);
+        if (a_lo > a.lo) {
+            const p = self.root_bounds.getPtr(sum.a).?;
+            p.lo = a_lo;
+            p.lo_assumed = after.lo_assumed | b.hi_assumed;
+            moved = true;
+        }
+        const b_lo = clampSlack(after.lo - a.hi);
+        if (b_lo > b.lo) {
+            const p = self.root_bounds.getPtr(sum.b).?;
+            p.lo = b_lo;
+            p.lo_assumed = after.lo_assumed | a.hi_assumed;
+            moved = true;
+        }
+        return moved;
+    }
+
+    /// Enter a root into the closure at its own window; whether it was new.
+    fn ensureRootBounds(self: *Pass, root: NodeId) ResourceError!bool {
+        const gop = try self.root_bounds.getOrPut(root);
+        if (gop.found_existing) return false;
+        const node = self.nodes.items[root];
+        gop.value_ptr.* = .{ .lo = node.lo, .hi = node.hi, .lo_assumed = 0, .hi_assumed = 0 };
+        return true;
     }
 
     /// Fact form of `value(a) <= value(b) + k`, normalized to roots. The
@@ -1423,17 +1585,20 @@ const Pass = struct {
         return hi_a <= lo_b + m;
     }
 
-    /// Add an ordering fact the current path does not already hold.
-    fn addFactOnce(self: *Pass, fact: Fact) ResourceError!void {
+    /// Add an ordering fact the current path does not already hold; whether
+    /// it was added.
+    fn addFactOnce(self: *Pass, fact: Fact) ResourceError!bool {
         if (fact.a < self.fwd_heads.items.len) {
             var index = self.fwd_heads.items[fact.a];
             while (index != no_fact) {
                 const have = self.facts.items[index];
-                if (have.b == fact.b and have.c <= fact.c) return;
+                if (have.b == fact.b and have.c <= fact.c) return false;
                 index = self.fact_links.items[index].fwd_prev;
             }
         }
+        const before = self.facts.items.len;
         try self.addFact(fact);
+        return self.facts.items.len != before;
     }
 
     /// Least `c` with `value(a) <= value(b) + c` provable through fact
@@ -1496,10 +1661,10 @@ const Pass = struct {
             else
                 continue;
             if (try self.slackLe(pair[0], pair[1])) |c| {
-                try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
+                _ = try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
             }
             if (try self.slackLe(pair[1], pair[0])) |c| {
-                try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
+                _ = try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
             }
         }
         const off_lo = self.offLoOf(lhs) + self.offLoOf(rhs);
