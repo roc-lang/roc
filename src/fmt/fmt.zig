@@ -2871,7 +2871,18 @@ const Formatter = struct {
                     3 => {
                         const branch = fmt.ast.store.getBranch(branches[f.locals.match.next]);
                         if (branch.guard) |guard| {
-                            try fmt.pushAll(" if ");
+                            if (try fmt.flushCommentsBefore(result.region.end)) {
+                                try fmt.pushIndent();
+                            } else {
+                                try fmt.push(' ');
+                            }
+                            try fmt.pushAll("if");
+                            const guard_region = fmt.nodeRegion(@intFromEnum(guard));
+                            if (try fmt.flushCommentsBefore(guard_region.start)) {
+                                try fmt.pushIndent();
+                            } else {
+                                try fmt.push(' ');
+                            }
                             f.phase = 4;
                             return call(exprFrame(guard, .{}));
                         }
@@ -5180,7 +5191,7 @@ const Formatter = struct {
             .record_field => fmt.recordFieldLayoutRule(items, @enumFromInt(query.node)),
             .type_anno => fmt.typeAnnoLayoutRule(items, @enumFromInt(query.node)),
             .anno_record_field => fmt.annoRecordFieldLayoutRule(items, @enumFromInt(query.node)),
-            .where_clause => fmt.ast.regionIsMultiline(fmt.ast.store.getWhereClause(@enumFromInt(query.node)).to_tokenized_region()),
+            .where_clause => fmt.whereClauseLayoutRule(items, @enumFromInt(query.node)),
             .statement => fmt.statementLayoutRule(items, @enumFromInt(query.node)),
             .header => fmt.headerLayoutRule(items, @enumFromInt(query.node)),
             .exposed_item => fmt.ast.regionIsMultiline(fmt.ast.store.getExposedItem(@enumFromInt(query.node)).to_tokenized_region()),
@@ -5456,10 +5467,23 @@ const Formatter = struct {
             .single_quote,
             .list_rest,
             .underscore,
-            .alternatives,
-            .as,
             .malformed,
             => fmt.ast.regionIsMultiline(pattern.to_tokenized_region()),
+            .as => |a| fmt.ast.regionIsMultiline(pattern.to_tokenized_region()) or
+                try fmt.childLayout(sink, .pattern, @intFromEnum(a.pattern)),
+            .alternatives => |a| fmt.ast.regionIsMultiline(pattern.to_tokenized_region()) or
+                try fmt.itemsLayout(sink, AST.Pattern.Idx, fmt.ast.store.patternSlice(a.patterns)),
+        };
+    }
+
+    fn whereClauseLayoutRule(fmt: *Formatter, items: LayoutEval.Items, item: AST.WhereClause.Idx) Allocator.Error!bool {
+        const sink: LayoutSink = .{ .rule = items };
+        const clause = fmt.ast.store.getWhereClause(item);
+        if (fmt.ast.regionIsMultiline(clause.to_tokenized_region())) return true;
+        return switch (clause) {
+            .mod_method => |c| fmt.childLayout(sink, .type_anno, @intFromEnum(c.anno)),
+            .mod_alias => |c| fmt.childLayout(sink, .type_anno, @intFromEnum(c.alias)),
+            .malformed => false,
         };
     }
 
@@ -8320,6 +8344,63 @@ test "nested expressions, patterns, types, and statements format on a small nati
     const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
     thread.join();
     try result;
+}
+
+test "issue 12019: comment before match guard is preserved" {
+    const input = "f = |p| match p {\n\tA # This comment will be deleted!!!\n\tif is_ok => 1\n\t_ => 0\n}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expect(std.mem.find(u8, result, "# This comment will be deleted!!!") != null);
+}
+
+test "issue 12018: expanded tag pattern under as is stable" {
+    const result = try moduleFmtsStable(std.testing.allocator, "f = |Ok(x,) as whole| x\n", false);
+    defer std.testing.allocator.free(result);
+}
+
+test "issue 12018: expanded type application in where clause is stable" {
+    const result = try moduleFmtsStable(std.testing.allocator, "f : a -> U64 where [a.h : List(U64,)]\nf = |x| 0\n", false);
+    defer std.testing.allocator.free(result);
+}
+
+test "issue 12019: comments on both sides of match guard keyword are preserved once" {
+    const inputs = [_][]const u8{
+        "f = |p| match p {\n\tA # before if\n\tif # after if\n\tis_ok => 1\n\t_ => 0\n}\n",
+        "f = |p| match p {\n\tOk(x,) # before if\n\tif # after if\n\tis_ok => x\n\t_ => 0\n}\n",
+        "f = |p| match p {\n\tA if # after if\n\tis_ok => 1\n\t_ => 0\n}\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        for ([_][]const u8{ "# before if", "# after if" }) |comment| {
+            try std.testing.expectEqual(std.mem.count(u8, input, comment), std.mem.count(u8, result, comment));
+        }
+    }
+}
+
+test "issue 12018: pattern wrappers propagate expanded children" {
+    const inputs = [_][]const u8{
+        "f = |{ x, } as whole| x\n",
+        "f = |[x,] as whole| x\n",
+        "f = |(x,) as whole| x\n",
+        "f = |p| match p { Ok(x,) | Err(x) => x }\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+    }
+}
+
+test "issue 12018: where clauses propagate nested expanded types" {
+    const inputs = [_][]const u8{
+        "f : a -> U64 where [a.h : List(List(U64,))]\nf = |x| 0\n",
+        "f : a -> U64 where [a.Alias(U64,)]\nf = |x| 0\n",
+        "f : a -> U64 where [a.h : (U64,)]\nf = |x| 0\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+    }
 }
 
 test "issue 12040: inter-token comments case 01" {
