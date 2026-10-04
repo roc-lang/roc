@@ -6,7 +6,7 @@ const TestEnv = @import("./TestEnv.zig");
 
 const escape_title = "Local Type Escapes Its Block";
 
-fn expectEscapeAt(source: []const u8, escaping: []const u8) !void {
+fn expectEscapeAt(source: []const u8, escaping: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
@@ -15,7 +15,7 @@ fn expectEscapeAt(source: []const u8, escaping: []const u8) !void {
     try std.testing.expectEqualStrings(escaping, source[escape.region.start.offset..escape.region.end.offset]);
 }
 
-fn expectNoErrors(source: []const u8) !void {
+fn expectNoErrors(source: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 

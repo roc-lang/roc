@@ -4302,7 +4302,7 @@ records a dispatch proof keyed by its constraint callable. Once targets and
 promotion settle, the proof is unavailable exactly when that dispatch, or a
 dispatch derived from it, selects an unpromoted local procedure. Derivation
 follows each selected target's parent, recorded derivation edges, and the
-component edges that link each component obligation of a structural
+component edges that link each component dispatch of a structural
 comparison or hash to that operation's constraint callable.
 
 A type declared in a block whose methods include an unpromoted local procedure
