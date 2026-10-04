@@ -3174,7 +3174,7 @@ const Pass = struct {
                 }
 
                 var stable = LoopBounds{ .complete = true };
-                const previous_bounds = self.loop_bounds.get(key);
+                const previous_bounds = self.loop_bounds.getPtr(key);
                 const old_items: []const StableBound = if (previous_bounds) |prev| prev.items[0..prev.len] else &.{};
                 const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
                 for (meet.bounds.slice()) |bound| {
@@ -3196,8 +3196,8 @@ const Pass = struct {
                 // Carry the invariant list forward, admitting new length
                 // candidates as pending. A base that already failed
                 // verification is listed as dead rather than re-admitted.
-                if (self.loop_bounds.get(key)) |previous| {
-                    stable.len_items = previous.len_items;
+                if (previous_bounds) |previous| {
+                    @memcpy(stable.len_items[0..previous.len_count], previous.len_items[0..previous.len_count]);
                     stable.len_count = previous.len_count;
                 }
                 const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
@@ -3230,8 +3230,7 @@ const Pass = struct {
                     }
                 }
                 if (stable.len == 0 and stable.lower_len == 0 and stable.len_count == 0) continue;
-                const previous = self.loop_bounds.get(key);
-                if (previous == null or previous.?.len != stable.len or previous.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
+                if (previous_bounds == null or previous_bounds.?.len != stable.len or previous_bounds.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
                 try self.loop_bounds.put(key, stable);
             }
         }
