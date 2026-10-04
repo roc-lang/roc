@@ -290,3 +290,39 @@ test "issue 11801: concrete dispatch replay never selects a method whose scheme 
     try env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), env.checker.dispatch_replayed_edges.items.len);
 }
+
+test "issue 11801: a type error in one replayed use leaves the uses sharing its instance intact" {
+    // Each use of `mk` resolves its own copy of `mk`'s `pair_with`
+    // requirement. `first` makes the binding replayable, `second` becomes
+    // the source, and `third` and `fourth` replay it, so their types share
+    // its frozen instance. `bad` then relates `third` to the wrong type;
+    // poisoning that occurrence must not reach the shared instance, so
+    // `fourth` keeps its type.
+    const source =
+        \\Cnt := [Cnt(I64)].{
+        \\  pair_with : Cnt, b -> (Cnt, b)
+        \\  pair_with = |c, x| (c, x)
+        \\}
+        \\
+        \\mk = |a| a.pair_with(5.U8)
+        \\
+        \\c = Cnt.Cnt(0.I64)
+        \\
+        \\first = mk(c)
+        \\
+        \\second = mk(c)
+        \\
+        \\third = mk(c)
+        \\
+        \\fourth = mk(c)
+        \\
+        \\bad : (Cnt, Str)
+        \\bad = third
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
+    try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
+    try env.assertDefTypeOptions("second", "(Cnt, U8)", .{ .allow_type_errors = true });
+    try env.assertDefTypeOptions("fourth", "(Cnt, U8)", .{ .allow_type_errors = true });
+}

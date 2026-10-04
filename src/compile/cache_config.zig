@@ -269,7 +269,7 @@ pub const Constants = struct {
     ///      evidence.
     /// 121: Raw alias types record the source argument boundary before their
     ///      hidden polarity parameters.
-    pub const CACHE_VERSION = 121;
+    pub const CACHE_VERSION = 122;
 };
 
 /// Configuration for the Roc cache system.

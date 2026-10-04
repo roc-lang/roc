@@ -910,6 +910,11 @@ dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .e
 /// with their exact shapes in `dispatch_replay_shapes`.
 dispatch_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(DispatchReplaySource)) = .empty,
 dispatch_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
+dispatch_replay_frozen_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
+dispatch_replay_trees: std.ArrayListUnmanaged(u8) = .empty,
+scratch_freeze_map: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+scratch_freeze_order: std.ArrayListUnmanaged(Var) = .empty,
+scratch_freeze_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Bindings one of whose eligible edges has settled to a ground instance.
 /// Only their edges encode a replay shape.
 dispatch_replay_bindings: std.AutoHashMapUnmanaged(DispatchReplayBinding, void) = .empty,
@@ -1511,13 +1516,22 @@ const DispatchTargetInstantiation = struct {
 };
 
 /// A concrete dispatch replay source (design.md): the edge, its exact replay
-/// shape in `dispatch_replay_shapes`, and the dispatch-target scheme-use
-/// record it wrote, if any.
+/// shape in `dispatch_replay_shapes`, and the dispatch-target scheme-use record
+/// it wrote, if any. Its first replay freezes a copy of its instance; from
+/// then on it holds that copy, the record's substitution in
+/// `dispatch_replay_frozen_pairs` naming the copy, and, in builds with
+/// runtime safety, the copy's tree in `dispatch_replay_trees`.
 const DispatchReplaySource = struct {
     edge: u32,
     shape_start: u32,
     shape_len: u32,
     scheme_use: ?u32,
+    freeze: enum { pending, frozen, unusable } = .pending,
+    frozen_root: Var = undefined,
+    pairs_start: u32 = 0,
+    pairs_len: u32 = 0,
+    tree_start: u32 = 0,
+    tree_len: u32 = 0,
 };
 
 /// A replay source's instance node and the callable node at its position.
@@ -3505,6 +3519,11 @@ pub fn deinit(self: *Self) void {
         self.dispatch_replay_sources.deinit(self.gpa);
     }
     self.dispatch_replay_shapes.deinit(self.gpa);
+    self.dispatch_replay_frozen_pairs.deinit(self.gpa);
+    self.dispatch_replay_trees.deinit(self.gpa);
+    self.scratch_freeze_map.deinit(self.gpa);
+    self.scratch_freeze_order.deinit(self.gpa);
+    self.scratch_freeze_vars.deinit(self.gpa);
     self.dispatch_replay_bindings.deinit(self.gpa);
     self.scratch_replay_shape.deinit(self.gpa);
     self.pending_replay_shape.deinit(self.gpa);
@@ -10539,6 +10558,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.finalizeBindingSchemeNodes();
 
     try self.finalizePlatformRequirementSolutions();
+    try self.finishDispatchReplayFreezes();
 
     self.debugAssertNominalDeclTableComplete();
 }
@@ -15004,6 +15024,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
+    try self.finishDispatchReplayFreezes();
 
     self.debugAssertNominalDeclTableComplete();
 }
@@ -37479,10 +37500,8 @@ fn instantiateDispatchTargetMethodVar(
         .derivations_end = derivations_end,
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
-    // Replay saves resolving an instance's nested requirements; a method
-    // without any is cheaper to instantiate than to replay, so only a root
-    // edge that resolved some can make its binding replayable.
-    if (derivations_end != derivations_start and parent_constraint_fn_var == null and
+    // Only a settled root edge can make its binding replayable.
+    if (parent_constraint_fn_var == null and
         constraint.origin.literalKind() == null and
         self.probe_depth == 0 and !self.commit_probe_active)
     {
@@ -37699,9 +37718,9 @@ fn replayShapeEql(a: []const u8, b: []const u8) bool {
 }
 
 /// The replay source whose shape equals `shape`, if any.
-fn findDispatchReplaySource(self: *const Self, hash: u64, shape: []const u8) ?DispatchReplaySource {
-    const sources = self.dispatch_replay_sources.get(hash) orelse return null;
-    for (sources.items) |source| {
+fn findDispatchReplaySource(self: *Self, hash: u64, shape: []const u8) ?*DispatchReplaySource {
+    const sources = self.dispatch_replay_sources.getPtr(hash) orelse return null;
+    for (sources.items) |*source| {
         if (replayShapeEql(self.dispatch_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) {
             return source;
         }
@@ -37791,6 +37810,283 @@ noinline fn recordDispatchReplaySource(self: *Self, fn_var: Var) Allocator.Error
     });
 }
 
+/// Freeze a copy of a settled source's ground instance for replayed edges to
+/// share (design.md "Concrete dispatch replay"), and name that copy in the
+/// source's scheme-use substitution. Null when the instance holds a row that
+/// is not closed directly, or the substitution names a variable that is
+/// neither in the instance nor one of the source's own nested requirements.
+fn freezeDispatchReplaySource(
+    self: *Self,
+    instantiation: DispatchTargetInstantiation,
+    scheme_use: ?u32,
+) Allocator.Error!?struct { root: Var, pairs_start: u32, pairs_len: u32, tree_start: u32, tree_len: u32 } {
+    const root = try self.freezeTypeGraph(instantiation.method_var) orelse return null;
+    const pairs_start: u32 = @intCast(self.dispatch_replay_frozen_pairs.items.len);
+    if (scheme_use) |record_idx| {
+        const record = self.cir.scheme_uses.items.items[record_idx];
+        for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
+            const fresh_var: Var = @enumFromInt(pair.fresh_var);
+            if (self.scratch_freeze_map.get(self.types.resolveVar(fresh_var).var_)) |frozen_var| {
+                try self.dispatch_replay_frozen_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @intFromEnum(frozen_var) });
+            } else if (self.dispatchReplaySourceOwnsDerivation(instantiation, fresh_var)) {
+                try self.dispatch_replay_frozen_pairs.append(self.gpa, pair);
+            } else {
+                self.dispatch_replay_frozen_pairs.shrinkRetainingCapacity(pairs_start);
+                return null;
+            }
+        }
+    }
+    const tree_start: u32 = @intCast(self.dispatch_replay_trees.items.len);
+    if (std.debug.runtime_safety) try self.appendReplayTree(root, &self.dispatch_replay_trees);
+    return .{
+        .root = root,
+        .pairs_start = pairs_start,
+        .pairs_len = @as(u32, @intCast(self.dispatch_replay_frozen_pairs.items.len)) - pairs_start,
+        .tree_start = tree_start,
+        .tree_len = @as(u32, @intCast(self.dispatch_replay_trees.items.len)) - tree_start,
+    };
+}
+
+/// Copy the ground type graph at `root` into fresh outermost-rank classes and
+/// freeze them; `scratch_freeze_map` maps each original class to its copy.
+/// Null when the graph holds a row that is not closed directly.
+fn freezeTypeGraph(self: *Self, root: Var) Allocator.Error!?Var {
+    self.scratch_freeze_map.clearRetainingCapacity();
+    self.scratch_freeze_order.clearRetainingCapacity();
+    const stack = &self.scratch_ground_vars;
+    stack.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.pop()) |next| {
+        const resolved = self.types.resolveVar(next);
+        const entry = try self.scratch_freeze_map.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        // A frozen copy has its original's region and joins no solver
+        // environment, so no generalization boundary ever reaches it.
+        const frozen_var = try self.types.freshFromContentWithRank(.{ .flex = types_mod.Flex.init() }, .outermost);
+        try self.fillInRegionsThrough(frozen_var);
+        self.setRegionAt(frozen_var, self.getRegionAt(resolved.var_));
+        entry.value_ptr.* = frozen_var;
+        try self.scratch_freeze_order.append(self.gpa, resolved.var_);
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err => return null,
+            .field_presence => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasAllArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .fn_unbound => return null,
+                .fn_pure, .fn_effectful => |func| {
+                    try stack.append(self.gpa, func.ret);
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .record => |record| {
+                    if (!self.varIsStructure(record.ext, .empty_record)) return null;
+                    try stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| switch (presence.decode()) {
+                        .required => |field_var| try stack.append(self.gpa, field_var),
+                        .unknown => |unknown| {
+                            try stack.append(self.gpa, unknown.var_);
+                            try stack.append(self.gpa, unknown.presence);
+                        },
+                    };
+                },
+                .tag_union => |tag_union| {
+                    if (!self.varIsStructure(tag_union.ext, .empty_tag_union)) return null;
+                    try stack.append(self.gpa, tag_union.ext);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                },
+            },
+        }
+    }
+    for (self.scratch_freeze_order.items) |original| {
+        const content = try self.frozenContent(&self.scratch_freeze_map, self.types.resolveVar(original).desc.content);
+        try self.types.dangerousSetVarDesc(self.scratch_freeze_map.get(original).?, .{ .content = content, .rank = .outermost });
+    }
+    for (self.scratch_freeze_order.items) |original| {
+        try self.types.freezeClass(self.scratch_freeze_map.get(original).?);
+    }
+    return self.scratch_freeze_map.get(self.types.resolveVar(root).var_).?;
+}
+
+fn varIsStructure(self: *const Self, var_: Var, comptime tag: std.meta.Tag(types_mod.FlatType)) bool {
+    const content = self.types.resolveVar(var_).desc.content;
+    return content == .structure and content.structure == tag;
+}
+
+/// `content` with each child replaced by its frozen copy.
+fn frozenContent(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), content: types_mod.Content) Allocator.Error!types_mod.Content {
+    return switch (content) {
+        .flex, .rigid, .err => unreachable,
+        .field_presence => content,
+        .alias => |alias| blk: {
+            const backing = self.frozenCopy(copies, self.types.getAliasBackingVar(alias));
+            const args = try self.frozenCopies(copies, self.types.sliceAliasAllArgs(alias));
+            const backing_idx = try self.types.appendVar(backing);
+            var span = try self.types.appendVars(args);
+            span.start = backing_idx;
+            span.count += 1;
+            var copy = alias;
+            copy.vars = .{ .nonempty = span };
+            break :blk .{ .alias = copy };
+        },
+        .structure => |flat| .{ .structure = switch (flat) {
+            .empty_record, .empty_tag_union, .fn_unbound => flat,
+            .fn_pure => |func| .{ .fn_pure = try self.frozenFunc(copies, func) },
+            .fn_effectful => |func| .{ .fn_effectful = try self.frozenFunc(copies, func) },
+            .tuple => |tuple| .{ .tuple = .{ .elems = try self.types.appendVars(try self.frozenCopies(copies, self.types.sliceVars(tuple.elems))) } },
+            .nominal_type => |nominal| blk: {
+                var copy = nominal;
+                copy.args = try self.types.appendVars(try self.frozenCopies(copies, self.types.sliceNominalArgs(nominal)));
+                break :blk .{ .nominal_type = copy };
+            },
+            .record => |record| blk: {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                var copied: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+                defer copied.deinit(self.gpa);
+                for (fields.items(.name), fields.items(.presence)) |name, presence| {
+                    try copied.append(self.gpa, .{ .name = name, .presence = switch (presence.decode()) {
+                        .required => |field_var| types_mod.RecordField.Presence.required(self.frozenCopy(copies, field_var)),
+                        .unknown => |unknown| types_mod.RecordField.Presence.unknown(self.frozenCopy(copies, unknown.presence), self.frozenCopy(copies, unknown.var_)),
+                    } });
+                }
+                break :blk .{ .record = .{ .fields = try self.types.appendRecordFields(copied.items), .ext = self.frozenCopy(copies, record.ext) } };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                var copied: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+                defer copied.deinit(self.gpa);
+                for (tags.items(.name), tags.items(.args)) |name, args| {
+                    const arg_copies = try self.frozenCopies(copies, self.types.sliceVars(args));
+                    try copied.append(self.gpa, .{ .name = name, .args = try self.types.appendVars(arg_copies) });
+                }
+                break :blk .{ .tag_union = .{ .tags = try self.types.appendTags(copied.items), .ext = self.frozenCopy(copies, tag_union.ext) } };
+            },
+        } },
+    };
+}
+
+fn frozenFunc(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), func: types_mod.Func) Allocator.Error!types_mod.Func {
+    const args = try self.types.appendVars(try self.frozenCopies(copies, self.types.sliceVars(func.args)));
+    const effect_deps = try self.types.appendVars(try self.frozenCopies(copies, self.types.sliceVars(func.effect_deps)));
+    return .{ .args = args, .ret = self.frozenCopy(copies, func.ret), .effect_deps = effect_deps };
+}
+
+fn frozenCopy(self: *const Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), var_: Var) Var {
+    return copies.get(self.types.resolveVar(var_).var_).?;
+}
+
+/// The frozen copies of `vars`, in `scratch_freeze_vars`, which the next call
+/// overwrites.
+fn frozenCopies(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), vars: []const Var) Allocator.Error![]const Var {
+    self.scratch_freeze_vars.clearRetainingCapacity();
+    for (vars) |var_| try self.scratch_freeze_vars.append(self.gpa, self.frozenCopy(copies, var_));
+    return self.scratch_freeze_vars.items;
+}
+
+/// Append a ground type as a tree: each node's content in depth-first order,
+/// with no variable identities, so two types encode equally exactly when they
+/// are equal.
+fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Allocator.Error!void {
+    var stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, root);
+    while (stack.pop()) |next| {
+        const content = self.types.resolveVar(next).desc.content;
+        switch (content) {
+            .err => try out.append(self.gpa, 0),
+            .flex => try out.append(self.gpa, 1),
+            .rigid => try out.append(self.gpa, 2),
+            .field_presence => |presence| switch (presence) {
+                .required => try out.append(self.gpa, 3),
+                .optional => try out.append(self.gpa, 14),
+                .defaulted => |id| {
+                    try out.append(self.gpa, 15);
+                    try appendReplayWord(out, self.gpa, @intFromEnum(id.origin_module));
+                    try appendReplayWord(out, self.gpa, id.expr_node);
+                },
+            },
+            .alias => |alias| {
+                try out.append(self.gpa, 4);
+                try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
+                try appendReplayWord(out, self.gpa, @intFromEnum(alias.origin_module));
+                const args = self.types.sliceAliasAllArgs(alias);
+                try appendReplayWord(out, self.gpa, @intCast(args.len));
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try appendReplayChildren(&stack, self.gpa, args);
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record => try out.append(self.gpa, 5),
+                .empty_tag_union => try out.append(self.gpa, 6),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try out.append(self.gpa, switch (flat) {
+                        .fn_pure => 7,
+                        .fn_effectful => 8,
+                        .fn_unbound => 9,
+                        .empty_record, .empty_tag_union, .tuple, .nominal_type, .record, .tag_union => unreachable,
+                    });
+                    const args = self.types.sliceVars(func.args);
+                    try appendReplayWord(out, self.gpa, @intCast(args.len));
+                    try stack.append(self.gpa, func.ret);
+                    try appendReplayChildren(&stack, self.gpa, args);
+                },
+                .tuple => |tuple| {
+                    try out.append(self.gpa, 10);
+                    const elems = self.types.sliceVars(tuple.elems);
+                    try appendReplayWord(out, self.gpa, @intCast(elems.len));
+                    try appendReplayChildren(&stack, self.gpa, elems);
+                },
+                .nominal_type => |nominal| {
+                    try out.append(self.gpa, 11);
+                    try appendReplayWord(out, self.gpa, @bitCast(nominal.ident.ident_idx));
+                    try appendReplayWord(out, self.gpa, @intFromEnum(nominal.origin_module));
+                    const args = self.types.sliceNominalArgs(nominal);
+                    try appendReplayWord(out, self.gpa, @intCast(args.len));
+                    try appendReplayChildren(&stack, self.gpa, args);
+                },
+                .record => |record| {
+                    try out.append(self.gpa, 12);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    try appendReplayWord(out, self.gpa, @intCast(fields.len));
+                    try stack.append(self.gpa, record.ext);
+                    var index = fields.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try appendReplayWord(out, self.gpa, @bitCast(fields.items(.name)[index]));
+                        switch (fields.items(.presence)[index].decode()) {
+                            .required => |field_var| try stack.append(self.gpa, field_var),
+                            .unknown => |unknown| {
+                                try stack.append(self.gpa, unknown.var_);
+                                try stack.append(self.gpa, unknown.presence);
+                            },
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try out.append(self.gpa, 13);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    try appendReplayWord(out, self.gpa, @intCast(tags.len));
+                    try stack.append(self.gpa, tag_union.ext);
+                    var index = tags.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const args = self.types.sliceVars(tags.items(.args)[index]);
+                        try appendReplayWord(out, self.gpa, @bitCast(tags.items(.name)[index]));
+                        try appendReplayWord(out, self.gpa, @intCast(args.len));
+                        try appendReplayChildren(&stack, self.gpa, args);
+                    }
+                },
+            },
+        }
+    }
+}
+
 /// Whether every nested requirement a replay source's instance carried, and
 /// every requirement those selected in turn, has settled without rejection.
 /// A replayed edge publishes exactly these requirements as its own.
@@ -37826,19 +38122,18 @@ fn dispatchReplaySourceOwnsDerivation(self: *const Self, source: DispatchTargetI
 /// source's ground instance is the fresh instance related to an equal
 /// callable shape, and its settled nested requirements are the ones a
 /// fresh instance's concrete receivers would select. The edge keeps its own
-/// callable, with each of its variables related to a copy of the instance
-/// subtree at that position, so nothing later done to either edge's types
-/// reaches the other, and gets a scheme-use record whose substitution names
-/// its own nodes and whose nested requirements are the source's. Null when
-/// the source cannot be replayed now.
+/// callable, with each of its variables related to the subtree at that
+/// position of the source's frozen instance, which no write can change, and
+/// gets a scheme-use record whose substitution names its own nodes and whose
+/// nested requirements are the source's. Null when the source cannot be
+/// replayed now.
 fn replayDispatchTarget(
     self: *Self,
-    replay_source: DispatchReplaySource,
+    replay_source: *DispatchReplaySource,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
     env: *Env,
-    region: Region,
 ) Allocator.Error!?Var {
     if (!try self.dispatchReplaySourceReady(replay_source.edge)) return null;
     const source = self.dispatch_target_instantiations.items[replay_source.edge];
@@ -37848,36 +38143,52 @@ fn replayDispatchTarget(
     {
         std.debug.panic("dispatch replay key matched an edge with a different method binding", .{});
     }
-    // The source's own context may have refined or poisoned its instance
-    // since it was recorded; only a still-ground instance is its input's.
-    if (!try self.varIsReplayGround(source.method_var)) return null;
+    switch (replay_source.freeze) {
+        .frozen => {},
+        .unusable => return null,
+        .pending => {
+            // A ground type changes later only by being poisoned, so an
+            // instance still ground now is the one the source settled to.
+            const frozen = if (try self.varIsReplayGround(source.method_var))
+                try self.freezeDispatchReplaySource(source, replay_source.scheme_use)
+            else
+                null;
+            const instance = frozen orelse {
+                replay_source.freeze = .unusable;
+                return null;
+            };
+            replay_source.* = .{
+                .edge = replay_source.edge,
+                .shape_start = replay_source.shape_start,
+                .shape_len = replay_source.shape_len,
+                .scheme_use = replay_source.scheme_use,
+                .freeze = .frozen,
+                .frozen_root = instance.root,
+                .pairs_start = instance.pairs_start,
+                .pairs_len = instance.pairs_len,
+                .tree_start = instance.tree_start,
+                .tree_len = instance.tree_len,
+            };
+        },
+    }
     const source_record: ?ModuleEnv.SchemeUseRecord = if (replay_source.scheme_use) |record_idx|
         self.cir.scheme_uses.items.items[record_idx]
     else
         null;
-    if (source_record) |record| {
-        for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
-            const fresh_var: Var = @enumFromInt(pair.fresh_var);
-            if (self.scratch_ground_seen.contains(self.types.resolveVar(fresh_var).var_)) continue;
-            if (!self.dispatchReplaySourceOwnsDerivation(source, fresh_var)) return null;
-        }
-    }
 
-    // Pair the source's ground instance with this edge's callable before
-    // changing anything: where the callable has structure it is the
-    // instance's (the shapes are equal), and where it has a variable the
-    // instance supplies that subtree.
-    if (!try self.pairDispatchReplayInstance(source.method_var, constraint.fn_var)) return null;
+    // Pair the frozen instance with this edge's callable before changing
+    // anything: where the callable has structure it is the instance's (the
+    // shapes are equal), and where it has a variable the instance supplies
+    // that subtree.
+    if (!try self.pairDispatchReplayInstance(replay_source.frozen_root, constraint.fn_var)) return null;
+    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source.*, constraint, method_lookup);
 
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
-    var graft_index: usize = 0;
-    while (graft_index < self.scratch_replay_grafts.items.len) : (graft_index += 1) {
-        const graft = self.scratch_replay_grafts.items[graft_index];
-        const copy = try self.instantiateVarOrphan(graft.source, env, env.rank(), .{ .explicit = region });
-        var copied = self.var_map.iterator();
-        while (copied.next()) |entry| try self.scratch_replay_nodes.put(self.gpa, entry.key_ptr.*, entry.value_ptr.*);
-        const result = try self.unify(graft.target, copy, env);
+    for (self.scratch_replay_grafts.items) |graft| {
+        // The callable variable is passed second so it stays its class's
+        // checked representative; the class keeps the frozen descriptor.
+        const result = try self.unify(graft.source, graft.target, env);
         if (!result.isEstablished()) {
             std.debug.panic("concrete dispatch replay could not relate a callable variable to its source's ground instance", .{});
         }
@@ -37885,9 +38196,8 @@ fn replayDispatchTarget(
     const method_var = constraint.fn_var;
     if (source_record) |record| {
         self.scratch_replay_pairs.clearRetainingCapacity();
-        for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
-            const fresh_root = self.types.resolveVar(@as(Var, @enumFromInt(pair.fresh_var))).var_;
-            const node = self.scratch_replay_nodes.get(fresh_root);
+        for (self.dispatch_replay_frozen_pairs.items[replay_source.pairs_start..][0..replay_source.pairs_len]) |pair| {
+            const node = self.scratch_replay_nodes.get(@enumFromInt(pair.fresh_var));
             try self.scratch_replay_pairs.append(self.gpa, .{
                 .old_var = pair.old_var,
                 .fresh_var = if (node) |mapped| @intFromEnum(mapped) else pair.fresh_var,
@@ -37919,6 +38229,132 @@ fn replayDispatchTarget(
     return method_var;
 }
 
+/// Builds with runtime safety check every replay against the work it
+/// replaces: a fresh copy of the method's scheme related to this edge's
+/// callable, on a savepoint the check rolls back, must be exactly the frozen
+/// instance the edge is about to share.
+fn verifyDispatchReplayAgainstFresh(
+    self: *Self,
+    replay_source: DispatchReplaySource,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+) Allocator.Error!void {
+    const scheme_root = if (method_lookup.is_this_module)
+        ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
+    else
+        try self.importedMethodScheme(method_lookup);
+    var frozen_tree: std.ArrayListUnmanaged(u8) = .empty;
+    defer frozen_tree.deinit(self.gpa);
+    try self.appendReplayTree(replay_source.frozen_root, &frozen_tree);
+    var fresh_tree: std.ArrayListUnmanaged(u8) = .empty;
+    defer fresh_tree.deinit(self.gpa);
+    {
+        var savepoint = try self.types.createSavepoint();
+        defer self.types.rollbackToSavepoint(&savepoint);
+        const fresh_instance = try self.copySchemeForReplayCheck(scheme_root);
+        if (!(try self.probeUnifyResultWithoutRecordingProblems(fresh_instance, constraint.fn_var)).isEstablished()) {
+            std.debug.panic("a replayed dispatch edge's callable does not relate to a fresh instance of its method", .{});
+        }
+        try self.appendReplayTree(fresh_instance, &fresh_tree);
+    }
+    if (!replayShapeEql(frozen_tree.items, fresh_tree.items)) {
+        std.debug.panic("concrete dispatch replay shared an instance a fresh instantiation would not produce", .{});
+    }
+}
+
+/// A copy of the scheme at `root` for `verifyDispatchReplayAgainstFresh`:
+/// its generalized classes are copied, as instantiation copies them, without
+/// registering anything with a solver environment, and the rest is shared.
+fn copySchemeForReplayCheck(self: *Self, root: Var) Allocator.Error!Var {
+    var copies: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    defer copies.deinit(self.gpa);
+    var order: std.ArrayListUnmanaged(Var) = .empty;
+    defer order.deinit(self.gpa);
+    var stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, root);
+    while (stack.pop()) |next| {
+        const resolved = self.types.resolveVar(next);
+        const entry = try copies.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        if (resolved.desc.rank != .generalized) {
+            entry.value_ptr.* = resolved.var_;
+            continue;
+        }
+        entry.value_ptr.* = try self.types.freshFromContentWithRank(.{ .flex = types_mod.Flex.init() }, .outermost);
+        try order.append(self.gpa, resolved.var_);
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err, .field_presence => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasAllArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.append(self.gpa, func.ret);
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .record => |record| {
+                    try stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| switch (presence.decode()) {
+                        .required => |field_var| try stack.append(self.gpa, field_var),
+                        .unknown => |unknown| {
+                            try stack.append(self.gpa, unknown.var_);
+                            try stack.append(self.gpa, unknown.presence);
+                        },
+                    };
+                },
+                .tag_union => |tag_union| {
+                    try stack.append(self.gpa, tag_union.ext);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                },
+            },
+        }
+    }
+    for (order.items) |original| {
+        const original_content = self.types.resolveVar(original).desc.content;
+        const content: types_mod.Content = switch (original_content) {
+            .flex, .rigid => .{ .flex = types_mod.Flex.init() },
+            .err => .err,
+            .field_presence, .alias => try self.frozenContent(&copies, original_content),
+            .structure => |flat| switch (flat) {
+                .fn_unbound => |func| .{ .structure = .{ .fn_unbound = try self.frozenFunc(&copies, func) } },
+                .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .tuple, .nominal_type, .record, .tag_union => try self.frozenContent(&copies, original_content),
+            },
+        };
+        try self.types.dangerousSetVarDesc(copies.get(original).?, .{ .content = content, .rank = .outermost });
+    }
+    return copies.get(self.types.resolveVar(root).var_).?;
+}
+
+/// End concrete dispatch replay's freezes once checking is done. Builds with
+/// runtime safety first check that no frozen instance changed while it was
+/// shared.
+fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
+    if (std.debug.runtime_safety) {
+        var tree: std.ArrayListUnmanaged(u8) = .empty;
+        defer tree.deinit(self.gpa);
+        var buckets = self.dispatch_replay_sources.valueIterator();
+        while (buckets.next()) |bucket| {
+            for (bucket.items) |source| {
+                if (source.freeze != .frozen) continue;
+                tree.clearRetainingCapacity();
+                try self.appendReplayTree(source.frozen_root, &tree);
+                if (!replayShapeEql(self.dispatch_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
+                    std.debug.panic("a frozen dispatch replay instance changed while replayed edges shared it", .{});
+                }
+            }
+        }
+    }
+    try self.types.thawFrozenClasses();
+}
+
 /// Walk a replay source's ground instance and a callable together, recording
 /// in `scratch_replay_nodes` a callable node standing at each instance node,
 /// and in `scratch_replay_grafts` each callable variable together with
@@ -37932,17 +38368,20 @@ fn pairDispatchReplayInstance(self: *Self, source_var: Var, callable_var: Var) A
     self.scratch_replay_walked.clearRetainingCapacity();
     try self.scratch_replay_walk.append(self.gpa, .{ .source = source_var, .target = callable_var });
     while (self.scratch_replay_walk.pop()) |pair| {
+        // Frozen nodes are named by their own variables: replayed edges may
+        // have handed a frozen class's checked representative to one of their
+        // variables, and the frozen content's children are the frozen nodes.
         const source = self.types.resolveVar(pair.source);
         const target = self.types.resolveVar(pair.target);
-        const walked = try self.scratch_replay_walked.getOrPut(self.gpa, .{ .source = source.var_, .target = target.var_ });
+        const walked = try self.scratch_replay_walked.getOrPut(self.gpa, .{ .source = pair.source, .target = target.var_ });
         if (walked.found_existing) continue;
         // A ground node shared by several positions stands at each of them;
         // any one of its callable nodes holds the same type.
-        const node = try self.scratch_replay_nodes.getOrPut(self.gpa, source.var_);
+        const node = try self.scratch_replay_nodes.getOrPut(self.gpa, pair.source);
         if (!node.found_existing) node.value_ptr.* = target.var_;
         switch (target.desc.content) {
             .flex => {
-                try self.scratch_replay_grafts.append(self.gpa, .{ .source = source.var_, .target = target.var_ });
+                try self.scratch_replay_grafts.append(self.gpa, .{ .source = pair.source, .target = target.var_ });
                 continue;
             },
             .rigid, .err => return false,
@@ -38059,11 +38498,10 @@ noinline fn attemptDispatchReplay(
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
     env: *Env,
-    region: Region,
 ) Allocator.Error!struct { method_var: ?Var = null, shape_hash: ?u64 = null } {
     const hash = try self.encodeDispatchReplayShape(dispatcher_var, constraint, method_lookup) orelse return .{};
     if (self.findDispatchReplaySource(hash, self.scratch_replay_shape.items)) |replay_source| {
-        if (try self.replayDispatchTarget(replay_source, dispatcher_var, constraint, method_lookup, env, region)) |method_var| {
+        if (try self.replayDispatchTarget(replay_source, dispatcher_var, constraint, method_lookup, env)) |method_var| {
             return .{ .method_var = method_var };
         }
     }
@@ -38136,7 +38574,7 @@ fn resolveDispatchTargetMethodVar(
         if (!can_be_ancestor) try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
         var replay_shape_hash: ?u64 = null;
         if (replay_eligible) {
-            const attempt = try self.attemptDispatchReplay(dispatcher_var, constraint, method_lookup, env, region);
+            const attempt = try self.attemptDispatchReplay(dispatcher_var, constraint, method_lookup, env);
             if (attempt.method_var) |method_var| return method_var;
             replay_shape_hash = attempt.shape_hash;
         }

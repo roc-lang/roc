@@ -113,7 +113,12 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
-    _unused: u5 = 0,
+    /// The class is a frozen copy of a settled ground instance that several
+    /// uses share (design.md "Concrete dispatch replay"). Its descriptor
+    /// never changes while checking: merges keep it, and writes aimed at a
+    /// member detach that member instead.
+    frozen: bool = false,
+    _unused: u4 = 0,
 };
 
 /// A type descriptor

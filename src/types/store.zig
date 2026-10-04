@@ -179,6 +179,14 @@ pub const Store = struct {
     /// relocated; capacity persists across instantiations against this store.
     instantiate_scratch: instantiate.Scratch = .{},
 
+    /// For each frozen class (see `DescriptorFlags.frozen`), keyed by its
+    /// descriptor, the variable it was frozen at. A merge leaves a frozen
+    /// class's descriptor in place but may hand its checked representative to
+    /// another member; a write aimed at that member hands the class back to
+    /// this anchor before detaching the member. Runtime-only: frozen classes
+    /// are thawed before a store is serialized or cloned.
+    frozen_anchors: std.AutoHashMapUnmanaged(u32, Var) = .empty,
+
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
     /// representative, or structural rank that existed before the probe began
@@ -260,6 +268,7 @@ pub const Store = struct {
 
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
+        self.frozen_anchors.deinit(self.gpa);
         // slots & descriptors
         self.descs.deinit(self.gpa);
         self.slots.deinit(self.gpa);
@@ -578,6 +587,14 @@ pub const Store = struct {
 
     /// In-place descriptor write. See setSlot.
     fn setDesc(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
+        if (std.debug.runtime_safety and self.descs.get(idx).flags.frozen) {
+            std.debug.panic("a frozen type class was written in place", .{});
+        }
+        try self.setDescUnguarded(idx, val);
+    }
+
+    /// `setDesc` without the frozen-class guard, for freezing and thawing.
+    fn setDescUnguarded(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
@@ -705,6 +722,87 @@ pub const Store = struct {
 
     // setting variables //
 
+    /// Freeze the class `var_` belongs to; `var_` becomes its anchor.
+    pub fn freezeClass(self: *Self, var_: Var) Allocator.Error!void {
+        const storage = self.resolveStorageRoot(var_);
+        std.debug.assert(!storage.desc.flags.frozen);
+        std.debug.assert(storage.meta.checked_var == var_);
+        var desc = storage.desc;
+        desc.flags.frozen = true;
+        try self.frozen_anchors.put(self.gpa, @intFromEnum(storage.desc_idx), var_);
+        try self.setDescUnguarded(storage.desc_idx, desc);
+    }
+
+    /// Whether `var_` belongs to a frozen class.
+    pub fn varIsFrozen(self: *const Self, var_: Var) bool {
+        return self.resolveStorageRoot(var_).desc.flags.frozen;
+    }
+
+    /// The frozen classes, by anchor, for verifying them.
+    pub fn frozenAnchors(self: *const Self) std.AutoHashMapUnmanaged(u32, Var).ValueIterator {
+        return self.frozen_anchors.valueIterator();
+    }
+
+    /// End every class's freeze; afterwards the store holds no frozen class.
+    pub fn thawFrozenClasses(self: *Self) Allocator.Error!void {
+        var anchors = self.frozen_anchors.iterator();
+        while (anchors.next()) |entry| {
+            const idx: DescStore.Idx = @enumFromInt(entry.key_ptr.*);
+            var desc = self.descs.get(idx);
+            desc.flags.frozen = false;
+            try self.setDescUnguarded(idx, desc);
+        }
+        self.frozen_anchors.clearRetainingCapacity();
+    }
+
+    /// When `target_var` is a member of a frozen class, detach it into a class
+    /// of its own holding the same type, so a write aimed at it changes it
+    /// alone. A class whose checked representative is `target_var` is first
+    /// handed back to its anchor. Returns false when `target_var` is the
+    /// anchor itself, which no write may change.
+    inline fn isolateFromFrozenClass(self: *Self, target_var: Var) Allocator.Error!bool {
+        if (self.frozen_anchors.count() == 0) return true;
+        return self.isolateFromFrozenClassSlow(target_var);
+    }
+
+    fn isolateFromFrozenClassSlow(self: *Self, target_var: Var) Allocator.Error!bool {
+        var class = self.resolveStorageRoot(target_var);
+        if (!class.desc.flags.frozen) return true;
+        const anchor = self.frozen_anchors.get(@intFromEnum(class.desc_idx)) orelse
+            std.debug.panic("a frozen type class has no anchor", .{});
+        if (target_var == anchor) return false;
+        if (class.meta.checked_var == target_var) {
+            try self.setRootMeta(class.desc_idx, .{ .checked_var = anchor });
+            class.meta.checked_var = anchor;
+        }
+        try self.detachOccurrence(class, target_var);
+        var desc = class.desc;
+        desc.flags.frozen = false;
+        const desc_idx = try self.appendClass(desc, target_var);
+        try self.setSlot(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
+        return true;
+    }
+
+    /// `target_var` resolved for a write aimed at it, after
+    /// `isolateWriteTarget` when its class is frozen.
+    inline fn resolveWriteTarget(self: *Self, target_var: Var) Allocator.Error!ResolvedVarDesc {
+        const resolved = self.resolveVar(target_var);
+        if (!resolved.desc.flags.frozen) return resolved;
+        return self.resolveIsolatedWriteTarget(target_var);
+    }
+
+    fn resolveIsolatedWriteTarget(self: *Self, target_var: Var) Allocator.Error!ResolvedVarDesc {
+        try self.isolateWriteTarget(target_var);
+        return self.resolveVar(target_var);
+    }
+
+    /// `isolateFromFrozenClass` for a write that must not reach an anchor.
+    fn isolateWriteTarget(self: *Self, target_var: Var) Allocator.Error!void {
+        if (!try self.isolateFromFrozenClass(target_var)) {
+            std.debug.panic("a write was aimed at the anchor of a frozen type class", .{});
+        }
+    }
+
     /// Reset a variable's slot to an unbound flex at the given rank. If it was a
     /// redirect, its entire storage subtree is detached; the former storage
     /// root becomes the checked representative of the remainder. The retained
@@ -717,6 +815,7 @@ pub const Store = struct {
     /// check can generate the annotation again.
     pub fn resetVarToUnbound(self: *Self, target_var: Var, rank: Rank) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
+        try self.isolateWriteTarget(target_var);
         const storage = self.resolveStorageRoot(target_var);
         const desc_idx = try self.appendClass(.{
             .content = .{ .flex = Flex.init() },
@@ -741,14 +840,14 @@ pub const Store = struct {
     /// know the two vars are of  the same rank.
     pub fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         try self.setDesc(resolved.desc_idx, desc);
     }
 
     /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.content = content;
         desc.flags.empty_tag_union_is_default = false;
@@ -759,6 +858,7 @@ pub const Store = struct {
     /// retaining the checker's authoritative defaulting decision.
     pub fn setVarToEmptyTagUnionDefault(self: *Self, target_var: Var) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
+        try self.isolateWriteTarget(target_var);
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = .{ .structure = .empty_tag_union };
@@ -774,6 +874,7 @@ pub const Store = struct {
     /// class rather than one per occurrence.
     pub fn markVarStaticDispatchRejected(self: *Self, target_var: Var) Allocator.Error!bool {
         std.debug.assert(@intFromEnum(target_var) < self.len());
+        try self.isolateWriteTarget(target_var);
         const resolved = self.resolveVar(target_var);
         if (resolved.desc.flags.static_dispatch_rejected) return false;
         var desc = resolved.desc;
@@ -792,6 +893,7 @@ pub const Store = struct {
     /// Record definition-site annotation openness (design.md "Derived Parser
     /// Tag-Row Closure"). Provenance travels with the flex equivalence class.
     pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {
+        try self.isolateWriteTarget(target_var);
         const resolved = self.resolveVar(target_var);
         std.debug.assert(resolved.desc.content == .flex);
         var desc = resolved.desc;
@@ -850,6 +952,7 @@ pub const Store = struct {
     pub fn dangerousSetVarRedirect(self: *Self, comptime rule: RedirectRule, target_var: Var, redirect_to: Var) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
+        try self.isolateWriteTarget(target_var);
         const target_storage = self.resolveStorageRoot(target_var);
         const redirect_storage = self.resolveStorageRoot(redirect_to);
         // Joining a class to itself is always an invalid invocation of a
@@ -1403,6 +1506,8 @@ pub const Store = struct {
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
         var desc = self.descs.get(desc_idx);
+        // A frozen class is ground, so no rank changes what it means.
+        if (desc.flags.frozen) return;
         desc.rank = rank;
         try self.setDesc(desc_idx, desc);
     }
@@ -1583,6 +1688,7 @@ pub const Store = struct {
     pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) Allocator.Error!void {
         const a_data = self.resolveStorageRoot(a_var);
         const b_data = self.resolveStorageRoot(b_var);
+        if (a_data.desc.flags.frozen or b_data.desc.flags.frozen) return self.unionWithFrozen(a_data, b_data, new_desc);
 
         var merged_desc = new_desc;
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
@@ -1618,6 +1724,22 @@ pub const Store = struct {
         try self.linkStorageRoots(a_data, b_data, b_data.desc_idx, b_data.meta.checked_var);
     }
 
+    /// `union_` when either class is frozen. The merged class keeps the frozen
+    /// descriptor, which already holds the type both sides agreed on, and `b`
+    /// stays the checked representative as in every merge. Relating a frozen
+    /// class to an error leaves the two classes apart: the error side is
+    /// already poisoned, and the frozen side must not change.
+    fn unionWithFrozen(self: *Self, a: ResolvedStorageRoot, b: ResolvedStorageRoot, new_desc: Desc) Allocator.Error!void {
+        if (a.storage_var == b.storage_var) return;
+        if (new_desc.content == .err) return;
+        const frozen = if (b.desc.flags.frozen) b else a;
+        const other = if (b.desc.flags.frozen) a else b;
+        if (std.debug.runtime_safety and other.desc.flags.static_dispatch_rejected and !frozen.desc.flags.static_dispatch_rejected) {
+            std.debug.panic("a rejected dispatch callable was related to a frozen type class", .{});
+        }
+        try self.linkStorageRoots(a, b, frozen.desc_idx, b.meta.checked_var);
+    }
+
     /// Poison a failed unification at its two queried occurrences.
     ///
     /// Successful unification always merges whole equivalence classes. Error
@@ -1632,6 +1754,14 @@ pub const Store = struct {
     /// class's checked representative owns the mismatch, so its whole class
     /// joins the error class.
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
+        // A frozen class never changes: an operand inside one is detached and
+        // poisoned alone, and an anchor, which is a type's structure rather
+        // than any occurrence, stays as it is.
+        const a_open = try self.isolateFromFrozenClass(a_var);
+        const b_open = try self.isolateFromFrozenClass(b_var);
+        if (!a_open and !b_open) return;
+        if (!a_open) return self.poisonOccurrence(b_var);
+        if (!b_open) return self.poisonOccurrence(a_var);
         var a = self.resolveStorageRoot(a_var);
         var b = self.resolveStorageRoot(b_var);
         // Poisoning replaces the content, not the rejection history: a class
@@ -1673,6 +1803,20 @@ pub const Store = struct {
         }
 
         try self.linkStorageRoots(a, b, b.desc_idx, b.meta.checked_var);
+    }
+
+    /// Poison one occurrence the way `poisonOnMismatch` poisons each operand.
+    fn poisonOccurrence(self: *Self, var_: Var) Allocator.Error!void {
+        const class = self.resolveStorageRoot(var_);
+        const err_desc = Desc{
+            .content = .err,
+            .rank = Rank.generalized,
+            .flags = .{ .static_dispatch_rejected = class.desc.flags.static_dispatch_rejected },
+        };
+        if (var_ == class.meta.checked_var) return self.setDesc(class.desc_idx, err_desc);
+        try self.detachOccurrence(class, var_);
+        const err_desc_idx = try self.appendClass(err_desc, var_);
+        try self.setSlot(Self.varToSlotIdx(var_), .{ .root = err_desc_idx });
     }
 
     /// Detach `occurrence`, a member of `class` other than its checked
@@ -2307,6 +2451,95 @@ test "mismatch poisoning a non-storage-root checked representative poisons its w
         try std.testing.expectEqual(mismatch, resolved.var_);
         try std.testing.expectEqual(Content.err, resolved.desc.content);
     }
+}
+
+/// A frozen empty record, and a use variable merged into its class that is
+/// the class's checked representative, as a replayed edge leaves them.
+fn frozenClassWithUse(store: *Store) Allocator.Error!struct { anchor: Var, use: Var } {
+    const anchor = try store.freshFromContentWithRank(.{ .structure = .empty_record }, Rank.outermost);
+    try store.freezeClass(anchor);
+    const use = try store.fresh();
+    try store.union_(anchor, use, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    return .{ .anchor = anchor, .use = use };
+}
+
+fn expectFrozenEmptyRecord(store: *const Store, var_: Var) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    const resolved = store.resolveVar(var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved.desc.content);
+    try std.testing.expect(resolved.desc.flags.frozen);
+    try std.testing.expectEqual(Rank.outermost, resolved.desc.rank);
+}
+
+test "a merge with a frozen class keeps its descriptor and the second operand's identity" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const later = try store.fresh();
+    try store.union_(later, class.use, .{ .content = .{ .flex = Flex.init() }, .rank = @enumFromInt(3) });
+    try expectFrozenEmptyRecord(&store, later);
+    try std.testing.expectEqual(class.use, store.resolveVar(class.anchor).var_);
+}
+
+test "poisoning a frozen class's checked representative detaches it alone" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const sibling = try store.freshRedirect(class.use);
+    const mismatch = try store.fresh();
+    try store.poisonOnMismatch(class.use, mismatch);
+
+    try std.testing.expectEqual(Content.err, store.resolveVar(class.use).desc.content);
+    try std.testing.expectEqual(Content.err, store.resolveVar(mismatch).desc.content);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, sibling);
+    try std.testing.expectEqual(class.anchor, store.resolveVar(sibling).var_);
+}
+
+test "poisoning a frozen anchor leaves it as it is" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const mismatch = try store.fresh();
+    try store.poisonOnMismatch(mismatch, class.anchor);
+
+    try std.testing.expectEqual(Content.err, store.resolveVar(mismatch).desc.content);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+}
+
+test "a content write aimed at a frozen class's member changes only that member" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const member = try store.freshRedirect(class.use);
+    try store.setVarContent(member, .err);
+
+    try std.testing.expectEqual(Content.err, store.resolveVar(member).desc.content);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+}
+
+test "a frozen class keeps its rank and thawing ends the freeze" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    try store.setDescRank(store.resolveVar(class.use).desc_idx, Rank.generalized);
+    try expectFrozenEmptyRecord(&store, class.use);
+
+    try store.thawFrozenClasses();
+    try std.testing.expect(!store.resolveVar(class.anchor).desc.flags.frozen);
+    try store.setDescRank(store.resolveVar(class.use).desc_idx, Rank.generalized);
+    try std.testing.expectEqual(Rank.generalized, store.resolveVar(class.anchor).desc.rank);
 }
 
 test "dangerousSetVarRedirect requires a declared rule by signature" {
