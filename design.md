@@ -752,6 +752,18 @@ checker recovery. The recovery rules:
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
   runtime error. The rejected relation has no lowering.
+- A static-dispatch constraint copied out of a generalized scheme belongs to
+  the use that instantiated it, whatever its origin. Instantiation records that
+  use explicitly: `instantiation_dispatchers` for ordinary dispatch and
+  `instantiated_literal_conversion_uses` for literal conversions (numeral,
+  quote, and interpolation), each keyed by the copy's own callable var. A
+  failure of the copy makes that use a runtime error and leaves the scheme's
+  body, which stays valid for every other use, intact.
+- Rejecting a static-dispatch constraint never writes `.err` into the
+  receiver's solved class. A concrete receiver's class is shared with every
+  expression and definition that mentions its type, so the rejection marks the
+  constraint rejected and retires its owner, and the receiver keeps its type.
+  An interpolation whose `Str` part demand fails keeps its `Str` result.
 
 A module that fails before checking, such as a member or dependent of an import
 cycle, has no CheckedModule. Checked-program finalization produces a

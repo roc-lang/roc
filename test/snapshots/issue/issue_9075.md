@@ -165,9 +165,9 @@ main = "${y}"
 	(defs
 		(patt (type "a, (a -> b) -> b"))
 		(patt (type "Dec"))
-		(patt (type "Error")))
+		(patt (type "Str")))
 	(expressions
 		(expr (type "a, (a -> b) -> b"))
 		(expr (type "Dec"))
-		(expr (type "Error"))))
+		(expr (type "Str"))))
 ~~~

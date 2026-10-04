@@ -12497,6 +12497,19 @@ test "check type - derived codec - value-restricted structural receiver settles 
 // dispatch. Builtin's `Try` really declares `from_interpolation`, so a
 // missing-method report on this program would be factually wrong.
 
+// Rejecting an interpolation part retires only the failing use. The
+// interpolation's result keeps its solved `Str` type, which every other
+// expression sharing that type relies on.
+test "check type - interpolation part mismatch keeps the result's Str type" {
+    var test_env = try TestEnv.init("Test",
+        \\y = 5.U8
+        \\main = "${y}"
+    );
+    defer test_env.deinit();
+    try test_env.assertHasTypeError("Type Mismatch");
+    try test_env.assertDefTypeOptions("main", "Str", .{ .allow_type_errors = true });
+}
+
 test "check type - dispatch - nested Try interpolation reports recursive dispatch" {
     const source =
         \\Url := [Url(Str)].{

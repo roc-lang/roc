@@ -91,8 +91,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "U8"))
-		(patt (type "Error")))
+		(patt (type "Str")))
 	(expressions
 		(expr (type "U8"))
-		(expr (type "Error"))))
+		(expr (type "Str"))))
 ~~~

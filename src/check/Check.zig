@@ -999,6 +999,11 @@ scratch_generated_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCa
 /// whole type store. Append-only within a probe scope—`Probe.rollback`
 /// truncates it alongside the other Check-side buffers a probe grows.
 open_literal_vars: std.ArrayListUnmanaged(Var),
+/// The use that instantiated each literal-conversion constraint copied out of
+/// a generalized scheme, keyed by the copy's own callable var. A copy's
+/// provenance names the literal inside the reusable definition, so a failure
+/// of the copy is attributed through this record to the use that created it.
+instantiated_literal_conversion_uses: std.ArrayListUnmanaged(InstantiatedLiteralConversionUse) = .empty,
 /// Exact numeral facts for entries in `open_literal_vars` whose conversion came
 /// from `from_numeral`. This is retained even after the literal var resolves to
 /// a concrete number type, so range validation does not depend on flex content
@@ -3545,6 +3550,7 @@ pub fn deinit(self: *Self) void {
     self.local_binding_roots.deinit(self.gpa);
     self.type_writer.deinit();
     self.instantiation_dispatchers.deinit(self.gpa);
+    self.instantiated_literal_conversion_uses.deinit(self.gpa);
     self.pending_scheme_requirement_dispatchers.deinit(self.gpa);
     self.ambiguity_candidates.deinit(self.gpa);
     self.ambiguity_candidate_by_key.deinit(self.gpa);
@@ -9581,6 +9587,15 @@ fn instantiateVarHelp(
                     const instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
                     if (has_literal_constraint) {
                         try self.recordOpenLiteralVar(fresh_var, constraints, instantiation_expr);
+                        if (instantiation_expr) |use_expr| {
+                            for (constraints) |c| {
+                                if (!self.constraintIsLiteralConversion(c)) continue;
+                                try self.instantiated_literal_conversion_uses.append(self.gpa, .{
+                                    .fn_var = c.fn_var,
+                                    .use_expr = use_expr,
+                                });
+                            }
+                        }
                     }
                     if (has_other_constraint) {
                         try self.registerInstantiatedAttachedDispatch(
@@ -10450,6 +10465,11 @@ fn explicitTypeSuffixVar(
     try self.unifyLiteralWithSuffixTarget(suffix_var, suffix_target, expr_region, env);
     return suffix_var;
 }
+
+const InstantiatedLiteralConversionUse = struct {
+    fn_var: Var,
+    use_expr: CIR.Expr.Idx,
+};
 
 fn recordOpenLiteralVar(
     self: *Self,
@@ -13094,14 +13114,18 @@ fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
 }
 
 /// The source expression whose checked value becomes invalid when this
-/// dispatch constraint fails. Ordinary dispatch records it in provenance;
-/// source literal conversions own it through their checked literal plan, and
-/// instantiated numeral worklist entries carry their exact use in provenance.
+/// dispatch constraint fails. A constraint copied out of a generalized scheme
+/// belongs to the use that instantiated it, whatever its origin: its
+/// provenance still names the introducing expression inside the scheme's own
+/// body, which stays valid for every other use of that scheme. Any other
+/// ordinary dispatch records its owner in provenance, and source literal
+/// conversions own it through their checked literal plan.
 fn constraintSourceExpr(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
 ) ?CIR.Expr.Idx {
+    if (self.instantiatedConstraintUseExpr(constraint)) |expr_idx| return expr_idx;
     if (constraintIntroExpr(constraint)) |expr_idx| return expr_idx;
     const literal_kind = constraint.origin.literalKind() orelse return null;
     if (literal_kind == .interpolation) return null;
@@ -13119,6 +13143,27 @@ fn constraintSourceExpr(
         }
     }
     return pattern_failure_expr;
+}
+
+/// The expression that instantiated this constraint out of a generalized
+/// scheme, or null for a constraint no instantiation copied. Instantiation
+/// mints the copy's callable var and records the copied range with its
+/// instantiating expression in `instantiation_dispatchers`, so the raw
+/// callable identifies that use exactly. Only failure paths ask, so the scan
+/// costs nothing when dispatch succeeds.
+fn instantiatedConstraintUseExpr(self: *const Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
+    if (self.constraintIsLiteralConversion(constraint)) {
+        for (self.instantiated_literal_conversion_uses.items) |copied| {
+            if (copied.fn_var == constraint.fn_var) return copied.use_expr;
+        }
+        return null;
+    }
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
+            if (copied.fn_var == constraint.fn_var) return dispatcher.instantiation_expr;
+        }
+    }
+    return null;
 }
 
 /// Constraint provenance can name only expressions. A statement or definition
@@ -31465,6 +31510,7 @@ const Probe = struct {
     scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
+    instantiated_literal_conversion_uses_len: usize,
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
@@ -31513,6 +31559,7 @@ const Probe = struct {
         // instantiation) reference vars the savepoint rollback just discarded.
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
+        self.check.instantiated_literal_conversion_uses.shrinkRetainingCapacity(self.instantiated_literal_conversion_uses_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
         // vars the savepoint rollback just discarded.
@@ -31583,6 +31630,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
+    const instantiated_literal_conversion_uses_len = self.instantiated_literal_conversion_uses.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
@@ -31618,6 +31666,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
+        .instantiated_literal_conversion_uses_len = instantiated_literal_conversion_uses_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
@@ -40519,7 +40568,6 @@ fn satisfyBuiltinStrInterpolation(
     }
 
     if (did_err) {
-        try self.markErroneous(dispatcher_var);
         try self.markStaticDispatchRejected(constraint);
         try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
         return true;
