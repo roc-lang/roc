@@ -2759,10 +2759,12 @@ Builtin :: [].{
 		## ```
 		from_interpolation : List(Str) -> Try((List(Str) -> Str), [InvalidInterpolation(Str)])
 		from_interpolation = |segments|
-			Ok(|values| {
-				first = List.first(segments).ok_or("")
-				List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
-			})
+			Ok(
+				|values| {
+					first = List.first(segments).ok_or("")
+					List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
+				},
+			)
 
 		## Split a string around a separator.
 		##
