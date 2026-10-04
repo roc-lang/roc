@@ -2659,6 +2659,17 @@ const Solver = struct {
                         self.program.types.spanItem(public_named.args, 0),
                         self.program.types.spanItem(private_named.args, 0),
                     );
+                    // A public iterator viewing a generated representation
+                    // receives its callable evidence through the backings,
+                    // exactly as the unifying relation transfers it.
+                    if (public_named.backing) |public_backing| if (private_named.backing) |private_backing| {
+                        if (public_backing.authority == .checked_public and private_backing.authority == .generated_private) {
+                            if (public_backing.use != private_backing.use) {
+                                Common.invariant("generated-private iterator evidence relation received different backing uses");
+                            }
+                            try self.pushRelate(stack, public_backing.ty, private_backing.ty);
+                        }
+                    };
                 }
             },
         }
