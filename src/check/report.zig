@@ -5295,17 +5295,50 @@ pub const ReportBuilder = struct {
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes("says it can be used at many types, but"),
                 D.bytes(name).withAnnotation(.inline_code),
-                D.bytes("is not a function, so it can only have one type."),
+                D.bytes("isn't defined as a function (like"),
+                D.bytes("|x| ...").withAnnotation(.inline_code),
+                D.bytes("), so it can only have one type.").withNoPrecedingSpace(),
             }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
-                D.bytes("This type annotation says its value can be used at many types, but the value is not a function, so it can only have one type."),
+                D.bytes("This type annotation says its value can be used at many types, but the value isn't defined as a function (like"),
+                D.bytes("|x| ...").withAnnotation(.inline_code),
+                D.bytes("), so it can only have one type.").withNoPrecedingSpace(),
             }, self, &report, &report.headline);
         }
 
         try self.addSourceHighlightRegion(&report, data.region);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+
+        if (data.stub_arity) |arity| {
+            // An unimplemented function: the stub itself must be a function.
+            var stub = std.ArrayList(u8).empty;
+            defer stub.deinit(self.gpa);
+            try stub.append(self.gpa, '|');
+            for (0..arity) |index| {
+                if (index != 0) try stub.appendSlice(self.gpa, ", ");
+                try stub.append(self.gpa, '_');
+            }
+            try stub.print(self.gpa, "| {s}", .{self.source[data.rhs_region.start.offset..data.rhs_region.end.offset]});
+            if (name_text) |name| {
+                try D.renderSlice(&.{
+                    D.bytes("If this function is not implemented yet, write its placeholder body inside a function:"),
+                }, self, &report);
+                try report.document.addLineBreak();
+                const suggestion = try std.fmt.allocPrint(self.gpa, "{s} = {s}", .{ name, stub.items });
+                defer self.gpa.free(suggestion);
+                try report.document.addCodeBlock(try report.addOwnedString(suggestion));
+                try report.document.addLineBreak();
+            } else {
+                try D.renderSlice(&.{
+                    D.bytes("If this function is not implemented yet, write its placeholder body inside a function, like"),
+                    D.bytes(try report.addOwnedString(stub.items)).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, &report);
+            }
+            return report;
+        }
 
         if (data.writes_named_variable and data.writes_open_extension) {
             try D.renderSlice(&.{

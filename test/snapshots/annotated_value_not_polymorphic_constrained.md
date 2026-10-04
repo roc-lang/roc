@@ -30,7 +30,10 @@ VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_constrained.md:3:1:3:
 			(reflow " ")
 			(annotated code "items")
 			(reflow " ")
-			(reflow "is not a function, so it can only have one type."))
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
 		(document
 			(source-region (file "annotated_value_not_polymorphic_constrained.md") (start 3 1) (end 3 43) (annotation error) (line-text "items : List(a) where [a.to_str : a -> Str]"))
 			(line-break)

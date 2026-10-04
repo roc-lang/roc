@@ -34,7 +34,10 @@ REDUNDANT OPEN TAG UNION - annotated_value_not_polymorphic_tag_widening.md:6:24:
 			(reflow " ")
 			(annotated code "f")
 			(reflow " ")
-			(reflow "is not a function, so it can only have one type."))
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
 		(document
 			(source-region (file "annotated_value_not_polymorphic_tag_widening.md") (start 3 1) (end 3 21) (annotation error) (line-text "f : [Red, Green, ..]"))
 			(line-break)
@@ -151,7 +154,7 @@ NO CHANGE
 				(ty-rigid-var (name "#others")))))
 	(d-let
 		(p-assign (ident "g"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Red"))
@@ -169,11 +172,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Blue, Green, Red]"))
+		(patt (type "[Red]"))
 		(patt (type "[Blue, Green, Red]"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[Blue, Green, Red]"))
+		(expr (type "[Red]"))
 		(expr (type "[Blue, Green, Red]"))
 		(expr (type "_arg -> {}"))))
 ~~~

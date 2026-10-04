@@ -40,7 +40,7 @@ general. Annotating a value that is not a function with a type variable it
 would have to be generalized over is an error:
 
 ```roc
-empty : List(a)  # error: `empty` is not a function, so it has one type
+empty : List(a)  # error: `empty` isn't defined as a function, so it has one type
 empty = []
 ```
 

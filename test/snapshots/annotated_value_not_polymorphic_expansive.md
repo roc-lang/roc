@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotation cannot make an expansive value (a call result) polymorphic: it is rejected, and the use at a second type is an ordinary mismatch
+description=An annotation cannot make an expansive value (a call result) polymorphic: it is rejected, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -23,7 +23,6 @@ main! = |_| {}
 ~~~
 # EXPECTED
 VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_expansive.md:6:1:6:15
-TYPE MISMATCH - annotated_value_not_polymorphic_expansive.md:13:8:13:12
 # PROBLEMS
 ~~~clojure
 (reports
@@ -40,7 +39,10 @@ TYPE MISMATCH - annotated_value_not_polymorphic_expansive.md:13:8:13:12
 			(reflow " ")
 			(annotated code "made")
 			(reflow " ")
-			(reflow "is not a function, so it can only have one type."))
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
 		(document
 			(source-region (file "annotated_value_not_polymorphic_expansive.md") (start 6 1) (end 6 15) (annotation error) (line-text "made : List(a)"))
 			(line-break)
@@ -69,32 +71,7 @@ TYPE MISMATCH - annotated_value_not_polymorphic_expansive.md:13:8:13:12
 			(reflow " ")
 			(annotated code "made({})")
 			(reflow " ")
-			(reflow "wherever you use it.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 13 8) (end 13 12))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "annotated_value_not_polymorphic_expansive.md") (start 13 8) (end 13 12) (annotation error) (line-text "strs = made"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(U64)")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the annotation says it should be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(Str)")
-			(annotation-end))))
+			(reflow "wherever you use it."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -191,13 +168,13 @@ NO CHANGE
 				(ty-rigid-var (name "a")))))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "Str") (builtin)))))
@@ -213,13 +190,13 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "List(U64)"))
+		(patt (type "List(_b)"))
 		(patt (type "List(U64)"))
 		(patt (type "List(Str)"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "List(U64)"))
+		(expr (type "List(_b)"))
 		(expr (type "List(U64)"))
 		(expr (type "List(Str)"))
 		(expr (type "_arg -> {}"))))

@@ -123,12 +123,12 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-method-call (method "next_static_dispatch_method")
+								(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 327)
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-method-call (method "static_dispatch_method")
+													(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 305)
 														(receiver
 															(e-match
 																(match
@@ -207,5 +207,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "ok"))
 ~~~

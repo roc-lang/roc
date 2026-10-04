@@ -233,6 +233,11 @@ pub const PolymorphicValueAnnotation = struct {
     type_is_function: bool,
     /// The binding's right-hand side, for the suggested thunk body.
     rhs_region: base.Region,
+    /// The annotated function type's arity, when the right-hand side is a
+    /// placeholder (`...` or a `crash`) for a function that is not
+    /// implemented yet; the report then suggests writing the placeholder
+    /// inside a lambda of that arity.
+    stub_arity: ?u32,
     /// Whether the annotation writes an anonymous `..` extension.
     writes_open_extension: bool,
     /// Whether the annotation writes a named type variable.

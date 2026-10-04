@@ -1295,7 +1295,10 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, ..], [Tb] -> Error")
+			(text "[Blue, ..], [Tb] -> f")
+			(line-break)
+			(indent 1)
+			(text "  where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2062,10 +2065,27 @@ expect {
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "add"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-lookup-local
+								(p-assign (ident "num")))
+							(e-runtime-error (tag "erroneous_value_expr"))))
+					(if-else
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "me"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-applied-tag))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -2156,8 +2176,8 @@ expect {
 		(patt (type "()"))
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
-		(patt (type "Bool -> Error"))
-		(patt (type "[Blue, ..], [Tb] -> Error"))
+		(patt (type "Bool -> _ret"))
+		(patt (type "[Blue, ..], [Tb] -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{}"))
@@ -2193,8 +2213,8 @@ expect {
 		(expr (type "()"))
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
-		(expr (type "Bool -> Error"))
-		(expr (type "[Blue, ..], [Tb] -> Error"))
+		(expr (type "Bool -> _ret"))
+		(expr (type "[Blue, ..], [Tb] -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{}"))

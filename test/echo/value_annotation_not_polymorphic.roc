@@ -1,6 +1,7 @@
 # An annotation cannot make a value that is not a function polymorphic. Each
-# rejected annotation is reported, its binding is checked as an unannotated
-# one, and the program runs until it reaches a rejected binding, which crashes.
+# rejected annotation is reported once, even where its binding is used at two
+# types, and the program runs until it reaches a use of a rejected binding,
+# which crashes.
 empty : List(a)
 empty = []
 
@@ -20,6 +21,9 @@ main! = |args| {
 		pick : a -> a
 		pick = if List.len(args) > 200 |x| x else |x| x
 		echo!(id(pick("unreached")))
+		echo!(Str.inspect(id(1.U8)))
+		echo!(Str.inspect(List.len(List.append(empty, 1.U8))))
+		echo!(Str.inspect(List.len(List.append(empty, "s"))))
 	} else {
 		{}
 	}

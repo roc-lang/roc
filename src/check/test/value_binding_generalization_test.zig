@@ -102,7 +102,7 @@ test "value binding generalization: the report quotes the annotation and suggest
     defer test_env.deinit();
     try test_env.assertOneTypeErrorMsg(
         \\**Value Is Not Polymorphic**
-        \\The type annotation on `empty` says it can be used at many types, but `empty` is not a function, so it can only have one type.
+        \\The type annotation on `empty` says it can be used at many types, but `empty` isn't defined as a function (like `|x| ...`), so it can only have one type.
         \\```roc
         \\empty : List(a)
         \\```
@@ -120,27 +120,64 @@ test "value binding generalization: the report quotes the annotation and suggest
     );
 }
 
-test "value binding generalization: a rejected binding keeps the type its right-hand side infers" {
-    var test_env = try TestEnv.init("Test",
-        \\empty : List(a)
-        \\empty = []
-        \\
-        \\bytes = List.append(empty, 1.U8)
-    );
-    defer test_env.deinit();
-    try test_env.assertTypeErrorTitles(&.{rejected_title});
-    try test_env.assertDefTypeOptions("empty", "List(U8)", .{ .allow_type_errors = true });
-}
-
-test "value binding generalization: a rejected binding used at two types also reports the mismatch" {
-    var test_env = try TestEnv.init("Test",
+test "value binding generalization: a rejected list used at two types reports one error" {
+    try expectRejected(
         \\empty : List(a)
         \\empty = []
         \\
         \\both = (List.append(empty, 1.U8), List.append(empty, "s"))
     );
-    defer test_env.deinit();
-    try test_env.assertTypeErrorTitles(&.{ rejected_title, "Type Mismatch" });
+}
+
+test "value binding generalization: a rejected function value called at two types reports one error" {
+    try expectRejected(
+        \\mk = |{}| |x| x
+        \\
+        \\id : a -> a
+        \\id = mk({})
+        \\
+        \\both = (id(1.U8), id("s"))
+        \\
+        \\shown = |{}| {
+        \\    _n = id(2.U8)
+        \\    s = id("t")
+        \\    "${s}"
+        \\}
+    );
+}
+
+test "value binding generalization: a rejected local binding used at two types reports one error" {
+    try expectRejected(
+        \\both : U8 -> (U64, U64)
+        \\both = |_n| {
+        \\    xs : List(b)
+        \\    xs = []
+        \\    (List.len(List.append(xs, 1.U8)), List.len(List.append(xs, "s")))
+        \\}
+    );
+}
+
+test "value binding generalization: a rejected top-level binding used from two functions reports one error" {
+    try expectRejected(
+        \\empty : List(a)
+        \\empty = []
+        \\
+        \\bytes = |{}| List.append(empty, 1.U8)
+        \\
+        \\strs = |{}| List.append(empty, "s")
+        \\
+        \\count = |{}| List.len(empty).to_str()
+    );
+}
+
+test "value binding generalization: a rejected binding used in a conditional branch reports one error" {
+    try expectRejected(
+        \\empty : List(a)
+        \\empty = []
+        \\
+        \\pick : Bool -> U64
+        \\pick = |c| if c List.len(List.append(empty, 1.U8)) else 0
+    );
 }
 
 test "value binding generalization: an unannotated value used at two types is a mismatch" {
@@ -240,7 +277,7 @@ test "value binding generalization: the report names no type the annotation did 
     defer test_env.deinit();
     try test_env.assertOneTypeErrorMsg(
         \\**Value Is Not Polymorphic**
-        \\The type annotation on `n` says it can be used at many types, but `n` is not a function, so it can only have one type.
+        \\The type annotation on `n` says it can be used at many types, but `n` isn't defined as a function (like `|x| ...`), so it can only have one type.
         \\```roc
         \\n : a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
         \\```
@@ -255,5 +292,88 @@ test "value binding generalization: the report names no type the annotation did 
         \\Then call it as `n({})` wherever you use it.
         \\
         \\
+    );
+}
+
+// Stubs: a placeholder body for an annotated function type is not a function
+// either; the report suggests writing it inside a lambda of the annotation's
+// arity.
+
+test "value binding generalization: an ellipsis stub for a function annotation suggests a lambda stub" {
+    var test_env = try TestEnv.init("Test",
+        \\parse : Str -> Try(a, [Bad])
+        \\parse = ...
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorMsg(
+        \\**Value Is Not Polymorphic**
+        \\The type annotation on `parse` says it can be used at many types, but `parse` isn't defined as a function (like `|x| ...`), so it can only have one type.
+        \\```roc
+        \\parse : Str -> Try(a, [Bad])
+        \\```
+        \\^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\
+        \\If this function is not implemented yet, write its placeholder body inside a function:
+        \\    parse = |_| ...
+        \\
+        \\
+        \\
+    );
+}
+
+test "value binding generalization: a crash stub keeps its message and matches a multi-argument arity" {
+    var test_env = try TestEnv.init("Test",
+        \\combine : a, b -> (a, b)
+        \\combine = crash "todo"
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorMsg(
+        \\**Value Is Not Polymorphic**
+        \\The type annotation on `combine` says it can be used at many types, but `combine` isn't defined as a function (like `|x| ...`), so it can only have one type.
+        \\```roc
+        \\combine : a, b -> (a, b)
+        \\```
+        \\^^^^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\
+        \\If this function is not implemented yet, write its placeholder body inside a function:
+        \\    combine = |_, _| crash "todo"
+        \\
+        \\
+        \\
+    );
+}
+
+test "value binding generalization: a stub for a non-function annotation gets the ordinary advice" {
+    var test_env = try TestEnv.init("Test",
+        \\none : List(a)
+        \\none = ...
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorMsg(
+        \\**Value Is Not Polymorphic**
+        \\The type annotation on `none` says it can be used at many types, but `none` isn't defined as a function (like `|x| ...`), so it can only have one type.
+        \\```roc
+        \\none : List(a)
+        \\```
+        \\^^^^^^^^^^^^^^
+        \\
+        \\
+        \\If you want me to infer its type, write `_` in place of each type variable, or write a concrete type.
+        \\
+        \\If you want to use it at many types, make it a function that takes `{}`:
+        \\    none : {} -> List(a)
+        \\    none = |{}| ...
+        \\Then call it as `none({})` wherever you use it.
+        \\
+        \\
+    );
+}
+
+test "value binding generalization: a lambda stub generalizes" {
+    try expectAccepted(
+        \\parse : Str -> Try(a, [Bad])
+        \\parse = |_| ...
     );
 }

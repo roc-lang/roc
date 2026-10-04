@@ -210,7 +210,19 @@ NO CHANGE
 			(e-block
 				(s-expect
 					(e-block
-						(s-runtime-error (tag "erroneous_value_expr"))
+						(s-expr
+							(e-if
+								(if-branches
+									(if-branch
+										(e-method-eq (negated "false")
+											(lhs
+												(e-lookup-local
+													(p-assign (ident "x"))))
+											(rhs
+												(e-num (value "1"))))
+										(e-runtime-error (tag "erroneous_value_expr"))))
+								(if-else
+									(e-empty_record))))
 						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local

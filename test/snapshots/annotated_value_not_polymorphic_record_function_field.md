@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotation cannot make a record value polymorphic, even when a field is a lambda: it is rejected, and the use at a second type is an ordinary mismatch
+description=An annotation cannot make a record value polymorphic, even when a field is a lambda: it is rejected, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -20,7 +20,6 @@ main! = |_| {}
 ~~~
 # EXPECTED
 VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_record_function_field.md:3:1:3:34
-TYPE MISMATCH - annotated_value_not_polymorphic_record_function_field.md:10:6:10:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -37,7 +36,10 @@ TYPE MISMATCH - annotated_value_not_polymorphic_record_function_field.md:10:6:10
 			(reflow " ")
 			(annotated code "rec")
 			(reflow " ")
-			(reflow "is not a function, so it can only have one type."))
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
 		(document
 			(source-region (file "annotated_value_not_polymorphic_record_function_field.md") (start 3 1) (end 3 34) (annotation error) (line-text "rec : { f : a -> a, n : List(b) }"))
 			(line-break)
@@ -66,32 +68,7 @@ TYPE MISMATCH - annotated_value_not_polymorphic_record_function_field.md:10:6:10
 			(reflow " ")
 			(annotated code "rec({})")
 			(reflow " ")
-			(reflow "wherever you use it.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 10 6) (end 10 9))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "annotated_value_not_polymorphic_record_function_field.md") (start 10 6) (end 10 9) (annotation error) (line-text "r2 = rec"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "{ f: U64 -> U64, n: List(U64) }")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the annotation says it should be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "{ f: Str -> Str, n: List(Str) }")
-			(annotation-end))))
+			(reflow "wherever you use it."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -194,7 +171,7 @@ NO CHANGE
 						(ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "r1"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record
 				(field (field "f")
@@ -206,7 +183,7 @@ NO CHANGE
 						(ty-lookup (name "U64") (builtin)))))))
 	(d-let
 		(p-assign (ident "r2"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record
 				(field (field "f")
@@ -227,12 +204,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ f: U64 -> U64, n: List(U64) }"))
+		(patt (type "{ f: c -> c, n: List(_d) }"))
 		(patt (type "{ f: U64 -> U64, n: List(U64) }"))
 		(patt (type "{ f: Str -> Str, n: List(Str) }"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "{ f: U64 -> U64, n: List(U64) }"))
+		(expr (type "{ f: c -> c, n: List(_d) }"))
 		(expr (type "{ f: U64 -> U64, n: List(U64) }"))
 		(expr (type "{ f: Str -> Str, n: List(Str) }"))
 		(expr (type "_arg -> {}"))))

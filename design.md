@@ -782,6 +782,18 @@ checker recovery. The recovery rules:
 - A value binding whose annotation is rejected for introducing a type
   variable the binding cannot quantify is checked without the annotation, and
   its right-hand side is erroneous (Value Bindings Generalize By Expression).
+- A use of a declaration that already reported its own rejection (a value
+  binding whose annotation is rejected, or a hosted declaration that is not an
+  effectful function) is erroneous at the use: the use never relates to the
+  declaration's type, so uses cannot disagree with one another, and the error
+  lives only in the use's own checker variable.
+- A conditional's or match's branch whose value is erroneous (its expression
+  is in `call_operand_type_error_exprs`) is retired on its own and does not
+  join the enclosing expression's result, whose type comes from the other
+  branches. Joining it would write the error into the class every branch
+  shares and retire the whole expression, so a branch that is never taken
+  would crash. A checked runtime error produces no value, so lowering gives it
+  its consumer's representation rather than its own type.
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
   runtime error. The rejected relation has no lowering.
@@ -3670,11 +3682,23 @@ binding that introduces a type variable, named (`a`, `_a`) or an anonymous
   means, so on a value binding it can only ask for a quantified row; it is
   rejected, and the report says to remove it.
 
-The report never names a type the program did not write: it quotes the
+The report never names a type the program did not write. Its headline says
+the binding "isn't defined as a function (like `|x| ...`)", which is accurate
+for a function-typed value such as `id = mk({})` too. It quotes the
 annotation, suggests writing `_` in place of each type variable (or removing
 each `..`) or a concrete type, and, for a named binding, the thunk built from
 the program's own text (`empty : {} -> List(a)` / `empty = |{}| []`) to call
 as `empty({})` where the binding must be used at many types.
+
+A placeholder for a function that is not implemented yet is not a function
+either: `parse : Str -> Try(a, [Bad])` / `parse = ...`, or `= crash "todo"`,
+is rejected like any other weak binding. When the right-hand side is `...` or
+a `crash` and the annotation is a function type, the report instead suggests
+writing the placeholder inside a lambda with one `_` parameter per argument
+of that function type (`parse = |_| ...`, `combine = |_, _| crash "todo"`),
+built from the expression kind and the annotation's arity
+(`Check.functionStubArity`) and the placeholder's own source. A placeholder
+under a non-function annotation gets the ordinary advice.
 
 Recovery follows Every Rejection Is Explicit Recovery. Rejection is decided
 before any body is checked (`Check.rejectTopLevelValueAnnotations`, and at a
@@ -3685,16 +3709,27 @@ keeps the type its right-hand side infers, so no `.err` enters a solved class
 the binding shares. Its right-hand side is then retired as a runtime error,
 and, as an unannotated binding of an erroneous value, its name is erroneous,
 so every use becomes a runtime error: a program reaching the binding crashes
-there, and code that does not reach it runs. Uses relate to the inferred type
-like any unannotated binding's uses, so using the binding at two types also
-reports the ordinary mismatch.
+there, and code that does not reach it runs. Each use is erroneous at the use
+(`Check.markRejectedValueAnnotationUse`), exactly like a use of a hosted
+declaration that is not an effectful function: it does not relate to the
+binding's type, so using the binding at two types reports nothing further.
+The use's error stays in its own variable; a call-like consumer is retired
+before it introduces a dispatch relation (Erroneous Call Operand Retirement),
+so no unresolved method requirement leaks into an enclosing function's
+scheme, and a conditional or match branch that becomes erroneous does not
+join the shared result (Every Rejection Is Explicit Recovery), so a branch
+that is never taken does not crash.
 
 Both sides are pinned in `src/check/test/value_binding_generalization_test.zig`
 and `src/check/test/issue_12016_test.zig`. Accepted: annotated syntactic
 functions used at two types, value aliases, concrete annotations, `_` holes, a
 local annotation naming only an enclosing variable, the thunk form used at two
-types, and the issue 12016 program. Rejected: each annotation listed above;
-an unannotated weak value used at two types is an ordinary mismatch.
+types, a lambda stub, and the issue 12016 program. Rejected: each annotation
+listed above, `...` and `crash` stubs (with their dedicated hint), and a
+rejected binding used at two types (a list, a function value called at two
+types, a local, and a top-level binding used from two functions), each with
+exactly one error; an unannotated weak value used at two types is an ordinary
+mismatch.
 `test/echo/value_annotation_not_polymorphic.roc` runs a program past its
 unreached rejected bindings until it reaches one and crashes there, and
 `test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.

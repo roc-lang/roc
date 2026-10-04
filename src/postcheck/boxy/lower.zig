@@ -17909,6 +17909,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const target_rep = self.repForType(expected_ty);
         const source_rep = self.exprStorageRep(expr, self.repForType(expr.ty));
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
@@ -17966,6 +17970,10 @@ const ProcBodyBuilder = struct {
         }
 
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         if (self.procedureValueRefForExpr(expr) != null) {
             return try self.beginProcedureValueRefTypeRef(
                 target,
@@ -18003,6 +18011,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const source_rep = self.repForType(expr.ty);
         try self.ensureBoundaryTargetDescriptorForSourceRep(target, source_rep);
         if (self.representationBoundaryIsDirect(target_rep, source_rep)) {
@@ -18022,6 +18034,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const source_rep = self.repForType(expr.ty);
         if (self.parent.result.store.getLocal(target).layout_idx == self.workerRuntimeLayoutForRep(source_rep).layoutIdx() and
             self.repsUseSameDynamicBoxStorage(target_rep, source_rep))

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotation cannot make a value bound inside a block polymorphic: `empty : List(a)` on `empty = []` is rejected, the binding is checked without the annotation, and its use at a second type is an ordinary mismatch
+description=An annotation cannot make a value bound inside a block polymorphic: `empty : List(a)` on `empty = []` is rejected, the binding is checked without the annotation, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -24,7 +24,6 @@ main! = |_| {
 ~~~
 # EXPECTED
 VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_block_local.md:4:5:4:20
-TYPE MISMATCH - annotated_value_not_polymorphic_block_local.md:11:12:11:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -41,7 +40,10 @@ TYPE MISMATCH - annotated_value_not_polymorphic_block_local.md:11:12:11:17
 			(reflow " ")
 			(annotated code "empty")
 			(reflow " ")
-			(reflow "is not a function, so it can only have one type."))
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
 		(document
 			(source-region (file "annotated_value_not_polymorphic_block_local.md") (start 4 5) (end 4 20) (annotation error) (line-text "    empty : List(a)"))
 			(line-break)
@@ -70,32 +72,7 @@ TYPE MISMATCH - annotated_value_not_polymorphic_block_local.md:11:12:11:17
 			(reflow " ")
 			(annotated code "empty({})")
 			(reflow " ")
-			(reflow "wherever you use it.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 11 12) (end 11 17))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "annotated_value_not_polymorphic_block_local.md") (start 11 12) (end 11 17) (annotation error) (line-text "    strs = empty"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(U64)")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the annotation says it should be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(Str)")
-			(annotation-end))))
+			(reflow "wherever you use it."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -197,10 +174,10 @@ main! = |_| {
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "nums"))
-					(e-runtime-error (tag "erroneous_value_use")))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "strs"))
-					(e-runtime-error (tag "erroneous_value_use")))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-underscore)
 					(e-lookup-local

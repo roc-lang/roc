@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotation cannot make a non-function value polymorphic: `empty : List(a)` on `empty = []` is rejected, and the use at a second type is an ordinary mismatch
+description=An annotation cannot make a non-function value polymorphic: `empty : List(a)` on `empty = []` is rejected, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -20,7 +20,6 @@ main! = |_| {}
 ~~~
 # EXPECTED
 VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_multi_type.md:3:1:3:16
-TYPE MISMATCH - annotated_value_not_polymorphic_multi_type.md:10:8:10:13
 # PROBLEMS
 ~~~clojure
 (reports
@@ -37,7 +36,10 @@ TYPE MISMATCH - annotated_value_not_polymorphic_multi_type.md:10:8:10:13
 			(reflow " ")
 			(annotated code "empty")
 			(reflow " ")
-			(reflow "is not a function, so it can only have one type."))
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
 		(document
 			(source-region (file "annotated_value_not_polymorphic_multi_type.md") (start 3 1) (end 3 16) (annotation error) (line-text "empty : List(a)"))
 			(line-break)
@@ -66,32 +68,7 @@ TYPE MISMATCH - annotated_value_not_polymorphic_multi_type.md:10:8:10:13
 			(reflow " ")
 			(annotated code "empty({})")
 			(reflow " ")
-			(reflow "wherever you use it.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 10 8) (end 10 13))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "annotated_value_not_polymorphic_multi_type.md") (start 10 8) (end 10 13) (annotation error) (line-text "strs = empty"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(U64)")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the annotation says it should be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(Str)")
-			(annotation-end))))
+			(reflow "wherever you use it."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -163,13 +140,13 @@ NO CHANGE
 				(ty-rigid-var (name "a")))))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "Str") (builtin)))))
@@ -184,12 +161,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(U64)"))
+		(patt (type "List(_b)"))
 		(patt (type "List(U64)"))
 		(patt (type "List(Str)"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(U64)"))
+		(expr (type "List(_b)"))
 		(expr (type "List(U64)"))
 		(expr (type "List(Str)"))
 		(expr (type "_arg -> {}"))))

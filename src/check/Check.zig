@@ -24083,6 +24083,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 break :blk;
             }
 
+            if (self.rejected_value_annotations.contains(lookup.pattern_idx)) {
+                try self.markRejectedValueAnnotationUse(expr_idx, expr_var);
+                break :blk;
+            }
+
             try self.value_lookup_tracking.append(self.gpa, .{
                 .expr_idx = expr_idx,
                 .pattern_idx = lookup.pattern_idx,
@@ -27711,7 +27716,10 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                     } };
                     try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, state.branch_acc.?, branch_ctx, env);
                 }
-                state.branch_var = ModuleEnv.varFrom(first_branch.body);
+                state.branch_var = if (self.branchValueIsErroneous(first_branch.body))
+                    try self.fresh(env, frame.expr_region)
+                else
+                    ModuleEnv.varFrom(first_branch.body);
                 state.phase = if (state.branch_index < branches.len) .schedule_branch_cond else .schedule_final_else;
             },
             .schedule_branch_cond => {
@@ -27744,7 +27752,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                         .last_if_branch = state.last_if_branch,
                     } };
                     try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, state.branch_acc.?, branch_ctx, env);
-                } else {
+                } else if (!self.branchValueIsErroneous(branch.body)) {
                     const body_var: Var = ModuleEnv.varFrom(branch.body);
                     const result = try self.unifyInContext(state.branch_var, body_var, env, .{ .if_branch = .{
                         .branch_index = @intCast(state.branch_index),
@@ -27829,14 +27837,16 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                     _ = try self.unify(if_expr_var, state.branch_acc.?, env);
                     _ = try self.unify(if_expr_var, expected_ret, env);
                 } else {
-                    const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
-                    _ = try self.unifyInContext(state.branch_var, final_else_var, env, .{ .if_branch = .{
-                        .branch_index = state.num_branches - 1,
-                        .num_branches = state.num_branches,
-                        .is_else = true,
-                        .parent_if_expr = if_expr_idx,
-                        .last_if_branch = state.last_if_branch,
-                    } });
+                    if (!self.branchValueIsErroneous(if_.final_else)) {
+                        const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
+                        _ = try self.unifyInContext(state.branch_var, final_else_var, env, .{ .if_branch = .{
+                            .branch_index = state.num_branches - 1,
+                            .num_branches = state.num_branches,
+                            .is_else = true,
+                            .parent_if_expr = if_expr_idx,
+                            .last_if_branch = state.last_if_branch,
+                        } });
+                    }
                     const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
                     _ = try self.unify(if_expr_var, state.branch_var, env);
                 }
@@ -28000,7 +28010,10 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             if (state.checking_other_branches) {
                 try self.markErroneous(ModuleEnv.varFrom(branch.value));
             } else if (branch_cur_index == 0) {
-                state.val_var = ModuleEnv.varFrom(branch.value);
+                state.val_var = if (self.branchValueIsErroneous(branch.value))
+                    try self.fresh(env, expr_region)
+                else
+                    ModuleEnv.varFrom(branch.value);
 
                 // Check first branch body against expected return type. For
                 // a `?`, that first branch is the unwrapped `Ok` payload, and
@@ -28029,7 +28042,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                         .match_expr = expr_idx,
                     } };
                     try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, state.branch_acc.?, branch_ctx, env);
-                } else {
+                } else if (!self.branchValueIsErroneous(branch.value)) {
                     const branch_result = try self.unifyInContext(state.val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
                         .branch_index = @intCast(branch_cur_index),
                         .num_branches = @intCast(match.branches.span.len),
@@ -28345,6 +28358,15 @@ fn retireCallLikeExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Alloca
         try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
     }
     self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
+}
+
+/// Whether a conditional's or match's branch value is an erroneous value
+/// (`call_operand_type_error_exprs`). Such a branch is retired on its own and
+/// does not join the enclosing expression's result: relating it would write
+/// its error into the class every other branch shares, and the whole
+/// expression would be retired even when that branch is never taken.
+fn branchValueIsErroneous(self: *const Self, value_expr: CIR.Expr.Idx) bool {
+    return self.call_operand_type_error_exprs.items[nodeSlot(value_expr)];
 }
 
 fn callLikeOperandsContainErroneousValue(self: *const Self, operand_exprs: []const CIR.Expr.Idx) bool {
@@ -28876,10 +28898,29 @@ fn rejectValueAnnotation(
         .where_region = where_region,
         .type_is_function = self.cir.store.getTypeAnno(annotation.anno) == .@"fn",
         .rhs_region = self.cir.store.getExprRegion(rhs),
+        .stub_arity = self.functionStubArity(annotation.anno, rhs),
         .writes_open_extension = written.open_extension,
         .writes_named_variable = written.named_variable,
     } });
     try self.rejected_value_annotations.put(self.gpa, pattern_idx, {});
+}
+
+/// The arity of an annotated function type whose definition is a placeholder
+/// (`...` or a `crash`) rather than a lambda, for the report's stub hint; null
+/// for any other right-hand side or a non-function annotation.
+fn functionStubArity(self: *const Self, anno_root: CIR.TypeAnno.Idx, rhs: CIR.Expr.Idx) ?u32 {
+    const rhs_expr = self.cir.store.getExpr(rhs);
+    const is_stub = rhs_expr == .e_ellipsis or rhs_expr == .e_crash or
+        (rhs_expr == .e_run_low_level and rhs_expr.e_run_low_level.op == .crash);
+    if (!is_stub) return null;
+    var anno_idx = anno_root;
+    while (true) {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .parens => |p| anno_idx = p.anno,
+            .@"fn" => |f| return @intCast(self.cir.store.sliceTypeAnnos(f.args).len),
+            .rigid_var, .rigid_var_lookup, .underscore, .lookup, .malformed, .apply, .tag_union, .tag, .tuple, .record => return null,
+        }
+    }
 }
 
 /// The source of an annotation's where clause, from the end of its type
@@ -31183,6 +31224,11 @@ fn checkResolvedAssociatedTarget(
 
     if (hostedDeclarationIsNotEffectful(target_env, target_def_idx)) {
         try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
+        return;
+    }
+
+    if (is_this_module and self.rejected_value_annotations.contains(target_env.store.getDef(target_def_idx).pattern)) {
+        try self.markRejectedValueAnnotationUse(expr_idx, expr_var);
         return;
     }
 
@@ -45497,6 +45543,17 @@ fn reportValuelessDeclarationUse(
 /// declaration already reported the problem, so the use only becomes
 /// erroneous, which code generates it as a crash.
 fn markNonEffectfulHostedDeclarationUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
+    try self.markErroneous(expr_var);
+    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+}
+
+/// A use of a binding whose annotation was rejected
+/// (`rejected_value_annotations`). The binding already reported the problem
+/// and its value is a runtime error, so, exactly like a use of a non-effectful
+/// hosted declaration, the use only becomes erroneous: it never relates to the
+/// binding's type, so uses cannot disagree with one another, and its error
+/// lives in the use's own variable.
+fn markRejectedValueAnnotationUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
     try self.markErroneous(expr_var);
     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
 }
