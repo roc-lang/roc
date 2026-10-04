@@ -654,6 +654,10 @@ pub const LocalImportEdge = struct {
 pub const ModuleState = struct {
     /// Module name (e.g., "Main", "Foo")
     name: []const u8,
+    /// Package-qualified module name (e.g., "pf.Foo"). Workspace information
+    /// that every environment installed for this module borrows as its
+    /// `qualified_module_name`; no cache entry carries it.
+    qualified_name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
     /// Source-relative import base override for materialized modules.
@@ -713,9 +717,10 @@ pub const ModuleState = struct {
         black,
     };
 
-    pub fn init(name: []const u8, path: []const u8) ModuleState {
+    pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
             .name = name,
+            .qualified_name = qualified_name,
             .path = path,
             .cached_ast = null,
             .phase = .Parse,
@@ -874,6 +879,7 @@ pub const ModuleState = struct {
         }
         if (self.source_dir_override) |source_dir| gpa.free(source_dir);
         gpa.free(self.path);
+        gpa.free(self.qualified_name);
         gpa.free(self.name);
     }
 };
@@ -1033,9 +1039,14 @@ pub const PackageState = struct {
 
         const id: ModuleId = @intCast(self.modules.items.len);
         const owned_name = try gpa.dupe(u8, name);
+        errdefer gpa.free(owned_name);
+        const owned_qualified_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ self.name, name });
+        errdefer gpa.free(owned_qualified_name);
         const owned_path = try gpa.dupe(u8, path);
+        errdefer gpa.free(owned_path);
 
-        try self.modules.append(gpa, ModuleState.init(owned_name, owned_path));
+        try self.modules.append(gpa, ModuleState.init(owned_name, owned_qualified_name, owned_path));
+        errdefer _ = self.modules.pop();
         try self.module_names.put(owned_name, id);
 
         return id;
@@ -3778,6 +3789,9 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         };
+        // Identical modules in different packages share this entry, so the
+        // package-qualified name comes from the module being installed.
+        cached_env.qualified_module_name = mod.qualified_name;
 
         // Relocate the artifact into its own 16-byte-aligned buffer, injecting the
         // freshly-relocated cached env (transform E). The resulting artifact is
@@ -4491,7 +4505,6 @@ pub const Coordinator = struct {
         try self.applyCanonicalizedModule(
             mod,
             result.package_name,
-            result.module_name,
             result.module_env,
             &result.reports,
         );
@@ -4520,7 +4533,6 @@ pub const Coordinator = struct {
         self: *Coordinator,
         mod: *ModuleState,
         package_name: []const u8,
-        module_name: []const u8,
         module_env: *ModuleEnv,
         reports: *std.ArrayList(Report),
     ) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
@@ -4528,18 +4540,13 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(module_env);
 
         if (mod.moduleEnv()) |env| {
-            // The package-qualified display identity is workspace information,
-            // so the coordinator records it on the canonicalized environment.
+            // The package-qualified display name is workspace information, so
+            // the coordinator records it on the canonicalized environment.
             // Two modules with the same basename in different packages share a
-            // bare display name; this identifier distinguishes them in
-            // diagnostics and in checked-artifact names. The bare
-            // `display_module_name_idx` is unchanged, and it keeps any
-            // directory segments the logical module name carries.
-            {
-                const qname = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ package_name, module_name });
-                defer self.gpa.free(qname);
-                env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
-            }
+            // bare display name; this name distinguishes them in diagnostics.
+            // The bare `display_module_name_idx` is unchanged, and it keeps
+            // any directory segments the logical module name carries.
+            env.qualified_module_name = mod.qualified_name;
 
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
@@ -4641,7 +4648,6 @@ pub const Coordinator = struct {
         try self.applyCanonicalizedModule(
             mod_after_imports,
             result.package_name,
-            result.module_name,
             result.module_env,
             &result.canonicalize_reports,
         );
@@ -8878,6 +8884,118 @@ test "canonicalized module cache shares one entry between identical modules in d
     try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_misses);
     try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, canonicalized_dir));
     try std.testing.expectEqualStrings(first.reports, second.reports);
+}
+
+/// Compile an app and require every module to carry the package-qualified
+/// name of the package it was discovered in.
+fn expectModulesQualifiedByOwningPackage(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+) CheckedModuleCacheRunError!void {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{
+        .enabled = true,
+        .cache_dir = cache_dir,
+    }, roc_ctx);
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_version,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finishCheckedProgram(.executable_artifacts);
+
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |pkg_entry| {
+        const pkg = pkg_entry.value_ptr.*;
+        for (pkg.modules.items) |*mod| {
+            const env = mod.moduleEnv() orelse continue;
+            const expected = try std.fmt.allocPrint(arena, "{s}.{s}", .{ pkg.name, mod.name });
+            const actual = env.qualifiedModuleName();
+            if (!std.mem.eql(u8, expected, actual)) {
+                std.debug.print("module qualified as '{s}', expected '{s}'\n", .{ actual, expected });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12032
+test "checked module cache hit keeps each package's qualified name for identical modules in different packages" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    // Two packages in one workspace, each holding a byte-identical `Util.roc`,
+    // so both modules share one checked-module cache key.
+    try tmp_dir.dir.createDirPath(std.testing.io, "ws/app/.roc_echo_platform");
+    try tmp_dir.dir.createDirPath(std.testing.io, "ws/pkg_a");
+    try tmp_dir.dir.createDirPath(std.testing.io, "ws/pkg_b");
+
+    const util_module =
+        \\Util := [].{
+        \\    greet : Str -> Str
+        \\    greet = |s| "hi ${s}"
+        \\}
+    ;
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "ws/app/main.roc", .data =
+        \\app [main!] {
+        \\    pf: platform "./.roc_echo_platform/main.roc",
+        \\    a: "../pkg_a/main.roc",
+        \\    b: "../pkg_b/main.roc",
+        \\}
+        \\
+        \\import pf.Echo
+        \\import a.Util
+        \\import b.Util as BUtil
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!(Util.greet(BUtil.greet("x")))
+        \\    Ok({})
+        \\}
+        },
+        .{ .rel = "ws/pkg_a/main.roc", .data = "package [Util] {}\n" },
+        .{ .rel = "ws/pkg_a/Util.roc", .data = util_module },
+        .{ .rel = "ws/pkg_b/main.roc", .data = "package [Util] {}\n" },
+        .{ .rel = "ws/pkg_b/Util.roc", .data = util_module },
+        .{ .rel = "ws/app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "ws/app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = file.rel, .data = file.data });
+    }
+
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "ws/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    // Cold: both `Util` modules are checked from source.
+    try expectModulesQualifiedByOwningPackage(allocator, cache_dir, app_path);
+    // Warm: both `Util` modules load the same checked entry, and each must
+    // still be named by the package it belongs to.
+    try expectModulesQualifiedByOwningPackage(allocator, cache_dir, app_path);
 }
 
 test "canonicalized module cache produces the same build as a disabled cache" {

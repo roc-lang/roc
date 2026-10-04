@@ -23325,7 +23325,6 @@ fn testModuleIdentity() checked.ModuleIdentity {
         .module_idx = 0,
         .module_name = @enumFromInt(fixtureTableIndex(0)),
         .display_module_name = @enumFromInt(fixtureTableIndex(0)),
-        .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
         .kind = .module,
     };
 }

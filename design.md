@@ -3035,9 +3035,14 @@ env); it never spells an owner module's name and looks the text up in another
 env's ident store.
 
 The package-qualified display identity of a module (`app.main`, `pf.Stdout`)
-is workspace information. It is recorded on the env after canonicalization, by
-the coordinator, for display and diagnostics only; no canonicalized data is
-keyed by it. Likewise the platform hosted transform (annotation-only
+is workspace information. The coordinator owns it on the module's state and
+records it on every env it installs for that module, canonicalized or checked,
+fresh or loaded from either cache, for display and diagnostics only. It is a
+runtime-only field of the env, never serialized, so no cache entry carries it,
+and no canonicalized or checked data is keyed by or derived from it: checked
+procedure names use the module's own name, which is part of its content
+identity. Identical modules in different packages therefore share cache
+entries while each keeps its own package's name. Likewise the platform hosted transform (annotation-only
 declarations in platform modules becoming hosted lambdas) is workspace input
 applied to the env after the canonicalized-cache boundary, before the drain.
 
@@ -3095,7 +3100,9 @@ The checked-module cache is unchanged in role: it stores the fully checked
 module after the drain, keyed by content identity and the direct imports'
 checked-module cache keys, and is probed once the direct imports are complete. A
 checked hit makes the drain unnecessary; a canonicalized hit makes parsing
-unnecessary.
+unnecessary. A checked hit installs the entry's env with the package-qualified
+display identity of the module being installed, exactly as a canonicalized
+result does.
 
 A module's file imports are part of its source-input identity. They are read
 in the canonicalize task, after the canonicalized-cache entry is stored and
@@ -3114,7 +3121,8 @@ roots only) → `TypeCheck` (compute content identity, probe checked cache, on
 miss drain the worklist then check) → `Done`. No phase before
 `WaitingOnImports` depends on any other module. The package-qualified display
 identity is recorded on the env when the canonicalized result is handled,
-before the hosted transform, on a cache hit exactly as on a miss.
+before the hosted transform, on a cache hit exactly as on a miss, and again on
+the env a checked-cache hit installs.
 
 ## Cache Boundary
 
@@ -9587,13 +9595,14 @@ them (pinned by run-test-eval). Checking's `does_fx` →
 Restrictions above): only pure defaults reach materialization.
 A compile-time failure resolves its report site through the failing LIR
 statement's explicit `SourceLoc` stamp. The LIR source-file table entry
-carries BOTH the declaring module's display name and its
-package-qualified identity (the coordinator's `qualified_module_ident`,
-e.g. `pf.Utils`); the is-this-local comparison matches qualified
-identities, never bare names—two packages may both contain a `Utils`,
+carries the declaring module's display name, its package-qualified name
+(the coordinator's `qualified_module_name`, e.g. `pf.Utils`), and its
+deep content identity; the is-this-local comparison matches content
+identities, never names—two packages may both contain a `Utils`,
 and a bare-name match would render the foreign module's byte offsets
-against the finalized module's source. The failed region renders
-against the finalized module's source only when the qualified
+against the finalized module's source, while identical modules in
+different packages are one source file with one identity. The failed
+region renders against the finalized module's source only when the
 identities match; otherwise (a failure inside an inlined FOREIGN
 default) the report highlights the consuming compile-time root locally
 and names the declaring module—display name, or qualified name when

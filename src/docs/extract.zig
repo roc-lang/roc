@@ -1518,9 +1518,9 @@ fn resolveModulePathFromBase(
     return switch (local_or_ext) {
         .builtin => "", // Don't expose "Builtin" module as it's an implementation detail
         // Local refs render the display-qualified path ("app.Geometry"), not
-        // the identity-qualified ident (which may embed a URL or canonical
-        // filesystem path); identity strings are cache keys, not presentation.
-        .local => if (!module_env.qualified_module_ident.isNone())
+        // the package-qualified name (which may embed a URL or canonical
+        // filesystem path).
+        .local => if (module_env.qualified_module_name.len != 0)
             local_module_path
         else
             module_env.module_name,

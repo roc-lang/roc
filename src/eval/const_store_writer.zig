@@ -1228,7 +1228,6 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
             .module_idx = 0,
             .module_name = module_name,
             .display_module_name = module_name,
-            .qualified_module_name = module_name,
             .kind = .package,
         },
         .checking_context_identity = .{},

@@ -2127,9 +2127,9 @@ pub const ProgramBuilder = struct {
         return self.proc_debug_names.get(symbol);
     }
 
-    /// Register a source file (module display name plus package-qualified
-    /// module identity) and return its index for `SourceLoc.file`. Callers
-    /// deduplicate; this always appends.
+    /// Register a source file (module display name, package-qualified module
+    /// name, and module content identity) and return its index for
+    /// `SourceLoc.file`. Callers deduplicate; this always appends.
     pub fn addSourceFile(self: *ProgramBuilder, file: base.SourceFileEntry) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.len());
         const owned_name = try self.allocator.dupe(u8, file.name);
@@ -2139,6 +2139,7 @@ pub const ProgramBuilder = struct {
         try self.source_files.append(self.allocator, .{
             .name = owned_name,
             .qualified_name = owned_qualified,
+            .module_identity = file.module_identity,
         });
         return id;
     }
@@ -3118,7 +3119,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const local = try source.addLocal(@enumFromInt(1), ty);
     try source.setLocalName(local, "value");
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);

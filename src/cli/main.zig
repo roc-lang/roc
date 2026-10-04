@@ -19486,7 +19486,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         };
         try origins.putIdentity(ctx.gpa, builtin_identity_hash, builtin_origin);
         try origins.put(ctx.gpa, builtin_env.module_name, builtin_origin);
-        try origins.put(ctx.gpa, builtin_env.getIdentText(builtin_env.qualified_module_ident), builtin_origin);
+        try origins.put(ctx.gpa, builtin_env.qualifiedModuleName(), builtin_origin);
 
         const coord = build_env.coordinator orelse return error.Internal;
         var pkg_iter = coord.packages.iterator();
@@ -19529,7 +19529,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);
                     try origins.put(ctx.gpa, mod_env.module_name, origin);
-                    try origins.put(ctx.gpa, mod_env.getIdentText(mod_env.qualified_module_ident), origin);
+                    try origins.put(ctx.gpa, mod_env.qualifiedModuleName(), origin);
                 }
             }
         }

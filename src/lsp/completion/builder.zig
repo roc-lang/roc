@@ -135,10 +135,8 @@ pub const CompletionBuilder = struct {
     log_file: ?std.Io.File = null,
     /// Lazily-built scope map, shared across methods that need scope info.
     cached_scope: ?scope_map.ScopeMap = null,
-    /// The qualified module ident idx the cached scope was built for (to detect
-    /// mismatches). Uses qualified_module_ident so modules with the same bare
-    /// name in different packages don't collide.
-    cached_scope_module_ident: base.Ident.Idx = base.Ident.Idx.NONE,
+    /// The module env the cached scope was built from.
+    cached_scope_env: ?*const ModuleEnv = null,
 
     /// Initialize a new CompletionBuilder.
     pub fn init(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
@@ -171,13 +169,9 @@ pub const CompletionBuilder = struct {
     }
 
     /// Get or build the scope map for the given module env.
-    /// Reuses a previously built scope if the module's qualified ident idx matches.
+    /// Reuses a previously built scope if it was built from the same env.
     fn getOrBuildScope(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!*scope_map.ScopeMap {
-        const module_ident = module_env.qualified_module_ident;
-        if (self.cached_scope != null and
-            !self.cached_scope_module_ident.isNone() and
-            self.cached_scope_module_ident.eql(module_ident))
-        {
+        if (self.cached_scope != null and self.cached_scope_env == module_env) {
             return &self.cached_scope.?;
         }
         // Dispose of stale scope if the module changed.
@@ -187,7 +181,7 @@ pub const CompletionBuilder = struct {
         errdefer scope.deinit();
         try scope.build(module_env);
         self.cached_scope = scope;
-        self.cached_scope_module_ident = module_ident;
+        self.cached_scope_env = module_env;
         return &self.cached_scope.?;
     }
 

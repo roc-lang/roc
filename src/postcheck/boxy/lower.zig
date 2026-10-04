@@ -152,6 +152,7 @@ fn appendSourceFile(
     try files.append(allocator, .{
         .name = module.module_env.module_name,
         .qualified_name = qualified_name,
+        .module_identity = module.key.module_identity_hash,
     });
 }
 
@@ -44602,7 +44603,6 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
             .module_idx = 0,
             .module_name = module_name,
             .display_module_name = module_name,
-            .qualified_module_name = module_name,
             .kind = .package,
         },
         .checking_context_identity = .{},
@@ -53577,7 +53577,6 @@ fn testModuleIdentity() checked.ModuleIdentity {
         .module_idx = 0,
         .module_name = @enumFromInt(fixtureTableIndex(0)),
         .display_module_name = @enumFromInt(fixtureTableIndex(0)),
-        .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
         .kind = .module,
     };
 }
