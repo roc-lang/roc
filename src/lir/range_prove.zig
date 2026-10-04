@@ -99,7 +99,7 @@ const query_visit_cap: usize = 64;
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var analysis = BodyClone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(store, layouts, store.allocator, &analysis);
+    var pass = try Pass.init(store, layouts, store.allocator, &analysis);
     defer pass.deinit();
 
     const proc_count = store.procSpecCount();
@@ -118,7 +118,7 @@ pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.
 
 /// Retain counting and traversal capacity across procedures and proof rounds.
 pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
+    var pass = try Pass.init(store, layouts, scratch_allocator, analysis);
     defer pass.deinit();
     try pass.transformProc(proc_id);
 }
@@ -365,10 +365,6 @@ const Fact = struct {
 /// Bit for an assumption whose index exceeds the mask; nothing resting on
 /// it can verify this round.
 const unknown_assumption_bit: u64 = 1 << 63;
-
-fn sameStableFact(a: StableFact, b: StableFact) bool {
-    return std.meta.eql(a.a, b.a) and std.meta.eql(a.b, b.b) and a.c == b.c;
-}
 
 const EdgeFact = union(enum) {
     ordering: Fact,
@@ -644,7 +640,26 @@ const loop_fact_cap: usize = 256;
 const LoopFacts = struct {
     items: [loop_fact_cap]StableFact = undefined,
     len: usize = 0,
+
+    /// Copy the live prefix; the struct is sized for its cap and is
+    /// stored and passed by pointer so no copy is proportional to it.
+    fn assign(dst: *LoopFacts, src: *const LoopFacts) void {
+        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
+        dst.len = src.len;
+    }
 };
+
+/// Identity of a stable fact without its bookkeeping, for the sets the
+/// stabilizations and meets dedupe and intersect through.
+const StableFactKey = struct {
+    a: StableTerm,
+    b: StableTerm,
+    c: i128,
+};
+
+fn stableFactKey(fact: StableFact) StableFactKey {
+    return .{ .a = fact.a, .b = fact.b, .c = fact.c };
+}
 
 /// Bound on persisted per-merge env locals.
 const merge_env_persist_cap: usize = 128;
@@ -664,6 +679,12 @@ const StoredEnvBound = struct {
 const MergeEnvBounds = struct {
     items: [merge_env_persist_cap]StoredEnvBound = undefined,
     len: usize = 0,
+
+    /// Copy the live prefix, as `LoopFacts.assign` does.
+    fn assign(dst: *MergeEnvBounds, src: *const MergeEnvBounds) void {
+        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
+        dst.len = src.len;
+    }
 };
 
 const Pass = struct {
@@ -738,6 +759,10 @@ const Pass = struct {
     /// values shares one root for the round.
     sum_roots: std.AutoHashMap(u64, NodeId),
     sums: std.ArrayList(SumRoot),
+    /// Every root that is a sum root or an operand of one this round: the
+    /// only roots the sums' derived facts touch, so a query reaching none
+    /// of them cannot be changed by deriving those facts.
+    sum_ends: collections.DenseMap(NodeId, void),
     /// A fact was added or rewound since the sums' operand facts were last
     /// derived, so a query first re-derives them from the current path.
     sums_dirty: bool = false,
@@ -796,6 +821,16 @@ const Pass = struct {
     /// Scratch for `dedupeFacts`.
     fact_seen: std.AutoHashMap(FactKey, void),
     fact_scratch: std.ArrayList(Fact),
+    /// Positions of stable facts by identity, for the stabilizations and
+    /// the merge meets. Scratch, cleared by each user.
+    stable_index: std.AutoHashMap(StableFactKey, u32),
+    /// Stable-form scratch for a captured edge's facts, its entry facts,
+    /// and a persisted meet under construction; heap-allocated once, as
+    /// each is sized for its cap.
+    stable_scratch: *LoopFacts,
+    entry_scratch: *LoopFacts,
+    persist_scratch: *LoopFacts,
+    env_scratch: *MergeEnvBounds,
     /// Assumption bits of the facts the current fact-graph query relaxed
     /// through; reset by each top-level query.
     query_used: u64 = 0,
@@ -809,7 +844,15 @@ const Pass = struct {
     read_counts: ?BodyClone.ReadCounts,
     analysis: *BodyClone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) Pass {
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!Pass {
+        const stable_scratch = try allocator.create(LoopFacts);
+        errdefer allocator.destroy(stable_scratch);
+        const entry_scratch = try allocator.create(LoopFacts);
+        errdefer allocator.destroy(entry_scratch);
+        const persist_scratch = try allocator.create(LoopFacts);
+        errdefer allocator.destroy(persist_scratch);
+        const env_scratch = try allocator.create(MergeEnvBounds);
+        errdefer allocator.destroy(env_scratch);
         return .{
             .store = store,
             .layouts = layouts,
@@ -847,6 +890,7 @@ const Pass = struct {
             .seeded_param_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
+            .sum_ends = collections.DenseMap(NodeId, void).init(allocator),
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .path_len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -870,6 +914,11 @@ const Pass = struct {
             .bwd_heads = .empty,
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
             .fact_scratch = .empty,
+            .stable_index = std.AutoHashMap(StableFactKey, u32).init(allocator),
+            .stable_scratch = stable_scratch,
+            .entry_scratch = entry_scratch,
+            .persist_scratch = persist_scratch,
+            .env_scratch = env_scratch,
             .rewrites = 0,
             .proof_records = .empty,
             .proof_facts = .empty,
@@ -914,6 +963,7 @@ const Pass = struct {
         self.seeded_param_roots.deinit();
         self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
+        self.sum_ends.deinit();
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
         self.path_len_roots.deinit();
@@ -931,6 +981,11 @@ const Pass = struct {
         self.bwd_heads.deinit(self.allocator);
         self.fact_seen.deinit();
         self.fact_scratch.deinit(self.allocator);
+        self.stable_index.deinit();
+        self.allocator.destroy(self.stable_scratch);
+        self.allocator.destroy(self.entry_scratch);
+        self.allocator.destroy(self.persist_scratch);
+        self.allocator.destroy(self.env_scratch);
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
         if (self.read_counts) |*counts| counts.deinit();
@@ -951,6 +1006,7 @@ const Pass = struct {
         self.seeded_param_root_set.clearRetainingCapacity();
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
+        self.sum_ends.clearRetainingCapacity();
         self.path_value_roots.clearRetainingCapacity();
         self.path_len_roots.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -1091,10 +1147,6 @@ const Pass = struct {
         return @max(-slack_limit, @min(slack_limit, x));
     }
 
-    /// Drop repeats among the facts a region starts with. The same fact
-    /// arrives from several seeds (global facts, the raw meet, the stable
-    /// meet, persisted loop facts), and repeats would only spend the fact
-    /// cap and slow every query.
     /// Relate every sum root to its operands under the current path's facts:
     /// each operand sits below the sum by the other operand's proven floor
     /// and above it by the other's proven ceiling. A guard `pos + span <=
@@ -1133,6 +1185,10 @@ const Pass = struct {
         };
     }
 
+    /// Drop repeats among the facts a region starts with. The same fact
+    /// arrives from several seeds (global facts, the raw meet, the stable
+    /// meet, persisted loop facts), and repeats would only spend the fact
+    /// cap and slow every query.
     fn dedupeFacts(self: *Pass) ResourceError!void {
         self.fact_seen.clearRetainingCapacity();
         self.fact_scratch.clearRetainingCapacity();
@@ -1252,6 +1308,27 @@ const Pass = struct {
         }
     }
 
+    /// `relaxFrom` with the sums' derived facts current for the walk: the
+    /// derivation is redone, and the walk with it, only when a reached root
+    /// is one those facts touch, since otherwise they cannot extend it.
+    fn relaxFresh(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
+        const used_before = self.query_used;
+        try self.relaxFrom(start, direction);
+        if (!self.sums_dirty or self.refreshing_sums) return;
+        var touches = false;
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            if (self.sum_ends.contains(entry.key_ptr.*)) {
+                touches = true;
+                break;
+            }
+        }
+        if (!touches) return;
+        try self.refreshSumOperandFacts();
+        self.query_used = used_before;
+        try self.relaxFrom(start, direction);
+    }
+
     /// Tightest constant upper bound of a root from the roots a forward
     /// walk reached: the least window ceiling plus slack.
     fn hiConstReached(self: *Pass, start: NodeId) i128 {
@@ -1267,14 +1344,14 @@ const Pass = struct {
     /// Tightest provable constant upper bound of a root node, following fact
     /// edges forward: from `r <= x + c` and a bound on `x`, `r` is bounded.
     fn hiConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
-        try self.relaxFrom(start, .forward);
+        try self.relaxFresh(start, .forward);
         return self.hiConstReached(start);
     }
 
     /// Tightest provable constant lower bound of a root node, following fact
     /// edges backward: from `x <= r + c` and a bound on `x`, `r` is bounded.
     fn loConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
-        try self.relaxFrom(start, .backward);
+        try self.relaxFresh(start, .backward);
         var best: i128 = self.nodes.items[start].lo;
         var it = self.query_best.iterator();
         while (it.next()) |entry| {
@@ -1288,7 +1365,6 @@ const Pass = struct {
     /// The narrowest offsets make the root-level goal imply the node-level
     /// one for any value in either node's window.
     fn proveLe(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
-        if (self.sums_dirty) try self.refreshSumOperandFacts();
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
@@ -1297,7 +1373,7 @@ const Pass = struct {
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
-        try self.relaxFrom(ra, .forward);
+        try self.relaxFresh(ra, .forward);
         if (self.query_best.get(rb)) |acc| {
             if (acc.c <= m) return true;
         }
@@ -1324,13 +1400,12 @@ const Pass = struct {
     /// Least `c` with `value(a) <= value(b) + c` provable through fact
     /// edges, or null when no fact path relates the two roots.
     fn slackLe(self: *Pass, a: NodeId, b: NodeId) ResourceError!?i128 {
-        if (self.sums_dirty) try self.refreshSumOperandFacts();
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const shift = self.offHiOf(a) - self.offLoOf(b);
         if (ra == rb) return shift;
-        try self.relaxFrom(ra, .forward);
+        try self.relaxFresh(ra, .forward);
         const acc = self.query_best.get(rb) orelse return null;
         return acc.c + shift;
     }
@@ -1352,6 +1427,9 @@ const Pass = struct {
             const root = (try self.freshRoot(na.lo + nb.lo, na.hi + nb.hi)) orelse return null;
             try self.sum_roots.put(key, root);
             try self.sums.append(self.allocator, .{ .root = root, .a = ra, .b = rb });
+            try self.sum_ends.put(root, {});
+            try self.sum_ends.put(ra, {});
+            try self.sum_ends.put(rb, {});
             break :blk root;
         };
         try self.refreshSumOperandFacts();
@@ -2212,27 +2290,42 @@ const Pass = struct {
     }
 
     /// Stabilize the facts an entry edge carries into loop `join_id`.
-    fn stabilizeLoopFacts(self: *const Pass, facts: []const Fact, join_id: JoinPointId) LoopFacts {
-        var stable = LoopFacts{};
+    fn stabilizeLoopFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact, join_id: JoinPointId) ResourceError!void {
+        stable.len = 0;
+        self.stable_index.clearRetainingCapacity();
         for (facts) |fact| {
             if (stable.len >= loop_fact_cap) break;
             const a = self.stabilizeLoopTerm(fact.a, join_id) orelse continue;
             const b = self.stabilizeLoopTerm(fact.b, join_id) orelse continue;
             if (a == .constant and b == .constant) continue;
             const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
-            var known = false;
-            for (stable.items[0..stable.len]) |*have| {
-                if (sameStableFact(have.*, candidate)) {
-                    have.assumed |= candidate.assumed;
-                    known = true;
-                    break;
-                }
+            const gop = try self.stable_index.getOrPut(stableFactKey(candidate));
+            if (gop.found_existing) {
+                stable.items[gop.value_ptr.*].assumed |= candidate.assumed;
+                continue;
             }
-            if (known) continue;
+            gop.value_ptr.* = @intCast(stable.len);
             stable.items[stable.len] = candidate;
             stable.len += 1;
         }
-        return stable;
+    }
+
+    /// Keep in `kept` only the facts `other` also holds, each with both
+    /// sides' assumptions.
+    fn intersectStableFacts(self: *Pass, kept: *LoopFacts, other: *const LoopFacts) ResourceError!void {
+        self.stable_index.clearRetainingCapacity();
+        for (other.items[0..other.len], 0..) |fact, i| {
+            const gop = try self.stable_index.getOrPut(stableFactKey(fact));
+            if (!gop.found_existing) gop.value_ptr.* = @intCast(i);
+        }
+        var keep: usize = 0;
+        for (kept.items[0..kept.len]) |fact| {
+            const match = self.stable_index.get(stableFactKey(fact)) orelse continue;
+            kept.items[keep] = fact;
+            kept.items[keep].assumed |= other.items[match].assumed;
+            keep += 1;
+        }
+        kept.len = keep;
     }
 
     /// Capture the current path state into a merge head's meet: facts keep
@@ -2248,40 +2341,22 @@ const Pass = struct {
         // An edge arriving from outside the loop is an entry edge; its facts
         // meet separately so loop-invariant relations survive the back
         // edge's inability to derive them before its region is seeded.
-        const mine_stable = self.stabilizeFacts(self.facts.items);
+        const mine_stable = self.stable_scratch;
+        try self.stabilizeFacts(mine_stable, self.facts.items);
         if (state.captures == 0) {
-            state.stable = mine_stable;
+            state.stable.assign(mine_stable);
         } else {
-            var keep_stable: usize = 0;
-            for (state.stable.items[0..state.stable.len]) |fact| {
-                for (mine_stable.items[0..mine_stable.len]) |candidate| {
-                    if (sameStableFact(fact, candidate)) {
-                        state.stable.items[keep_stable] = fact;
-                        state.stable.items[keep_stable].assumed |= candidate.assumed;
-                        keep_stable += 1;
-                        break;
-                    }
-                }
-            }
-            state.stable.len = keep_stable;
+            try self.intersectStableFacts(&state.stable, mine_stable);
         }
         if (self.edgeEntersLoop(head)) {
-            const entry_mine = if (self.body_joins.get(head)) |join_id| self.stabilizeLoopFacts(self.facts.items, join_id) else mine_stable;
+            const entry_mine = if (self.body_joins.get(head)) |join_id| blk: {
+                try self.stabilizeLoopFacts(self.entry_scratch, self.facts.items, join_id);
+                break :blk self.entry_scratch;
+            } else mine_stable;
             if (state.entry_captures == 0) {
-                state.entry_stable = entry_mine;
+                state.entry_stable.assign(entry_mine);
             } else {
-                var keep_entry: usize = 0;
-                for (state.entry_stable.items[0..state.entry_stable.len]) |fact| {
-                    for (entry_mine.items[0..entry_mine.len]) |candidate| {
-                        if (sameStableFact(fact, candidate)) {
-                            state.entry_stable.items[keep_entry] = fact;
-                            state.entry_stable.items[keep_entry].assumed |= candidate.assumed;
-                            keep_entry += 1;
-                            break;
-                        }
-                    }
-                }
-                state.entry_stable.len = keep_entry;
+                try self.intersectStableFacts(&state.entry_stable, entry_mine);
             }
             state.entry_captures += 1;
         }
@@ -2476,11 +2551,11 @@ const Pass = struct {
     fn mergeIncomplete(self: *const Pass, head: CFStmtId) bool {
         const expected = self.mergeExpected(head);
         if (expected <= 1) return false;
-        const state = self.merge_states.get(head) orelse return true;
+        const state = self.merge_states.getPtrConst(head) orelse return true;
         if (self.body_joins.get(head)) |join_id| {
             // A loop body can never see its back edges before it walks; it
             // waits only for its entry edges, whose common facts seed it.
-            if (state.captures < expected) return !self.entryEdgesComplete(join_id, &state);
+            if (state.captures < expected) return !self.entryEdgesComplete(join_id, state);
         }
         return state.captures < expected;
     }
@@ -2493,7 +2568,7 @@ const Pass = struct {
         // in-round meet never completes; bounds persisted by an earlier
         // round stand in for it.
         if (self.body_joins.get(head)) |join_id| {
-            const state = self.merge_states.get(head);
+            const state = self.merge_states.getPtr(head);
             const captures = if (state) |st| st.captures else 0;
             // Values bind before facts materialize against them, so a fact
             // about a local's length or value lands on the node the region
@@ -2518,8 +2593,8 @@ const Pass = struct {
                 // Facts every entry edge captured this round carries about
                 // values the loop never assigns hold throughout the body.
                 if (state) |st| {
-                    if (self.entryEdgesComplete(join_id, &st)) {
-                        try self.seedEnvFromMeet(&st, join_id);
+                    if (self.entryEdgesComplete(join_id, st)) {
+                        try self.seedEnvFromMeet(st, join_id);
                         try self.seedStableFacts(&st.entry_stable);
                     }
                 }
@@ -2767,18 +2842,18 @@ const Pass = struct {
     /// every entry edge makes it hold throughout the loop.
     fn persistLoopFacts(self: *Pass, join_id: JoinPointId, state: *const MergeState) ResourceError!void {
         if (state.entry_captures == 0) return;
-        const stable = state.entry_stable;
+        const stable = &state.entry_stable;
         if (stable.len == 0) return;
-        const previous = self.loop_facts.get(join_id);
-        if (previous == null or previous.?.len != stable.len) self.new_loop_bounds = true;
-        try self.loop_facts.put(join_id, stable);
+        const entry = try self.loop_facts.getOrPut(join_id);
+        if (!entry.found_existing or entry.value_ptr.len != stable.len) self.new_loop_bounds = true;
+        entry.value_ptr.assign(stable);
     }
 
     /// Seed a loop body region with its persisted entry-invariant facts,
     /// materialized against this round's nodes.
     fn seedLoopFacts(self: *Pass, join_id: JoinPointId) ResourceError!void {
-        const stored = self.loop_facts.get(join_id) orelse return;
-        try self.seedStableFacts(&stored);
+        const stored = self.loop_facts.getPtr(join_id) orelse return;
+        try self.seedStableFacts(stored);
     }
 
     /// This round's node for a stable term: the local's value, the list
@@ -2805,34 +2880,32 @@ const Pass = struct {
 
     /// Stabilize a fact list into round-stable form, keeping facts whose
     /// endpoints all denote something stable.
-    fn stabilizeFacts(self: *const Pass, facts: []const Fact) LoopFacts {
-        var stable = LoopFacts{};
+    fn stabilizeFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact) ResourceError!void {
+        stable.len = 0;
+        self.stable_index.clearRetainingCapacity();
         for (facts) |fact| {
             if (stable.len >= loop_fact_cap) break;
             const a = self.stabilizeTerm(fact.a) orelse continue;
             const b = self.stabilizeTerm(fact.b) orelse continue;
             if (a == .constant and b == .constant) continue;
             const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
-            var known = false;
-            for (stable.items[0..stable.len]) |*have| {
-                if (sameStableFact(have.*, candidate)) {
-                    have.assumed |= candidate.assumed;
-                    known = true;
-                    break;
-                }
+            const gop = try self.stable_index.getOrPut(stableFactKey(candidate));
+            if (gop.found_existing) {
+                stable.items[gop.value_ptr.*].assumed |= candidate.assumed;
+                continue;
             }
-            if (known) continue;
+            gop.value_ptr.* = @intCast(stable.len);
             stable.items[stable.len] = candidate;
             stable.len += 1;
         }
-        return stable;
     }
 
     /// Persist a fully-captured merge's all-edge fact intersection for
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        var stable = state.stable;
-        if (self.merge_facts.get(head)) |previous| {
+        const stable = self.persist_scratch;
+        stable.assign(&state.stable);
+        if (self.merge_facts.getPtr(head)) |previous| {
             // A fact that comes back weaker round after round is widened
             // away rather than iterated, like a persisted bound.
             for (stable.items[0..stable.len]) |*fact| {
@@ -2850,7 +2923,9 @@ const Pass = struct {
             }
         }
         if (stable.len == 0) return;
-        if (self.merge_facts.get(head)) |previous| {
+        const entry = try self.merge_facts.getOrPut(head);
+        if (entry.found_existing) {
+            const previous = entry.value_ptr;
             if (previous.len != stable.len) {
                 self.new_loop_bounds = true;
             } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
@@ -2860,14 +2935,14 @@ const Pass = struct {
                 }
             }
         } else self.new_loop_bounds = true;
-        try self.merge_facts.put(head, stable);
+        entry.value_ptr.assign(stable);
     }
 
     /// Seed a region walked before its captures complete with the facts
     /// every edge carried last round.
     fn seedMergeFacts(self: *Pass, head: CFStmtId) ResourceError!void {
-        const stored = self.merge_facts.get(head) orelse return;
-        try self.seedStableFacts(&stored);
+        const stored = self.merge_facts.getPtr(head) orelse return;
+        try self.seedStableFacts(stored);
     }
 
     /// Add round-stable facts to the current path, materialized against
@@ -2886,8 +2961,9 @@ const Pass = struct {
 
     /// Persist a fully-captured merge's env meet in round-stable form.
     fn persistMergeEnv(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        var stable = MergeEnvBounds{};
-        const previous_env = self.merge_env.get(head);
+        const stable = self.env_scratch;
+        stable.len = 0;
+        const previous_env = self.merge_env.getPtr(head);
         for (state.env.items) |meet| {
             if (meet.field != null) continue;
             if (stable.len >= merge_env_persist_cap) break;
@@ -2923,7 +2999,9 @@ const Pass = struct {
             stable.len += 1;
         }
         if (stable.len == 0) return;
-        if (self.merge_env.get(head)) |previous| {
+        const entry = try self.merge_env.getOrPut(head);
+        if (entry.found_existing) {
+            const previous = entry.value_ptr;
             if (previous.len != stable.len) {
                 self.new_loop_bounds = true;
             } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
@@ -2945,15 +3023,15 @@ const Pass = struct {
                 }
             }
         } else self.new_loop_bounds = true;
-        try self.merge_env.put(head, stable);
+        entry.value_ptr.assign(stable);
     }
 
     /// Seed the env of a region walked before its captures complete from
     /// last round's stabilized meet: each local binds to a fresh value
     /// carrying the upper bounds every edge proved.
     fn seedMergeEnv(self: *Pass, head: CFStmtId) ResourceError!void {
-        const stored = self.merge_env.get(head) orelse return;
-        for (stored.items[0..stored.len]) |entry| {
+        const stored = self.merge_env.getPtr(head) orelse return;
+        for (stored.items[0..stored.len]) |*entry| {
             const node = (try self.metValueNode(entry.local, entry.bounds[0..entry.len], entry.lower[0..entry.lower_len])) orelse continue;
             var used = false;
             used = try self.seedLowerBounds(node, entry.lower[0..entry.lower_len]) or used;
