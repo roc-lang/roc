@@ -20475,6 +20475,23 @@ const EvidencePass = struct {
         return .{ .table = table, .template = table.get(procedure.template.template) };
     }
 
+    /// Whether every evidence parameter of a procedure target is fixed by its
+    /// concrete callable relation: either projected from the callable or
+    /// reached through the callable of another requirement, which Monotype's
+    /// substitution-derived fixpoint binds once that requirement's target is
+    /// selected.
+    fn procedureEvidenceDerivesFromCallable(self: *EvidencePass, target: static_dispatch.MethodTarget) bool {
+        const target_view = self.procedureEvidenceView(target);
+        for (target_view.table.evidenceParams(&target_view.template)) |param| {
+            switch (param.source) {
+                .scheme_callable => if (param.path.len == 0) return false,
+                .constraint_callable, .use_site_only => {},
+                .scheme_requirement, .explicit_default, .erased_row_remainder => return false,
+            }
+        }
+        return true;
+    }
+
     fn procedureEvidenceSchemaForTemplate(
         table: *const CheckedProcedureTemplateTable,
         template: *const CheckedProcedureTemplate,
@@ -20657,9 +20674,11 @@ const EvidencePass = struct {
             const record = self.module.moduleEnvConst().scheme_uses.items.items[idx];
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target)) {
                 // The checker closed an exact concrete backedge and proved
-                // every requirement is determined by the target's callable.
-                // Publish its finite recipe instead of expanding it again.
-                if (procedure_schema == .requires_record or procedure_schema == .from_target) {
+                // every requirement is determined by the target's callable,
+                // directly or through the callables of determined
+                // requirements. Publish its finite recipe instead of
+                // expanding it again.
+                if (target.kind == .procedure and !self.procedureEvidenceDerivesFromCallable(target)) {
                     checkedArtifactInvariant("recursive dispatch target did not have callable-derived evidence", .{});
                 }
                 return .{ .done = try self.internEvidenceNode(.{

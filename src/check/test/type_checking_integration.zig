@@ -12656,6 +12656,42 @@ test "check type - dispatch - strictly growing dispatch chain reports recursive 
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 
+// Each recursive call dispatches on the result of another method call, so the
+// receiver of `is_odd`/`is_even` is reachable only through `pred`'s callable.
+// Selecting `pred` at the concrete repeated state fixes that receiver, so the
+// cycle closes instead of being rejected.
+test "check type - dispatch - recursion through another method's result closes" {
+    var test_env = try TestEnv.init("Test",
+        \\Num := { n : U64 }.{
+        \\    pred = |x| Num.{ n: x.n - 1 }
+        \\    is_zero = |x| x.n == 0
+        \\    is_even = |x| if x.is_zero() Bool.True else x.pred().is_odd()
+        \\    is_odd = |x| if x.is_zero() Bool.False else x.pred().is_even()
+        \\}
+        \\
+        \\main = Num.is_even(Num.{ n: 4 })
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("main", "Bool");
+}
+
+// The repeated state's result type is never determined, so the cycle still
+// needs inference and is rejected. The rejection poisons only the failing use:
+// `pred`'s reusable definition keeps its concrete result type.
+test "check type - dispatch - rejected recursive dispatch leaves the shared receiver's definition intact" {
+    var test_env = try TestEnv.init("Test",
+        \\N := [Z].{
+        \\    pred = |_x| N.Z
+        \\    f = |x| x.pred().f()
+        \\}
+        \\
+        \\main = N.f(N.Z)
+    );
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+    try test_env.assertDefTypeOptions("Test.N.pred", "_arg -> N", .{ .allow_type_errors = true });
+}
+
 // The variants below pin the divergence detector's coverage of receivers
 // unification can still refine, of growth spelled through aliases, and of
 // legal programs the growth rule must never reject. Each rejected variant is

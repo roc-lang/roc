@@ -8718,12 +8718,23 @@ different use still runs, so that use is poisoned too.
 Dispatch-cycle termination is structural. An exact repeated solver state along
 its derivation lineage—the same alpha-normalized receiver plus callable digest
 and exact method binding—can close a recursive implementation when its receiver
-and callable are concrete and the target's evidence parameters are all reachable
-from its callable. The edge reuses the ancestor's selected method instance; it
+and callable are concrete and the target's evidence parameters are all
+determined by its callable. A parameter is determined when its receiver has a
+path over the callable, or over the callable of a requirement whose receiver is
+itself determined: at the concrete repeated state, selecting that requirement's
+target is deterministic and fixes its callable, and with it the receiver. So a
+method that recurses by dispatching on another method's result
+(`x.pred().is_odd()`) closes, because `pred`'s selected target fixes the
+receiver of `is_odd`. The edge reuses the ancestor's selected method instance; it
 does not instantiate another copy of the same requirements. Checking records
 this recursive target explicitly, and CheckedModule construction emits a finite
-callable-based evidence recipe. The ancestor's other requirements must still
-check successfully.
+callable-based evidence recipe; Monotype derives the target's evidence from the
+concrete callable, relating each selected requirement target to its constraint
+callable to a fixpoint, which binds the receivers reached through those
+callables. The ancestor's other requirements must still check successfully.
+Rejection reports the cycle and poisons only the failing use: it never writes
+the receiver's solved class, which a concrete receiver shares with every
+definition that mentions its type.
 This admits ordinary recursive equality without making acceptance depend on
 which operand first identifies the named type. A repeated state that still needs
 type inference, or needs evidence not determined by its callable, remains a
@@ -10134,8 +10145,9 @@ Other solved-graph mutations:
   second validation. Unsettled inputs retain complete scheme requirements.
 - `closeConcreteRecursiveDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). A concrete repeated receiver/callable state with an
-  exact ancestor target and callable-reachable evidence reuses that selected
-  method instance through ordinary unification. A dedicated scheme-use record
+  exact ancestor target and callable-determined evidence (a path over the
+  callable, or over the callable of a determined requirement) reuses that
+  selected method instance through ordinary unification. A dedicated scheme-use record
   authorizes its finite recursive evidence recipe. Unresolved repeated states,
   hidden requirements, and growing states do not qualify.
 - structural-origin retirement (`retiredRequirementCallableUnified`,
@@ -10156,7 +10168,10 @@ Other solved-graph mutations:
   with the same exact binding. A shrinking or otherwise changing finite chain
   is accepted. The 80-layer accepted chain, concrete recursive equality,
   unresolved self-nested rejected chains, and the strictly growing rejected
-  chain pin all sides of the rule.
+  chain pin all sides of the rule. Mutual recursion through another method's
+  result (issue 12036) pins the accepted side of the determined-requirement
+  closure, and an undetermined-result self cycle pins that rejection leaves the
+  shared concrete receiver's definition type intact.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 - `copyExpectedShape` / `projectExpectedAggregateShape`—policy: Expected Shape

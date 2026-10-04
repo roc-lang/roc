@@ -1660,8 +1660,9 @@ pub const EvidenceNested = union(enum(u8)) {
     resolved: artifact_serialize.Span,
     /// Target selection occurred after checking settled the dispatcher, or
     /// checking explicitly closed a concrete recursive dispatch. The edge
-    /// derives the target's declared
-    /// evidence params from their checker-recorded paths over its concrete callable.
+    /// derives the target's declared evidence params from their
+    /// checker-recorded paths over its concrete callable, and from the
+    /// callables of the requirement targets it selects.
     from_callable,
 };
 
@@ -1774,7 +1775,9 @@ pub const EvidenceParamSource = union(enum) {
     constraint_callable: ConstraintCallableRoot,
     /// Reachable only through a nested constraint callable, with no
     /// specialization-time default to preserve. Checked use-site evidence
-    /// resolves this requirement before post-check lowering.
+    /// resolves this requirement before post-check lowering, except at a
+    /// closed recursive dispatch target, whose callable-derived evidence binds
+    /// the receiver by relating the selected targets of its requirements.
     use_site_only,
     explicit_default: NumericDefaultPhase,
     erased_row_remainder,

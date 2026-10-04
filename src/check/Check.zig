@@ -38630,7 +38630,6 @@ fn rejectRecursiveStaticDispatch(
     } });
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
-    try self.markErroneous(dispatcher_var);
 }
 
 /// Copy the selected method target for a new raw dispatch edge and record its
@@ -38866,8 +38865,26 @@ fn closeConcreteRecursiveDispatch(
     var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
     defer params.deinit(self.gpa);
     try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, scheme_root, &scratch, &params);
+    // A receiver is determined by the callable when it has a path over the
+    // callable itself, or over the callable of a requirement whose receiver
+    // is itself determined: selecting that requirement's target at the
+    // concrete state fixes the callable, and so the receiver. Enumeration
+    // emits each param before any param found through its callables.
+    var determined_callables = std.ArrayListUnmanaged(Var).empty;
+    defer determined_callables.deinit(self.gpa);
     for (params.items) |param| {
-        if (param.source != .scheme_callable or param.path_len == 0) return null;
+        if (param.path_len == 0) return null;
+        switch (param.source) {
+            .scheme_callable => {},
+            .constraint_callable => |source| {
+                if (!varListContains(determined_callables.items, self.types.resolveVar(source.callable_var).var_)) return null;
+            },
+            .erased_row_remainder, .scheme_requirement => return null,
+        }
+        try determined_callables.append(self.gpa, self.types.resolveVar(param.constraint.fn_var).var_);
+        for (param.callable_contracts) |contract| {
+            try determined_callables.append(self.gpa, self.types.resolveVar(contract.fn_var).var_);
+        }
     }
 
     const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
