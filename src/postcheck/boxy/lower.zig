@@ -19821,6 +19821,15 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The local a loop body lowers into; the loop discards its value. A
+    /// `runtime_error` body produces no value, and the representation plan
+    /// gives its type no representation.
+    fn addLoopBodyResultLocal(self: *ProcBodyBuilder, body_id: checked.CheckedExprId) Allocator.Error!LIR.LocalId {
+        const body_expr = self.module.checked_bodies.expr(body_id);
+        if (body_expr.data == .runtime_error) return try self.addFrameLocal(.zst);
+        return try self.addFrameLocalForType(body_expr.ty);
+    }
+
     /// A loop header re-evaluates its condition before each pass of its body,
     /// which jumps back to the header. The loop is the innermost `break`
     /// target while its body lowers.
@@ -19833,8 +19842,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("checked while condition did not lower to Bool layout");
                 }
 
-                const body_expr = self.module.checked_bodies.expr(task.body_id);
-                const body_result = try self.addFrameLocalForType(body_expr.ty);
+                const body_result = try self.addLoopBodyResultLocal(task.body_id);
                 const loop_result = try self.addFrameLocal(.zst);
 
                 task.join_id = self.freshJoinPointId();
@@ -20135,8 +20143,7 @@ const ProcBodyBuilder = struct {
             task.payload_desc = try self.ensureTagPayloadTargetDescriptorLocal(task.payload, payload_rep);
             task.item = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_item.ty }));
             task.rest = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty }));
-            const body_expr = self.module.checked_bodies.expr(task.for_.body);
-            const body_result = try self.addFrameLocalForType(body_expr.ty);
+            const body_result = try self.addLoopBodyResultLocal(task.for_.body);
 
             var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = task.join_id } }, self.glueOrigin());
             continuation = try self.setLocalInitializeJoinParam(task.iterator_param, task.rest, continuation);
