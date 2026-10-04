@@ -748,6 +748,36 @@ checker recovery. The recovery rules:
 - A binding whose right-hand side is erroneous binds nothing. Every name a
   destructuring pattern introduces is erroneous, annotated or not; an
   unannotated assignment's own name is erroneous.
+- An uninitialized `var` whose annotation contains an error binds nothing:
+  its binders are erroneous and the declaration is a runtime error.
+- An expression statement whose expression's checked type contains an error
+  is a runtime error; it introduces no `{}` relation for that expression.
+- A pattern rejected while it is checked binds nothing. Each name it
+  introduces is erroneous, and its solved class is marked `.err`: no owner has
+  related the pattern to a value, an annotation, or a use yet, so that class
+  belongs to the pattern alone, and a use of the name, such as a method call
+  on it, adds no report of its own. A `var` name a destructure reassigns
+  belongs to its own declaration and is left alone.
+- A pattern can also be rejected by a judgment made after its check: a
+  literal pattern whose conversion fails, or a record-destructure binder that
+  the kind-directed judgment cannot relate to its field (a closed nested
+  record pattern missing a field, or a binder whose uses demand another
+  type). The binder judgment relates the binder to the field without
+  poisoning either side, because the field is the destructured value's own
+  type and the binder's class is shared with every use of the name, and it
+  reports with the `record_destructure` context. Such a judgment can run at a
+  boundary inside the owner's own check, so it only records the rejection
+  (`rejectPatternFailureOwner`), and the erroneous-value sweep retires the
+  owner once checking is done with it: a binding or loop statement binds
+  nothing and becomes a runtime error, a top-level destructure retires its
+  binders (`rejected_destructure_defs`), and a lambda or `match` becomes a
+  runtime error. A statement's or definition's binders are erroneous as soon
+  as the rejection is recorded. A `match` rejected this way before its
+  exhaustiveness analysis is not analyzed, like a `match` whose patterns fail
+  their own check: the rejected pattern does not describe the scrutinee. A
+  literal expression whose conversion fails is not a pattern owner: it
+  becomes a runtime error itself, like the source of any other rejected
+  dispatch.
 - An effectful top-level value's right-hand side is erroneous.
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
@@ -2589,6 +2619,14 @@ An expression statement is such a consumer of its expression's value: the
 callee's return slot, which a monomorphic callee shares with every other use.
 A rejected statement value retires the expression and marks the statement
 erroneous; the call and its callee keep their solved types.
+A `Bool` demand is the same kind of consumer: an `if` or `while` condition and
+an `expect` body each own the `Bool` relation on a value they only consult, so
+a rejection retires that operand, and a rejected match guard retires its match.
+The short-circuiting `and` and `or` operators canonicalize to an `if` whose
+`origin` names the operator, so the checker relates both operands, not just
+the condition, to the `Bool` the operator demands, and reports a rejection as
+a bool operation on that side. The operator owns both relations, so a
+rejection retires the operator, whose value stays `Bool`.
 
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that only needs diagnostic recovery may accept both
@@ -10011,7 +10049,9 @@ Other solved-graph mutations:
 - `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
-  unifying that node with a fresh error variable. Tuple access uses this only
+  unifying that node with a fresh error variable. A pattern rejected while it
+  is checked marks each name it introduces this way
+  (`poisonRejectedPatternBinders`), before any owner relates the pattern. Tuple access uses this only
   for immediate rejection while the expression frame owns the result;
   deferred rejection follows the expression replacement described under Module
   Completion Boundary and never poisons either shared solved class.

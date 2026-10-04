@@ -15156,7 +15156,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
                 .final_else = self.checkedExpr(if_.final_else),
-                .warn_unused_branches = if_.warn_unused_branches,
+                .warn_unused_branches = if_.origin == .source,
             } },
             .e_call => |call| .{ .call = .{
                 .func = self.checkedExpr(call.func),

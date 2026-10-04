@@ -87,19 +87,18 @@ NO CHANGE
 		(e-lambda
 			(args)
 			(e-block
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(e-string
 					(e-literal (string "x"))))))
 	(d-let
 		(p-assign (ident "rDsult"))
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 232)
+				(e-call (constraint-fn-var 231)
 					(e-lookup-local
 						(p-assign (ident "poly")))))
 			(rhs
-				(e-call (constraint-fn-var 237)
+				(e-call (constraint-fn-var 236)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

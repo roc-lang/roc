@@ -114,7 +114,35 @@ match Answer {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "erroneous_value_expr"))
+(e-match
+	(match
+		(cond
+			(e-tag (name "Answer")))
+		(branches
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-num (value "10"))))
+				(value
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

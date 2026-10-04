@@ -70,14 +70,14 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-call (constraint-fn-var 271)
+					(e-call (constraint-fn-var 273)
 						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17624") (target-def "17624"))
 						(e-tag (name "True")))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-call (constraint-fn-var 282)
+				(e-call (constraint-fn-var 284)
 					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17624") (target-def "17624"))
 					(e-tag (name "True")))))))
 ~~~

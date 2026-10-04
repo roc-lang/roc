@@ -266,7 +266,7 @@ pub const Expr = union(enum) {
     e_if: struct {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
-        warn_unused_branches: bool,
+        origin: IfOrigin,
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -703,6 +703,21 @@ pub const Expr = union(enum) {
     ///     "negative"      # body: "negative"
     /// }
     /// ```
+    /// The source construct an `if` expression canonicalizes. The
+    /// short-circuiting `and` and `or` operators canonicalize to an `if` over
+    /// their operands with a single branch: `lhs and rhs` is
+    /// `if lhs rhs else False`, and `lhs or rhs` is `if lhs True else rhs`.
+    pub const IfOrigin = enum(u32) {
+        /// An `if` written in source. A condition known at compile time is
+        /// reported, because it leaves a branch unused.
+        source,
+        /// `lhs and rhs`: the branch condition is `lhs` and its body is `rhs`.
+        short_circuit_and,
+        /// `lhs or rhs`: the branch condition is `lhs` and the final else is
+        /// `rhs`.
+        short_circuit_or,
+    };
+
     pub const IfBranch = struct {
         cond: Expr.Idx,
         body: Expr.Idx,

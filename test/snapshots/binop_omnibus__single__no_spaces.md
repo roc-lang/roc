@@ -121,11 +121,11 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "is_lte") (constraint-fn-var 390)
+				(e-dispatch-call (method "is_lte") (constraint-fn-var 392)
 					(receiver
 						(e-num (value "12")))
 					(args
-						(e-dispatch-call (method "div_by") (constraint-fn-var 387)
+						(e-dispatch-call (method "div_by") (constraint-fn-var 389)
 							(receiver
 								(e-num (value "3")))
 							(args

@@ -121,11 +121,11 @@ NO CHANGE
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "is_lte") (constraint-fn-var 390)
+				(e-dispatch-call (method "is_lte") (constraint-fn-var 392)
 					(receiver
 						(e-num (value "12")))
 					(args
-						(e-dispatch-call (method "div_by") (constraint-fn-var 387)
+						(e-dispatch-call (method "div_by") (constraint-fn-var 389)
 							(receiver
 								(e-num (value "3")))
 							(args

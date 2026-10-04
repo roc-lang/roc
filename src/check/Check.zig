@@ -640,11 +640,17 @@ nonlocal_value_lookups: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
 erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
-/// Declarations and reassignments whose pattern/RHS relation was rejected. The
-/// whole statement must become an explicit runtime error before checked-body
-/// construction, because its pattern interface is erroneous independently of
-/// its RHS.
-erroneous_pattern_statements: std.AutoHashMapUnmanaged(CIR.Statement.Idx, CIR.Expr.Idx),
+/// Rejected statements, each with its poisoned value expression if it has one:
+/// declarations and reassignments whose pattern/RHS relation was rejected,
+/// expression statements whose expression is erroneous, and uninitialized
+/// `var` declarations whose annotation is erroneous. The whole statement must
+/// become an explicit runtime error before checked-body construction, because
+/// its interface is erroneous independently of any value expression.
+erroneous_statements: std.AutoHashMapUnmanaged(CIR.Statement.Idx, ?CIR.Expr.Idx),
+/// Top-level destructuring definitions whose pattern a judgment made after
+/// the pattern was checked rejected (see `rejectPatternFailureOwner`). The
+/// erroneous-value sweep retires each through `rejectTopLevelDestructure`.
+rejected_destructure_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
 /// Tracks unannotated expression identities whose checked value type contains
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
@@ -3276,7 +3282,8 @@ fn initAssumePrepared(
         .value_lookup_tracking = .empty,
         .nonlocal_value_lookups = .empty,
         .erroneous_value_exprs = .empty,
-        .erroneous_pattern_statements = .empty,
+        .erroneous_statements = .empty,
+        .rejected_destructure_defs = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
@@ -3425,7 +3432,8 @@ pub fn deinit(self: *Self) void {
     self.value_lookup_tracking.deinit(self.gpa);
     self.nonlocal_value_lookups.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
-    self.erroneous_pattern_statements.deinit(self.gpa);
+    self.erroneous_statements.deinit(self.gpa);
+    self.rejected_destructure_defs.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
     var position_values = self.nominal_positions.valueIterator();
@@ -4695,6 +4703,9 @@ fn warnIfComptimeConditionalExpr(
 }
 
 fn emitComptimeCondition(self: *Self, expr: CIR.Expr.Idx, kind: @FieldType(problem.ComptimeCondition, "kind")) Allocator.Error!void {
+    // A rejected condition, such as an `and` whose operand is not a `Bool`,
+    // has no value to know at compile time; its own problem is reported.
+    if (self.erroneous_value_exprs.contains(expr)) return;
     self.var_set.clearRetainingCapacity();
     if (try self.varContainsError(ModuleEnv.varFrom(expr), &self.var_set)) return;
 
@@ -11196,6 +11207,9 @@ const PendingRecordDestruct = struct {
     binder_var: Var,
     field_name: Ident.Idx,
     region: Region,
+    /// The construct that owns the destructure pattern. A rejected binder
+    /// relation retires it exactly like any other rejected pattern.
+    failure_owner: CIR.Node.Idx,
 };
 
 /// Type-check every def in the module, including the numeric-literal
@@ -11409,9 +11423,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 _ = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
-                // Unify with Bool (expects must be bool expressions)
-                const bool_var = try self.freshBool(&env, stmt_region);
-                _ = try self.unifyInContext(bool_var, body_var, &env, .expect);
+                // Expects must be bool expressions
+                _ = try self.checkBoolOperand(expr_stmt.body, stmt_region, .expect, &env);
 
                 // Unify statement var with body var
                 _ = try self.unify(stmt_var, body_var, &env);
@@ -13182,31 +13195,34 @@ fn poisonPatternBindings(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!
     }
 }
 
-/// Consume the owner recorded when the literal pattern was checked. This is
-/// diagnostic recovery only; it never changes solved types or successful plans.
-fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!void {
+/// Reject the construct that owns a pattern which a judgment made after the
+/// pattern was checked rejected: a literal pattern whose conversion fails, or
+/// a record destructure whose binder relation fails. Such a judgment can run
+/// at a boundary inside the owner's own check, so this only records the
+/// rejection; the erroneous-value sweep (`poisonErroneousValueExprs`) retires
+/// the owner once checking is done with it. A rejected statement's or
+/// definition's binders are erroneous immediately, so the erroneous-use sweep
+/// retires every use of them. This is diagnostic recovery only; it never
+/// changes solved types or successful plans.
+fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!void {
     const tag = self.cir.store.nodes.get(owner).tag;
     if (tag == .malformed) return;
-    // A parameter can fail while its lambda is still checking returns.
-    // Keep the function structure until the ordinary erroneous-value sweep.
-    if (tag == .expr_lambda or tag == .expr_closure) {
+    // A lambda (whose parameter the pattern is) or a `match` (whose branch
+    // pattern it is) becomes a runtime error; the binders are scoped inside
+    // it.
+    if (isExprNodeTag(tag)) {
         try self.erroneous_value_exprs.put(self.gpa, @enumFromInt(@intFromEnum(owner)), {});
         return;
     }
-    const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-        .region = self.cir.store.getNodeRegion(owner),
-    } });
-    if (self.literalFailureOwnerExpr(owner)) |expr| {
-        try self.replaceExprWithRuntimeError(expr, diagnostic);
-        try self.erroneous_value_exprs.put(self.gpa, expr, {});
-        return;
-    }
     if (tag == .def) {
-        try self.rejectTopLevelDestructure(self.cir.store.getDef(@enumFromInt(@intFromEnum(owner))), diagnostic);
+        const def_idx: CIR.Def.Idx = @enumFromInt(@intFromEnum(owner));
+        try self.poisonPatternBindings(self.cir.store.getDef(def_idx).pattern);
+        try self.rejected_destructure_defs.put(self.gpa, def_idx, {});
         return;
     }
 
     // The remaining producer-owned contexts are binding and loop statements.
+    // The statement binds nothing and is replaced with a runtime error.
     const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(owner));
     const pattern = switch (self.cir.store.getStatement(stmt_idx)) {
         .s_decl => |decl| decl.pattern,
@@ -13217,7 +13233,8 @@ fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
         .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
     };
     try self.poisonPatternBindings(pattern);
-    try self.replaceRejectedPatternStatement(stmt_idx, diagnostic);
+    const recorded = try self.erroneous_statements.getOrPut(self.gpa, stmt_idx);
+    if (!recorded.found_existing) recorded.value_ptr.* = null;
 }
 
 /// Retire a top-level definition whose pattern was rejected. The binders keep
@@ -13246,10 +13263,10 @@ fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnost
     }
 }
 
-/// Replace a binding statement whose pattern was rejected with an explicit
-/// runtime error. Its binders must already be poisoned, so later lookups of
-/// them become runtime errors rather than reading a binder with no value.
-fn replaceRejectedPatternStatement(
+/// Replace a rejected statement with an explicit runtime error. A binding
+/// statement's binders must already be poisoned, so later lookups of them
+/// become runtime errors rather than reading a binder with no value.
+fn replaceRejectedStatement(
     self: *Self,
     stmt_idx: CIR.Statement.Idx,
     diagnostic: CIR.Diagnostic.Idx,
@@ -13324,17 +13341,22 @@ fn literalPatternFailureExprForConstraint(
     return null;
 }
 
-/// Poison every source occurrence represented by a merged literal relation.
-/// The scan is failure-only: successful dispatch never pays for occurrence
-/// recovery. Collect owners before rewriting any of them because invalidating
-/// an expression subtree retires its literal plans from the dense plan list.
+/// Reject every source occurrence represented by a merged literal relation.
+/// A literal expression becomes a runtime error itself, exactly like the
+/// source of any other rejected dispatch; a literal pattern rejects the
+/// construct that owns it (`rejectPatternFailureOwner`). The scan is
+/// failure-only: successful dispatch never pays for occurrence recovery.
+/// Collect occurrences before rewriting any of them because invalidating an
+/// expression subtree retires its literal plans from the dense plan list.
 fn poisonLiteralFailureOwners(
     self: *Self,
     deferred: DeferredConstraintCheck,
 ) Allocator.Error!bool {
     const dispatcher_root = self.types.resolveVar(deferred.var_).var_;
-    var owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty;
-    defer owners.deinit(self.gpa);
+    var literal_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer literal_exprs.deinit(self.gpa);
+    var pattern_owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty;
+    defer pattern_owners.deinit(self.gpa);
 
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
         const literal_kind = literal_constraint.origin.literalKind() orelse continue;
@@ -13345,25 +13367,29 @@ fn poisonLiteralFailureOwners(
             if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
             if (self.types.resolveVar(@enumFromInt(plan.fn_var)).var_ != literal_fn_root) continue;
             const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
-            const owner: CIR.Node.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
-                @enumFromInt(plan.node_idx)
-            else
-                @enumFromInt(plan.patternFailureOwner(&self.cir.store) orelse continue);
-            var already_recorded = false;
-            for (owners.items) |recorded| {
-                if (recorded == owner) {
-                    already_recorded = true;
-                    break;
-                }
+            if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
+                try literal_exprs.append(self.gpa, @enumFromInt(plan.node_idx));
+                continue;
             }
-            if (!already_recorded) try owners.append(self.gpa, owner);
+            const owner: CIR.Node.Idx = @enumFromInt(plan.patternFailureOwner(&self.cir.store) orelse continue);
+            for (pattern_owners.items) |recorded| {
+                if (recorded == owner) break;
+            } else try pattern_owners.append(self.gpa, owner);
         }
     }
 
-    for (owners.items) |owner| {
-        try self.poisonLiteralFailureOwner(owner);
+    for (literal_exprs.items) |expr_idx| {
+        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(expr_idx),
+        } });
+        try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
     }
-    return owners.items.len != 0;
+    for (pattern_owners.items) |owner| {
+        try self.rejectPatternFailureOwner(owner);
+    }
+    return literal_exprs.items.len != 0 or pattern_owners.items.len != 0;
 }
 
 fn poisonConstraintSourceExpr(
@@ -22138,6 +22164,24 @@ const PatternCtx = struct {
     failure_owner: CIR.Node.Idx,
 };
 
+/// A pattern rejected while it was checked binds nothing, so every name it
+/// introduces is erroneous: each binder is recorded erroneous, and its solved
+/// class is marked `.err` so a use of it, such as a method call on it, adds
+/// no report of its own. No owner has related the pattern to a value, an
+/// annotation, or a use yet, so each binder's class belongs to the rejected
+/// pattern alone. A `var` binder inside a destructure reassigns a variable
+/// its own declaration introduced, and that declaration owns its class.
+fn poisonRejectedPatternBinders(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern_idx, &bindings);
+    for (bindings.items) |binding| {
+        if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
+        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+        try self.markErroneous(ModuleEnv.varFrom(binding.pattern_idx));
+    }
+}
+
 /// Check the pattern in-place and return whether its constructors are valid.
 /// Children report rejection during checking; owners consume this fact
 /// without rediscovering errors from the solved pattern type.
@@ -22167,7 +22211,10 @@ fn checkPattern(
             },
             .done => |pattern_var| {
                 _ = frames.pop();
-                if (frames.items.len == 0) return valid;
+                if (frames.items.len == 0) {
+                    if (!valid) try self.poisonRejectedPatternBinders(pattern_idx);
+                    return valid;
+                }
                 input = pattern_var;
             },
         }
@@ -22453,6 +22500,7 @@ fn stepPatternCheck(
                             .binder_var = destruct_var,
                             .field_name = destruct.label,
                             .region = destruct_region,
+                            .failure_owner = ctx.failure_owner,
                         });
 
                         // Append it to the scratch records array
@@ -25582,7 +25630,19 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                     _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
                 } else {
                     try self.generateAnnotationType(annotation_idx, env);
-                    _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                    const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                    self.var_set.clearRetainingCapacity();
+                    if (try self.varContainsError(annotation_var, &self.var_set)) {
+                        // The annotation's error is already reported, and it
+                        // gives the binder no instantiable type. With no
+                        // initializer to type it either, the declaration
+                        // binds nothing: its binders are erroneous and the
+                        // statement becomes an explicit runtime error.
+                        try self.poisonPatternBindings(var_stmt.pattern_idx);
+                        try self.erroneous_statements.put(self.gpa, stmt_idx, null);
+                    } else {
+                        _ = try self.unifyInContext(annotation_var, var_pattern_var, env, .type_annotation);
+                    }
                 }
             }
 
@@ -25729,7 +25789,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
 
             if (decl_pattern_result.isProblem()) {
                 try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
-                try self.erroneous_pattern_statements.put(self.gpa, stmt_idx, decl_stmt.expr);
+                try self.erroneous_statements.put(self.gpa, stmt_idx, decl_stmt.expr);
                 try self.poisonPatternBindings(decl_stmt.pattern);
             }
 
@@ -25845,7 +25905,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 self.types.resolveVar(reassign_expr_var).desc.content == .err)
             {
                 try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
-                try self.erroneous_pattern_statements.put(self.gpa, stmt_idx, reassign.expr);
+                try self.erroneous_statements.put(self.gpa, stmt_idx, reassign.expr);
             }
 
             _ = try self.unify(stmt_var, reassign_expr_var, env);
@@ -25868,11 +25928,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
             if (statement.phase == 0) {
                 statement.phase = 1;
-                const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
-
                 // Check that condition is Bool
-                const bool_var = try self.freshBool(env, cond_region);
-                _ = try self.unify(bool_var, cond_var, env);
+                _ = try self.checkBoolOperand(while_stmt.cond, cond_region, .none, env);
 
                 // Check the body
                 // while $count < 10 {
@@ -25892,6 +25949,18 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         },
         .s_expr => |expr| {
             const expr_var: Var = ModuleEnv.varFrom(expr.expr);
+
+            // An expression whose checked value type contains an error has
+            // already reported that error and has no value to discard. The
+            // statement introduces no relation for it and is itself rejected:
+            // it becomes an explicit runtime error, so no later stage reads
+            // the expression's erroneous type.
+            if (self.call_operand_type_error_exprs.items[nodeSlot(expr.expr)]) {
+                try self.erroneous_value_exprs.put(self.gpa, expr.expr, {});
+                try self.erroneous_statements.put(self.gpa, stmt_idx, expr.expr);
+                try self.markErroneous(stmt_var);
+                return null;
+            }
 
             // Statements must evaluate to {}. The statement only consults its
             // expression's value, whose solved class is shared with the
@@ -25920,10 +25989,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         .s_expect => |expr_stmt| {
             self.finishExpectBody(statement.kind.expect, child_does_fx);
             statement.kind = .single;
-            const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
-
-            const bool_var = try self.freshBool(env, stmt_region);
-            _ = try self.unifyInContext(bool_var, body_var, env, .expect);
+            _ = try self.checkBoolOperand(expr_stmt.body, stmt_region, .expect, env);
 
             try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             return null;
@@ -26154,10 +26220,8 @@ fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *En
         self.finishExpectBody(state.scope.?, expect_does_fx);
         state.scope = null;
         task.does_fx = expect_does_fx or task.does_fx;
-        const body_var = ModuleEnv.varFrom(expect.body);
 
-        const bool_var = try self.freshBool(env, frame.expr_region);
-        _ = try self.unifyInContext(bool_var, body_var, env, .expect);
+        _ = try self.checkBoolOperand(expect.body, frame.expr_region, .expect, env);
 
         try self.unifyWith(frame.expr_var, .{ .structure = .empty_record }, env);
         return .done;
@@ -27548,10 +27612,16 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .after_first_cond => {
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-                const bool_var = try self.freshBool(env, frame.expr_region);
-                const result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
-                if (if_.warn_unused_branches and result.isEstablished()) {
+                if (shortCircuitOperator(if_.origin)) |operator| {
+                    try self.checkShortCircuitOperand(if_expr_idx, first_branch.cond, frame.expr_region, .{ .binop_lhs = .{
+                        .operator = operator,
+                        .binop_expr = if_expr_idx,
+                    } }, env);
+                    state.phase = .schedule_first_body;
+                    continue;
+                }
+                const result = try self.checkBoolOperand(first_branch.cond, frame.expr_region, .if_condition, env);
+                if (if_.origin == .source and result.isEstablished()) {
                     try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, expected);
                 }
                 state.phase = .schedule_first_body;
@@ -27564,6 +27634,16 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .after_first_body => {
                 const first_branch_idx = branches[0];
                 const first_branch = self.cir.store.getIfBranch(first_branch_idx);
+                if (shortCircuitOperator(if_.origin)) |operator| {
+                    if (operator == .@"and") {
+                        try self.checkShortCircuitOperand(if_expr_idx, first_branch.body, frame.expr_region, .{ .binop_rhs = .{
+                            .operator = operator,
+                            .binop_expr = if_expr_idx,
+                        } }, env);
+                    }
+                    state.phase = .schedule_final_else;
+                    continue;
+                }
                 if (expected.branch_result) |expected_ret| {
                     const branch_ctx = problem.Context{ .if_branch = .{
                         .branch_index = 0,
@@ -27584,10 +27664,8 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .after_branch_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-                const bool_var = try self.freshBool(env, frame.expr_region);
-                const result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
-                if (if_.warn_unused_branches and result.isEstablished()) {
+                const result = try self.checkBoolOperand(branch.cond, frame.expr_region, .if_condition, env);
+                if (if_.origin == .source and result.isEstablished()) {
                     try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
                 }
                 state.phase = .schedule_branch_body;
@@ -27638,10 +27716,8 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .after_remaining_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-                const bool_var = try self.freshBool(env, frame.expr_region);
-                const result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
-                if (if_.warn_unused_branches and result.isEstablished()) {
+                const result = try self.checkBoolOperand(branch.cond, frame.expr_region, .if_condition, env);
+                if (if_.origin == .source and result.isEstablished()) {
                     try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
                 }
                 state.phase = .schedule_remaining_body;
@@ -27665,6 +27741,18 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                 return self.requestIfChild(state, if_.final_else, expected.forBranchBody(), is_call_arg, is_immediate_callee);
             },
             .after_final_else => {
+                if (shortCircuitOperator(if_.origin)) |operator| {
+                    if (operator == .@"or") {
+                        try self.checkShortCircuitOperand(if_expr_idx, if_.final_else, frame.expr_region, .{ .binop_rhs = .{
+                            .operator = operator,
+                            .binop_expr = if_expr_idx,
+                        } }, env);
+                    }
+                    // The operator's value is a `Bool` whatever its operands
+                    // are; whoever consumes it owns that relation.
+                    _ = try self.unify(ModuleEnv.varFrom(if_expr_idx), try self.freshBool(env, frame.expr_region), env);
+                    return .done;
+                }
                 if (expected.branch_result) |expected_ret| {
                     const branch_ctx = problem.Context{ .if_branch = .{
                         .branch_index = state.num_branches - 1,
@@ -27835,7 +27923,11 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             const guard_idx = branch.guard.?;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const guard_bool_var = try self.freshBool(env, expr_region);
-            const guard_result = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
+            // The match owns its guard's `Bool` demand; the guard's value
+            // class can be shared with its producer (a call's result is its
+            // callee's return slot), so a rejection retires the match without
+            // poisoning that class.
+            const guard_result = try self.unifyOwnedRelation(guard_bool_var, guard_var, env, .if_condition, .construction);
             if (!guard_result.isEstablished()) state.had_type_error = true;
             if (!match.skip_exhaustiveness and guard_result.isEstablished()) {
                 try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
@@ -27949,8 +28041,12 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         // field's value type). Judge the pending destructure binds now—an
         // analysis site is a commitment point exactly like a generalization
         // boundary (a still-flex kind pins `required` here; see
-        // `judgeRecordDestructBinds`).
+        // `judgeRecordDestructBinds`). A binder relation the judgment
+        // rejects rejects this match: like a match whose patterns fail their
+        // own check, it is not analyzed, because the rejected pattern does
+        // not describe the scrutinee.
         try self.judgeRecordDestructBinds(env);
+        if (self.erroneous_value_exprs.contains(expr_idx)) return .done;
 
         self.known_empty_payload_vars_match.clearRetainingCapacity();
         const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
@@ -28036,6 +28132,53 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
     }
     return .done;
+}
+
+/// Relate an operand to the `Bool` its consumer demands: an `if` or `while`
+/// condition, or an `expect` body. The consumer only consults the operand's
+/// value, whose solved class can be shared with its producer (a call's result
+/// is its callee's return slot), so a rejection reports here, poisons neither
+/// operand, and retires the operand itself: it becomes an explicit runtime
+/// error at its own solved type.
+fn checkBoolOperand(
+    self: *Self,
+    operand: CIR.Expr.Idx,
+    bool_region: Region,
+    ctx: problem.Context,
+    env: *Env,
+) std.mem.Allocator.Error!unifier.Result {
+    const bool_var = try self.freshBool(env, bool_region);
+    const result = try self.unifyOwnedRelation(bool_var, ModuleEnv.varFrom(operand), env, ctx, .construction);
+    if (result.isProblem()) try self.erroneous_value_exprs.put(self.gpa, operand, {});
+    return result;
+}
+
+/// The operator a short-circuiting `if` canonicalizes, or null for an `if`
+/// written in source.
+fn shortCircuitOperator(origin: CIR.Expr.IfOrigin) ?problem.Context.BinopContext.Binop {
+    return switch (origin) {
+        .source => null,
+        .short_circuit_and => .@"and",
+        .short_circuit_or => .@"or",
+    };
+}
+
+/// Relate an `and` or `or` operand to the `Bool` the operator demands. The
+/// operator only consults the operand's value, so a rejection reports here and
+/// poisons neither side, exactly like `checkBoolOperand`. The operator owns
+/// the relation, so a rejection retires the operator, whose value stays
+/// `Bool`.
+fn checkShortCircuitOperand(
+    self: *Self,
+    operator_expr: CIR.Expr.Idx,
+    operand: CIR.Expr.Idx,
+    bool_region: Region,
+    ctx: problem.Context,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const bool_var = try self.freshBool(env, bool_region);
+    const result = try self.unifyOwnedRelation(bool_var, ModuleEnv.varFrom(operand), env, ctx, .construction);
+    if (result.isProblem()) try self.erroneous_value_exprs.put(self.gpa, operator_expr, {});
 }
 
 /// Check branch `state.branch_index`'s patterns inside a fresh hoist scope,
@@ -29718,8 +29861,6 @@ fn finishBinopExpr(
             _ = try self.unify(expr_var, not_ret_var, env);
         },
         .@"and", .@"or" => {
-            const lhs_fresh_bool = try self.freshBool(env, expr_region);
-
             const binop_ctx: problem.Context.BinopContext.Binop = switch (binop.op) {
                 .@"and" => .@"and",
                 .@"or" => .@"or",
@@ -29739,26 +29880,16 @@ fn finishBinopExpr(
                 .range_inclusive,
                 => unreachable,
             };
-            const lhs_result = try self.unifyInContext(lhs_fresh_bool, lhs_var, env, .{ .binop_lhs = .{
+            try self.checkShortCircuitOperand(expr_idx, binop.lhs, expr_region, .{ .binop_lhs = .{
                 .operator = binop_ctx,
                 .binop_expr = expr_idx,
-            } });
-
-            // If lhs unified successfully, then reuse that var, otherwise
-            // create a fresh one. This is so we can get nice errors on both
-            // sides of the binop.
-            const rhs_fresh_bool = if (lhs_result.isEstablished()) lhs_fresh_bool else try self.freshBool(env, expr_region);
-
-            _ = try self.unifyInContext(rhs_fresh_bool, rhs_var, env, .{ .binop_rhs = .{
+            } }, env);
+            try self.checkShortCircuitOperand(expr_idx, binop.rhs, expr_region, .{ .binop_rhs = .{
                 .operator = binop_ctx,
                 .binop_expr = expr_idx,
-            } });
+            } }, env);
 
-            // Unify left and right together to ensure both are bools
-            _ = try self.unify(lhs_var, rhs_var, env);
-
-            // Set the expression to redirect to the return type
-            _ = try self.unify(expr_var, lhs_var, env);
+            _ = try self.unify(expr_var, try self.freshBool(env, expr_region), env);
         },
     }
 
@@ -31457,6 +31588,18 @@ fn retireErroneousLookupOccurrence(self: *Self, expr_idx: CIR.Expr.Idx) Allocato
 }
 
 fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
+    var rejected_defs = self.rejected_destructure_defs.keyIterator();
+    while (rejected_defs.next()) |def_idx| {
+        const def = self.cir.store.getDef(def_idx.*);
+        // A definition whose RHS is already a runtime error was retired
+        // when that RHS was rejected.
+        if (self.cir.store.getExpr(def.expr) == .e_runtime_error) continue;
+        const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(def.expr),
+        } });
+        try self.rejectTopLevelDestructure(def, diagnostic);
+    }
+
     var iter = self.erroneous_value_exprs.keyIterator();
     while (iter.next()) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx.*) == .e_runtime_error) continue;
@@ -31466,18 +31609,24 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         try self.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
     }
 
-    var pattern_statements = self.erroneous_pattern_statements.iterator();
-    while (pattern_statements.next()) |entry| {
+    var rejected_statements = self.erroneous_statements.iterator();
+    while (rejected_statements.next()) |entry| {
+        const stmt_idx = entry.key_ptr.*;
         // A statement already replaced by an earlier sweep has nothing left to poison.
-        if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key_ptr.*)).tag == .malformed) continue;
-        const poisoned_expr = self.cir.store.getExpr(entry.value_ptr.*);
-        if (poisoned_expr != .e_runtime_error) {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic("check invariant violated: rejected pattern statement RHS was not poisoned", .{});
+        if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(stmt_idx)).tag == .malformed) continue;
+        const diagnostic = if (entry.value_ptr.*) |value_expr| blk: {
+            const poisoned_expr = self.cir.store.getExpr(value_expr);
+            if (poisoned_expr != .e_runtime_error) {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("check invariant violated: rejected statement value was not poisoned", .{});
+                }
+                unreachable;
             }
-            unreachable;
-        }
-        try self.replaceRejectedPatternStatement(entry.key_ptr.*, poisoned_expr.e_runtime_error.diagnostic);
+            break :blk poisoned_expr.e_runtime_error.diagnostic;
+        } else try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getStatementRegion(stmt_idx),
+        } });
+        try self.replaceRejectedStatement(stmt_idx, diagnostic);
     }
 }
 
@@ -31976,28 +32125,31 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// field kind is still flex there commits to `required` at the site (in
 /// checking order), which is also what the pre-optional-fields `.required`
 /// row demand did at pattern-check time.
+///
+/// A binder whose sub-pattern does not describe the field's value (a closed
+/// nested record pattern missing one of the field's fields, or a binder whose
+/// uses demand another type) is a rejected pattern: the judgment reports it
+/// and rejects the construct that owns the pattern through
+/// `rejectPatternFailureOwner`.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var retained: usize = 0;
     var index: usize = 0;
     while (index < self.pending_record_destructs.items.len) : (index += 1) {
         const pending = self.pending_record_destructs.items[index];
         const resolved = self.types.resolveVar(pending.presence_var);
-        switch (resolved.desc.content) {
+        const bound_var = switch (resolved.desc.content) {
             .field_presence => |field_presence| switch (field_presence) {
-                .required, .defaulted => {
-                    _ = try self.unify(pending.binder_var, pending.payload_var, env);
-                },
-                .optional => {
+                .required, .defaulted => pending.payload_var,
+                .optional => blk: {
                     const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
-                    const try_var = try self.freshFromContent(
+                    break :blk try self.freshFromContent(
                         try self.mkTryContent(pending.payload_var, missing_err_var),
                         env,
                         pending.region,
                     );
-                    _ = try self.unify(pending.binder_var, try_var, env);
                 },
             },
-            .flex => {
+            .flex => blk: {
                 // A still-flex kind commits to `required` only at a
                 // commitment point that OWNS the var: the boundary's
                 // generalize call is about to promote exactly the vars at
@@ -32021,14 +32173,24 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
                     pending.region,
                 );
                 _ = try self.unify(pending.presence_var, required_var, env);
-                _ = try self.unify(pending.binder_var, pending.payload_var, env);
+                break :blk pending.payload_var;
             },
-            .rigid, .alias, .structure, .err => {
-                // `.err` and other poisoned contents: the kind mismatch was
-                // already reported; bind the binder to the payload so its
-                // uses don't cascade (err absorbs).
-                _ = try self.unify(pending.binder_var, pending.payload_var, env);
-            },
+            // `.err` and other poisoned contents: the kind mismatch was
+            // already reported; the binder still describes the payload.
+            .rigid, .alias, .structure, .err => pending.payload_var,
+        };
+        // The binder relation belongs to the destructure pattern. The payload
+        // is the destructured record's own field type, and the binder's class
+        // is shared with every use of the name, so a rejection reports here,
+        // poisons neither operand, and rejects the construct that owns the
+        // pattern.
+        const result = try self.runUnify(pending.binder_var, bound_var, env, .{
+            .context = .record_destructure,
+            .on_mismatch = .write_no_report,
+        });
+        if (!result.isAccepted()) {
+            _ = try self.appendTypeMismatch(pending.binder_var, bound_var, self.mismatchContext(.record_destructure, bound_var));
+            try self.rejectPatternFailureOwner(pending.failure_owner);
         }
     }
     self.pending_record_destructs.shrinkRetainingCapacity(retained);
@@ -42936,7 +43098,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     for (failed_pattern_owners.items) |owner| {
         if (previous_owner == owner) continue;
         previous_owner = owner;
-        try self.poisonLiteralFailureOwner(owner);
+        try self.rejectPatternFailureOwner(owner);
     }
     if (failed_pattern_owners.items.len != 0) {
         try self.poisonErroneousValueExprs();
