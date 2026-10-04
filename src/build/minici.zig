@@ -113,7 +113,8 @@ const shards = [_]Shard{
     .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = "run-test-zig-module-roc_target" } },
     .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-zig-module-roc_target", .before = "run-test-eval" } },
     .{ .name = "windows-eval", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
-    .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
+    .{ .name = "windows-simd", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
+    .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval-host-effects" } },
 };
 
 fn shardByName(name: []const u8) ?Shard {
