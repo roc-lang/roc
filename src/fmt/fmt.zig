@@ -8285,7 +8285,7 @@ test "issue 12019: comment before match guard is preserved" {
     const input = "f = |p| match p {\n\tA # This comment will be deleted!!!\n\tif is_ok => 1\n\t_ => 0\n}\n";
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
-    try std.testing.expect(std.mem.indexOf(u8, result, "# This comment will be deleted!!!") != null);
+    try std.testing.expect(std.mem.find(u8, result, "# This comment will be deleted!!!") != null);
 }
 
 test "issue 12018: expanded tag pattern under as is stable" {
