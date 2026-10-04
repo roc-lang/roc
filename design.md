@@ -6570,6 +6570,10 @@ public and private structure while retaining both sealed Monotype roots, and it
 unifies only callable slots and still-open Lambda Solved slots. This makes a
 SpecConstr-authored callable worker visible in the exact private representation
 that contains it without using the public representation as a replacement.
+When the walk reaches a public iterator viewing a minted or forced-dynamic
+representation, it continues from the public backing into the generated
+backing, exactly as the unifying relation does, so the public view's step slot
+receives the callable evidence of the value it views.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark
@@ -6577,6 +6581,14 @@ runs only after the clone is structurally complete, so the erased callable's
 source-function digest never observes a partially built type. The erased
 callable then accumulates exact finite members through normal Lambda Solved
 unification.
+
+The erased callable also records the function type it was erased from, and that
+type's arguments and result are its ABI. Function types that view the callable
+through a public interface can differ from the ABI in representation (a public
+iterator is boxed, a forced-dynamic one is not), so direct LIR lowering
+specializes every member entry at the ABI and lowers every indirect call's
+arguments to it and its result from it at explicit typed boundaries. A call
+site never takes its result layout from its own view of the callee.
 
 Minted iterator backings keep finite callable slots inline. Only
 forced-dynamic backings take this explicit erased-callable boundary. The direct
@@ -18091,7 +18103,10 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
-machine ABI while consuming another in ARC.
+machine ABI while consuming another in ARC. That resolution lives in
+`lir/erased_owner.zig`; a LIR transform that rewrites the definitions on such a
+chain, as join scalarization does when it turns field reads into aliases,
+re-resolves the reuse sources of the procedures it changes with it.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:

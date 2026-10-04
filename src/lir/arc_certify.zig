@@ -6755,6 +6755,45 @@ test "certify accepts erased call reuse from a transparent outer owner" {
     try f.certify();
 }
 
+test "erased owner resolution re-derives a reuse source that became an alias" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owner = try f.local(erased_callable);
+    const read = try f.local(erased_callable);
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    // The reuse source names `read`, as it did when `read` was a field read;
+    // `read` is now an alias of `owner`, so `owner` is the allocation.
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
+        .reuse_closure = true,
+        .reuse_source = read,
+        .next = ret,
+    } }, .test_fixture);
+    const closure_assign = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = closure,
+        .op = .{ .local = read },
+        .next = call,
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = read,
+        .op = .{ .local = owner },
+        .next = closure_assign,
+    } }, .test_fixture);
+    const proc_id = try f.addProc(&.{owner}, body, erased_callable);
+    try testing.expectError(error.Certification, f.certify());
+
+    try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
+    try testing.expectEqual(owner, f.store.getCFStmt(call).assign_call_erased.reuse_source.?);
+    try f.certify();
+}
+
 test "certify rejects erased call reuse from a different allocation" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
