@@ -18804,6 +18804,12 @@ const EvidencePass = struct {
     /// Explicit shared-var use records deferred during template walks because
     /// the current chain did not bind every obligation.
     deferred_use_sites: std.ArrayListUnmanaged(struct { record_idx: u32, site_key: u32 }) = .empty,
+    /// Evidence already resolved for a scheme-use substitution: records
+    /// naming the same substitution range of the same scheme (uses replayed
+    /// from one source) resolve it once.
+    record_spans_by_substitution: std.AutoHashMapUnmanaged(RecordSubstitutionKey, RecordSiteSpans) = .empty,
+    /// The same, for procedure values' evidence.
+    procedure_value_spans_by_substitution: std.AutoHashMapUnmanaged(RecordSubstitutionKey, RecordSiteSpans) = .empty,
     /// The param chain in scope while resolving a site's evidence entries, so
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
@@ -18909,6 +18915,8 @@ const EvidencePass = struct {
         while (contract_buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.callable_contract_buckets.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
+        self.record_spans_by_substitution.deinit(self.allocator);
+        self.procedure_value_spans_by_substitution.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
         self.evidence_param_paths.deinit(self.allocator);
         self.evidence_param_callables.deinit(self.allocator);
@@ -20819,6 +20827,13 @@ const EvidencePass = struct {
         subst: artifact_serialize.Span,
     };
 
+    const RecordSubstitutionKey = struct {
+        scheme_root: u32,
+        pairs_start: u32,
+        pairs_len: u32,
+        commit_unpinned: bool,
+    };
+
     /// Resolve one scheme-use record's obligations (in the scheme's canonical
     /// order) into a contiguous `evidence_refs` range, and record the
     /// substitution the instantiation applied to the scheme.
@@ -20829,6 +20844,15 @@ const EvidencePass = struct {
             checkedArtifactInvariant("where-method callable relation reached scheme-use evidence emission", .{});
         }
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        // Resolution against an enclosing evidence chain depends on that
+        // chain, so only chain-free resolutions are shared.
+        const key: ?RecordSubstitutionKey = if (self.current_chain.len == 0) .{
+            .scheme_root = record.scheme_root,
+            .pairs_start = record.pairs_start,
+            .pairs_len = record.pairs_len,
+            .commit_unpinned = commit_unpinned,
+        } else null;
+        if (key) |shared| if (self.record_spans_by_substitution.get(shared)) |spans| return spans;
 
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
         defer params.deinit(self.allocator);
@@ -20846,10 +20870,12 @@ const EvidencePass = struct {
         // A value use instantiates the referenced scheme; a nested-function use
         // instantiates the stored expression's own scheme for the value that
         // stores it. Either way the pairs name each quantified variable's copy.
-        return .{
+        const spans: RecordSiteSpans = .{
             .refs = try self.appendEvidenceRefs(entries.items),
             .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
         };
+        if (key) |shared| try self.record_spans_by_substitution.put(self.allocator, shared, spans);
+        return spans;
     }
 
     fn evidenceForRecordParam(
@@ -21199,6 +21225,26 @@ const EvidencePass = struct {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        // Records naming the same substitution of the same scheme (uses
+        // checking replayed from one source) publish the same evidence, so
+        // chain-free resolutions are shared.
+        const key: ?RecordSubstitutionKey = if (chain.len == 0) .{
+            .scheme_root = record.scheme_root,
+            .pairs_start = record.pairs_start,
+            .pairs_len = record.pairs_len,
+            .commit_unpinned = false,
+        } else null;
+        if (key) |shared| if (self.procedure_value_spans_by_substitution.get(shared)) |spans| {
+            try self.site_seen.put(site_key, {});
+            try self.site_evidence.append(self.allocator, .{
+                .key = site_key,
+                .start = spans.refs.start,
+                .len = spans.refs.len,
+                .subst_start = spans.subst.start,
+                .subst_len = spans.subst.len,
+            });
+            return;
+        };
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
         defer params.deinit(self.allocator);
         try self.enumerateParams(@enumFromInt(record.scheme_root), &params);
@@ -21228,6 +21274,7 @@ const EvidencePass = struct {
 
         const span = try self.appendEvidenceRefs(entries.items);
         const subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs);
+        if (key) |shared| try self.procedure_value_spans_by_substitution.put(self.allocator, shared, .{ .refs = span, .subst = subst });
         try self.site_seen.put(site_key, {});
         try self.site_evidence.append(self.allocator, .{
             .key = site_key,

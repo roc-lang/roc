@@ -465,67 +465,89 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v6");
-    writeU32(&hasher, @intCast(evidence.len));
+    writeFnEvidence(&hasher, evidence, frames, head);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// A fast hash of retained function evidence over exactly the bytes its
+/// digest covers, for finding a stored conversion to compare with
+/// `fnEvidenceEql`; never an identity by itself.
+pub fn fnEvidenceBucket(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    writeFnEvidence(&hasher, evidence, frames, head);
+    return hasher.final();
+}
+
+fn writeFnEvidence(
+    hasher: anytype,
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+) void {
+    writeBytes(hasher, "roc.monotype.fn_evidence.v6");
+    writeU32(hasher, @intCast(evidence.len));
     for (evidence) |entry| {
-        writeU8(&hasher, @intFromEnum(entry));
+        writeU8(hasher, @intFromEnum(entry));
         switch (entry) {
             .target => |target| {
-                writeU32(&hasher, target.callable_contracts);
-                writeBytes(&hasher, &target.view.bytes);
-                writeMethodTarget(&hasher, target.method, target.method_callable_key);
+                writeU32(hasher, target.callable_contracts);
+                writeBytes(hasher, &target.view.bytes);
+                writeMethodTarget(hasher, target.method, target.method_callable_key);
                 if (target.instantiation) |instantiation| {
-                    writeU8(&hasher, 1);
-                    writeBytes(&hasher, &instantiation.view.bytes);
-                    writeBytes(&hasher, &instantiation.callable_key.bytes);
-                } else writeU8(&hasher, 0);
-                writeU8(&hasher, @intFromEnum(target.nested));
+                    writeU8(hasher, 1);
+                    writeBytes(hasher, &instantiation.view.bytes);
+                    writeBytes(hasher, &instantiation.callable_key.bytes);
+                } else writeU8(hasher, 0);
+                writeU8(hasher, @intFromEnum(target.nested));
                 switch (target.nested) {
                     .resolved => |nested| {
-                        writeU32(&hasher, nested.count);
-                        writeU32(&hasher, nested.subtree_len);
+                        writeU32(hasher, nested.count);
+                        writeU32(hasher, nested.subtree_len);
                     },
                     .from_callable => {},
                 }
             },
             .structural => |structural| {
-                writeU32(&hasher, structural.callable_contracts);
-                writeStructuralDerivation(&hasher, structural.derivation);
+                writeU32(hasher, structural.callable_contracts);
+                writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
-                    writeU8(&hasher, 1);
-                    writeBytes(&hasher, &checked_structural.view.bytes);
-                    writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
-                    writeBytes(&hasher, &checked_structural.callable_key.bytes);
+                    writeU8(hasher, 1);
+                    writeBytes(hasher, &checked_structural.view.bytes);
+                    writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
+                    writeBytes(hasher, &checked_structural.callable_key.bytes);
                     writeOptionalU32(
-                        &hasher,
+                        hasher,
                         if (checked_structural.generated_codec_identity) |derivation|
                             @intFromEnum(derivation)
                         else
                             null,
                     );
-                } else writeU8(&hasher, 0);
+                } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
-                writeU32(&hasher, use.callable_contracts);
-                writeU8(&hasher, @intFromBool(use.independent_callable));
+                writeU32(hasher, use.callable_contracts);
+                writeU8(hasher, @intFromBool(use.independent_callable));
             },
-            .from_scheme => |index| writeU32(&hasher, index),
+            .from_scheme => |index| writeU32(hasher, index),
             .unreachable_value, .checked_error => {},
         }
     }
-    writeU32(&hasher, @intCast(frames.len));
+    writeU32(hasher, @intCast(frames.len));
     for (frames) |frame| {
-        writeU8(&hasher, @intFromEnum(frame.scope_id));
+        writeU8(hasher, @intFromEnum(frame.scope_id));
         switch (frame.scope_id) {
             .root => {},
-            .generalized => |scope| writeU32(&hasher, scope),
+            .generalized => |scope| writeU32(hasher, scope),
         }
-        writeOptionalU32(&hasher, frame.parent);
-        writeU32(&hasher, frame.roots_start);
-        writeU32(&hasher, frame.roots_len);
+        writeOptionalU32(hasher, frame.parent);
+        writeU32(hasher, frame.roots_start);
+        writeU32(hasher, frame.roots_len);
     }
-    writeOptionalU32(&hasher, head);
-    return .{ .bytes = hasher.finalResult() };
+    writeOptionalU32(hasher, head);
 }
 
 /// Exact checked-identity equality for retained function evidence. Checked
@@ -592,7 +614,7 @@ fn methodTargetIdentityEql(
 }
 
 fn writeMethodTarget(
-    hasher: *TypeDigestHasher,
+    hasher: anytype,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
 ) void {
@@ -618,7 +640,7 @@ fn writeMethodTarget(
     writeBytes(hasher, &callable_key.bytes);
 }
 
-fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispatch.StructuralDerivation) void {
+fn writeStructuralDerivation(hasher: anytype, derivation: static_dispatch.StructuralDerivation) void {
     writeU8(hasher, @intFromEnum(derivation));
     switch (derivation) {
         .map, .map_effectful => |plan| {
@@ -629,7 +651,7 @@ fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispa
     }
 }
 
-fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
+fn writeOptionalU32(hasher: anytype, value: ?u32) void {
     if (value) |actual| {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
@@ -772,16 +794,16 @@ fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) vo
     writeU32(hasher, @intFromEnum(template.template));
 }
 
-fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
+fn writeBytes(hasher: anytype, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeU8(hasher: *TypeDigestHasher, value: u8) void {
+fn writeU8(hasher: anytype, value: u8) void {
     hasher.update(&.{value});
 }
 
-fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
+fn writeU32(hasher: anytype, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }

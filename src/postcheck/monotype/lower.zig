@@ -4286,6 +4286,9 @@ const Builder = struct {
     /// The stored form `constFnEvidence` last produced for each innermost
     /// evidence vector, which callers lowering one request pass repeatedly.
     const_evidence_memo: std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence),
+    /// Stored conversions by `Ast.fnEvidenceBucket`, each checked for exact
+    /// equality before reuse.
+    const_evidence_by_content: std.AutoHashMap(u64, StoredConstFnEvidence),
 
     /// The store this scope emits restored const expressions into.
     fn constEmit(self: *Builder) *Ast.Program {
@@ -4420,6 +4423,7 @@ const Builder = struct {
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
+            .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
         };
     }
 
@@ -4645,6 +4649,7 @@ const Builder = struct {
         self.pending_spec_jobs.deinit(self.allocator);
         self.type_cache.deinit();
         self.const_evidence_memo.deinit();
+        self.const_evidence_by_content.deinit();
         self.evidence_arena.deinit();
         // Workers borrow these views, so they go last.
         self.allocator.free(self.module_views);
@@ -6069,12 +6074,22 @@ const Builder = struct {
         if (self.const_evidence_memo.get(key)) |stored| {
             if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) return stored;
         }
+        // Another request with equal evidence (uses checking replayed from
+        // one source) already stored this conversion and its digest.
+        const bucket = Ast.fnEvidenceBucket(nodes.items, frames.items, parent);
+        if (self.const_evidence_by_content.get(bucket)) |stored| {
+            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) {
+                try self.const_evidence_memo.put(key, stored);
+                return stored;
+            }
+        }
         const stored = StoredConstFnEvidence.init(
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             parent,
         );
         try self.const_evidence_memo.put(key, stored);
+        try self.const_evidence_by_content.put(bucket, stored);
         return stored;
     }
 
