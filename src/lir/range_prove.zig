@@ -594,6 +594,10 @@ const max_struct_meet_fields: u32 = 16;
 /// captured, so a missing edge (a loop back edge captured mid-walk, say)
 /// keeps the merge at bottom for the round.
 const MergeState = struct {
+    /// Captured this round. A state from an earlier round keeps its lists'
+    /// memory: the pass runs on an arena, where a freed list returns
+    /// nothing, so the lists are cleared and refilled rather than remade.
+    live: bool,
     captures: u32,
     facts: std.ArrayList(Fact),
     /// The all-edge meet of the facts in round-stable form, for persisting
@@ -987,7 +991,7 @@ const Pass = struct {
         self.frames.deinit(self.allocator);
         self.joins_in_order.deinit(self.allocator);
         self.jump_records.deinit(self.allocator);
-        self.clearMergeStates();
+        self.freeMergeStates();
         self.merge_states.deinit();
         self.body_joins.deinit();
         self.len_roots.deinit();
@@ -1063,7 +1067,7 @@ const Pass = struct {
         self.frames.clearRetainingCapacity();
         self.joins_in_order.clearRetainingCapacity();
         self.jump_records.clearRetainingCapacity();
-        self.clearMergeStates();
+        self.retireMergeStates();
         self.body_joins.clearRetainingCapacity();
         self.enclosing_join.clearRetainingCapacity();
         self.join_parent.clearRetainingCapacity();
@@ -1844,13 +1848,31 @@ const Pass = struct {
         return self.pred_counts.get(stmt) orelse 0;
     }
 
-    fn clearMergeStates(self: *Pass) void {
+    /// End the round's merge states, keeping each state's lists for the
+    /// next round's captures of the same head.
+    fn retireMergeStates(self: *Pass) void {
+        var it = self.merge_states.valueIterator();
+        while (it.next()) |state| {
+            state.live = false;
+            state.facts.clearRetainingCapacity();
+            state.env.clearRetainingCapacity();
+        }
+    }
+
+    fn freeMergeStates(self: *Pass) void {
         var it = self.merge_states.valueIterator();
         while (it.next()) |state| {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
+    }
+
+    /// This round's state for a merge head, if any edge into it was
+    /// captured this round.
+    fn liveMergeState(self: *Pass, head: CFStmtId) ?*MergeState {
+        const state = self.merge_states.getPtr(head) orelse return null;
+        return if (state.live) state else null;
     }
 
     /// A binding is worth carrying through a merge when it says something a
@@ -2399,7 +2421,13 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+            entry.value_ptr.* = .{ .live = true, .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+        } else if (!entry.value_ptr.live) {
+            entry.value_ptr.live = true;
+            entry.value_ptr.captures = 0;
+            entry.value_ptr.entry_captures = 0;
+            entry.value_ptr.stable.len = 0;
+            entry.value_ptr.entry_stable.len = 0;
         }
         const state = entry.value_ptr;
 
@@ -2617,6 +2645,7 @@ const Pass = struct {
         const expected = self.mergeExpected(head);
         if (expected <= 1) return false;
         const state = self.merge_states.getPtrConst(head) orelse return true;
+        if (!state.live) return true;
         if (self.body_joins.get(head)) |join_id| {
             // A loop body can never see its back edges before it walks; it
             // waits only for its entry edges, whose common facts seed it.
@@ -2633,7 +2662,7 @@ const Pass = struct {
         // in-round meet never completes; bounds persisted by an earlier
         // round stand in for it.
         if (self.body_joins.get(head)) |join_id| {
-            const state = self.merge_states.getPtr(head);
+            const state = self.liveMergeState(head);
             const captures = if (state) |st| st.captures else 0;
             // Values bind before facts materialize against them, so a fact
             // about a local's length or value lands on the node the region
@@ -2666,7 +2695,7 @@ const Pass = struct {
                 return;
             }
         }
-        const state = self.merge_states.getPtr(head) orelse {
+        const state = self.liveMergeState(head) orelse {
             try self.seedMergeEnv(head);
             try self.seedMergeFacts(head);
             return;
@@ -3142,6 +3171,7 @@ const Pass = struct {
         while (it.next()) |entry| {
             const head = entry.key_ptr.*;
             const state = entry.value_ptr;
+            if (!state.live) continue;
             if (!self.live_pending and state.captures == self.mergeExpected(head) and state.captures >= 2) {
                 try self.persistMergeFacts(head, state);
                 try self.persistMergeEnv(head, state);
