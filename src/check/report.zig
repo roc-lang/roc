@@ -111,6 +111,7 @@ const TupleAccessNeedsAnnotation = problem_mod.TupleAccessNeedsAnnotation;
 const InvalidTupleAccess = problem_mod.InvalidTupleAccess;
 const OptionalAccessOfRequiredField = problem_mod.OptionalAccessOfRequiredField;
 const DerivedParserErrorRow = problem_mod.DerivedParserErrorRow;
+const DerivedCodecOpenRecord = problem_mod.DerivedCodecOpenRecord;
 const EffectfulDefaultValue = problem_mod.EffectfulDefaultValue;
 const RecursiveDefaultValue = problem_mod.RecursiveDefaultValue;
 const CircularValueDefinition = problem_mod.CircularValueDefinition;
@@ -1161,6 +1162,7 @@ pub const ReportBuilder = struct {
             .invalid_tuple_access => |data| return self.buildInvalidTupleAccessReport(data),
             .optional_access_of_required_field => |data| return self.buildOptionalAccessOfRequiredFieldReport(data),
             .derived_parser_error_row => |data| return self.buildDerivedParserErrorRowReport(data),
+            .derived_codec_open_record => |data| return self.buildDerivedCodecOpenRecordReport(data),
             .unset_of_required_field => |data| return self.buildUnsetOfRequiredFieldReport(data),
             .unset_of_defaulted_field => |data| return self.buildUnsetOfDefaultedFieldReport(data),
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
@@ -3841,6 +3843,62 @@ pub const ReportBuilder = struct {
                 try report.document.addReflowingText("Add the missing tags to the error row, or widen it so it includes them.");
             },
         }
+
+        return report;
+    }
+
+    /// Build a report for a derived parser or encoder requested for a record
+    /// whose row is still open in its definition's type.
+    fn buildDerivedCodecOpenRecordReport(
+        self: *Self,
+        data: DerivedCodecOpenRecord,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Record Fields Not Known", "", .runtime_error);
+        errdefer report.deinit();
+
+        const action = switch (data.direction) {
+            .parse => "decodes",
+            .encode => "encodes",
+        };
+        const codec = switch (data.direction) {
+            .parse => "A decoder",
+            .encode => "An encoder",
+        };
+
+        try D.renderSliceInto(&.{
+            D.bytes("This"),
+            D.bytes(action),
+            D.bytes("a record whose full set of fields is not known:"),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("Its type is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const record_str = try report.addOwnedString(self.getFormattedString(data.record_snapshot));
+        try report.document.addCodeBlock(record_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The record's type comes only from the fields this definition uses, and the record is part of the definition's own type, so callers could use it with other fields too. ");
+        try report.document.addReflowingText(codec);
+        try report.document.addReflowingText(" needs the exact set of fields.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" Destructure the record to list every field, for example ");
+        try report.document.addAnnotated("{ name, email } = record", .inline_code);
+        try report.document.addReflowingText(", or add a type annotation that lists them.");
 
         return report;
     }

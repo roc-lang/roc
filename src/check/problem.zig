@@ -44,6 +44,7 @@ pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
 pub const TupleAccessNeedsAnnotation = types.TupleAccessNeedsAnnotation;
 pub const OptionalAccessOfRequiredField = types.OptionalAccessOfRequiredField;
 pub const DerivedParserErrorRow = types.DerivedParserErrorRow;
+pub const DerivedCodecOpenRecord = types.DerivedCodecOpenRecord;
 pub const UnsetOfRequiredField = types.UnsetOfRequiredField;
 pub const UnsetOfDefaultedField = types.UnsetOfDefaultedField;
 pub const EffectfulDefaultValue = types.EffectfulDefaultValue;

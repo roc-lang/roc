@@ -102,6 +102,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_10804_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11444_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10824_test.zig"));
+    std.testing.refAllDecls(@import("test/derived_codec_local_record_row_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10853_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10875_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11057_test.zig"));

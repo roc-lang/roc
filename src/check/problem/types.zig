@@ -89,6 +89,7 @@ pub const Problem = union(enum) {
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
+    derived_codec_open_record: DerivedCodecOpenRecord,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -409,6 +410,17 @@ pub const DerivedParserErrorRow = struct {
     required_fields: ?ExtraStringIdx,
     /// How many required fields `required_fields` joins.
     required_field_count: u32,
+};
+
+/// A compiler-derived parser or encoder was requested for a record inferred
+/// from field uses whose row is still open in its definition's type (a record
+/// parameter, or a returned record). Callers may use that record with more
+/// fields, so the derived codec's exact field set is not known.
+pub const DerivedCodecOpenRecord = struct {
+    region: base.Region,
+    direction: enum { parse, encode },
+    /// Snapshot of the value type the codec was requested for.
+    record_snapshot: SnapshotContentIdx,
 };
 
 /// Unset (`x: _`) of a field whose presence resolved to `defaulted`: the
