@@ -101,7 +101,7 @@ expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
 
 main =
-# This will cause a type mismatch
+	# This will cause a type mismatch
 	expectsPerson("not a person")
 ~~~
 # CANONICALIZE

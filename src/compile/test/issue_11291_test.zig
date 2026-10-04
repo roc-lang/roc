@@ -80,7 +80,7 @@ test "issue 11291: imported nominal methods preserve backing arguments" {
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "app.roc", .data =
         \\app [main!] { pf: platform "./platform.roc" }
-        \\import Container exposing [Container]
+        \\import Container
         \\container : Container(U8)
         \\container = { items: Str.to_utf8("x") }
         \\main! = |_args| if Container.to_list(container) == Str.to_utf8("x") Ok({}) else Err(Exit(1))

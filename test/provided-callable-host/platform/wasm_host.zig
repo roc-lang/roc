@@ -17,9 +17,9 @@ const U64Arg = extern struct {
 
 const wasm_allocator = std.heap.wasm_allocator;
 
-fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     allocation_counts[0] += 1;
-    return host_alloc.alloc(wasm_allocator, length, alignment);
+    return host_alloc.alloc(wasm_allocator, length, alignment) orelse @trap();
 }
 
 fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
@@ -27,10 +27,10 @@ fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     host_alloc.dealloc(wasm_allocator, ptr, alignment);
 }
 
-fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     allocation_counts[0] += 1;
     allocation_counts[1] += 1;
-    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment);
+    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment) orelse @trap();
 }
 
 fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
@@ -40,7 +40,7 @@ fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
     @trap();
 }
 
-fn rocOpsAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocOpsAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     return roc_alloc(length, alignment);
 }
 
@@ -48,7 +48,7 @@ fn rocOpsDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) voi
     roc_dealloc(ptr, alignment);
 }
 
-fn rocOpsRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocOpsRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return roc_realloc(ptr, new_length, alignment);
 }
 

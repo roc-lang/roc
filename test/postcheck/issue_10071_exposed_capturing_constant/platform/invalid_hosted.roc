@@ -16,7 +16,7 @@ platform ""
         arm64v1musl: { inputs: [app], output: Archive },
     }
 
-import Elem exposing [Elem]
+import Elem
 import Browser
 
 ui_init : {} -> Box(Elem)

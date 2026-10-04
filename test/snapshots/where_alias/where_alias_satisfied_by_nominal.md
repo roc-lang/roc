@@ -126,7 +126,7 @@ main = stringify(Name.Name("hi"))
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 286)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 283)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -141,7 +141,7 @@ main = stringify(Name.Name("hi"))
 					(ty-lookup (name "Stringable") (local))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 312)
+		(e-call (constraint-fn-var 309)
 			(e-lookup-local
 				(p-assign (ident "stringify")))
 			(e-nominal (nominal "Name")

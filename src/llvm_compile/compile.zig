@@ -19,8 +19,6 @@ const builtin_registry = builtins.builtin_registry;
 
 const Allocator = std.mem.Allocator;
 
-var temp_path_counter = std.atomic.Value(usize).init(0);
-
 const HostOs = enum {
     windows,
     macos,
@@ -70,8 +68,6 @@ const host_os: HostOs = switch (builtin.os.tag) {
     .vulkan,
     => .other,
 };
-
-const TempPathError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.RealPathFileAllocError || error{TempDirUnavailable};
 
 // Platform-specific i128 ABI Handling
 //
@@ -153,7 +149,6 @@ pub const Error = error{
     LlvmModuleVerificationFailed,
     /// LLVM could not write the object file.
     LlvmObjectEmitFailed,
-    TempFileError,
     LinkFailed,
     WindowsSDKNotFound,
 };
@@ -423,16 +418,6 @@ fn pruneBuiltinModule(module: *bindings.Module, app_decls: *const std.StringHash
     }
 }
 
-fn emitMergedBitcodeToObjectFile(
-    allocator: Allocator,
-    io: std.Io,
-    bitcode: []const u32,
-    options: CompileOptions,
-    output_path: [:0]const u8,
-) Error!void {
-    try emitMergedBitcodeModulesToObjectFile(allocator, io, &.{bitcode}, options, output_path);
-}
-
 fn parseBitcodeModule(
     context: *bindings.Context,
     bitcode: []const u32,
@@ -457,13 +442,14 @@ fn parseBitcodeModule(
     return module;
 }
 
-fn emitMergedBitcodeModulesToObjectFile(
+/// Link the modules, merge in the builtins, and compile the result to an
+/// object file held in memory. The returned bytes are owned by `allocator`.
+fn emitMergedBitcodeModulesToObject(
     allocator: Allocator,
     io: std.Io,
     bitcodes: []const []const u32,
     options: CompileOptions,
-    output_path: [:0]const u8,
-) Error!void {
+) Error![]u8 {
     if (bitcodes.len == 0) return Error.NoBitcodeModules;
 
     if (comptime build_options.llvm_keep_bitcode.len != 0) {
@@ -657,7 +643,7 @@ fn emitMergedBitcodeModulesToObjectFile(
         .allow_fast_isel = false,
         .allow_machine_outliner = true,
         .asm_filename = null,
-        .bin_filename = output_path.ptr,
+        .bin_filename = null,
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = default_coverage,
@@ -665,41 +651,17 @@ fn emitMergedBitcodeModulesToObjectFile(
         .lower_memory_intrinsics_to_loops = options.lower_memory_intrinsics_to_loops,
     };
 
-    // Emit merged module to object file
     var emit_error: [*:0]const u8 = undefined;
-    if (target_machine.emitToFile(module, &emit_error, &emit_options)) {
+    var object_ptr: [*]u8 = undefined;
+    var object_len: usize = 0;
+    if (target_machine.emitObjectToMemory(module, &emit_error, &emit_options, &object_ptr, &object_len)) {
         recordDiagnostic(options.diagnostic, emit_error);
         bindings.disposeMessage(emit_error);
         return Error.LlvmObjectEmitFailed;
     }
-}
+    defer bindings.TargetMachine.freeEmittedObject(object_ptr);
 
-/// Compile LLVM bitcode to a native object file.
-pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
-    const temp_path = createTempPath(allocator, io, ".o") catch return Error.TempFileError;
-    defer allocator.free(temp_path);
-
-    try emitMergedBitcodeToObjectFile(allocator, io, bitcode, options, temp_path);
-
-    // Read the object file back into memory
-    const object_bytes = std.Io.Dir.cwd().readFileAlloc(
-        io,
-        std.mem.sliceTo(temp_path, 0),
-        allocator,
-        .limited(10 * 1024 * 1024), // 10MB max
-    ) catch return Error.TempFileError;
-
-    if (comptime build_options.llvm_keep_object.len != 0) {
-        std.Io.Dir.cwd().writeFile(io, .{
-            .sub_path = build_options.llvm_keep_object,
-            .data = object_bytes,
-        }) catch {};
-    }
-
-    // Clean up temp file
-    std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(temp_path, 0)) catch {};
-
-    return object_bytes;
+    return allocator.dupe(u8, object_ptr[0..object_len]);
 }
 
 /// Compile LLVM bitcode modules to one relocatable native object the
@@ -708,12 +670,6 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
 /// copy of the builtin definitions and imports only the host's symbols,
 /// which the relocatable loader binds when it loads the object.
 pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes: []const []const u32, options: CompileOptions) Error![]u8 {
-    const object_path = createTempPath(allocator, io, objectExtension()) catch return Error.TempFileError;
-    defer {
-        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(object_path, 0)) catch {};
-        allocator.free(object_path);
-    }
-
     var pic_options = options;
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
@@ -723,15 +679,8 @@ pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes:
     };
     pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
-    try emitMergedBitcodeModulesToObjectFile(allocator, io, bitcodes, pic_options, object_path);
+    const object_bytes = try emitMergedBitcodeModulesToObject(allocator, io, bitcodes, pic_options);
     recordInProcessCompileForTest(allocator, io);
-
-    const object_bytes = std.Io.Dir.cwd().readFileAlloc(
-        io,
-        std.mem.sliceTo(object_path, 0),
-        allocator,
-        .limited(256 * 1024 * 1024),
-    ) catch return Error.TempFileError;
 
     if (comptime build_options.llvm_keep_object.len != 0) {
         std.Io.Dir.cwd().writeFile(io, .{
@@ -796,68 +745,4 @@ fn recordInProcessCompileForTest(allocator: Allocator, io: std.Io) void {
     contents.appendSlice(allocator, "1\n") catch return;
 
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = contents.items }) catch {};
-}
-
-fn getTempDir(allocator: Allocator) (Allocator.Error || error{TempDirUnavailable})![]u8 {
-    const names: []const [:0]const u8 = if (builtin.os.tag == .windows)
-        &.{ "TEMP", "TMP" }
-    else
-        &.{ "TMPDIR", "TEMP", "TMP" };
-
-    for (names) |name| {
-        if (std.c.getenv(name.ptr)) |value_z| {
-            const value = std.mem.sliceTo(value_z, 0);
-            if (value.len != 0) return allocator.dupe(u8, value);
-        }
-    }
-
-    // POSIX does not require TMPDIR to be set. Match the other compiler temp
-    // paths and standard library behavior by using the conventional location.
-    // Zig's createDirPath rejects macOS's /tmp symlink, so use its real path.
-    if (builtin.os.tag != .windows) return allocator.dupe(
-        u8,
-        if (builtin.os.tag == .macos) "/private/tmp" else "/tmp",
-    );
-
-    return error.TempDirUnavailable;
-}
-
-/// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) TempPathError![:0]const u8 {
-    const counter = temp_path_counter.fetchAdd(1, .monotonic);
-    // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
-    // mixed with the pid for cross-process uniqueness of the temp path.
-    const pid: u64 = if (builtin.os.tag == .windows)
-        std.os.windows.GetCurrentProcessId()
-    else
-        @intCast(std.c.getpid());
-    var prng = std.Random.DefaultPrng.init((@as(u64, counter) << 32) ^ pid);
-    const rng = prng.random();
-    const random_hi = rng.int(u64);
-    const random_lo = rng.int(u64);
-
-    const temp_dir = try getTempDir(allocator);
-    defer allocator.free(temp_dir);
-    try std.Io.Dir.cwd().createDirPath(io, temp_dir);
-    const temp_dir_abs = if (std.fs.path.isAbsolute(temp_dir))
-        try allocator.dupe(u8, temp_dir)
-    else
-        try std.Io.Dir.cwd().realPathFileAlloc(io, temp_dir, allocator);
-    defer allocator.free(temp_dir_abs);
-
-    const filename = try std.fmt.allocPrint(
-        allocator,
-        "roc_llvm_{x}_{x}_{x}{s}",
-        .{ random_hi, random_lo, counter, extension },
-    );
-    defer allocator.free(filename);
-
-    return try std.fs.path.joinZ(allocator, &.{ temp_dir_abs, filename });
-}
-
-fn objectExtension() []const u8 {
-    return switch (host_os) {
-        .windows => ".obj",
-        .macos, .elf, .other => ".o",
-    };
 }

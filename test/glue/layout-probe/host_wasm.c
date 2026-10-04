@@ -74,6 +74,12 @@ static void finish_pass(void) {
     report[report_len] = 0;
 }
 
+/* roc_alloc and roc_realloc must not return to Roc without an allocation,
+   so an allocation failure traps with its report recorded. */
+static _Noreturn void abort_allocation(void) {
+    __builtin_trap();
+}
+
 void *roc_alloc(size_t length, size_t alignment) {
     const size_t page_size = 65536;
     if (heap_cursor == 0) {
@@ -86,7 +92,7 @@ void *roc_alloc(size_t length, size_t alignment) {
     if (required_pages > current_pages) {
         if (__builtin_wasm_memory_grow(0, required_pages - current_pages) == (size_t)-1) {
             record_failure("wasm memory grow failed");
-            return 0;
+            abort_allocation();
         }
     }
     heap_cursor = end;

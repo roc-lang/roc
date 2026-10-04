@@ -276,7 +276,7 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
-		(e-call (constraint-fn-var 454)
+		(e-call (constraint-fn-var 452)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-runtime-error (tag "erroneous_value_expr"))

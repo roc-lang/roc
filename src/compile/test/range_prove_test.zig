@@ -261,6 +261,103 @@ fn countMeetShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     }
 }
 
+const ColdShape = struct {
+    found: bool = false,
+    cold_defaults: usize = 0,
+};
+
+var cold_shape: ColdShape = .{};
+
+fn countColdDefaults(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    cold_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "list_get_unsafe") == 0) continue;
+        cold_shape = .{ .found = true, .cold_defaults = std.mem.count(u8, text, "default_cold=true") };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== cold proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+const FillShape = struct {
+    found: bool = false,
+    unsafe_appends: usize = 0,
+    reserves: usize = 0,
+    fits_checks: usize = 0,
+};
+
+var fill_shape: FillShape = .{};
+
+fn countFillShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    fill_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "list_with_capacity") == 0) continue;
+        fill_shape = .{
+            .found = true,
+            .unsafe_appends = std.mem.count(u8, text, "list_append_unsafe"),
+            .reserves = std.mem.count(u8, text, "list_reserve_for_append("),
+            .fits_checks = std.mem.count(u8, text, "num_is_gte("),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== fill proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+test "a counted fill of a reserved list runs its appends unchecked once the slack is seen to cover the loop" {
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "fill : U64, U8 -> U64\n" ++
+                "fill = |n, x| {\n" ++
+                "    var $out = List.with_capacity(n)\n" ++
+                "    var $i = 0\n" ++
+                "    while $i < n {\n" ++
+                "        $out = List.append($out, x)\n" ++
+                "        $i = $i + 1\n" ++
+                "    }\n" ++
+                "    List.len($out)\n" ++
+                "}\n" ++
+                "# A second caller keeps `List.append` a procedure the loop calls,\n" ++
+                "# rather than a body inlined at its one use.\n" ++
+                "tail : List(U8), U8 -> U64\n" ++
+                "tail = |xs, x| List.len(List.append(xs, x))\n",
+            "fill(List.len(_args), 3) + tail(Str.to_utf8(Str.join_with(_args, \",\")), 4)",
+        ),
+        .{ .inline_mode = .wrappers },
+        countFillShape,
+    );
+    try std.testing.expect(fill_shape.found);
+    // The checked body keeps its reserve behind the limit diamond; the
+    // versioned copy appends without one; the head compares the spare
+    // against the remaining iterations.
+    try std.testing.expectEqual(@as(usize, 2), fill_shape.unsafe_appends);
+    try std.testing.expectEqual(@as(usize, 1), fill_shape.reserves);
+    try std.testing.expect(fill_shape.fits_checks >= 1);
+}
+
+test "a checked list read's miss arm lowers as the cold default of its bounds switch" {
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "pick : List(U8), U64 -> U64\npick = |xs, i| (List.get(xs, i) ?? 0).to_u64()\n",
+            "pick(Str.to_utf8(Str.join_with(_args, \",\")), List.len(_args))",
+        ),
+        .{ .inline_mode = .wrappers, .prove_ranges = false },
+        countColdDefaults,
+    );
+    try std.testing.expect(cold_shape.found);
+    try std.testing.expect(cold_shape.cold_defaults >= 1);
+}
+
 test "a hash bounded by a guard on entry and a shift on the back edge proves its table read" {
     meet_selection = .hashed_read;
     // The loop parameter meets two different derivations of the same
@@ -1141,4 +1238,455 @@ test "a shared checked List.get inlines at every site so a guard proves the read
     try std.testing.expectEqual(@as(usize, 0), shared_get_shape.calls);
     try std.testing.expectEqual(@as(usize, 1), shared_get_shape.get_unsafe);
     try std.testing.expectEqual(@as(usize, 1), shared_get_shape.is_lt);
+}
+
+const MarkedShape = struct {
+    found: bool = false,
+    is_lt: usize = 0,
+    is_gt: usize = 0,
+    is_gte: usize = 0,
+    unchecked_reads: usize = 0,
+    get_unsafe: usize = 0,
+};
+
+var marked_shape: MarkedShape = .{};
+var marked_op: []const u8 = "";
+
+/// Count the comparisons and unchecked reads of the one proc that contains
+/// `marked_op`, which each test picks so the proc under test is unambiguous.
+fn countMarkedShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    marked_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, marked_op) == 0) continue;
+        marked_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .is_gt = std.mem.count(u8, text, "num_is_gt("),
+            .is_gte = std.mem.count(u8, text, "num_is_gte("),
+            .unchecked_reads = std.mem.count(u8, text, "num_from_le_bytes_unchecked"),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe"),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== marked proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+// Two cursors walk one buffer eight bytes at a time. The guard bounds the
+// string cursor plus the limit by the length once; every read's index is a
+// sum sharing an operand with that guarded sum, so the loop head's
+// `len + 8 <= max_len` bounds the string-side read, and `match_at < str_at`
+// bounds the match-side read below it.
+test "a guard on one sum bounds every read whose index is a sum sharing its operand" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\ext : List(U8), U64, U64, U64 -> U64
+        \\ext = |input, str_at, match_at, max_len| {
+        \\    if str_at + max_len > List.len(input) or match_at >= str_at {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    var $len = 0.U64
+        \\    while $len + 8 <= max_len {
+        \\        s = U64.from_le_bytes(input, str_at.plus_wrap($len)) ?? 0
+        \\        m = U64.from_le_bytes(input, match_at.plus_wrap($len)) ?? 0
+        \\        if s != m {
+        \\            return $len
+        \\        } else {
+        \\        }
+        \\        $len = $len.plus_wrap(8)
+        \\    }
+        \\    $len
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(ext(bytes, args.len(), 1, 40)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.unchecked_reads);
+    // Both reads' length tests and bound tests folded; only the guard's own
+    // comparisons remain.
+    try std.testing.expectEqual(@as(usize, 0), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
+}
+
+// The table grows by one per iteration and is read `len` back from its end
+// for every candidate length from three up to a bound of at most 258: the
+// entry guard makes `258 <= length` an invariant the append preserves, and
+// the candidate loop's counter places `len` in [3, 258], so the read's
+// subtraction and bounds test both fold.
+test "an append per iteration keeps a length lower bound that proves a read back from the end" {
+    marked_op = "num_int_add_wrap";
+    try harness.expectLirInspectionWithOptions(
+        \\fill : List(U32), U64, List(U32) -> List(U32)
+        \\fill = |costs_0, block_length, lens| {
+        \\    var $costs = costs_0
+        \\    if List.len($costs) < 258 {
+        \\        return $costs
+        \\    } else {
+        \\    }
+        \\    var $cur = block_length
+        \\    while $cur != 0 {
+        \\        $cur = $cur.minus_wrap(1)
+        \\        this_len = (List.get(lens, $cur) ?? 0).to_u64()
+        \\        if this_len > 258 or this_len < 3 {
+        \\            return $costs
+        \\        } else {
+        \\        }
+        \\        count = this_len - 2
+        \\        var $best = 0.U32
+        \\        var $k = 0.U64
+        \\        while $k < count {
+        \\            len = $k.plus_wrap(3)
+        \\            prev = List.get($costs, List.len($costs).minus_wrap(len)) ?? 0
+        \\            $best = $best.plus_wrap(prev)
+        \\            $k = $k.plus_wrap(1)
+        \\        }
+        \\        $costs = List.append($costs, $best)
+        \\    }
+        \\    $costs
+        \\}
+        \\
+        \\tail : List(U32), U32 -> List(U32)
+        \\tail = |xs, x| List.append(xs, x)
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    lens = List.repeat(3.U32, 300)
+        \\    costs = fill(List.repeat(0.U32, 300), args.len(), lens)
+        \\    echo!(Str.inspect(List.len(tail(costs, 1))))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
+    // Four `<` tests remain: the entry guard, the `lens` read's bounds test
+    // (nothing bounds `cur` by that length), the `this_len < 3` guard, and
+    // the candidate loop's head. The read back from the end of the growing
+    // table proved, so its bounds test is gone.
+    try std.testing.expectEqual(@as(usize, 4), marked_shape.is_lt);
+}
+
+// `i <= n` and `i != n` together place `i` strictly below `n`, which the
+// guard placed strictly below the length.
+test "an inequality edge tightens a non-strict ordering into a proven bounds test" {
+    marked_op = "list_get_unsafe";
+    try harness.expectLirInspectionWithOptions(
+        \\pick : List(U32), U64, U64 -> U32
+        \\pick = |xs, i, n| {
+        \\    if n >= List.len(xs) or i > n {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    if i != n {
+        \\        List.get(xs, i) ?? 0
+        \\    } else {
+        \\        0
+        \\    }
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    xs = List.repeat(7.U32, 20)
+        \\    echo!(Str.inspect(pick(xs, args.len(), 5)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 0), marked_shape.is_lt);
+}
+
+// Equality asserts both orderings: `i == n` under `n < length` bounds `i`.
+test "an equality edge carries the other side's bound to the compared value" {
+    marked_op = "list_get_unsafe";
+    try harness.expectLirInspectionWithOptions(
+        \\pick : List(U32), U64, U64 -> U32
+        \\pick = |xs, i, n| {
+        \\    if n >= List.len(xs) {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    if i == n {
+        \\        List.get(xs, i) ?? 0
+        \\    } else {
+        \\        0
+        \\    }
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    xs = List.repeat(7.U32, 20)
+        \\    echo!(Str.inspect(pick(xs, args.len(), 5)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 0), marked_shape.is_lt);
+}
+
+// The table's length invariant is established at the outer loop, and the
+// read that needs it sits after an inner loop that never touches the table.
+// The merge after the inner loop only keeps what both of its edges bind, so
+// the inner loop's body has to carry the table's entry binding for the read
+// to prove.
+test "a length invariant survives an inner loop that never touches the table" {
+    marked_op = "num_int_add_wrap";
+    try harness.expectLirInspectionWithOptions(
+        \\fill : List(U32), U64, List(U32) -> List(U32)
+        \\fill = |costs_0, block_length, lens| {
+        \\    var $costs = costs_0
+        \\    if List.len($costs) < 258 {
+        \\        return $costs
+        \\    } else {
+        \\    }
+        \\    var $cur = block_length
+        \\    while $cur != 0 {
+        \\        $cur = $cur.minus_wrap(1)
+        \\        var $best = 0.U32
+        \\        var $k = 0.U64
+        \\        while $k < 8 {
+        \\            $best = $best.plus_wrap(List.get(lens, $k) ?? 0)
+        \\            $k = $k.plus_wrap(1)
+        \\        }
+        \\        prev = List.get($costs, List.len($costs).minus_wrap(1)) ?? 0
+        \\        $costs = List.append($costs, $best.plus_wrap(prev))
+        \\    }
+        \\    $costs
+        \\}
+        \\
+        \\tail : List(U32), U32 -> List(U32)
+        \\tail = |xs, x| List.append(xs, x)
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    lens = List.repeat(3.U32, 300)
+        \\    costs = fill(List.repeat(0.U32, 300), args.len(), lens)
+        \\    echo!(Str.inspect(List.len(tail(costs, 1))))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
+    // Three `<` tests remain: the entry guard, the inner loop's head, and
+    // the `lens` read's bounds test. The read one back from the end of the
+    // table proved.
+    try std.testing.expectEqual(@as(usize, 3), marked_shape.is_lt);
+}
+
+// A guard on `pos + span` against the length, with `span` known to be at
+// least five, bounds `pos` itself five below the length: the sum's operand
+// facts take the path's bounds on the other operand into account, so the
+// four-byte reads at `pos` and `pos + 1` need no bounds test.
+test "a guarded sum bounds its operand by the other operand's proven floor" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\hash_pair : List(U8), U64, U64 -> U32
+        \\hash_pair = |input, pos, span| {
+        \\    if pos + span > List.len(input) or span < 5 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    a = U32.from_le_bytes(input, pos) ?? 0
+        \\    b = U32.from_le_bytes(input, pos.plus_wrap(1)) ?? 0
+        \\    a.bitwise_xor(b)
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(hash_pair(bytes, 1, args.len())))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.unchecked_reads);
+    // Both reads' length tests and bound tests folded; the guard's `>` and
+    // `<` remain.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gt);
+}
+
+// The candidate length starts at three and only grows, so it never reaches
+// zero and the read `len` back from the table's end stays inside the table
+// as long as `len` stays below the table's length: the loop parameter's
+// lower bound has to cross the merge for the subtraction and the read to
+// prove without rewriting the loop around a counter.
+test "a loop parameter keeps its lower bound so a read back from a table's end proves" {
+    marked_op = "num_int_add_wrap";
+    try harness.expectLirInspectionWithOptions(
+        \\scan : List(U32), U64, List(U32) -> U32
+        \\scan = |costs, block_length, lens| {
+        \\    if List.len(costs) < 258 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    var $best = 0.U32
+        \\    var $cur = block_length
+        \\    while $cur != 0 {
+        \\        $cur = $cur.minus_wrap(1)
+        \\        this_len = (List.get(lens, $cur) ?? 0).to_u64()
+        \\        if this_len > 258 {
+        \\            return $best
+        \\        } else {
+        \\        }
+        \\        var $len = 3.U64
+        \\        while $len <= this_len {
+        \\            prev = List.get(costs, List.len(costs).minus_wrap($len)) ?? 0
+        \\            $best = $best.plus_wrap(prev)
+        \\            $len = $len.plus_wrap(1)
+        \\        }
+        \\    }
+        \\    $best
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    lens = List.repeat(3.U32, 300)
+        \\    echo!(Str.inspect(scan(List.repeat(0.U32, 300), args.len(), lens)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
+    // Three `<` tests remain: the entry guard, the `lens` read's bounds
+    // test, and nothing else from the inner loop: its head is a `<=` and
+    // the read back from the end proved.
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.is_lt);
+}
+
+// The hash-chain search's "longer match" loop: the head keeps the length in
+// hand below the nice length, the guard keeps the nice length within the
+// readable span past the position, and the length in hand is at least four
+// on entry, so the four-byte probe just past it inside the nested chain
+// walk is provably in bounds.
+test "a nested chain walk's probe past the length in hand proves from the outer loop's head" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\search : List(U8), List(U16), U64, U64, U64, U64, U16 -> U64
+        \\search = |input, tab, in_next, best_len_in, max_len, nice_len, node_in| {
+        \\    if in_next + max_len > List.len(input) or nice_len > max_len or List.len(tab) < 32768 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    var $best_len = best_len_in
+        \\    var $done = 0.U64
+        \\    var $node = node_in
+        \\    if $best_len < 4 {
+        \\        $best_len = 4
+        \\    } else {
+        \\    }
+        \\    if $done == 0 {
+        \\        while $done == 0 and $best_len < nice_len {
+        \\            var $cand = 0.U64
+        \\            while True {
+        \\                probe = U32.from_le_bytes(input, in_next.plus_wrap($best_len).minus_wrap(3)) ?? 0
+        \\                if probe == 7 {
+        \\                    $cand = 1
+        \\                    break
+        \\                } else {
+        \\                }
+        \\                $node = List.get(tab, $node.to_u64().bitwise_and(32767)) ?? 0
+        \\                if $node == 0 {
+        \\                    $done = 1
+        \\                    break
+        \\                } else {
+        \\                }
+        \\            }
+        \\            if $done == 0 {
+        \\                $best_len = $best_len.plus_wrap($cand)
+        \\            } else {
+        \\            }
+        \\        }
+        \\    } else {
+        \\    }
+        \\    $best_len
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    tab = List.repeat(1.U16, 32768)
+        \\    echo!(Str.inspect(search(bytes, tab, 2, 4, args.len(), 8, 5)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.unchecked_reads);
+    // Only the guard's two `>` tests remain: the probe's length test and
+    // bound test both folded.
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.is_gt);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12010
+// The loop runs `level` from 0 through 12, so `pick`'s `level >= 10` test is
+// true on the last three iterations and must survive as a real comparison.
+test "a loop parameter bounded by its loop head keeps a test it does not decide" {
+    marked_op = "num_is_lte(";
+    try harness.expectLirInspectionWithOptions(
+        \\pick : U64 -> Try(U64, [Bug])
+        \\pick = |level| {
+        \\    limit = if level == 0 { 5000 } else if level * 4 >= 55 { 0 } else { 55 }
+        \\    if limit > 1000 {
+        \\        Ok(0)
+        \\    } else if level >= 10 {
+        \\        Ok(10)
+        \\    } else {
+        \\        Ok(2)
+        \\    }
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    var $level = 0.U64
+        \\    while $level <= 12 {
+        \\        parser = pick($level) ?? 99
+        \\        echo!("${$level.to_str()}:${parser.to_str()}")
+        \\        $level = $level + 1
+        \\    }
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    // The one `>=` left is `level >= 10`. `level * 4 >= 55` folds soundly,
+    // since the loop head bounds `level` by 12 inside the body.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
 }

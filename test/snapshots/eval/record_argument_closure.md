@@ -40,7 +40,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 255)
+(e-call (constraint-fn-var 256)
 	(e-lambda
 		(args
 			(p-record-destructure
@@ -51,7 +51,7 @@ NO CHANGE
 					(record-destruct (label "y") (ident "y")
 						(required
 							(p-assign (ident "y")))))))
-		(e-dispatch-call (method "times") (constraint-fn-var 224)
+		(e-dispatch-call (method "times") (constraint-fn-var 225)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "x"))))

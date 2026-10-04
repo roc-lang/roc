@@ -86,12 +86,12 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 259)
+					(e-dispatch-call (method "plus") (constraint-fn-var 260)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
 						(args
-							(e-call (constraint-fn-var 258)
+							(e-call (constraint-fn-var 259)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local
@@ -107,7 +107,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 282)
+					(e-dispatch-call (method "plus") (constraint-fn-var 283)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))

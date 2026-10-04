@@ -251,7 +251,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 299)
+					(e-call (constraint-fn-var 300)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple

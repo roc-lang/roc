@@ -407,6 +407,11 @@ pub const Diagnostic = union(enum) {
         duplicate_region: Region,
         original_region: Region,
     },
+    duplicate_pattern_binder: struct {
+        ident: Ident.Idx,
+        duplicate_region: Region,
+        original_region: Region,
+    },
     duplicate_tag: struct {
         tag_name: Ident.Idx,
         duplicate_region: Region,
@@ -450,6 +455,26 @@ pub const Diagnostic = union(enum) {
             /// `?` suffix operator (try operator)
             try_suffix,
         };
+    },
+    /// A `return`, `break`, or `?` that would move control flow out of an
+    /// `expect` body (outside any lambda nested within it). `?` is only reported
+    /// in inline `expect`s; in top-level `expect`s it fails the test instead.
+    control_flow_in_expect: struct {
+        region: Region,
+        kind: Kind,
+
+        pub const Kind = enum(u8) {
+            return_keyword,
+            break_keyword,
+            try_suffix,
+        };
+    },
+    /// Reassigning a var declared outside the `expect` whose body (outside any
+    /// lambda nested within it) contains the reassignment.
+    var_reassigned_in_expect: struct {
+        ident: Ident.Idx,
+        region: Region,
+        declaration_region: Region,
     },
     /// Two or more type aliases form a cycle where each references another.
     /// This is not allowed because type aliases are transparent synonyms.
@@ -550,6 +575,7 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
+            .duplicate_pattern_binder => |d| d.duplicate_region,
             .duplicate_tag => |d| d.duplicate_region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
@@ -559,6 +585,8 @@ pub const Diagnostic = union(enum) {
             .infinite_loop_never_exits => |d| d.region,
             .trailing_try_suffix => |d| d.region,
             .return_outside_fn => |d| d.region,
+            .control_flow_in_expect => |d| d.region,
+            .var_reassigned_in_expect => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
             .range_op_chained => |d| d.region,

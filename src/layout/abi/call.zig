@@ -38,7 +38,7 @@ pub const RegExtension = enum { none, zero, sign };
 /// a 128-bit value in a single SSE register).
 pub const RegPiece = struct {
     class: RegClass,
-    offset: u16,
+    offset: u32,
     size: u8,
     /// Exact lane shape for a vector-register piece. Keeping this in the ABI
     /// lowering prevents consumers from reconstructing vector type information
@@ -107,7 +107,7 @@ pub const AssignedRegPiece = struct {
 /// A by-value argument in the outgoing stack argument area. `offset` is
 /// relative to the start of that area (and excludes Win64 shadow space).
 pub const StackValue = struct {
-    offset: u16,
+    offset: u32,
     size: u32,
     alignment: u8,
     /// Widening the slot's contents must receive, for an ABI whose overflow
@@ -118,7 +118,7 @@ pub const StackValue = struct {
 /// Where an ABI-mandated pointer to an indirectly passed argument travels.
 pub const PointerLocation = union(enum) {
     register: u8,
-    stack: u16,
+    stack: u32,
 };
 
 /// Physical argument placement after register exhaustion, all-or-nothing
@@ -136,7 +136,7 @@ pub const PhysicalCall = struct {
     args: []const PhysicalArg,
     /// Bytes occupied by the outgoing stack argument area, excluding Win64's
     /// mandatory 32-byte shadow space.
-    stack_size: u16,
+    stack_size: u32,
 };
 
 /// The host targets whose C ABI we lower for. AArch64 has distinct LLVM carrier
@@ -281,7 +281,21 @@ fn pieceCounts(pieces: []const RegPiece) PieceCounts {
 /// Whether the generated C type is an aggregate rather than a transparent
 /// scalar/vector leaf. This distinction matters only to the SysV LLVM IR
 /// signature when register exhaustion forces a byval parameter.
-fn isCAbiAggregate(store: *const Store, idx: Idx) bool {
+/// The layout a transparent single-variant union (one without a runtime
+/// discriminant) stands for; glue exposes such a union as its payload.
+fn unwrapTransparentUnion(store: *const Store, start: Idx) Idx {
+    var idx = start;
+    while (true) {
+        const lay = store.getLayout(idx);
+        if (lay.tag != .tag_union) return idx;
+        const info = store.getTagUnionInfo(lay);
+        if (info.variants.len != 1 or info.data.discriminant_size != 0) return idx;
+        idx = info.variants.get(0).payload_layout;
+    }
+}
+
+fn isCAbiAggregate(store: *const Store, start: Idx) bool {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     return switch (lay.tag) {
         .struct_, .closure => true,
@@ -291,46 +305,33 @@ fn isCAbiAggregate(store: *const Store, idx: Idx) bool {
         // scalar. SysV therefore changes it to aligned `byval` when its two
         // INTEGER eightbytes do not both fit.
         .scalar => lay.getScalar().tag == .frac and lay.getScalar().getFrac() == .dec,
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk isCAbiAggregate(store, info.variants.get(0).payload_layout);
-            }
-            break :blk true;
-        },
+        // A union with a runtime discriminant is a C struct.
+        .tag_union => true,
         .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => false,
     };
 }
 
-fn isCAbiI128Scalar(store: *const Store, idx: Idx) bool {
+fn isCAbiI128Scalar(store: *const Store, start: Idx) bool {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     return switch (lay.tag) {
         .scalar => lay.getScalar().tag == .int and store.layoutSize(lay) == 16,
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk isCAbiI128Scalar(store, info.variants.get(0).payload_layout);
-            }
-            break :blk false;
-        },
+        // A union with a runtime discriminant is a C struct.
+        .tag_union => false,
         .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
     };
 }
 
-fn cAbiI128VectorKind(store: *const Store, idx: Idx) ?layout.Vector {
+fn cAbiI128VectorKind(store: *const Store, start: Idx) ?layout.Vector {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     return switch (lay.tag) {
         .scalar => if (lay.getScalar().tag == .int and store.layoutSize(lay) == 16)
             if (idx.isSigned()) .i64x2 else .u64x2
         else
             null,
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk cAbiI128VectorKind(store, info.variants.get(0).payload_layout);
-            }
-            break :blk null;
-        },
+        // A union with a runtime discriminant is a C struct.
+        .tag_union => null,
         .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
     };
 }
@@ -351,10 +352,10 @@ pub fn assignPhysicalArgs(
     std.debug.assert(target != .wasm32 and target != .wasm32v1 and target != .wasm64);
 
     const args = try arena.alloc(PhysicalArg, lowered.args.len);
-    var gp_used: u8 = 0;
-    var sse_used: u8 = 0;
-    var win_position: u8 = 0;
-    var stack_size: u16 = 0;
+    var gp_used: u32 = 0;
+    var sse_used: u32 = 0;
+    var win_position: u32 = 0;
+    var stack_size: u32 = 0;
 
     if (lowered.ret == .indirect) switch (target) {
         .x86_64_sysv, .x86_64_windows => {
@@ -390,7 +391,7 @@ pub fn assignPhysicalArgs(
                 ) },
                 .aarch64, .aarch64_macho, .aarch64_windows => {
                     if (gp_used < aarch64_gp_registers) {
-                        assigned.* = .{ .indirect = .{ .register = gp_used } };
+                        assigned.* = .{ .indirect = .{ .register = @intCast(gp_used) } };
                         gp_used += 1;
                     } else {
                         assigned.* = .{ .indirect = .{ .stack = assignStackPointer(&stack_size) } };
@@ -398,7 +399,7 @@ pub fn assignPhysicalArgs(
                 },
                 .x86_64_windows => {
                     if (win_position < win64_argument_registers) {
-                        assigned.* = .{ .indirect = .{ .register = win_position } };
+                        assigned.* = .{ .indirect = .{ .register = @intCast(win_position) } };
                     } else {
                         assigned.* = .{ .indirect = .{ .stack = assignWinStackSlot(&stack_size, win_position) } };
                     }
@@ -413,7 +414,7 @@ pub fn assignPhysicalArgs(
                     std.debug.assert(pieces.len == 1);
                     if (win_position < win64_argument_registers) {
                         const regs = try arena.alloc(AssignedRegPiece, 1);
-                        regs[0] = .{ .piece = pieces[0], .register_index = win_position };
+                        regs[0] = .{ .piece = pieces[0], .register_index = @intCast(win_position) };
                         assigned.* = .{ .registers = regs };
                     } else {
                         assigned.* = .{ .stack_value = .{
@@ -430,12 +431,12 @@ pub fn assignPhysicalArgs(
                     const pieces = registers.pieces;
                     const counts = pieceCounts(pieces);
                     const aarch64_target = isAarch64(target);
-                    const gp_limit: u8 = if (aarch64_target) aarch64_gp_registers else sysv_gp_registers;
+                    const gp_limit: u32 = if (aarch64_target) aarch64_gp_registers else sysv_gp_registers;
                     // AAPCS64 rule C.8 rounds NGRN to an even register before
                     // allocating a 16-byte-aligned, multi-register argument.
                     // Apple's arm64 ABI explicitly removes that rule.
                     const first_gp = if (aarch64_target and target != .aarch64_macho and counts.gp > 1 and value_alignment == 16)
-                        std.mem.alignForward(u8, gp_used, 2)
+                        std.mem.alignForward(u32, gp_used, 2)
                     else
                         gp_used;
                     if (first_gp + counts.gp <= gp_limit and sse_used + counts.sse <= simd_argument_registers) {
@@ -444,11 +445,11 @@ pub fn assignPhysicalArgs(
                         var next_sse = sse_used;
                         for (pieces, regs) |piece, *reg| switch (piece.class) {
                             .integer => {
-                                reg.* = .{ .piece = piece, .register_index = next_gp };
+                                reg.* = .{ .piece = piece, .register_index = @intCast(next_gp) };
                                 next_gp += 1;
                             },
                             .float, .vector => {
-                                reg.* = .{ .piece = piece, .register_index = next_sse };
+                                reg.* = .{ .piece = piece, .register_index = @intCast(next_sse) };
                                 next_sse += 1;
                             },
                         };
@@ -488,26 +489,26 @@ pub fn assignPhysicalArgs(
 
     return .{
         .args = args,
-        .stack_size = @intCast(std.mem.alignForward(u16, stack_size, 8)),
+        .stack_size = std.mem.alignForward(u32, stack_size, 8),
     };
 }
 
-fn assignStackValue(stack_size: *u16, size: u32, alignment: u8, slot_alignment: u8) StackValue {
-    stack_size.* = std.mem.alignForward(u16, stack_size.*, alignment);
+fn assignStackValue(stack_size: *u32, size: u32, alignment: u8, slot_alignment: u8) StackValue {
+    stack_size.* = std.mem.alignForward(u32, stack_size.*, alignment);
     const offset = stack_size.*;
-    stack_size.* += @intCast(std.mem.alignForward(u32, size, slot_alignment));
+    stack_size.* += std.mem.alignForward(u32, size, slot_alignment);
     return .{ .offset = offset, .size = size, .alignment = alignment };
 }
 
-fn assignStackPointer(stack_size: *u16) u16 {
-    const offset = std.mem.alignForward(u16, stack_size.*, 8);
+fn assignStackPointer(stack_size: *u32) u32 {
+    const offset = std.mem.alignForward(u32, stack_size.*, 8);
     stack_size.* = offset + 8;
     return offset;
 }
 
-fn assignWinStackSlot(stack_size: *u16, position: u8) u16 {
+fn assignWinStackSlot(stack_size: *u32, position: u32) u32 {
     std.debug.assert(position >= win64_argument_registers);
-    const offset: u16 = @as(u16, position - win64_argument_registers) * 8;
+    const offset: u32 = (position - win64_argument_registers) * 8;
     stack_size.* = @max(stack_size.*, offset + 8);
     return offset;
 }
@@ -540,7 +541,8 @@ fn placementFor(
 /// to carry the promotion rather than whatever the caller happened to leave
 /// there. Aggregates keep C's "unspecified upper bits" rule; glue exposes them
 /// as structs, which clang never marks `zeroext`/`signext`.
-fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
+fn narrowScalarExtension(store: *const Store, start: Idx) RegExtension {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     if (store.layoutSize(lay) >= 4) return .none;
 
@@ -555,9 +557,6 @@ fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
         },
         .tag_union => blk: {
             const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk narrowScalarExtension(store, info.variants.get(0).payload_layout);
-            }
             // Glue exposes a payload-free tag union as its unsigned
             // discriminant integer; anything carrying a payload is a struct.
             for (0..info.variants.len) |i| {
@@ -572,7 +571,7 @@ fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
 fn onePiece(
     arena: std.mem.Allocator,
     class: RegClass,
-    offset: u16,
+    offset: u32,
     size: u8,
     extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
@@ -613,9 +612,11 @@ fn placementAarch64(
     ctx: Context,
     extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
-    const lay = store.getLayout(idx);
+    // A transparent single-variant union passes exactly as its payload.
+    const payload_idx = unwrapTransparentUnion(store, idx);
+    const lay = store.getLayout(payload_idx);
     const size = store.layoutSize(lay);
-    switch (aarch64.classifyType(store, idx)) {
+    switch (try aarch64.classifyType(arena, store, payload_idx)) {
         .memory => return .indirect,
         .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
         .double_integer => return integerPieces(arena, size, .{ .array = null }, .none),
@@ -624,7 +625,7 @@ fn placementAarch64(
             const pieces = try arena.alloc(RegPiece, fa.count);
             var i: u8 = 0;
             while (i < fa.count) : (i += 1) {
-                pieces[i] = .{ .class = .float, .offset = @as(u16, i) * elem_bytes, .size = elem_bytes };
+                pieces[i] = .{ .class = .float, .offset = @as(u32, i) * elem_bytes, .size = elem_bytes };
             }
             return .{ .registers = .{
                 .pieces = pieces,
@@ -667,12 +668,7 @@ fn placementAarch64(
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
             .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
-            .tag_union => {
-                const info = store.getTagUnionInfo(lay);
-                std.debug.assert(info.variants.len == 1 and info.data.discriminant_size == 0);
-                return placementAarch64(arena, store, target, info.variants.get(0).payload_layout, ctx, extend);
-            },
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => unreachable,
+            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst => unreachable,
         },
     }
 }
@@ -685,14 +681,14 @@ fn placementSysV(
     extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
-    const classes = x86_64.classifySystemV(store, idx, if (ctx == .ret) .ret else .arg);
+    const classes = try x86_64.classifySystemV(arena, store, idx, if (ctx == .ret) .ret else .arg);
     if (classes[0] == .memory) return .indirect;
 
     var pieces = std.ArrayList(RegPiece).empty;
     var i: usize = 0;
     while (i < classes.len) : (i += 1) {
         if (classes[i] == .none) break;
-        const offset: u16 = @intCast(i * 8);
+        const offset: u32 = @intCast(i * 8);
         const piece_size: u8 = @intCast(@min(@as(u32, 8), size - offset));
         switch (classes[i]) {
             .integer => try pieces.append(arena, .{
@@ -707,7 +703,7 @@ fn placementSysV(
                         .class = .vector,
                         .offset = offset,
                         .size = @intCast(@min(@as(u32, 16), size - offset)),
-                        .vector_kind = findVectorKind(store, idx) orelse unreachable,
+                        .vector_kind = try findVectorKind(arena, store, idx) orelse unreachable,
                     });
                     i += 1;
                 } else {
@@ -740,7 +736,7 @@ fn placementWin64(
         // XMM0 as <2 x i64>. Generated RocDec is a C aggregate instead, so it
         // is indirect in both directions.
         .win_i128 => if (ctx == .ret and !isCAbiAggregate(store, idx)) {
-            if (findVectorKind(store, idx)) |kind| {
+            if (try findVectorKind(arena, store, idx)) |kind| {
                 const pieces = try arena.alloc(RegPiece, 1);
                 pieces[0] = .{ .class = .vector, .offset = 0, .size = 16, .vector_kind = kind };
                 return .{ .registers = .{ .pieces = pieces } };
@@ -795,30 +791,39 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
     }
 }
 
-fn findVectorKind(store: *const Store, idx: Idx) ?layout.Vector {
-    const lay = store.getLayout(idx);
-    return switch (lay.tag) {
-        .scalar => if (lay.getScalar().tag == .vector) lay.getScalar().getVector() else null,
-        .struct_ => blk: {
-            const struct_idx = lay.getStruct().idx;
-            const count = store.getStructData(struct_idx).fields.count;
-            var i: u32 = 0;
-            while (i < count) : (i += 1) {
-                if (store.getStructFieldIsPadding(struct_idx, i)) continue;
-                if (findVectorKind(store, store.getStructFieldLayout(struct_idx, i))) |kind| break :blk kind;
-            }
-            break :blk null;
-        },
-        .closure => findVectorKind(store, lay.getClosure().captures_layout_idx),
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk findVectorKind(store, info.variants.get(0).payload_layout);
-            }
-            break :blk null;
-        },
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => null,
-    };
+/// The first vector member of `idx` in field order, looking through
+/// closures and transparent unions. Members are visited on an explicit
+/// stack, so aggregate nesting never becomes native call depth.
+fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.mem.Allocator.Error!?layout.Vector {
+    var pending: std.ArrayList(Idx) = .empty;
+    defer pending.deinit(arena);
+    try pending.append(arena, idx);
+    while (pending.pop()) |current| {
+        const lay = store.getLayout(current);
+        switch (lay.tag) {
+            .scalar => if (lay.getScalar().tag == .vector) return lay.getScalar().getVector(),
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const count = store.getStructData(struct_idx).fields.count;
+                var i = count;
+                // Pushed last to first, so the first field is searched next.
+                while (i > 0) {
+                    i -= 1;
+                    if (store.getStructFieldIsPadding(struct_idx, i)) continue;
+                    try pending.append(arena, store.getStructFieldLayout(struct_idx, i));
+                }
+            },
+            .closure => try pending.append(arena, lay.getClosure().captures_layout_idx),
+            .tag_union => {
+                const info = store.getTagUnionInfo(lay);
+                if (info.variants.len == 1 and info.data.discriminant_size == 0) {
+                    try pending.append(arena, info.variants.get(0).payload_layout);
+                }
+            },
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => {},
+        }
+    }
+    return null;
 }
 
 const testing = std.testing;
@@ -1067,14 +1072,14 @@ test "physical sysv allocation spills whole aggregates and aligns vectors" {
 
     const physical = try assignPhysicalArgs(arena, &store, .x86_64_sysv, lowered, &arg_idxs);
     try testing.expect(physical.args[5] == .stack_value);
-    try testing.expectEqual(@as(u16, 0), physical.args[5].stack_value.offset);
+    try testing.expectEqual(@as(u32, 0), physical.args[5].stack_value.offset);
     // i32 uses the one GP register left after the aggregate rollback. All
     // eight SSE registers are occupied, so the vector is a 16-aligned stack
     // value following the 16-byte pair.
     try testing.expect(physical.args[14] == .registers);
     try testing.expectEqual(@as(u8, 5), physical.args[14].registers[0].register_index);
     try testing.expect(physical.args[15] == .stack_value);
-    try testing.expectEqual(@as(u16, 16), physical.args[15].stack_value.offset);
+    try testing.expectEqual(@as(u32, 16), physical.args[15].stack_value.offset);
     try testing.expectEqual(@as(u8, 16), physical.args[15].stack_value.alignment);
 }
 
@@ -1094,8 +1099,8 @@ test "physical win64 allocation uses shared argument positions" {
     try testing.expectEqual(@as(u8, 2), physical.args[1].registers[0].register_index);
     try testing.expectEqual(PointerLocation{ .register = 3 }, physical.args[2].indirect);
     try testing.expect(physical.args[3] == .stack_value);
-    try testing.expectEqual(@as(u16, 0), physical.args[3].stack_value.offset);
-    try testing.expectEqual(@as(u16, 8), physical.stack_size);
+    try testing.expectEqual(@as(u32, 0), physical.args[3].stack_value.offset);
+    try testing.expectEqual(@as(u32, 8), physical.stack_size);
 }
 
 test "physical aarch64 allocation spills complete HFA and integer aggregates" {
@@ -1116,18 +1121,18 @@ test "physical aarch64 allocation spills complete HFA and integer aggregates" {
     const physical = try assignPhysicalArgs(arena, &store, .aarch64, lowered, &args);
 
     try testing.expect(physical.args[7] == .stack_value);
-    try testing.expectEqual(@as(u16, 0), physical.args[7].stack_value.offset);
+    try testing.expectEqual(@as(u32, 0), physical.args[7].stack_value.offset);
     try testing.expectEqual(@as(u8, 8), physical.args[7].stack_value.alignment);
     // Rule C.5 closes the SIMD pool, so the following direct vector also stacks.
     try testing.expect(physical.args[8] == .stack_value);
-    try testing.expectEqual(@as(u16, 16), physical.args[8].stack_value.offset);
+    try testing.expectEqual(@as(u32, 16), physical.args[8].stack_value.offset);
     try testing.expectEqual(@as(u8, 16), physical.args[8].stack_value.alignment);
 
     try testing.expect(physical.args[16] == .stack_value);
-    try testing.expectEqual(@as(u16, 32), physical.args[16].stack_value.offset);
+    try testing.expectEqual(@as(u32, 32), physical.args[16].stack_value.offset);
     // Rule C.13 closes the GP pool after the pair fails to fit in x7 alone.
     try testing.expect(physical.args[17] == .stack_value);
-    try testing.expectEqual(@as(u16, 48), physical.args[17].stack_value.offset);
+    try testing.expectEqual(@as(u32, 48), physical.args[17].stack_value.offset);
 }
 
 test "physical aarch64 multi-vector aggregate passes a pointer in a GP register" {
@@ -1233,15 +1238,15 @@ test "physical Apple arm64 stack arguments use compact natural alignment" {
     const args = [_]Idx{ .i64, .i64, .i64, .i64, .i64, .i64, .i64, .i64, .u8, .u16, .u32 };
     const macho_lowered = try lower(arena, &store, .aarch64_macho, &args, .i32, false);
     const macho = try assignPhysicalArgs(arena, &store, .aarch64_macho, macho_lowered, &args);
-    try testing.expectEqual(@as(u16, 0), macho.args[8].stack_value.offset);
-    try testing.expectEqual(@as(u16, 2), macho.args[9].stack_value.offset);
-    try testing.expectEqual(@as(u16, 4), macho.args[10].stack_value.offset);
-    try testing.expectEqual(@as(u16, 8), macho.stack_size);
+    try testing.expectEqual(@as(u32, 0), macho.args[8].stack_value.offset);
+    try testing.expectEqual(@as(u32, 2), macho.args[9].stack_value.offset);
+    try testing.expectEqual(@as(u32, 4), macho.args[10].stack_value.offset);
+    try testing.expectEqual(@as(u32, 8), macho.stack_size);
 
     const elf_lowered = try lower(arena, &store, .aarch64, &args, .i32, false);
     const elf = try assignPhysicalArgs(arena, &store, .aarch64, elf_lowered, &args);
-    try testing.expectEqual(@as(u16, 0), elf.args[8].stack_value.offset);
-    try testing.expectEqual(@as(u16, 8), elf.args[9].stack_value.offset);
-    try testing.expectEqual(@as(u16, 16), elf.args[10].stack_value.offset);
-    try testing.expectEqual(@as(u16, 24), elf.stack_size);
+    try testing.expectEqual(@as(u32, 0), elf.args[8].stack_value.offset);
+    try testing.expectEqual(@as(u32, 8), elf.args[9].stack_value.offset);
+    try testing.expectEqual(@as(u32, 16), elf.args[10].stack_value.offset);
+    try testing.expectEqual(@as(u32, 24), elf.stack_size);
 }

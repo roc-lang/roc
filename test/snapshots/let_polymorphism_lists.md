@@ -400,13 +400,13 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 356)
+		(e-call (constraint-fn-var 357)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 369)
+		(e-call (constraint-fn-var 370)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string

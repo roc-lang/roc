@@ -216,15 +216,15 @@ const ReturnSlotRewriter = struct {
         } }, slot);
     }
 
-    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         if (stmt == .assign_struct) {
             const s = stmt.assign_struct;
-            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s, slotOrigin(origin));
+            if (cloner.directReturnOf(s.next, s.target)) return .{ .done = try self.cloneStructReturn(cloner, s, slotOrigin(origin)) };
         } else if (stmt == .assign_tag) {
             const s = stmt.assign_tag;
-            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneTagReturn(cloner, s, slotOrigin(origin));
+            if (cloner.directReturnOf(s.next, s.target)) return .{ .done = try self.cloneTagReturn(cloner, s, slotOrigin(origin)) };
         }
-        return null;
+        return .none;
     }
 
     fn cloneStructReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype, slot: LIR.StmtOrigin) ResourceError!CFStmtId {
@@ -430,8 +430,8 @@ test "return slot lowers direct tag return into destination store" {
     const variant_store = store.getCFStmt(variant.body.?).store_tag;
     try std.testing.expectEqual(GuardedList.at(variant_args, 0), variant_store.dest);
     try std.testing.expectEqual(aggregate, variant_store.tag_layout);
-    try std.testing.expectEqual(@as(u16, 0), variant_store.variant_index);
-    try std.testing.expectEqual(@as(u16, 0), variant_store.discriminant);
+    try std.testing.expectEqual(@as(u32, 0), variant_store.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), variant_store.discriminant);
     try std.testing.expectEqual(GuardedList.at(variant_args, 1), variant_store.payload.?);
     try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmt(variant_store.next).ret.value).layout_idx);
 }

@@ -117,7 +117,7 @@ main = g([1.U32, 2.U32])
 		(e-lambda
 			(args
 				(p-assign (ident "l")))
-			(e-dispatch-call (method "map") (constraint-fn-var 256)
+			(e-dispatch-call (method "map") (constraint-fn-var 257)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "l"))))
@@ -125,7 +125,7 @@ main = g([1.U32, 2.U32])
 					(e-lambda
 						(args
 							(p-assign (ident "i")))
-						(e-call (constraint-fn-var 255)
+						(e-call (constraint-fn-var 256)
 							(e-lookup-external
 								(builtin))
 							(e-lookup-local
@@ -135,7 +135,7 @@ main = g([1.U32, 2.U32])
 		(e-lambda
 			(args
 				(p-assign (ident "l")))
-			(e-dispatch-call (method "map") (constraint-fn-var 265)
+			(e-dispatch-call (method "map") (constraint-fn-var 266)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "l"))))
@@ -143,7 +143,7 @@ main = g([1.U32, 2.U32])
 					(e-lambda
 						(args
 							(p-assign (ident "i")))
-						(e-call (constraint-fn-var 264)
+						(e-call (constraint-fn-var 265)
 							(e-lookup-external
 								(builtin))
 							(e-lookup-local
@@ -156,14 +156,14 @@ main = g([1.U32, 2.U32])
 			(e-block
 				(s-let
 					(p-assign (ident "_a1"))
-					(e-call (constraint-fn-var 271)
+					(e-call (constraint-fn-var 272)
 						(e-lookup-local
 							(p-assign (ident "f1")))
 						(e-lookup-local
 							(p-assign (ident "l")))))
 				(s-let
 					(p-assign (ident "_a2"))
-					(e-call (constraint-fn-var 276)
+					(e-call (constraint-fn-var 277)
 						(e-lookup-local
 							(p-assign (ident "f2")))
 						(e-lookup-local
@@ -171,7 +171,7 @@ main = g([1.U32, 2.U32])
 				(e-num (value "0")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 312)
+		(e-call (constraint-fn-var 313)
 			(e-lookup-local
 				(p-assign (ident "g")))
 			(e-list

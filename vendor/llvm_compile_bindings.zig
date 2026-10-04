@@ -263,6 +263,22 @@ pub const TargetMachine = opaque {
         options: *const EmitOptions,
     ) bool;
 
+    /// Like `emitToFile`, but writes the object into a buffer
+    /// (`bin_filename` is ignored). On success the caller owns
+    /// `out_bytes[0..out_len]` and releases it with `freeEmittedObject`.
+    pub const emitObjectToMemory = ZigLLVMTargetMachineEmitObjectToMemory;
+    extern fn ZigLLVMTargetMachineEmitObjectToMemory(
+        T: *TargetMachine,
+        M: *Module,
+        ErrorMessage: *[*:0]const u8,
+        options: *const EmitOptions,
+        out_bytes: *[*]u8,
+        out_len: *usize,
+    ) bool;
+
+    pub const freeEmittedObject = ZigLLVMFreeEmittedObject;
+    extern fn ZigLLVMFreeEmittedObject(bytes: [*]u8) void;
+
     pub const createTargetDataLayout = LLVMCreateTargetDataLayout;
     extern fn LLVMCreateTargetDataLayout(*TargetMachine) *TargetData;
 };

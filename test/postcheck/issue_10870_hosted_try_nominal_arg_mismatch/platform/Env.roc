@@ -1,4 +1,4 @@
-import OsStr exposing [OsStr]
+import OsStr
 import Host
 
 Env := [].{

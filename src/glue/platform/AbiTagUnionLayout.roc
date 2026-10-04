@@ -1,4 +1,4 @@
-import AbiTagLayout exposing [AbiTagLayout]
+import AbiTagLayout
 
 ## Exact committed tag-union layout details from src/layout/store.zig.
 AbiTagUnionLayout := {

@@ -17,24 +17,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const rounds = @import("builtins").sha256;
 
-comptime {
-    // Every 64-bit target other than x86_64 must carry the SHA-256
-    // instructions: there is no software path for them, by decision. build.zig
-    // adds the feature to the baseline CPU; a `-Dcpu` that drops it is an
-    // unsupported target. x86_64 always has a path: the hardware rounds,
-    // runtime dispatch, or the portable rounds (see `dispatches_at_runtime`
-    // and `uses_software_rounds`).
-    switch (rounds.arch_class) {
-        .x86_64 => {},
-        .aarch64 => if (!rounds.hasHardwareSupport) {
-            @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported");
-        },
-        .other => if (@sizeOf(usize) == 8) {
-            @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
-        },
-    }
-}
-
 /// The compiler's incremental SHA-256 hasher.
 pub const Sha256 = rounds.Hasher(compress);
 
@@ -74,6 +56,25 @@ pub const uses_software_rounds = rounds.arch_class == .x86_64 and builtin.os.tag
 pub const dispatches_at_runtime = rounds.arch_class == .x86_64 and !rounds.hasHardwareSupport and !uses_software_rounds and builtin.zig_backend == .stage2_llvm;
 
 fn compress(state: *rounds.State, blocks: []const rounds.Block) void {
+    // Frozen-image consumers use digest metadata without hashing. Enforce
+    // the compiler CPU contract only when the hasher compresses blocks.
+    comptime {
+        // Every 64-bit target other than x86_64 must carry the SHA-256
+        // instructions: there is no software path for them, by decision. build.zig
+        // adds the feature to the baseline CPU; a `-Dcpu` that drops it is an
+        // unsupported target. x86_64 always has a path: the hardware rounds,
+        // runtime dispatch, or the portable rounds (see `dispatches_at_runtime`
+        // and `uses_software_rounds`).
+        switch (rounds.arch_class) {
+            .x86_64 => {},
+            .aarch64 => if (!rounds.hasHardwareSupport) {
+                @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported");
+            },
+            .other => if (@sizeOf(usize) == 8) {
+                @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
+            },
+        }
+    }
     if (comptime dispatches_at_runtime) {
         @atomicLoad(CompressFn, &runtime_compress, .monotonic)(state, blocks);
     } else {

@@ -2,8 +2,8 @@
 # method-name stores. Both native and Wasm code generation must succeed.
 app [main] { pf: platform "./platform/main.roc" }
 
-import pf.Elem exposing [Elem]
-import pf.NodeValue exposing [NodeValue]
+import pf.Elem
+import pf.NodeValue
 import pf.Signal
 import pf.Ui
 

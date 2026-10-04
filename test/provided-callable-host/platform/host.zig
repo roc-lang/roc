@@ -225,7 +225,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 const callbacks = host_alloc.Callbacks(HostEnv);
 
-fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     host.alloc_count += 1;
     return callbacks.rocAllocFn(ops, length, alignment);
