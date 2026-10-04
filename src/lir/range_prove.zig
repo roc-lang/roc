@@ -657,13 +657,29 @@ const StableFact = struct {
 /// Bound on persisted facts per loop join.
 const loop_fact_cap: usize = 256;
 
+/// A list of stable facts with room for `loop_fact_cap`; `items` is the
+/// storage held, `len` the live prefix. Thousands of merge heads each
+/// persist one, most well under the cap, so storage follows use: it grows
+/// by half at least, which bounds the copies an arena keeps.
 const LoopFacts = struct {
-    items: [loop_fact_cap]StableFact = undefined,
+    items: []StableFact = &.{},
     len: usize = 0,
 
-    /// Copy the live prefix; the struct is sized for its cap and is
-    /// stored and passed by pointer so no copy is proportional to it.
-    fn assign(dst: *LoopFacts, src: *const LoopFacts) void {
+    fn ensureCapacity(self: *LoopFacts, allocator: Allocator, needed: usize) ResourceError!void {
+        if (self.items.len >= needed) return;
+        const grown = try allocator.alloc(StableFact, @min(loop_fact_cap, @max(needed, self.items.len + self.items.len / 2)));
+        @memcpy(grown[0..self.len], self.items[0..self.len]);
+        allocator.free(self.items);
+        self.items = grown;
+    }
+
+    fn deinit(self: *LoopFacts, allocator: Allocator) void {
+        allocator.free(self.items);
+    }
+
+    /// Copy the live prefix.
+    fn assign(dst: *LoopFacts, allocator: Allocator, src: *const LoopFacts) ResourceError!void {
+        try dst.ensureCapacity(allocator, src.len);
         @memcpy(dst.items[0..src.len], src.items[0..src.len]);
         dst.len = src.len;
     }
@@ -697,11 +713,25 @@ const StoredEnvBound = struct {
 /// Last round's stabilized env meet of one merge head, seeded when the
 /// region must walk before its captures complete.
 const MergeEnvBounds = struct {
-    items: [merge_env_persist_cap]StoredEnvBound = undefined,
+    items: []StoredEnvBound = &.{},
     len: usize = 0,
 
-    /// Copy the live prefix, as `LoopFacts.assign` does.
-    fn assign(dst: *MergeEnvBounds, src: *const MergeEnvBounds) void {
+    /// Storage follows use, as for `LoopFacts`.
+    fn ensureCapacity(self: *MergeEnvBounds, allocator: Allocator, needed: usize) ResourceError!void {
+        if (self.items.len >= needed) return;
+        const grown = try allocator.alloc(StoredEnvBound, @min(merge_env_persist_cap, @max(needed, self.items.len + self.items.len / 2)));
+        @memcpy(grown[0..self.len], self.items[0..self.len]);
+        allocator.free(self.items);
+        self.items = grown;
+    }
+
+    fn deinit(self: *MergeEnvBounds, allocator: Allocator) void {
+        allocator.free(self.items);
+    }
+
+    /// Copy the live prefix.
+    fn assign(dst: *MergeEnvBounds, allocator: Allocator, src: *const MergeEnvBounds) ResourceError!void {
+        try dst.ensureCapacity(allocator, src.len);
         @memcpy(dst.items[0..src.len], src.items[0..src.len]);
         dst.len = src.len;
     }
@@ -917,12 +947,24 @@ const Pass = struct {
     fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!Pass {
         const stable_scratch = try allocator.create(LoopFacts);
         errdefer allocator.destroy(stable_scratch);
+        stable_scratch.* = .{};
+        try stable_scratch.ensureCapacity(allocator, loop_fact_cap);
+        errdefer stable_scratch.deinit(allocator);
         const entry_scratch = try allocator.create(LoopFacts);
         errdefer allocator.destroy(entry_scratch);
+        entry_scratch.* = .{};
+        try entry_scratch.ensureCapacity(allocator, loop_fact_cap);
+        errdefer entry_scratch.deinit(allocator);
         const persist_scratch = try allocator.create(LoopFacts);
         errdefer allocator.destroy(persist_scratch);
+        persist_scratch.* = .{};
+        try persist_scratch.ensureCapacity(allocator, loop_fact_cap);
+        errdefer persist_scratch.deinit(allocator);
         const env_scratch = try allocator.create(MergeEnvBounds);
         errdefer allocator.destroy(env_scratch);
+        env_scratch.* = .{};
+        try env_scratch.ensureCapacity(allocator, merge_env_persist_cap);
+        errdefer env_scratch.deinit(allocator);
         return .{
             .store = store,
             .layouts = layouts,
@@ -1022,6 +1064,12 @@ const Pass = struct {
         self.jump_records.deinit(self.allocator);
         self.freeMergeStates();
         self.merge_states.deinit();
+        var loop_facts_it = self.loop_facts.valueIterator();
+        while (loop_facts_it.next()) |facts| facts.deinit(self.allocator);
+        var merge_facts_it = self.merge_facts.valueIterator();
+        while (merge_facts_it.next()) |facts| facts.deinit(self.allocator);
+        var merge_env_it = self.merge_env.valueIterator();
+        while (merge_env_it.next()) |env| env.deinit(self.allocator);
         self.body_joins.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
@@ -1058,9 +1106,13 @@ const Pass = struct {
         self.bwd_heads.deinit(self.allocator);
         self.fact_seen.deinit();
         self.stable_index.deinit();
+        self.stable_scratch.deinit(self.allocator);
         self.allocator.destroy(self.stable_scratch);
+        self.entry_scratch.deinit(self.allocator);
         self.allocator.destroy(self.entry_scratch);
+        self.persist_scratch.deinit(self.allocator);
         self.allocator.destroy(self.persist_scratch);
+        self.env_scratch.deinit(self.allocator);
         self.allocator.destroy(self.env_scratch);
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
@@ -1870,9 +1922,9 @@ const Pass = struct {
     // Pre-scan: predecessor counts, jump counts, and assignment counts.
 
     /// Reserve the per-merge-head maps for every head the procedure has,
-    /// so they never grow during the rounds: their values are sized for
-    /// their caps, and the pass runs on an arena, where a map that grows
-    /// by doubling leaves every earlier copy allocated.
+    /// so they never grow during the rounds: the pass runs on an arena,
+    /// where a map that grows by doubling leaves every earlier copy
+    /// allocated.
     fn reserveMergeStorage(self: *Pass) ResourceError!void {
         var heads: usize = 0;
         var it = self.pred_counts.iterator();
@@ -2111,6 +2163,8 @@ const Pass = struct {
         while (it.next()) |state| {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
+            state.stable.deinit(self.allocator);
+            state.entry_stable.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
     }
@@ -2701,7 +2755,7 @@ const Pass = struct {
         const mine_stable = self.stable_scratch;
         try self.stabilizeFacts(mine_stable, self.facts.items);
         if (state.captures == 0) {
-            state.stable.assign(mine_stable);
+            try state.stable.assign(self.allocator, mine_stable);
         } else {
             try self.intersectStableFacts(&state.stable, mine_stable);
         }
@@ -2711,7 +2765,7 @@ const Pass = struct {
                 break :blk self.entry_scratch;
             } else mine_stable;
             if (state.entry_captures == 0) {
-                state.entry_stable.assign(entry_mine);
+                try state.entry_stable.assign(self.allocator, entry_mine);
             } else {
                 try self.intersectStableFacts(&state.entry_stable, entry_mine);
             }
@@ -2726,6 +2780,7 @@ const Pass = struct {
                 if (!self.captureWorthy(kv.value_ptr.node)) continue;
                 const node = self.nodes.items[kv.value_ptr.node];
                 const len_bounds = try self.localLenBounds(kv.value_ptr.node);
+                const local_lower = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node);
                 try state.env.append(self.allocator, .{
                     .local = kv.key_ptr.*,
                     .root = node.root,
@@ -2733,8 +2788,8 @@ const Pass = struct {
                     .off_hi = node.off_hi,
                     .valid = true,
                     .bounds = try self.reachableBounds(kv.value_ptr.node),
-                    .lower = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node),
-                    .lower_any = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node),
+                    .lower = local_lower,
+                    .lower_any = local_lower,
                     .len_bounds = len_bounds,
                     .len_bounds_any = len_bounds,
                 });
@@ -3203,8 +3258,9 @@ const Pass = struct {
         const stable = &state.entry_stable;
         if (stable.len == 0) return;
         const entry = try self.loop_facts.getOrPut(join_id);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
         if (!entry.found_existing or entry.value_ptr.len != stable.len) self.new_loop_bounds = true;
-        entry.value_ptr.assign(stable);
+        try entry.value_ptr.assign(self.allocator, stable);
     }
 
     /// Seed a loop body region with its persisted entry-invariant facts,
@@ -3262,7 +3318,7 @@ const Pass = struct {
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
         const stable = self.persist_scratch;
-        stable.assign(&state.stable);
+        try stable.assign(self.allocator, &state.stable);
         if (self.merge_facts.getPtr(head)) |previous| {
             // A fact that comes back weaker round after round is widened
             // away rather than iterated, like a persisted bound.
@@ -3284,8 +3340,11 @@ const Pass = struct {
         const entry = try self.merge_facts.getOrPut(head);
         if (entry.found_existing) {
             if (!try self.sameStableFacts(entry.value_ptr, stable)) self.new_loop_bounds = true;
-        } else self.new_loop_bounds = true;
-        entry.value_ptr.assign(stable);
+        } else {
+            entry.value_ptr.* = .{};
+            self.new_loop_bounds = true;
+        }
+        try entry.value_ptr.assign(self.allocator, stable);
     }
 
     /// Seed a region walked before its captures complete with the facts
@@ -3352,8 +3411,11 @@ const Pass = struct {
         const entry = try self.merge_env.getOrPut(head);
         if (entry.found_existing) {
             if (!entry.value_ptr.sameBounds(stable)) self.new_loop_bounds = true;
-        } else self.new_loop_bounds = true;
-        entry.value_ptr.assign(stable);
+        } else {
+            entry.value_ptr.* = .{};
+            self.new_loop_bounds = true;
+        }
+        try entry.value_ptr.assign(self.allocator, stable);
     }
 
     /// Seed the env of a region walked before its captures complete from
