@@ -69,6 +69,7 @@ const UnifyFinishAction = union(enum) {
         rhs: Type.TypeVarId,
         source_fn_ty: Type.names.TypeDigest,
         members: Type.Span,
+        abi_fn: ?Type.TypeVarId,
     },
     set_left_lambda_set_link_right: struct {
         lhs: Type.TypeVarId,
@@ -1537,6 +1538,7 @@ const Solver = struct {
                         const erased = try types.add(.{ .erased = .{
                             .source_fn_ty = try self.solvedTypeDigest(root),
                             .members = .empty(),
+                            .abi_fn = root,
                         } });
                         try self.unify(func.callable, erased);
                     }
@@ -2140,6 +2142,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = left_erased.abi_fn orelse right_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
@@ -2152,6 +2155,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = left_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
@@ -2169,6 +2173,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = right_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = right_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
@@ -2290,6 +2295,7 @@ const Solver = struct {
                 self.program.types.set(set.lhs, .{ .erased = .{
                     .source_fn_ty = set.source_fn_ty,
                     .members = set.members,
+                    .abi_fn = set.abi_fn,
                 } });
                 self.program.types.set(set.rhs, .{ .link = set.lhs });
             },
