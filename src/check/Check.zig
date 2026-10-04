@@ -939,7 +939,10 @@ dispatch_replayed_edges: std.ArrayListUnmanaged(u32) = .empty,
 /// those uses copied or derived.
 use_instances: std.ArrayListUnmanaged(UseInstance) = .empty,
 use_owned_fns: std.ArrayListUnmanaged(Var) = .empty,
-use_instance_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+use_instance_by_fn_var: collections.DenseMap(Var, u32),
+/// Schemes one of whose uses settled as a replay source would: only their
+/// uses encode a shape.
+use_replayable_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Per whole-use shape hash, the settled uses that are replay sources.
 use_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(UseReplaySource)) = .empty,
 use_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
@@ -1562,7 +1565,9 @@ const UseInstance = struct {
     owned_start: u32,
     owned_len: u32,
     state: State = .pending,
-    /// The use's replay shape, encoded when its first relation was processed.
+    /// The use's replay shape, encoded when its first relation was processed
+    /// if its scheme was replayable by then.
+    has_shape: bool = false,
     shape_hash: u64 = 0,
     shape_start: u32 = 0,
     shape_len: u32 = 0,
@@ -3352,6 +3357,7 @@ fn initAssumePrepared(
         .retired_literal_dispatch_plans = .empty,
         .pending_tuple_accesses = .empty,
         .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
+        .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
         .external_pinnable = collections.DenseMap(Var, void).init(gpa),
@@ -3598,8 +3604,9 @@ pub fn deinit(self: *Self) void {
     self.scratch_replay_shape_vars.deinit(self.gpa);
     self.dispatch_replay_ready.deinit(self.gpa);
     self.use_instances.deinit(self.gpa);
+    self.use_replayable_schemes.deinit(self.gpa);
     self.use_owned_fns.deinit(self.gpa);
-    self.use_instance_by_fn_var.deinit(self.gpa);
+    self.use_instance_by_fn_var.deinit();
     {
         var sources = self.use_replay_sources.valueIterator();
         while (sources.next()) |list| list.deinit(self.gpa);
@@ -36269,7 +36276,7 @@ fn recordDispatchDerivations(
         // A probe can roll the child back, and its var with it.
         if (self.probe_depth == 0 and !self.commit_probe_active) {
             if (self.use_instance_by_fn_var.get(parent_fn_var)) |use_idx| {
-                try self.use_instance_by_fn_var.put(self.gpa, constraint.fn_var, use_idx);
+                try self.use_instance_by_fn_var.put(constraint.fn_var, use_idx);
             }
         }
     }
@@ -38286,7 +38293,7 @@ fn registerUseInstance(self: *Self, scheme_root: Var, instance_root: Var, record
     const owned = self.scratch_use_owned.items;
     const owned_start: u32 = @intCast(self.use_owned_fns.items.len);
     try self.use_owned_fns.appendSlice(self.gpa, owned);
-    try self.use_instance_by_fn_var.ensureUnusedCapacity(self.gpa, @intCast(owned.len));
+    try self.use_instance_by_fn_var.ensureUnusedCapacity(owned.len);
     for (owned) |fn_var| self.use_instance_by_fn_var.putAssumeCapacity(fn_var, use_idx);
     try self.use_instances.append(self.gpa, .{
         .scheme_root = scheme_root,
@@ -38342,6 +38349,12 @@ fn beginDeferredEntryUse(self: *Self, entry: DeferredConstraintCheck, env: *Env)
         return .process;
     }
     const use = self.use_instances.items[use_idx];
+    // Until one use of the scheme has settled as a source would, no use of it
+    // encodes a shape: that use only makes the scheme replayable.
+    if (!self.use_replayable_schemes.contains(self.types.resolveVar(use.scheme_root).var_)) {
+        self.use_instances.items[use_idx].state = .settling;
+        return .{ .settle = use_idx };
+    }
     const hash = (try self.encodeUseReplayShape(use.scheme_root, use.instance_root)) orelse {
         self.excludeUseFromReplay(use_idx);
         return .process;
@@ -38353,6 +38366,7 @@ fn beginDeferredEntryUse(self: *Self, entry: DeferredConstraintCheck, env: *Env)
     try self.use_replay_shapes.appendSlice(self.gpa, self.scratch_replay_shape.items);
     const settling = &self.use_instances.items[use_idx];
     settling.state = .settling;
+    settling.has_shape = true;
     settling.shape_hash = hash;
     settling.shape_start = shape_start;
     settling.shape_len = @intCast(self.scratch_replay_shape.items.len);
@@ -38379,25 +38393,11 @@ fn useRelationsUntouched(self: *const Self, use_idx: u32) bool {
 }
 
 /// RULE: a use's relations settle as one unit (design.md "Whole-use
-/// replay"). Once a use's first relation is processed, process every queued
-/// relation of that use, including the ones this appends, before any other
-/// queued relation. Unrelated relations wait in the queue behind them.
-fn settleUseRelations(self: *Self, env: *Env, drain: *StaticDispatchDrain, use_idx: u32, from: usize) Allocator.Error!void {
-    const previous = self.settling_use;
-    self.settling_use = use_idx;
-    defer self.settling_use = previous;
-    var index = from;
-    while (index < env.deferred_static_dispatch_constraints.items.items.len) : (index += 1) {
-        if (self.use_settled_entries.contains(index)) continue;
-        const entry = env.deferred_static_dispatch_constraints.items.items[index];
-        if (!self.deferredEntryHasUse(entry, use_idx)) continue;
-        try self.use_settled_entries.put(self.gpa, index, {});
-        self.excludeOtherEntryUses(entry, use_idx);
-        switch (try self.processDeferredDispatchEntry(env, drain, index)) {
-            .next => {},
-            .stopped => unreachable, // settling runs only in a validating drain
-        }
-    }
+/// replay"). Once a use's first relation is processed, the drain processes
+/// every queued relation of that use, including the ones this appends,
+/// before any other queued relation; unrelated relations wait in the queue
+/// behind them. This ends a use's settling.
+fn finishUseSettling(self: *Self, use_idx: u32) Allocator.Error!void {
     const use = &self.use_instances.items[use_idx];
     use.state = .settled;
     use.records_end = @intCast(self.cir.scheme_uses.items.items.len);
@@ -38415,11 +38415,21 @@ fn excludeOtherEntryUses(self: *Self, entry: DeferredConstraintCheck, use_idx: u
     }
 }
 
-fn deferredEntryHasUse(self: *const Self, entry: DeferredConstraintCheck, use_idx: u32) bool {
+/// Record `position` under every use with a relation in `entry`.
+fn indexDeferredEntryUses(
+    self: *Self,
+    use_positions: *std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(usize)),
+    entry: DeferredConstraintCheck,
+    position: usize,
+) Allocator.Error!void {
     for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
-        if (self.use_instance_by_fn_var.get(constraint.fn_var) == use_idx) return true;
+        const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse continue;
+        const list = try use_positions.getOrPut(self.gpa, use_idx);
+        if (!list.found_existing) list.value_ptr.* = .empty;
+        const items = list.value_ptr.items;
+        if (items.len != 0 and items[items.len - 1] == position) continue;
+        try list.value_ptr.append(self.gpa, position);
     }
-    return false;
 }
 
 /// Encode a use's replay shape into `scratch_replay_shape`: the scheme, then
@@ -38464,6 +38474,10 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
     try self.appendUseInstanceParts(use.instance_root, &parts);
     for (parts.items) |part| {
         if (!try self.varIsReplayGround(part)) return;
+    }
+    if (!use.has_shape) {
+        try self.use_replayable_schemes.put(self.gpa, self.types.resolveVar(use.scheme_root).var_, {});
+        return;
     }
     const shape = self.use_replay_shapes.items[use.shape_start..][0..use.shape_len];
     if (self.findUseReplaySource(use.shape_hash, shape) != null) return;
@@ -38678,12 +38692,23 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
     // Relations the unifications below queue belong to a replayed use and
     // are skipped.
     self.use_instances.items[use_idx].state = .replayed;
-    for (relations.items) |relation| {
-        // The use's variable is passed second so it stays its class's
-        // checked representative; the class keeps the frozen descriptor.
-        const result = try self.unify(relation.source, relation.target, env);
-        if (!result.isEstablished()) {
-            std.debug.panic("whole-use replay could not relate a use's instance to its source's settled instance", .{});
+    // Structures go first: relating them reaches most of the use's variables,
+    // whose own relations then find them already in the frozen class.
+    const variable_targets = try self.gpa.alloc(bool, relations.items.len);
+    defer self.gpa.free(variable_targets);
+    for (relations.items, variable_targets) |relation, *is_variable| {
+        is_variable.* = self.types.resolveVar(relation.target).desc.content == .flex;
+    }
+    for ([_]bool{ false, true }) |variables| {
+        for (relations.items, variable_targets) |relation, is_variable| {
+            if (is_variable != variables) continue;
+            if (self.types.resolveVar(relation.target).var_ == self.types.resolveVar(relation.source).var_) continue;
+            // The use's variable is passed second so it stays its class's
+            // checked representative; the class keeps the frozen descriptor.
+            const result = try self.unify(relation.source, relation.target, env);
+            if (!result.isEstablished()) {
+                std.debug.panic("whole-use replay could not relate a use's instance to its source's settled instance", .{});
+            }
         }
     }
     if (std.debug.runtime_safety) try self.verifyUseReplay(source.*, use_idx);
@@ -39561,22 +39586,66 @@ fn resumeStaticDispatchDrain(
     // grounding consumes it, and every fresh child edge passes the lineage
     // detectors, which reject an exact repeated state or a strictly grown
     // re-entry of the same binding before it can extend the queue further.
-    while (drain.index < env.deferred_static_dispatch_constraints.items.items.len) : (drain.index += 1) {
-        if (self.use_settled_entries.count() != 0 and self.use_settled_entries.remove(drain.index)) continue;
-        var settles: ?u32 = null;
-        if (try self.beginDeferredEntryUse(env.deferred_static_dispatch_constraints.items.items[drain.index], env)) |begin| switch (begin) {
-            .skip => continue,
-            .process => {},
-            .settle => |use_idx| settles = use_idx,
+    // The use whose relations are settling (design.md "a use's relations
+    // settle as one unit"): the queue position of its first processed
+    // relation, and how far it has consumed its positions in `use_positions`.
+    var settling: ?struct { use: u32, first: usize, next: usize } = null;
+    const settling_before = self.settling_use;
+    defer self.settling_use = settling_before;
+    // The queue positions of each use's relations, indexed the first time a
+    // settling use needs positions past `indexed_to`, so every entry is
+    // looked at once.
+    var use_positions: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(usize)) = .empty;
+    defer {
+        var lists = use_positions.valueIterator();
+        while (lists.next()) |list| list.deinit(self.gpa);
+        use_positions.deinit(self.gpa);
+    }
+    var indexed_to: usize = drain.index;
+    while (true) {
+        const entry_index: usize = if (settling) |*active| pick: {
+            const entries = env.deferred_static_dispatch_constraints.items.items;
+            if (indexed_to <= active.first) indexed_to = active.first + 1;
+            while (indexed_to < entries.len) : (indexed_to += 1) {
+                try self.indexDeferredEntryUses(&use_positions, entries[indexed_to], indexed_to);
+            }
+            if (use_positions.getPtr(active.use)) |positions| {
+                while (active.next < positions.items.len) {
+                    const position = positions.items[active.next];
+                    active.next += 1;
+                    if (position <= active.first or self.use_settled_entries.contains(position)) continue;
+                    try self.use_settled_entries.put(self.gpa, position, {});
+                    self.excludeOtherEntryUses(entries[position], active.use);
+                    break :pick position;
+                }
+            }
+            try self.finishUseSettling(active.use);
+            settling = null;
+            self.settling_use = settling_before;
+            continue;
+        } else pick: {
+            if (drain.index >= env.deferred_static_dispatch_constraints.items.items.len) break;
+            const index = drain.index;
+            drain.index += 1;
+            if (self.use_settled_entries.count() != 0 and self.use_settled_entries.remove(index)) continue;
+            if (try self.beginDeferredEntryUse(env.deferred_static_dispatch_constraints.items.items[index], env)) |begin| switch (begin) {
+                .skip => continue,
+                .process => {},
+                .settle => |use_idx| {
+                    settling = .{ .use = use_idx, .first = index, .next = 0 };
+                    self.settling_use = use_idx;
+                },
+            };
+            break :pick index;
         };
-        switch (try self.processDeferredDispatchEntry(env, drain, drain.index)) {
+        switch (try self.processDeferredDispatchEntry(env, drain, entry_index)) {
             .next => {},
             .stopped => {
-                drain.index += 1;
+                // Settling runs only in a validating drain, which never stops.
+                std.debug.assert(settling == null);
                 return .stopped;
             },
         }
-        if (settles) |use_idx| try self.settleUseRelations(env, drain, use_idx, drain.index + 1);
     }
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
@@ -39603,7 +39672,7 @@ fn resumeStaticDispatchDrain(
 const DeferredEntryOutcome = enum { next, stopped };
 
 /// Process the deferred relation at `entry_index` of the drain's queue.
-fn processDeferredDispatchEntry(
+inline fn processDeferredDispatchEntry(
     self: *Self,
     env: *Env,
     drain: *StaticDispatchDrain,

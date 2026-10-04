@@ -8526,13 +8526,16 @@ is processed: the relations reach only the use's private copies, fresh
 method instances, final method schemes, and the root, and nothing else runs
 in between.
 
-Whole-use replay is a mechanism built on that rule. When a use's first
-relation is processed, its shape—the scheme and the use's copy of its root,
-encoded like a dispatch replay shape—is computed. A use whose relations
-settled processing only its own relations, with none of them touched before
-its first was processed, every one of them and every requirement they
-selected settled without rejection, and its root's arguments, result and
-effect dependencies ground, becomes the replay source for its shape. A later
+Whole-use replay is a mechanism built on that rule. A use settles as a
+source would when its relations settled processing only its own relations,
+with none of them touched before its first was processed, every one of them
+and every requirement they selected settled without rejection, and its
+root's arguments, result and effect dependencies ground. The first such use
+of a scheme makes the scheme replayable; until then no use of it computes a
+shape. When the first relation of a later use of a replayable scheme is
+processed, its shape—the scheme and the use's copy of its root, encoded like
+a dispatch replay shape—is computed, and if it settles as a source would, it
+becomes the replay source for its shape. A later
 use with an equal shape and untouched relations takes the source's settled
 instance instead of settling its own: settling would produce that instance,
 since equal shapes make settling the same function. The first replay freezes
@@ -9940,9 +9943,10 @@ Other solved-graph mutations:
   changes a type any use observes, and it ends when module checking does.
   `freezeTypeGraph` and the runtime-safety check `copySchemeForReplayCheck`
   write descriptors only of the fresh classes they themselves create.
-- `settleUseRelations`—rule: a use's relations settle as one unit (Pending
-  Dispatch Requirements In Type Schemes, above). It changes only the order in
-  which queued relations are processed.
+- `resumeStaticDispatchDrain` settling a use (`finishUseSettling`)—rule: a
+  use's relations settle as one unit (Pending Dispatch Requirements In Type
+  Schemes, above). It changes only the order in which queued relations are
+  processed.
 - `replayUse`—mechanism: whole-use replay (above). A use whose shape equals a
   settled source's relates its root and substitution to the source's frozen
   instance by ordinary unification, skips its own relations, and names the

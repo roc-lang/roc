@@ -4377,8 +4377,9 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(3, 13, 6, 200, -70000)" },
     },
     .{
-        // Whole-use replay: the later `I64` uses of `big` take the first
-        // one's settled instance, the `U8` use settles its own.
+        // Whole-use replay: the first use makes `big` replayable, the last
+        // `I64` use takes the second one's settled instance, and the `U8` use
+        // settles its own.
         .name = "issue 11801: replayed uses compute each use's own values",
         .source_kind = .module,
         .source =

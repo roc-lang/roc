@@ -591,14 +591,20 @@ pub fn fnEvidenceEql(
 
 fn fnEvidenceTargetEql(left: anytype, right: @TypeOf(left)) bool {
     if (left.callable_contracts != right.callable_contracts) return false;
-    if (!std.meta.eql(left.view, right.view)) return false;
+    if (!keyBytesEql(left.view, right.view)) return false;
     if (!methodTargetIdentityEql(left.method, left.method_callable_key, right.method, right.method_callable_key)) return false;
     if (left.instantiation) |left_instantiation| {
         const right_instantiation = right.instantiation orelse return false;
-        if (!std.meta.eql(left_instantiation.view, right_instantiation.view)) return false;
-        if (!std.meta.eql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
+        if (!keyBytesEql(left_instantiation.view, right_instantiation.view)) return false;
+        if (!keyBytesEql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
     } else if (right.instantiation != null) return false;
     return std.meta.eql(left.nested, right.nested);
+}
+
+/// Whether two digest keys hold the same bytes, compared as whole slices
+/// rather than element by element.
+fn keyBytesEql(left: anytype, right: @TypeOf(left)) bool {
+    return std.mem.eql(u8, &left.bytes, &right.bytes);
 }
 
 fn methodTargetIdentityEql(
@@ -610,7 +616,7 @@ fn methodTargetIdentityEql(
     return left.module_idx == right.module_idx and
         left.def_idx == right.def_idx and
         std.meta.eql(left.kind, right.kind) and
-        std.meta.eql(left_callable_key, right_callable_key);
+        keyBytesEql(left_callable_key, right_callable_key);
 }
 
 fn writeMethodTarget(

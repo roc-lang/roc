@@ -229,9 +229,10 @@ test "issue 11801: concrete dispatch replay reuses a settled ground target acros
     // shape, and its instance is ground once related. Once the first one's
     // `bump` requirement settles, the later edges of the first use select
     // from it instead of instantiating `step` and resolving `bump` again; the
-    // later uses replay the first use whole.
+    // first use makes `big` replayable, the second becomes the source, and
+    // the later uses replay it whole.
     try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= chain_len / 2);
-    try std.testing.expectEqual(use_count - 1, useStateCount(&env, .replayed));
+    try std.testing.expectEqual(use_count - 2, useStateCount(&env, .replayed));
     // A replayed edge is a root `step` edge, and only a freshly instantiated
     // `step` resolves a `bump` requirement of its own: the replayed ones
     // publish their source's.
@@ -348,8 +349,9 @@ test "issue 11801: whole-use replay settles one use and replays the rest" {
     try env.assertNoErrors();
 
     // Every use of `big` takes a `List(I64)` and settles to the same
-    // instance, so the first settles its relations and the rest replay it.
-    try std.testing.expectEqual(use_count - 1, useStateCount(&env, .replayed));
+    // instance. The first makes `big` replayable, the second settles its
+    // relations as the source, and the rest replay it.
+    try std.testing.expectEqual(use_count - 2, useStateCount(&env, .replayed));
     var j: usize = 0;
     while (j < use_count) : (j += 1) {
         const name = try std.fmt.allocPrint(gpa, "u{d}", .{j});
@@ -359,8 +361,9 @@ test "issue 11801: whole-use replay settles one use and replays the rest" {
 }
 
 test "issue 11801: whole-use replay keys each use's own argument types" {
-    // The two `I64` uses share a shape and the `U8` use does not, so it
-    // settles its own relations and keeps its own element type.
+    // `first` makes `big` replayable. `second` and `third` are the sources
+    // for their own shapes, and only `fourth` shares a shape with one of
+    // them, so the `U8` use keeps its own element type.
     const source =
         \\big = |a| a.map(|x| x + 1).map(|x| x + 2)
         \\
@@ -369,6 +372,8 @@ test "issue 11801: whole-use replay keys each use's own argument types" {
         \\second = big([2.U8])
         \\
         \\third = big([3.I64])
+        \\
+        \\fourth = big([4.I64])
     ;
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
@@ -377,6 +382,7 @@ test "issue 11801: whole-use replay keys each use's own argument types" {
     try env.assertDefType("first", "List(I64)");
     try env.assertDefType("second", "List(U8)");
     try env.assertDefType("third", "List(I64)");
+    try env.assertDefType("fourth", "List(I64)");
 }
 
 test "issue 11801: whole-use replay never takes a result its relations leave open" {
@@ -398,9 +404,10 @@ test "issue 11801: whole-use replay never takes a result its relations leave ope
 }
 
 test "issue 11801: a type error in one whole-use replay leaves the uses sharing its instance intact" {
-    // `second`, `third` and `fourth` replay `first`'s settled instance.
-    // `bad` relates `third` to the wrong type; poisoning that occurrence must
-    // not reach the shared instance, so `fourth` keeps its type.
+    // `first` makes `big` replayable, and `third` and `fourth` replay
+    // `second`'s settled instance. `bad` relates `third` to the wrong type;
+    // poisoning that occurrence must not reach the shared instance, so
+    // `fourth` keeps its type.
     const source =
         \\big = |a| a.map(|x| x + 1).map(|x| x + 2)
         \\
@@ -417,7 +424,7 @@ test "issue 11801: a type error in one whole-use replay leaves the uses sharing 
     ;
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
-    try std.testing.expectEqual(@as(usize, 3), useStateCount(&env, .replayed));
+    try std.testing.expectEqual(@as(usize, 2), useStateCount(&env, .replayed));
     try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
     try env.assertDefTypeOptions("second", "List(I64)", .{ .allow_type_errors = true });
     try env.assertDefTypeOptions("fourth", "List(I64)", .{ .allow_type_errors = true });
