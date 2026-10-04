@@ -69,8 +69,9 @@ fn replayedEdge(replayed: []const u32, edge_index: usize) bool {
 }
 
 fn expectNoDigestedEdges(env: *const TestEnv) error{TestUnexpectedResult}!void {
+    // The first use settles every edge of the chain; the later ones replay it.
     const edges = env.checker.dispatch_target_instantiations.items;
-    try std.testing.expect(edges.len >= chain_len * use_count);
+    try std.testing.expect(edges.len >= chain_len);
     for (edges) |edge| {
         try std.testing.expect(edge.state_type_key == null);
     }
@@ -226,9 +227,11 @@ test "issue 11801: concrete dispatch replay reuses a settled ground target acros
 
     // Every `step` edge has the receiver `Wrap(Cnt)` and the same callable
     // shape, and its instance is ground once related. Once the first one's
-    // `bump` requirement settles, the later uses select from it instead of
-    // instantiating `step` and resolving `bump` again.
-    try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= chain_len * (use_count - 1));
+    // `bump` requirement settles, the later edges of the first use select
+    // from it instead of instantiating `step` and resolving `bump` again; the
+    // later uses replay the first use whole.
+    try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= chain_len / 2);
+    try std.testing.expectEqual(use_count - 1, useStateCount(&env, .replayed));
     // A replayed edge is a root `step` edge, and only a freshly instantiated
     // `step` resolves a `bump` requirement of its own: the replayed ones
     // publish their source's.
@@ -292,29 +295,29 @@ test "issue 11801: concrete dispatch replay never selects a method whose scheme 
 }
 
 test "issue 11801: a type error in one replayed use leaves the uses sharing its instance intact" {
-    // Each use of `mk` resolves its own copy of `mk`'s `pair_with`
-    // requirement. `first` makes the binding replayable, `second` becomes
-    // the source, and `third` and `fourth` replay it, so their types share
-    // its frozen instance. `bad` then relates `third` to the wrong type;
-    // poisoning that occurrence must not reach the shared instance, so
-    // `fourth` keeps its type.
+    // The uses of `mk` differ in their unused argument's type, so each
+    // settles its own copy of `mk`'s `pair_with` requirement. `first` makes
+    // the binding replayable, `second` becomes the source, and `third` and
+    // `fourth` replay it, so their types share its frozen instance. `bad`
+    // then relates `third` to the wrong type; poisoning that occurrence must
+    // not reach the shared instance, so `fourth` keeps its type.
     const source =
         \\Cnt := [Cnt(I64)].{
         \\  pair_with : Cnt, b -> (Cnt, b)
         \\  pair_with = |c, x| (c, x)
         \\}
         \\
-        \\mk = |a| a.pair_with(5.U8)
+        \\mk = |a, _| a.pair_with(5.U8)
         \\
         \\c = Cnt.Cnt(0.I64)
         \\
-        \\first = mk(c)
+        \\first = mk(c, 1.I8)
         \\
-        \\second = mk(c)
+        \\second = mk(c, 1.I16)
         \\
-        \\third = mk(c)
+        \\third = mk(c, 1.I32)
         \\
-        \\fourth = mk(c)
+        \\fourth = mk(c, 1.I64)
         \\
         \\bad : (Cnt, Str)
         \\bad = third
@@ -325,4 +328,97 @@ test "issue 11801: a type error in one replayed use leaves the uses sharing its 
     try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
     try env.assertDefTypeOptions("second", "(Cnt, U8)", .{ .allow_type_errors = true });
     try env.assertDefTypeOptions("fourth", "(Cnt, U8)", .{ .allow_type_errors = true });
+}
+
+fn useStateCount(env: *const TestEnv, state: anytype) usize {
+    var count: usize = 0;
+    for (env.checker.use_instances.items) |use| {
+        if (use.state == state) count += 1;
+    }
+    return count;
+}
+
+test "issue 11801: whole-use replay settles one use and replays the rest" {
+    const gpa = std.testing.allocator;
+    const source = try genSource(gpa, "", "map(|x| x + 1)", "[#.I64]");
+    defer gpa.free(source);
+
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+
+    // Every use of `big` takes a `List(I64)` and settles to the same
+    // instance, so the first settles its relations and the rest replay it.
+    try std.testing.expectEqual(use_count - 1, useStateCount(&env, .replayed));
+    var j: usize = 0;
+    while (j < use_count) : (j += 1) {
+        const name = try std.fmt.allocPrint(gpa, "u{d}", .{j});
+        defer gpa.free(name);
+        try env.assertDefType(name, "List(I64)");
+    }
+}
+
+test "issue 11801: whole-use replay keys each use's own argument types" {
+    // The two `I64` uses share a shape and the `U8` use does not, so it
+    // settles its own relations and keeps its own element type.
+    const source =
+        \\big = |a| a.map(|x| x + 1).map(|x| x + 2)
+        \\
+        \\first = big([1.I64])
+        \\
+        \\second = big([2.U8])
+        \\
+        \\third = big([3.I64])
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), useStateCount(&env, .replayed));
+    try env.assertDefType("first", "List(I64)");
+    try env.assertDefType("second", "List(U8)");
+    try env.assertDefType("third", "List(I64)");
+}
+
+test "issue 11801: whole-use replay never takes a result its relations leave open" {
+    // `wrap`'s relations leave the element type of its result open, so no
+    // use is a replay source, and each use's annotation decides its own.
+    const source =
+        \\wrap = |a| a.map(|_| [])
+        \\
+        \\first : List(List(Str))
+        \\first = wrap([1.I64])
+        \\
+        \\second : List(List(U8))
+        \\second = wrap([2.I64])
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), useStateCount(&env, .replayed));
+}
+
+test "issue 11801: a type error in one whole-use replay leaves the uses sharing its instance intact" {
+    // `second`, `third` and `fourth` replay `first`'s settled instance.
+    // `bad` relates `third` to the wrong type; poisoning that occurrence must
+    // not reach the shared instance, so `fourth` keeps its type.
+    const source =
+        \\big = |a| a.map(|x| x + 1).map(|x| x + 2)
+        \\
+        \\first = big([1.I64])
+        \\
+        \\second = big([2.I64])
+        \\
+        \\third = big([3.I64])
+        \\
+        \\fourth = big([4.I64])
+        \\
+        \\bad : List(Str)
+        \\bad = third
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try std.testing.expectEqual(@as(usize, 3), useStateCount(&env, .replayed));
+    try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
+    try env.assertDefTypeOptions("second", "List(I64)", .{ .allow_type_errors = true });
+    try env.assertDefTypeOptions("fourth", "List(I64)", .{ .allow_type_errors = true });
 }

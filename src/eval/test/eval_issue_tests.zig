@@ -4376,4 +4376,16 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(3, 13, 6, 200, -70000)" },
     },
+    .{
+        // Whole-use replay: the later `I64` uses of `big` take the first
+        // one's settled instance, the `U8` use settles its own.
+        .name = "issue 11801: replayed uses compute each use's own values",
+        .source_kind = .module,
+        .source =
+        \\big = |a| a.map(|x| x + 1).map(|x| x * 2)
+        \\
+        \\main = (big([1.I64, 5]), big([2.I64]), big([3.U8]), big([4.I64]))
+        ,
+        .expected = .{ .inspect_str = "([4, 12], [6], [8], [10])" },
+    },
 };

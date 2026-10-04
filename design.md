@@ -8507,6 +8507,49 @@ with the type store's frozen-class rules pinned by its own tests ("poisoning a
 frozen class's checked representative detaches it alone" and the tests beside
 it).
 
+A use's relations settle as one unit. A use's relations are the ones its
+instantiation of a constrained scheme copied, and every relation those
+derive when they select targets. The first time a drain processes one of
+them, every queued relation of the same use, including the ones processing
+appends, is processed before any other queued relation; unrelated relations
+wait in the queue behind them. A relation whose receiver is still a variable
+waits as before, and a later grounding processes it like any other. Settling
+is a scheduling rule: unification and target selection give the same result
+in any order when every relation succeeds, so it changes no error-free
+program, and in a program with errors it decides which relation meets a
+conflict first by the use alone, never by whether another use exists. A use
+instantiated inside a speculative probe is not registered, and one whose
+first relation is processed inside a probe or a queueing derived-parser
+drain settles in the ordinary order. Settling a use is a function of its
+scheme and its copy of the scheme root as it stands when the first relation
+is processed: the relations reach only the use's private copies, fresh
+method instances, final method schemes, and the root, and nothing else runs
+in between.
+
+Whole-use replay is a mechanism built on that rule. When a use's first
+relation is processed, its shape—the scheme and the use's copy of its root,
+encoded like a dispatch replay shape—is computed. A use whose relations
+settled processing only its own relations, with none of them touched before
+its first was processed, every one of them and every requirement they
+selected settled without rejection, and its root's arguments, result and
+effect dependencies ground, becomes the replay source for its shape. A later
+use with an equal shape and untouched relations takes the source's settled
+instance instead of settling its own: settling would produce that instance,
+since equal shapes make settling the same function. The first replay freezes
+a copy of the source's instance, as concrete dispatch replay does: the root's
+parts, every variable the source's scheme-use substitution names, and every
+requirement its relations derived. Functions whose effect is still open may
+be frozen there, because those classes are reached only through relations no
+later relation revisits. The source's substitution and the dispatch-target
+records its relations wrote are restated over the copy. The replayed use
+then relates its root's parts and every variable of its own substitution to
+the frozen node at the same position, its own relations are skipped, and its
+scheme-use record names the source's restated substitution, so CheckedModule construction
+resolves that substitution's evidence once for every use that shares it.
+Builds with runtime safety check after every replay that the use's root and
+substitution hold exactly the source's frozen types, and before thawing that
+no frozen use instance changed.
+
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
 constraint production to quiescence. Capture transfers a settled local codec
@@ -9897,6 +9940,16 @@ Other solved-graph mutations:
   changes a type any use observes, and it ends when module checking does.
   `freezeTypeGraph` and the runtime-safety check `copySchemeForReplayCheck`
   write descriptors only of the fresh classes they themselves create.
+- `settleUseRelations`—rule: a use's relations settle as one unit (Pending
+  Dispatch Requirements In Type Schemes, above). It changes only the order in
+  which queued relations are processed.
+- `replayUse`—mechanism: whole-use replay (above). A use whose shape equals a
+  settled source's relates its root and substitution to the source's frozen
+  instance by ordinary unification, skips its own relations, and names the
+  source's restated substitution in its scheme-use record; it writes exactly
+  the instance and evidence settling its own relations would.
+  `freezeUseReplaySource` writes descriptors only of the fresh classes it
+  creates.
 - `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). Two triggers: the explicit derivation chain and
   alpha-normalized receiver + callable digest prove that target selection has
