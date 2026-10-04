@@ -10054,7 +10054,10 @@ const Builder = struct {
         if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |target| return target;
         for (scope.method_lookup_scope) |module_id| {
             const candidate = self.moduleForId(module_id);
-            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, false)) |target| return target;
+            // Only the module declaring a function-body type registers its
+            // methods, so a local procedure found here is that owner's exact
+            // target; its declaration context comes from the evidence purpose.
+            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |target| return target;
         }
         return null;
     }

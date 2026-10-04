@@ -2150,3 +2150,162 @@ test "issue 11731 - nested closed helpers retain recursive promotion" {
     try test_env.assertTypeErrorTitles(&.{ "Unconditional Condition", "Unconditional Condition" });
     try std.testing.expectEqual(@as(usize, 2), test_env.checker.promotedLocalProcedures().len);
 }
+
+test "issue 11993 - condition dispatching to a capturing local method does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + offset
+        \\    }
+        \\    counter = Counter.{ count: 0 }
+        \\    if counter.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11993 - comparison dispatching to a capturing local is_eq does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + offset == b.count
+        \\    }
+        \\    if Counter.{ count: 0 } == Counter.{ count: 1 } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11993 - condition dispatching to a promoted local method still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + 1
+        \\    }
+        \\    counter = Counter.{ count: 0 }
+        \\    if counter.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.promotedLocalProcedures().len);
+}
+
+test "issue 11993 - condition through a helper whose evidence is a capturing local method does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + offset
+        \\    }
+        \\    get = |c| c.value()
+        \\    if get(Counter.{ count: 0 }) == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11993 - condition through a helper whose evidence is a promoted local method still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count
+        \\    }
+        \\    get = |c| c.value()
+        \\    if get(Counter.{ count: 0 }) == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11993 - structural comparison whose component is_eq captures a local does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + offset == b.count
+        \\    }
+        \\    if { c: Counter.{ count: 0 } } == { c: Counter.{ count: 1 } } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11993 - structural comparison whose component is_eq is promoted still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + 1 == b.count
+        \\    }
+        \\    if { c: Counter.{ count: 0 } } == { c: Counter.{ count: 1 } } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11993 - method bound to a capturing local function does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    helper = |c| c.count + offset
+        \\    alias = helper
+        \\    Counter := { count : U64 }.{
+        \\        value = alias
+        \\    }
+        \\    if Counter.{ count: 0 }.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11993 - method bound to a promoted local function still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    helper = |c| c.count + 1
+        \\    alias = helper
+        \\    Counter := { count : U64 }.{
+        \\        value = alias
+        \\    }
+        \\    if Counter.{ count: 0 }.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11993 - generic is_eq whose evidence is a capturing local is_eq does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\Wrap(a) := { inner : a }.{
+        \\    is_eq = |x, y| x.inner == y.inner
+        \\}
+        \\
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + offset == b.count
+        \\    }
+        \\    if Wrap.{ inner: Counter.{ count: 0 } } == Wrap.{ inner: Counter.{ count: 1 } } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
