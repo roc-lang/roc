@@ -3089,6 +3089,19 @@ const HostedBindingView = struct {
     names: *const names.NameStore,
 };
 
+/// A context's binder relations, shared by the nested contexts it creates
+/// (`BodyContext.nestedRelationBase`): a context relating each binder's type
+/// to its local, and which local each binder was related to.
+const NestedRelationBase = struct {
+    ctx: BodyContext,
+    related: collections.DenseMap(checked.PatternBinderId, DraftLocalId),
+
+    fn relate(self: *NestedRelationBase, entry: BinderMap.Entry) Allocator.Error!void {
+        try self.ctx.constrainCheckedInterfaceToCell(checkedBinderType(self.ctx.view, entry.binder), self.ctx.localTypeCell(entry.local));
+        try self.related.put(entry.binder, entry.local);
+    }
+};
+
 /// Each lexical environment has its own version. Forks share inherited bindings;
 /// the active indexed view replays only changes when retained branches switch.
 const BinderMap = struct {
@@ -19662,6 +19675,9 @@ const BodyContext = struct {
     typed_binders: TypedBinders,
     local_proc_contexts: LocalProcContexts,
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
+    /// The binder relations every nested context created from this one
+    /// starts from (see `nestedRelationBase`).
+    nested_relation_base: ?*NestedRelationBase = null,
     /// True while this context lowers a defaulted-field expression (design.md
     /// "Defaulted Fields"). Checking records nested-function sites for
     /// default expressions under the `.default_root` owner (they belong to no
@@ -20745,6 +20761,7 @@ const BodyContext = struct {
     }
 
     fn deinit(self: *BodyContext) void {
+        self.destroyNestedRelationBase();
         self.explicit_binding_memo.deinit(self.allocator);
         var error_rows = self.parser_error_rows.valueIterator();
         while (error_rows.next()) |row| self.allocator.free(row.*);
@@ -22464,14 +22481,71 @@ const BodyContext = struct {
     ) Allocator.Error!BodyContext {
         var child = try self.childContextWithTypeCells(current_fn_key, false);
         errdefer child.deinit();
+        // The child starts from this context's binder relations, related
+        // once for every nested context rather than once by each.
+        const relation_base = try self.nestedRelationBase();
+        child.instantiation.node_map.deinit();
+        child.instantiation.node_map = relation_base.ctx.instantiation.node_map.forkCompleted();
+        var kinds = relation_base.ctx.instantiation.field_kind_map.iterator();
+        while (kinds.next()) |entry| try child.instantiation.field_kind_map.put(entry.key_ptr.*, entry.value_ptr.*);
         child.evidence = switch (evidence.origin) {
             .specialization => evidence,
             .stored_function => try child.instantiateStoredEvidence(evidence),
         };
         child.function_entry_demand_guards = &.{};
         try child.bindNestedTypes(site_id, constructing_scope);
-        try child.constrainCopiedBinderTypes();
         return child;
+    }
+
+    /// Every binder in this context's environment related to its local, in a
+    /// context of its own that no nested site's bindings have touched yet.
+    /// Relating a binder there gives each variable of its type a node in the
+    /// class of the local's, exactly what relating it in each nested context
+    /// gave; a nested context forks these relations, binds its site's
+    /// variables over them, and relates each bound node to the one it
+    /// replaces. The relations follow the environment: a new binder is
+    /// related on the next request, and one rebound or removed since starts
+    /// them over.
+    fn nestedRelationBase(self: *BodyContext) Allocator.Error!*NestedRelationBase {
+        const entries = try self.binders.sortedEntries(self.allocator);
+        defer self.allocator.free(entries);
+        if (self.nested_relation_base) |existing| {
+            var current: usize = 0;
+            var stale = false;
+            for (entries) |entry| {
+                const local = existing.related.get(entry.binder) orelse continue;
+                if (local != entry.local) {
+                    stale = true;
+                    break;
+                }
+                current += 1;
+            }
+            if (!stale and current == existing.related.count()) {
+                for (entries) |entry| {
+                    if (existing.related.contains(entry.binder)) continue;
+                    try existing.relate(entry);
+                }
+                return existing;
+            }
+            self.destroyNestedRelationBase();
+        }
+        const relation_base = try self.allocator.create(NestedRelationBase);
+        errdefer self.allocator.destroy(relation_base);
+        relation_base.* = .{
+            .ctx = try self.childContextWithTypeCells(self.current_fn_key, false),
+            .related = collections.DenseMap(checked.PatternBinderId, DraftLocalId).init(self.allocator),
+        };
+        self.nested_relation_base = relation_base;
+        for (entries) |entry| try relation_base.relate(entry);
+        return relation_base;
+    }
+
+    fn destroyNestedRelationBase(self: *BodyContext) void {
+        const relation_base = self.nested_relation_base orelse return;
+        self.nested_relation_base = null;
+        relation_base.ctx.deinit();
+        relation_base.related.deinit();
+        self.allocator.destroy(relation_base);
     }
 
     /// The checked inventory is sorted by lexical depth. Visit each frame
@@ -22495,7 +22569,14 @@ const BodyContext = struct {
                 Common.invariant("nested type binding differed from its checked lexical substitution");
             }
             switch (frame.subst[binding.slot]) {
-                .node => |node| try self.putScopedNode(self.scopedCheckedType(binding.ty), node),
+                .node => |node| {
+                    const scoped = self.scopedCheckedType(binding.ty);
+                    // The inherited binder relations may already hold a node
+                    // for this variable; the binding replaces it in the same
+                    // class.
+                    if (try self.scopedNode(scoped)) |related| try self.graph.unify(related, node);
+                    try self.putScopedNode(scoped, node);
+                },
                 .checked_error => {},
             }
         }
@@ -22545,18 +22626,6 @@ const BodyContext = struct {
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
 
         return child;
-    }
-
-    fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
-        // Relation production preserves checked binder order independently of
-        // the environment's insertion/removal history.
-        const entries = try self.binders.sortedEntries(self.allocator);
-        defer self.allocator.free(entries);
-        for (entries) |entry| {
-            const local = entry.local;
-            const local_ty = self.localTypeCell(local);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, entry.binder), local_ty);
-        }
     }
 
     fn enterRestoredLocalProcScope(
