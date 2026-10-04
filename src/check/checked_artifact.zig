@@ -6246,8 +6246,9 @@ const DeclarationAnnoWalk = struct {
         ops_start: usize,
         next: usize,
         results_start: usize,
-        /// Set once an application of a local alias has its arguments: the
-        /// alias body then walks under these formals, which the frame owns.
+        /// Set once a reference to a local alias has its arguments (at once
+        /// for an unapplied one): the alias body then walks under these
+        /// formals, which the frame owns.
         alias_body: ?AliasBody = null,
     };
 
@@ -6359,13 +6360,31 @@ const DeclarationAnnoWalk = struct {
                 try self.ops.append(gpa, .{ .child = func.ret });
             },
             .apply => |apply| for (module_env.store.sliceTypeAnnos(apply.args)) |arg| try self.ops.append(gpa, .{ .child = arg }),
-            .lookup => |lookup| return switch (lookup.base) {
-                .local => |local| try self.appendRoot(ModuleEnv.varFrom(self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx))),
+            .lookup => |lookup| switch (lookup.base) {
+                .local => |local| {
+                    const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
+                    if (self.module.getStatement(finalized) != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
+                    // A local alias walks its body here, like an alias
+                    // application: the alias declaration's own root keeps its
+                    // output rows deferred for its use sites, while a
+                    // declaration body closes them as written.
+                    const body = try self.beginAliasApplication(finalized, &.{});
+                    try self.ops.append(gpa, .{ .child = body.anno });
+                    try self.frames.append(gpa, .{
+                        .anno = current,
+                        .formals = formals,
+                        .ops_start = ops_start,
+                        .next = ops_start,
+                        .results_start = self.results.items.len,
+                        .alias_body = body.alias_body,
+                    });
+                    return null;
+                },
                 .builtin,
                 .external,
                 .external_identity,
                 .pending,
-                => try self.appendRoot(ModuleEnv.varFrom(current)),
+                => return try self.appendRoot(ModuleEnv.varFrom(current)),
             },
             .rigid_var => |rigid| return declarationFormalRoot(formals, rigid.name) orelse
                 try self.appendRoot(ModuleEnv.varFrom(current)),
@@ -6486,8 +6505,14 @@ const DeclarationAnnoWalk = struct {
                 } });
             },
             .apply => |apply| return try self.finishApply(index, apply, &results),
+            .lookup => {
+                // Only a local alias pushes a lookup frame; its op is the
+                // walked alias body.
+                var alias = frame.alias_body.?.alias;
+                alias.backing = results.typeId();
+                return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .alias = alias });
+            },
             .parens,
-            .lookup,
             .rigid_var,
             .underscore,
             .rigid_var_lookup,
@@ -6522,8 +6547,9 @@ const DeclarationAnnoWalk = struct {
         switch (apply.base) {
             .local => |local| {
                 const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
-                if (actual_args.len == 0) return try self.appendRoot(ModuleEnv.varFrom(finalized));
-                switch (self.module.getStatement(finalized)) {
+                const statement = self.module.getStatement(finalized);
+                if (actual_args.len == 0 and statement != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
+                switch (statement) {
                     .s_alias_decl => {
                         const body = try self.beginAliasApplication(finalized, actual_args);
                         self.frames.items[index].alias_body = body.alias_body;
@@ -9880,6 +9906,78 @@ test "optional record fields publish through the declaration annotation path" {
     try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
     try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[1].name));
     try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+}
+
+test "nominal declaration backing closes a referenced alias's tag union row" {
+    // repro for https://github.com/roc-lang/roc/issues/12033
+    // A nominal declaration body has no use-site polarity, so the `[POST]`
+    // reached through `Method` closes as written in `Endpoint`'s published
+    // backing, exactly like a `[POST]` written inline.
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main",
+        \\Method : [POST]
+        \\
+        \\Endpoint :: { method : Method }
+        \\
+        \\books : Endpoint
+        \\books = { method: POST }
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const module_env = module.moduleEnvConst();
+
+    const backing_anno = blk: {
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            const statement = module_env.store.getStatement(statement_idx);
+            if (statement != .s_nominal_decl) continue;
+            break :blk statement.s_nominal_decl.anno;
+        }
+        return error.TestUnexpectedResult;
+    };
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+    var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, &source_nodes);
+    defer local_type_declarations.deinit();
+
+    const backing_root = try appendCheckedTypeRootFromDeclarationAnno(
+        allocator,
+        module,
+        &names,
+        imports,
+        &store,
+        &active,
+        &local_type_declarations,
+        &.{},
+        backing_anno,
+    );
+    const fields = store.payload(backing_root).record.fields;
+    try testing.expectEqual(@as(usize, 1), fields.len);
+    try testing.expectEqualStrings("method", names.recordFieldLabelText(fields[0].name));
+
+    const method = store.payload(fields[0].ty);
+    try testing.expect(method == .alias);
+    const row = store.payload(method.alias.backing);
+    try testing.expect(row == .tag_union);
+    try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len);
+    try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
 }
 
 const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError || error{

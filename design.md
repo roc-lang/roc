@@ -11494,6 +11494,14 @@ the current declaration's formal scope. Reusing the original annotation's
 nominal instance would retain the alias declaration's independent parameters
 inside an otherwise correctly substituted outer backing template.
 
+Declaration output expands every local alias reference, applied or bare, by
+walking the alias body syntax. A nominal backing has no use-site polarity, so
+every extensionless tag union it reaches closes as written, exactly as the
+checker closes it. The alias declaration's own root is never the backing's
+content: it keeps its output rows' polarity markers deferred for the alias's
+use sites, and a marker in a backing template would leave every instantiation
+of the nominal with an open row that no use can close.
+
 Monotype must use the declaration backing template for ordinary local nominal
 declarations. For local declarations, the `backing` root on a nominal-use
 payload is not the authority for declaration-template instantiation; the
