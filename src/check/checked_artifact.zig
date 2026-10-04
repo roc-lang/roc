@@ -6395,13 +6395,14 @@ const DeclarationAnnoWalk = struct {
                 .local => |local| {
                     const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
                     if (self.module.getStatement(finalized) != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
-                    // A bare local alias walks its body under its own formals,
-                    // like an alias application: the alias declaration's own
-                    // root keeps its output rows deferred for its use sites,
-                    // while a declaration body closes them as written.
-                    const own_formals = try self.aliasFormalRoots(finalized);
-                    if (self.publishedAliasExpansion(finalized, own_formals)) |id| return id;
-                    const body = try self.beginAliasApplication(finalized, own_formals);
+                    // A bare local alias walks its body like an alias
+                    // application with no arguments (checking rejects a bare
+                    // reference that leaves formals unapplied): the alias
+                    // declaration's own root keeps its output rows deferred
+                    // for its use sites, while a declaration body closes them
+                    // as written.
+                    if (self.publishedAliasExpansion(finalized, &.{})) |id| return id;
+                    const body = try self.beginAliasApplication(finalized, &.{});
                     try self.ops.append(gpa, .{ .child = body.anno });
                     try self.frames.append(gpa, .{
                         .anno = current,
@@ -6540,15 +6541,10 @@ const DeclarationAnnoWalk = struct {
             .apply => |apply| return try self.finishApply(index, apply, &results),
             .lookup => {
                 // Only a bare local alias pushes a lookup frame; its op is
-                // the alias body walked under the alias's own formals.
+                // the walked alias body.
                 const body = frame.alias_body.?;
                 var alias = body.alias;
                 alias.backing = results.typeId();
-                alias.args = if (body.formals.len == 0) &.{} else args: {
-                    const args = try gpa.alloc(CheckedTypeId, body.formals.len);
-                    for (body.formals, args) |formal, *arg| arg.* = formal.root;
-                    break :args args;
-                };
                 return try self.publishAliasExpansion(body.statement, alias);
             },
             .parens,
@@ -6637,9 +6633,8 @@ const DeclarationAnnoWalk = struct {
         }
     }
 
-    /// Bind an alias declaration's formals to an application's arguments (a
-    /// bare reference's are the alias's own formal roots) and publish its
-    /// generic root; the reference then walks the alias body.
+    /// Bind an alias declaration's formals to an application's arguments and
+    /// publish its generic root; the reference then walks the alias body.
     fn beginAliasApplication(
         self: *DeclarationAnnoWalk,
         statement_idx: CIR.Statement.Idx,
@@ -6706,16 +6701,6 @@ const DeclarationAnnoWalk = struct {
             },
             .anno = alias.anno,
         };
-    }
-
-    /// The checked roots of a local alias declaration's own formals: what a
-    /// bare reference to the alias binds them to.
-    fn aliasFormalRoots(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx) Allocator.Error![]const CheckedTypeId {
-        const generic_payload = self.store.payload(try self.appendRoot(ModuleEnv.varFrom(statement_idx)));
-        if (generic_payload != .alias) {
-            checkedArtifactInvariant("checked declaration template alias reference root was not an alias", .{});
-        }
-        return generic_payload.alias.args;
     }
 
     /// The root already published for this alias at these argument roots.
@@ -10087,29 +10072,6 @@ test "nominal declaration backing closes a referenced alias's tag union row" {
             const row = store.payload(method.alias.backing);
             try testing.expect(row == .tag_union);
             try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len);
-            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
-        }
-    }.check);
-}
-
-test "nominal declaration backing expands a bare parameterized alias at its own formals" {
-    // A bare reference names the alias at its own formals, so the published
-    // expansion carries exactly the formal roots its body walks under.
-    try checkPublishedNominalBacking(
-        \\Pair(a) : (a, [Left, Right])
-        \\
-        \\Thing :: { p : Pair }
-    , "Thing", struct {
-        fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
-            const testing = std.testing;
-            const store = published.store;
-            const pair = store.payload(store.payload(published.root).record.fields[0].ty);
-            try testing.expect(pair == .alias);
-            try testing.expectEqual(@as(usize, 1), pair.alias.args.len);
-            const elems = store.payload(pair.alias.backing).tuple;
-            try testing.expectEqual(pair.alias.args[0], elems[0]);
-            const row = store.payload(elems[1]);
-            try testing.expect(row == .tag_union);
             try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
         }
     }.check);

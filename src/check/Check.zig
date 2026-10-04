@@ -18342,6 +18342,8 @@ fn resolveWhereAliasReference(
 fn unifyAnnoWithExternalType(
     self: *Self,
     resolved: ?ExternalType,
+    anno_idx: CIR.TypeAnno.Idx,
+    name: Ident.Idx,
     anno_var: Var,
     anno_region: Region,
     polarity: Polarity,
@@ -18354,6 +18356,7 @@ fn unifyAnnoWithExternalType(
         try self.markErroneous(anno_var);
         return;
     };
+    if (try self.rejectUnappliedTypeConstructorInDeclaration(ctx, anno_idx, ext_ref.local_var, name, anno_var, anno_region)) return;
     const ext_instantiated_var = try self.instantiateVarPolarized(
         ext_ref.local_var,
         env,
@@ -18364,6 +18367,90 @@ fn unifyAnnoWithExternalType(
         .none,
     );
     _ = try self.unify(anno_var, ext_instantiated_var, env);
+}
+
+/// A type declaration body leaves no type variable unbound (a written `_` or
+/// undeclared variable there is an error), so a bare reference there to a
+/// type constructor that takes arguments is an arity mismatch. The one bare
+/// reference a declaration body may hold is an alias's whole body, which
+/// re-exports the type constructor itself. Reports the mismatch and marks the
+/// annotation erroneous; returns whether it did.
+fn rejectUnappliedTypeConstructorInDeclaration(
+    self: *Self,
+    ctx: GenTypeAnnoCtx,
+    anno_idx: CIR.TypeAnno.Idx,
+    decl_var: Var,
+    name: Ident.Idx,
+    anno_var: Var,
+    anno_region: Region,
+) std.mem.Allocator.Error!bool {
+    const decl = switch (ctx) {
+        .annotation => return false,
+        .type_decl => |decl| decl,
+    };
+    if (decl.type_ == .alias and self.isWholeAliasBody(decl.idx, anno_idx)) return false;
+    const unapplied = self.unappliedTypeConstructorArity(decl_var);
+    if (unapplied == 0) return false;
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+        .type_name = name,
+        .region = anno_region,
+        .num_expected_args = unapplied,
+        .num_actual_args = 0,
+    } });
+    try self.markErroneous(anno_var);
+    return true;
+}
+
+/// Whether `anno_idx` is the whole body of the alias declared by `statement_idx`.
+fn isWholeAliasBody(self: *const Self, statement_idx: CIR.Statement.Idx, anno_idx: CIR.TypeAnno.Idx) bool {
+    var body = switch (self.cir.store.getStatement(statement_idx)) {
+        .s_alias_decl => |alias| alias.anno,
+        .s_nominal_decl, .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => return false,
+    };
+    while (true) {
+        if (body == anno_idx) return true;
+        switch (self.cir.store.getTypeAnno(body)) {
+            .parens => |parens| body = parens.anno,
+            .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => return false,
+        }
+    }
+}
+
+/// How many arguments a bare reference to the declaration whose type is
+/// `decl_var` leaves unapplied: a parameterized declaration's own formals,
+/// or, for an alias re-exporting a type constructor, the arguments its
+/// re-exported application leaves unbound. A declaration body binds every
+/// other variable, so an unbound argument there is exactly an unapplied one.
+fn unappliedTypeConstructorArity(self: *const Self, decl_var: Var) u32 {
+    var current = decl_var;
+    var declared = true;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| {
+                const args = self.types.sliceAliasArgs(alias);
+                if (args.len != 0) return if (declared) @intCast(args.len) else self.countUnboundTypeVars(args);
+                current = self.types.getAliasBackingVar(alias);
+                declared = false;
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal| {
+                    const args = self.types.sliceNominalArgs(nominal);
+                    return if (declared) @intCast(args.len) else self.countUnboundTypeVars(args);
+                },
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return 0,
+            },
+            .flex, .rigid, .field_presence, .err => return 0,
+        }
+    }
+}
+
+fn countUnboundTypeVars(self: *const Self, vars: []const Var) u32 {
+    var count: u32 = 0;
+    for (vars) |var_| switch (self.types.resolveVar(var_).desc.content) {
+        .flex, .rigid => count += 1,
+        .alias, .structure, .field_presence, .err => {},
+    };
+    return count;
 }
 
 /// Resolve a where alias whose declaration lives in another module, from the
@@ -19387,6 +19474,8 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     },
                     .external => |ext| try self.unifyAnnoWithExternalType(
                         try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx),
+                        frame.anno_idx,
+                        lookup.name,
                         anno_var,
                         anno_region,
                         polarity,
@@ -19395,6 +19484,8 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     ),
                     .external_identity => |ext| try self.unifyAnnoWithExternalType(
                         try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx),
+                        frame.anno_idx,
+                        lookup.name,
                         anno_var,
                         anno_region,
                         polarity,
@@ -19419,6 +19510,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                 try self.markErroneous(anno_var);
                 return anno_gen_done;
             }
+            if (try self.rejectUnappliedTypeConstructorInDeclaration(ctx, frame.anno_idx, ModuleEnv.varFrom(local.decl_idx), lookup.name, anno_var, anno_region)) return anno_gen_done;
             const instantiated_var = try self.instantiateVarPolarized(
                 ModuleEnv.varFrom(local.decl_idx),
                 env,
