@@ -16422,9 +16422,9 @@ test "RC specialization: owned-only field takes from different parameters into o
     // Repro for https://github.com/roc-lang/roc/issues/12042: both aggregate
     // parameters solve borrowed, and each switch arm writes a field of a
     // different parameter into the same join parameter, which the join body
-    // consumes. Each field read is an owned-only take in the owned variant,
-    // so the join parameter is a take binding of either parameter depending
-    // on the arm that reached it.
+    // consumes. Each field read is an owned-only take of its own parameter,
+    // so the join parameter, solved owned, receives a taken field from
+    // whichever parameter its arm read.
     const left = try f.local(f.pair_list);
     const right = try f.local(f.pair_list);
     const cond = try f.local(.bool);
@@ -16473,11 +16473,15 @@ test "RC specialization: owned-only field takes from different parameters into o
     const caller_body = try f.assignList(a, &.{}, b_assign);
     _ = try f.addProc(&.{}, caller_body, f.list_i64);
 
-    // Whichever arm runs, the picked field is the only unit the append
-    // consumes; the other parameter's fields and the picked parameter's
-    // residual field are released exactly once, which the debug ownership
-    // certifier run by `insert` verifies.
+    const base_proc_count = f.store.procSpecCount();
     try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // The caller moves both dying pairs into one owned variant. The base proc
+    // retains the borrowed field in each arm; the variant takes it in each
+    // arm without a retain. The debug ownership certifier run by `insert`
+    // verifies that every other field is released exactly once.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 2), f.countRc(picked, .incref));
 }
 
 test "RC field takes through repeated dominating complete projections" {
