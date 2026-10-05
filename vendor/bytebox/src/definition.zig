@@ -258,7 +258,7 @@ pub const Val = extern union {
     I64: i64,
     F32: f32,
     F64: f64,
-    V128: [4]f32,
+    V128: [4]f32 align(16),
     FuncRef: FuncRef,
     ExternRef: ExternRef,
 

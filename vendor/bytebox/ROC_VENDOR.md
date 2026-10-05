@@ -15,8 +15,8 @@ from the build graph because Roc consumes the Zig module directly.
 
 Runtime changes use Zig 0.17's reflected enum arrays, optimization mode names,
 `@Int`, sentinel formatting API, and explicit arrays in place of array repetition.
-`Val.V128` uses C-compatible `[4]f32` storage instead of an extern vector field.
-Vectors coerce to and from this array, preserving 16-byte union storage and the
+`Val.V128` uses C-compatible `[4]f32 align(16)` storage instead of an extern vector field.
+Vectors coerce to and from this array, preserving 16-byte union size and alignment and the
 scalar reinterpretation used by VM marshalling. `roc_smoke_test.zig` validates
 WebAssembly decoding, instantiation, and execution under safety checks. Further
 changes are recorded in the Git diff against the source revision above. `README.md` is the upstream documentation;

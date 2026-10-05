@@ -41,6 +41,7 @@ test "extern vector storage preserves WebAssembly SIMD returns" {
     var returns: [1]bytebox.Val = undefined;
     try instance.invoke(handle, &.{}, &returns, .{});
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(bytebox.Val));
+    try std.testing.expectEqual(@as(usize, 16), @alignOf(bytebox.Val));
     try std.testing.expectEqualSlices(f32, &.{ 1, 2, 3, 4 }, &returns[0].V128);
 }
 
