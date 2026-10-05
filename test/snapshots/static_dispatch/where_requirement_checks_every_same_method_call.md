@@ -114,7 +114,7 @@ f = |value| {
 			(e-block
 				(s-let
 					(p-assign (ident "_first"))
-					(e-dispatch-call (method "convert") (constraint-fn-var 255)
+					(e-dispatch-call (method "convert") (constraint-fn-var 259)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))

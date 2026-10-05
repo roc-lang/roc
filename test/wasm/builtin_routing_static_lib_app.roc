@@ -18,6 +18,20 @@ string_report = |seed| {
     split = Str.split_on("${roc},x", ",")
     utf8 = if seed == 0 { [82.U8, 111.U8, 99.U8] } else { [82.U8, 79.U8, 99.U8] }
     decoded = Str.from_utf8(utf8)
+    utf16 = List.map(utf8, U8.to_u16)
+    utf32 = List.map(utf8, U8.to_u32)
+    decoded16 = Str.from_utf16_le(utf16_bytes(utf16))
+    decoded32 = Str.from_utf32_le(utf32_bytes(utf32))
+    lossy16 = Str.from_utf16_le_lossy(utf16_bytes(List.append(utf16, 0xD800)))
+    lossy32 = Str.from_utf32_le_lossy(utf32_bytes(List.append(utf32, 0x110000)))
+    invalid16 = Str.from_utf16_le(utf16_bytes(List.append(utf16, 0xDC00))) == Err(BadUtf16({ index: 6, problem: UnpairedLowSurrogate }))
+    invalid32 = Str.from_utf32_le(utf32_bytes(List.append(utf32, 0xD800))) == Err(BadUtf32({ index: 12, problem: SurrogateCodePoint }))
+
+    be16 = [0.U8, 82, 0, if seed == 0 { 111 } else { 79 }, 0, 99]
+    be32 = [0.U8, 0, 0, 82, 0, 0, 0, if seed == 0 { 111 } else { 79 }, 0, 0, 0, 99]
+    wide_ok = wide_utf_report(seed)
+    endian16_ok = Str.from_utf16_be(be16) == Ok(roc) and Str.from_utf16_be_lossy(be16) == roc and Str.from_utf16_bom([254, 255].concat(be16)) == Ok(roc) and Str.from_utf16_bom_lossy([254, 255].concat(be16)) == Ok(roc)
+    endian32_ok = Str.from_utf32_be(be32) == Ok(roc) and Str.from_utf32_be_lossy(be32) == roc and Str.from_utf32_bom([0, 0, 254, 255].concat(be32)) == Ok(roc) and Str.from_utf32_bom_lossy([0, 0, 254, 255].concat(be32)) == Ok(roc)
 
     found = match Str.split_first("${roc}:lang", ":") {
         Ok({ before, after }) => { before, after }
@@ -47,6 +61,15 @@ string_report = |seed| {
         \\string find first: ${Str.inspect(found)}
         \\string caseless prefix: ${Str.inspect(caseless_prefix)}
         \\string from utf8: ${Str.inspect(decoded)}
+        \\string from utf16: ${Str.inspect(decoded16)}
+        \\string from utf32: ${Str.inspect(decoded32)}
+        \\string from utf16 lossy: ${lossy16}
+        \\string from utf32 lossy: ${lossy32}
+        \\string invalid utf16: ${Str.inspect(invalid16)}
+        \\string invalid utf32: ${Str.inspect(invalid32)}
+        \\string utf16 byte order: ${Str.inspect(endian16_ok)}
+        \\string utf32 byte order: ${Str.inspect(endian32_ok)}
+        \\string wide UTF boundaries: ${Str.inspect(wide_ok)}
 
     expected =
         \\string trimmed: ${Str.inspect(roc)}
@@ -66,6 +89,15 @@ string_report = |seed| {
         \\string find first: ${Str.inspect({ before: roc, after: "lang" })}
         \\string caseless prefix: ${Str.inspect(roc)}
         \\string from utf8: Ok(${Str.inspect(roc)})
+        \\string from utf16: Ok(${Str.inspect(roc)})
+        \\string from utf32: Ok(${Str.inspect(roc)})
+        \\string from utf16 lossy: ${roc}�
+        \\string from utf32 lossy: ${roc}�
+        \\string invalid utf16: True
+        \\string invalid utf32: True
+        \\string utf16 byte order: True
+        \\string utf32 byte order: True
+        \\string wide UTF boundaries: True
 
     { actual, expected }
 }
@@ -188,4 +220,56 @@ main! = |seed| {
     } else {
         actual
     }
+}
+
+utf16_bytes : List(U16) -> List(U8)
+utf16_bytes = |units| {
+	var $bytes = List.with_capacity(List.len(units) * 2)
+	for unit in units {
+		$bytes = $bytes.append(unit.to_u8_wrap())
+		$bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap())
+	}
+	$bytes
+}
+
+utf32_bytes : List(U32) -> List(U8)
+utf32_bytes = |units| {
+	var $bytes = List.with_capacity(List.len(units) * 4)
+	for unit in units {
+		$bytes = $bytes.append(unit.to_u8_wrap())
+		$bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap())
+		$bytes = $bytes.append(unit.shr_wrap(16).to_u8_wrap())
+		$bytes = $bytes.append(unit.shr_wrap(24).to_u8_wrap())
+	}
+	$bytes
+}
+
+# Both SIMD-enabled and baseline Wasm execute this same byte-decoding corpus.
+wide_utf_report : U64 -> Bool
+wide_utf_report = |seed| {
+    byte = if seed == 0 { 65.U8 } else { 66.U8 }
+    letter = if seed == 0 { "A" } else { "B" }
+    var $ok = True
+    for count in [0.U64, 1, 7, 11, 12, 15, 16, 17, 23, 24, 31, 32, 33, 65] {
+        var $le16 = List.with_capacity(count * 2)
+        var $be16 = List.with_capacity(count * 2)
+        var $le32 = List.with_capacity(count * 4)
+        var $be32 = List.with_capacity(count * 4)
+        var $index = 0.U64
+        while $index < count {
+            $le16 = $le16.append(byte).append(0)
+            $be16 = $be16.append(0).append(byte)
+            $le32 = $le32.append(byte).append(0).append(0).append(0)
+            $be32 = $be32.append(0).append(0).append(0).append(byte)
+            $index = $index + 1
+        }
+        expected = Str.repeat(letter, count)
+        $ok = $ok and Str.from_utf16_le($le16) == Ok(expected) and Str.from_utf16_le_lossy($le16) == expected
+        $ok = $ok and Str.from_utf16_be($be16) == Ok(expected) and Str.from_utf16_be_lossy($be16) == expected
+        $ok = $ok and Str.from_utf32_le($le32) == Ok(expected) and Str.from_utf32_le_lossy($le32) == expected
+        $ok = $ok and Str.from_utf32_be($be32) == Ok(expected) and Str.from_utf32_be_lossy($be32) == expected
+        $ok = $ok and Str.from_utf16_bom([255, 254].concat($le16)) == Ok(expected) and Str.from_utf16_bom_lossy([254, 255].concat($be16)) == Ok(expected)
+        $ok = $ok and Str.from_utf32_bom([255, 254, 0, 0].concat($le32)) == Ok(expected) and Str.from_utf32_bom_lossy([0, 0, 254, 255].concat($be32)) == Ok(expected)
+    }
+    $ok and Str.from_utf16_be([216, 0, 65]) == Err(BadUtf16({ index: 0, problem: UnpairedHighSurrogate })) and Str.from_utf16_be_lossy([216, 0, 65]) == "��" and Str.from_utf32_be_lossy([0, 17, 0, 0, 1]) == "��"
 }
