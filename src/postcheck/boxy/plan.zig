@@ -14226,6 +14226,8 @@ const Builder = struct {
             var stored_capture_substitutions = std.ArrayList(CallDescriptorRepSubstitution).empty;
             defer stored_capture_substitutions.deinit(self.allocator);
             try self.storedFnCaptureDescriptorSubstitutions(.{ .module = static_fn.store_module, .fn_id = static_fn.fn_id }, &stored_capture_substitutions);
+            // The stored callable signature and captures record this value's
+            // instantiation; construction evidence supplies its dictionaries.
             static_fn.hidden_desc_args = try self.materializeWorkerHiddenDescriptorArgsWithStoredCaptures(
                 static_fn.worker,
                 arg_reps,

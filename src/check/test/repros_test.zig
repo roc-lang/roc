@@ -1529,3 +1529,45 @@ test "codec row equality - derived encoder settles a hashed dictionary key row" 
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+test "codec row equality - expect parser error row satisfies equality" {
+    const source =
+        \\expect {
+        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    v = Json.parse("{\"a\":\"x\"}")
+        \\    v == Err(MissingRequiredField("b"))
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "codec row equality - independent expect parser and function error rows" {
+    const source =
+        \\CodecParts :: [].{}
+        \\expect {
+        \\  v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\  v = Json.parse("{\"a\":\"x\"}")
+        \\  v == Err(MissingRequiredField("b"))
+        \\}
+        \\
+        \\run : (Str -> Try(U64, [Bad, ..errs])), Str -> Try(U64, [Bad, ..errs])
+        \\run = |f, s| {
+        \\  n = f(s)?
+        \\  Ok(n + 1)
+        \\}
+        \\
+        \\expect {
+        \\  g : Str -> Try(U64, [Bad, Other(Str)])
+        \\  g = |s| Err(Other(s))
+        \\  r : Try(U64, [Bad, Other(Str)])
+        \\  r = run(g, "x")
+        \\  r == Err(Other("x"))
+        \\}
+        \\
+    ;
+    var test_env = try TestEnv.init("CodecParts", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
