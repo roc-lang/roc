@@ -28985,8 +28985,8 @@ const BodyContext = struct {
         inspected: InspectedTask,
         /// A divergent expression lowered for its effect.
         divergent: DivergentTask,
-        /// A rejected dispatch's operands, then its checked-error crash.
-        rejected_dispatch: RejectedDispatchTask,
+        /// A divergent expression's operands, each for its effect.
+        operand_sequence: OperandSequenceTask,
         /// A loop statement.
         loop: LoopTask,
         /// An iterator method call. Boxed: its method lookup is far larger
@@ -30281,32 +30281,54 @@ const BodyContext = struct {
         }
     }
 
-    /// A call to a rejected method (`checked_error`) follows strict call
-    /// semantics: its receiver and arguments evaluate in order, each for its
-    /// effect, and then the call crashes with the checked-error message. An
-    /// operand that diverges ends the sequence, since its own crash happens
-    /// first.
-    const RejectedDispatchTask = struct {
-        /// The source expressions the dispatch's operands evaluate, in
-        /// evaluation order. Owned.
+    /// A divergent expression evaluates its operands in source order, each
+    /// for its effect, up to the operand whose evaluation diverges; a
+    /// dispatch that cannot run (`DispatchCrashReason`) evaluates all of its
+    /// operands and then crashes. Every operand before the divergence point
+    /// is observable, so none is skipped. Only the operands up to and
+    /// including the first divergent one are listed: nothing after it runs.
+    const OperandSequenceTask = struct {
+        /// The operand expressions in evaluation order. Owned.
         operands: []const checked.CheckedExprId,
         ty: Type.TypeId,
+        tail: OperandSequenceTail,
         index: usize = 0,
         stmts: std.ArrayList(DraftStmtId) = .empty,
     };
 
-    fn releaseRejectedDispatchTask(self: *BodyContext, task: *RejectedDispatchTask) void {
+    const OperandSequenceTail = union(enum) {
+        /// The last operand diverges.
+        diverges,
+        /// The dispatch crashes once every operand has evaluated.
+        dispatch_crash: DispatchCrashReason,
+    };
+
+    fn releaseOperandSequenceTask(self: *BodyContext, task: *OperandSequenceTask) void {
         self.allocator.free(task.operands);
         task.operands = &.{};
         task.stmts.deinit(self.allocator);
         task.stmts = .empty;
     }
 
-    /// The source expressions a rejected dispatch evaluates before it
-    /// crashes. A generated interpolation iterator evaluates the
+    /// The operands of a divergent expression whose evaluation diverges at
+    /// one of them: every operand up to and including the first divergent
+    /// one, in evaluation order.
+    fn divergentOperandsStep(self: *BodyContext, operands: []const checked.CheckedExprId, ty: Type.TypeId) Allocator.Error!LowerStep {
+        const len = for (operands, 0..) |operand, index| {
+            if (self.checkedExprDivergesInLoweredRuntime(operand)) break index + 1;
+        } else Common.invariant("checked expression was marked divergent but no divergent operand was found");
+        return requestLowerTask(self, .{ .operand_sequence = .{
+            .operands = try self.allocator.dupe(checked.CheckedExprId, operands[0..len]),
+            .ty = ty,
+            .tail = .diverges,
+        } });
+    }
+
+    /// The source expressions a dispatch's operands evaluate, in evaluation
+    /// order. A generated interpolation iterator evaluates the
     /// interpolation's segments and values; a generated numeral or quote
-    /// operand is literal source text with nothing to evaluate.
-    fn rejectedDispatchOperandExprs(
+    /// operand is literal source text with nothing to evaluate. Owned.
+    fn dispatchOperandExprs(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error![]const checked.CheckedExprId {
@@ -30317,27 +30339,35 @@ const BodyContext = struct {
             .generated_interpolation_iter => |expr| {
                 const interpolation = switch (self.view.bodies.expr(expr).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("rejected interpolation iterator referenced a non-interpolation expression"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("dispatch interpolation iterator referenced a non-interpolation expression"),
                 };
-                try exprs.append(self.allocator, interpolation.first);
-                for (interpolation.parts) |part| {
-                    try exprs.append(self.allocator, part.value);
-                    try exprs.append(self.allocator, part.following_segment);
-                }
+                try appendInterpolationOperands(self.allocator, &exprs, interpolation);
             },
             .generated_numeral, .generated_quote => {},
         };
         return try exprs.toOwnedSlice(self.allocator);
     }
 
-    fn stepRejectedDispatch(self: *BodyContext, task: *RejectedDispatchTask, input: ?LowerResult) Allocator.Error!LowerStep {
+    fn appendInterpolationOperands(
+        allocator: Allocator,
+        exprs: *std.ArrayList(checked.CheckedExprId),
+        interpolation: checked.CheckedInterpolation,
+    ) Allocator.Error!void {
+        try exprs.append(allocator, interpolation.first);
+        for (interpolation.parts) |part| {
+            try exprs.append(allocator, part.value);
+            try exprs.append(allocator, part.following_segment);
+        }
+    }
+
+    fn stepOperandSequence(self: *BodyContext, task: *OperandSequenceTask, input: ?LowerResult) Allocator.Error!LowerStep {
         if (input) |result| {
             const lowered = result.statementValue();
             if (lowered.stmt) |stmt| try task.stmts.append(self.allocator, stmt);
             switch (lowered.termination) {
                 .none => {},
-                .checked_control_transfer => return try self.finishRejectedDispatch(task, try self.unreachableAfterTerminatingStatementExpr(task.ty)),
-                .uninhabited => |scrutinee| return try self.finishRejectedDispatch(task, try self.zeroBranchMatch(scrutinee, task.ty)),
+                .checked_control_transfer => return try self.finishOperandSequence(task, try self.unreachableAfterTerminatingStatementExpr(task.ty)),
+                .uninhabited => |scrutinee| return try self.finishOperandSequence(task, try self.zeroBranchMatch(scrutinee, task.ty)),
             }
         }
         if (task.index < task.operands.len) {
@@ -30345,13 +30375,16 @@ const BodyContext = struct {
             task.index += 1;
             return requestLowerTask(self, .{ .discarded = .{ .expr = operand } });
         }
-        return try self.finishRejectedDispatch(task, try self.addExpr(.{
-            .ty = task.ty,
-            .data = try self.dispatchCrashData(.checked_error),
-        }));
+        return switch (task.tail) {
+            .diverges => Common.invariant("divergent operand sequence ended without diverging"),
+            .dispatch_crash => |reason| try self.finishOperandSequence(task, try self.addExpr(.{
+                .ty = task.ty,
+                .data = try self.dispatchCrashData(reason),
+            })),
+        };
     }
 
-    fn finishRejectedDispatch(self: *BodyContext, task: *RejectedDispatchTask, final_expr: DraftExprId) Allocator.Error!LowerStep {
+    fn finishOperandSequence(self: *BodyContext, task: *OperandSequenceTask, final_expr: DraftExprId) Allocator.Error!LowerStep {
         return .{ .ret = .{ .data = .{ .block = .{
             .statements = try self.addStmtSpan(task.stmts.items),
             .final_expr = final_expr,
@@ -30374,9 +30407,7 @@ const BodyContext = struct {
                 task.finish = .{ .expect_err = checked_expr.source_region };
                 return requestLowerTask(self, .{ .inspected = .{ .expr = expect_err.expr, .expect_err_snippet = expect_err.snippet } });
             },
-            .str => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
-            .list => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
-            .tuple => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
+            .str, .list, .tuple => |items| return try self.divergentOperandsStep(items, ty),
             .block => |block| return requestLowerTask(self, .{ .block = .{
                 .statements = block.statements,
                 .final_expr = block.final_expr,
@@ -30393,19 +30424,22 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
             },
             .call => |call| {
-                if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
-                    return self.divergentEffectStep(call.func, ty);
-                }
-                return self.divergentEffectStep(self.firstDivergentChild(call.args), ty);
+                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                defer operands.deinit(self.allocator);
+                try operands.append(self.allocator, call.func);
+                try operands.appendSlice(self.allocator, call.args);
+                return try self.divergentOperandsStep(operands.items, ty);
             },
-            .record => |record| return self.divergentEffectStep(self.divergentRecordChild(record), ty),
-            .tag => |tag| return self.divergentEffectStep(self.firstDivergentChild(tag.args), ty),
+            .record => |record| {
+                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                defer operands.deinit(self.allocator);
+                if (record.ext) |ext| try operands.append(self.allocator, ext);
+                for (record.fields) |field| try operands.append(self.allocator, field.value);
+                return try self.divergentOperandsStep(operands.items, ty);
+            },
+            .tag => |tag| return try self.divergentOperandsStep(tag.args, ty),
             .nominal => |nominal| return self.divergentEffectStep(nominal.backing_expr, ty),
-            .binop => |binop| {
-                if (self.checkedExprDivergesInLoweredRuntime(binop.lhs)) return self.divergentEffectStep(binop.lhs, ty);
-                if (self.checkedExprDivergesInLoweredRuntime(binop.rhs)) return self.divergentEffectStep(binop.rhs, ty);
-                Common.invariant("checked binary expression was marked divergent but no divergent child was found");
-            },
+            .binop => |binop| return try self.divergentOperandsStep(&.{ binop.lhs, binop.rhs }, ty),
             .unary_minus,
             .unary_not,
             .dbg,
@@ -30415,21 +30449,13 @@ const BodyContext = struct {
             else
                 Common.invariant("omitted checked expect reached divergent runtime lowering"),
             .field_access => |field| return self.divergentEffectStep(field.receiver, ty),
-            .structural_eq => |eq| {
-                if (self.checkedExprDivergesInLoweredRuntime(eq.lhs)) return self.divergentEffectStep(eq.lhs, ty);
-                if (self.checkedExprDivergesInLoweredRuntime(eq.rhs)) return self.divergentEffectStep(eq.rhs, ty);
-                Common.invariant("checked structural equality was marked divergent but no divergent child was found");
-            },
-            .structural_hash => |hash| {
-                if (self.checkedExprDivergesInLoweredRuntime(hash.value)) return self.divergentEffectStep(hash.value, ty);
-                if (self.checkedExprDivergesInLoweredRuntime(hash.hasher)) return self.divergentEffectStep(hash.hasher, ty);
-                Common.invariant("checked structural hash was marked divergent but no divergent child was found");
-            },
+            .structural_eq => |eq| return try self.divergentOperandsStep(&.{ eq.lhs, eq.rhs }, ty),
+            .structural_hash => |hash| return try self.divergentOperandsStep(&.{ hash.value, hash.hasher }, ty),
             .tuple_access => |access| return self.divergentEffectStep(access.tuple, ty),
             .for_ => |for_| return self.divergentEffectStep(for_.expr, ty),
             .run_low_level => |low_level| {
                 for (low_level.args) |arg| {
-                    if (self.checkedExprDivergesInLoweredRuntime(arg)) return self.divergentEffectStep(arg, ty);
+                    if (self.checkedExprDivergesInLoweredRuntime(arg)) return try self.divergentOperandsStep(low_level.args, ty);
                 }
                 if (low_level.op != .crash) {
                     Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
@@ -30438,7 +30464,12 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
             },
             .dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
-            .interpolation => |interpolation| return self.divergentEffectStep(self.divergentInterpolationChild(interpolation), ty),
+            .interpolation => |interpolation| {
+                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                defer operands.deinit(self.allocator);
+                try appendInterpolationOperands(self.allocator, &operands, interpolation);
+                return try self.divergentOperandsStep(operands.items, ty);
+            },
             .method_eq => |plan| return try self.divergentDispatchStep(plan, ty),
             .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
             .numeral => |numeral| return try self.divergentDispatchStep(numeral.plan, ty),
@@ -30461,32 +30492,6 @@ const BodyContext = struct {
         return .{ .ret = .{ .data = data } };
     }
 
-    fn firstDivergentChild(self: *BodyContext, items: []const checked.CheckedExprId) checked.CheckedExprId {
-        for (items) |item| {
-            if (self.checkedExprDivergesInLoweredRuntime(item)) return item;
-        }
-        Common.invariant("checked expression was marked divergent but no divergent child was found");
-    }
-
-    fn divergentRecordChild(self: *BodyContext, record: anytype) checked.CheckedExprId {
-        if (record.ext) |ext| {
-            if (self.checkedExprDivergesInLoweredRuntime(ext)) return ext;
-        }
-        for (record.fields) |field| {
-            if (self.checkedExprDivergesInLoweredRuntime(field.value)) return field.value;
-        }
-        Common.invariant("checked record expression was marked divergent but no divergent child was found");
-    }
-
-    fn divergentInterpolationChild(self: *BodyContext, interpolation: checked.CheckedInterpolation) checked.CheckedExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(interpolation.first)) return interpolation.first;
-        for (interpolation.parts) |part| {
-            if (self.checkedExprDivergesInLoweredRuntime(part.value)) return part.value;
-            if (self.checkedExprDivergesInLoweredRuntime(part.following_segment)) return part.following_segment;
-        }
-        Common.invariant("checked interpolation was marked divergent but no divergent child was found");
-    }
-
     fn divergentDispatchStep(
         self: *BodyContext,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
@@ -30494,30 +30499,16 @@ const BodyContext = struct {
     ) Allocator.Error!LowerStep {
         const plan_id = maybe_plan orelse Common.invariant("divergent checked dispatch expression did not contain its checked plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        switch (self.dispatchRuntimePlan(plan)) {
-            .callable => {},
-            .crash => |reason| switch (reason) {
-                .checked_error => return requestLowerTask(self, .{ .rejected_dispatch = .{
-                    .operands = try self.rejectedDispatchOperandExprs(plan),
-                    .ty = ty,
-                } }),
-                .unreachable_value => return .{ .ret = .{ .data = try self.dispatchCrashData(reason) } },
-            },
-        }
-        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
-            .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
-                return self.divergentEffectStep(expr, ty);
-            },
-            .generated_interpolation_iter => |expr| {
-                const interpolation = switch (self.view.bodies.expr(expr).data) {
-                    .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("divergent interpolation iterator referenced a non-interpolation expression"),
-                };
-                return self.divergentEffectStep(self.divergentInterpolationChild(interpolation), ty);
-            },
-            .generated_numeral, .generated_quote => {},
+        const operands = try self.dispatchOperandExprs(plan);
+        defer self.allocator.free(operands);
+        return switch (self.dispatchRuntimePlan(plan)) {
+            .callable => try self.divergentOperandsStep(operands, ty),
+            .crash => |reason| requestLowerTask(self, .{ .operand_sequence = .{
+                .operands = try self.allocator.dupe(checked.CheckedExprId, operands),
+                .ty = ty,
+                .tail = .{ .dispatch_crash = reason },
+            } }),
         };
-        Common.invariant("checked dispatch expression was marked divergent but no divergent operand was found");
     }
 
     /// A `for` loop's checked fields, shared by its statement and expression
@@ -30549,7 +30540,7 @@ const BodyContext = struct {
             for_: CheckedForLoop,
             condition: struct { loop: checked.CheckedConditionLoop, condition: WhileCondition },
         },
-        stage: enum { start, rejected_iterable, initial_iterator, step_expr, one_body, cond, body } = .start,
+        stage: union(enum) { start, crashing_iter: DispatchCrashReason, initial_iterator, step_expr, one_body, cond, body } = .start,
         carries: []LoopCarry = &.{},
         loop_cell: DraftTypeCell = undefined,
         /// The binder mappings the loop parameters replace.
@@ -30627,21 +30618,15 @@ const BodyContext = struct {
                     .for_ => |for_| {
                         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
                         task.plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
-                        // A rejected `iter` call evaluates the iterable it
-                        // receives and then crashes; a rejected `next` call
-                        // crashes once `iter` has produced the iterator it
-                        // receives (`initial_iterator`).
-                        if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| switch (reason) {
-                            .checked_error => {
-                                task.stage = .rejected_iterable;
-                                return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.iterable } });
-                            },
-                            .unreachable_value => return self.finishLoop(task, try self.dispatchCrashData(reason)),
-                        };
-                        if (self.dispatchCrashReason(task.plan.next.resolution)) |reason| switch (reason) {
-                            .checked_error => {},
-                            .unreachable_value => return self.finishLoop(task, try self.dispatchCrashData(reason)),
-                        };
+                        // An `iter` call that cannot run evaluates the
+                        // iterable it receives and then crashes; a `next`
+                        // call that cannot run crashes once `iter` has
+                        // produced the iterator it receives
+                        // (`initial_iterator`).
+                        if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| {
+                            task.stage = .{ .crashing_iter = reason };
+                            return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.iterable } });
+                        }
                         task.stage = .initial_iterator;
                         return self.iteratorDispatchStep(.{
                             .plan = task.plan.iter,
@@ -30665,7 +30650,7 @@ const BodyContext = struct {
                     },
                 }
             },
-            .rejected_iterable => {
+            .crashing_iter => |reason| {
                 const lowered = input.?.statementValue();
                 var statement_buf: [1]DraftStmtId = undefined;
                 const statements: []const DraftStmtId = if (lowered.stmt) |stmt| blk: {
@@ -30673,7 +30658,7 @@ const BodyContext = struct {
                     break :blk statement_buf[0..1];
                 } else &.{};
                 const final_expr = switch (lowered.termination) {
-                    .none => try self.addExprWithTypeCell(task.loop_cell, try self.dispatchCrashData(.checked_error)),
+                    .none => try self.addExprWithTypeCell(task.loop_cell, try self.dispatchCrashData(reason)),
                     .checked_control_transfer => try self.addExprWithTypeCell(task.loop_cell, .@"unreachable"),
                     .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, task.loop_cell),
                 };
@@ -31586,7 +31571,7 @@ const BodyContext = struct {
             },
             .value_then_state => |*task| self.releaseValueThenStateTask(task),
             .discarded => |*task| self.releaseDiscardedTask(task),
-            .rejected_dispatch => |*task| self.releaseRejectedDispatchTask(task),
+            .operand_sequence => |*task| self.releaseOperandSequenceTask(task),
             .statement => |*task| self.releaseStatementTask(task),
             .loop => |*task| self.releaseLoopTask(task),
             .iterator_dispatch => |task| {
@@ -31662,7 +31647,7 @@ const BodyContext = struct {
             .return_value => |*task| self.stepReturn(frame, task, input),
             .inspected => |*task| self.stepInspected(frame, task, input),
             .divergent => |*task| self.stepDivergent(frame, task, input),
-            .rejected_dispatch => |*task| self.stepRejectedDispatch(task, input),
+            .operand_sequence => |*task| self.stepOperandSequence(task, input),
             .loop => |*task| self.stepLoop(task, input),
             .iterator_dispatch => |task| self.stepIteratorDispatch(frame, task, input),
             .materialize => |*task| self.stepMaterialize(task, input),

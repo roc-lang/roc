@@ -861,7 +861,15 @@ closure_arg = |xs| {
 						(p-assign (ident "xs")))))))
 	(d-let
 		(p-assign (ident "closure_arg"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-assign (ident "xs")))
+			(e-block
+				(s-let
+					(p-assign (ident "ys"))
+					(e-lookup-local
+						(p-assign (ident "xs"))))
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -871,11 +879,11 @@ closure_arg = |xs| {
 		(patt (type "Str -> Str"))
 		(patt (type "Str -> Str"))
 		(patt (type "List(item) -> U64"))
-		(patt (type "List(List(U64)) -> Error")))
+		(patt (type "List(List(U64)) -> _ret")))
 	(expressions
 		(expr (type "Str -> Try(Str, [BadInput])"))
 		(expr (type "Str -> Str"))
 		(expr (type "Str -> Str"))
 		(expr (type "List(item) -> U64"))
-		(expr (type "List(List(U64)) -> Error"))))
+		(expr (type "List(List(U64)) -> _ret"))))
 ~~~

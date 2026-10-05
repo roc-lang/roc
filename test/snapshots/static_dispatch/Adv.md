@@ -456,7 +456,19 @@ main = {
 				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "mismatch2"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "val"))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-num (value "10"))
+							(e-string
+								(e-literal (string "hello")))))))
+			(s-let
+				(p-assign (ident "next_val"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "mismatch3"))
 		(e-block
@@ -525,7 +537,7 @@ main = {
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
 		(patt (type "Adv"))
-		(patt (type "Error"))
+		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "(Str, U64)")))
 	(type_decls
@@ -537,7 +549,7 @@ main = {
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
 		(expr (type "Adv"))
-		(expr (type "Error"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "(Str, U64)"))))
 ~~~

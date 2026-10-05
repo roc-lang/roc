@@ -110,5 +110,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_arg -> Error"))
+(expr (type "_arg -> _ret"))
 ~~~

@@ -854,6 +854,15 @@ checker recovery. The recovery rules:
   shares and retire the whole expression, so a branch that is never taken
   would crash. A checked runtime error produces no value, so lowering gives it
   its consumer's representation rather than its own type.
+- A block whose final value is erroneous (its final expression is in
+  `call_operand_type_error_exprs`) retires only that final expression, by the
+  same rule as an erroneous branch: the final value does not join the block's
+  result, whose type stays unconstrained like a block that diverges in a
+  statement. Joining it would write the error into the block's type, and from
+  there into an enclosing function's return type or a binding's type, which
+  retires the whole block, function, or binding, so the block's earlier
+  statements would never run. The statements run and the program crashes
+  where the erroneous final value is evaluated.
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
   runtime error. The rejected relation has no lowering.
@@ -13085,10 +13094,13 @@ its plan:
   direct payload index.
 - `checked_error`—checking rejected the site; executing it anyway (running a
   program with reported errors) evaluates the call's receiver and arguments
-  and then crashes explicitly (rejected calls evaluate their operands, below).
+  and then crashes explicitly (dispatches that cannot run evaluate their
+  operands, below).
 - `unreachable`—the dispatcher is a constrained variable no
   specialization edge can ever supply and no default applies: the dispatch is
-  statically unreachable and lowers to an explicit crash.
+  statically unreachable, and reaching it anyway evaluates its receiver and
+  arguments and then crashes explicitly (dispatches that cannot run evaluate
+  their operands, below).
 
 Checking records `checked_error` on the equivalence class of the static-dispatch
 constraint function variable that owns the rejected edge, as the descriptor
@@ -13213,27 +13225,39 @@ the crash observed if `roc run` continues after reporting the missing method and
 execution reaches the rejected dispatch. For `unreachable`, the crash
 represents the path that checking proved cannot receive a dispatcher value.
 
-Rejected calls evaluate their operands. A call that dispatches to a rejected
-method (`checked_error`, by any of its routes) uses strict evaluation in
-every lowering mode: its receiver and arguments evaluate first, in their normal
-order and with every `dbg`, effect, and crash inside them, and then the call
-crashes with the checked-error crash (`method dispatch failed to check`). An
-operand that crashes ends the sequence, so its crash is the one observed. The
-dispatch stays explicit through lowering: Monotype lowers its operands as
-discarded statements before the `checked_error` crash (`RejectedDispatchTask`),
-and Boxy lowers them into discarded locals before the same crash
-(`beginRejectedDispatch`), exactly as a call through a dictionary slot filled
-with a crashing method evaluates its arguments before the slot crashes. A
-generated interpolation iterator operand evaluates the interpolation's segments
-and values; a generated numeral or quote operand is literal source text with
-nothing to evaluate. A `for` loop's implicit calls follow the same rule: a
-rejected `iter` evaluates the iterable first, and a rejected `next` crashes
-once `iter` has produced the iterator it receives. A derived equality or hash
-whose component reaches a rejected method has already evaluated its operands,
-because every derivation binds its operands to locals, each evaluated once and
-in order, before any component comparison or hash runs. This is distinct from
-call-operand retirement, where an operand is itself erroneous: evaluating that
-operand already crashes.
+Dispatches that cannot run evaluate their operands. A call that dispatches to a
+rejected method (`checked_error`, by any of its routes) or through an edge no
+value can reach (`unreachable`) uses strict evaluation in every lowering mode:
+its receiver and arguments evaluate first, in their normal order and with every
+`dbg`, effect, and crash inside them, and then the call crashes with its
+dispatch crash (`method dispatch failed to check`, or `dispatch on a value that
+can never exist`). An operand that crashes ends the sequence, so its crash is
+the one observed. The dispatch stays explicit through lowering: Monotype lowers
+its operands as discarded statements before the crash (`OperandSequenceTask`
+with a `dispatch_crash` tail), and Boxy lowers them into discarded locals
+before the same crash (`beginCrashingDispatch`), exactly as a call through a
+dictionary slot filled with a crashing method evaluates its arguments before
+the slot crashes. A generated interpolation iterator operand evaluates the
+interpolation's segments and values; a generated numeral or quote operand is
+literal source text with nothing to evaluate. A `for` loop's implicit calls
+follow the same rule: an `iter` that cannot run evaluates the iterable first,
+and a `next` that cannot run crashes once `iter` has produced the iterator it
+receives. A derived equality or hash whose component reaches a rejected method
+has already evaluated its operands, because every derivation binds its operands
+to locals, each evaluated once and in order, before any component comparison or
+hash runs.
+
+Divergent expressions evaluate their earlier operands. Monotype lowers an
+expression that checking marked divergent without asking for its value, and
+that lowering keeps strict evaluation: a call (callee, then arguments), tuple,
+list, record (its update base, then its fields in source order), tag,
+interpolation, string, equality, hash, low-level operation, or dispatch
+evaluates each operand in order, for its effect, up to and including the first
+operand the divergence column marks divergent, and nothing after it
+(`divergentOperandsStep`). Operands before the divergence point are observable
+(`dbg`, effects, an earlier crash) and evaluate exactly as Boxy evaluates them.
+Only the divergent path does this work: a value that does not diverge lowers
+through the ordinary operand lowering.
 
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When

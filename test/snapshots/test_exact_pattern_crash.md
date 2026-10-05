@@ -303,7 +303,20 @@ main = {
 					(ty-rigid-var-lookup (ty-rigid-var (name "d")))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "p1"))
+				(e-call (constraint-fn-var 376)
+					(e-lookup-local
+						(p-assign (ident "swap_pair")))
+					(e-tuple
+						(elems
+							(e-num (value "1"))
+							(e-num (value "2"))))))
+			(s-let
+				(p-assign (ident "p2"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args
@@ -319,7 +332,7 @@ main = {
 	(defs
 		(patt (type "Pair(a, b) -> Pair(b, a)"))
 		(patt (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
-		(patt (type "Error")))
+		(patt (type "_e")))
 	(type_decls
 		(alias (type "Pair(a, b)")
 			(ty-header (name "Pair")
@@ -329,5 +342,5 @@ main = {
 	(expressions
 		(expr (type "Pair(a, b) -> Pair(b, a)"))
 		(expr (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
-		(expr (type "Error"))))
+		(expr (type "_e"))))
 ~~~

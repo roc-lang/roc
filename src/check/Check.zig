@@ -25533,6 +25533,12 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, state: *BlockCheck, env: *Env,
             // the block's type since the final expression is unreachable
             if (state.statements.diverges) {
                 try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+            } else if (self.branchValueIsErroneous(block.final_expr)) {
+                // An erroneous final value is retired on its own, like an
+                // erroneous branch: it produces no value, so it does not
+                // join the block's result, and the block's statements still
+                // run before it.
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
             } else {
                 // Link the root expr with the final expr
                 _ = try self.unify(expr_var, ModuleEnv.varFrom(block.final_expr), env);

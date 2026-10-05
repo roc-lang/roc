@@ -557,6 +557,16 @@ pub fn lambdaBodyStatement(self: *const TestEnv, target_def_name: []const u8, st
     return store.getStatement(stmts[stmt_index]);
 }
 
+/// The final expression of the block that is a top-level lambda's body.
+pub fn lambdaBodyFinalExpr(self: *const TestEnv, target_def_name: []const u8) TestEnvError!CIR.Expr {
+    const store = &self.module_env.store;
+    const lambda = store.getExpr(try self.defExpr(target_def_name));
+    try testing.expect(lambda == .e_lambda);
+    const body = store.getExpr(lambda.e_lambda.body);
+    try testing.expect(body == .e_block);
+    return store.getExpr(body.e_block.final_expr);
+}
+
 fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Var {
     const idents = self.module_env.getIdentStoreConst();
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);

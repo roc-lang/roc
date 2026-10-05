@@ -181,7 +181,11 @@ a = || {}
 									(p-list
 										(patterns))))
 							(value
-								(e-runtime-error (tag "erroneous_value_expr")))))))))
+								(e-block
+									(s-expr
+										(e-block
+											(e-runtime-error (tag "empty_tuple"))))
+									(e-runtime-error (tag "erroneous_value_expr"))))))))))
 	(d-let
 		(p-assign (ident "a"))
 		(e-lambda

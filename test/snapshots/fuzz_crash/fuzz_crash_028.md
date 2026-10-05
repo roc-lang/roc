@@ -3220,7 +3220,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1391) (dispatcher-var 280)
+						(e-interpolation (constraint-fn-var 1390) (dispatcher-var 280)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3233,7 +3233,8 @@ EndOfFile,
 				(s-for
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-block
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "rd"))
 					(e-runtime-error (tag "erroneous_value_expr")))
@@ -3248,11 +3249,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1582)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1581)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1579)
+										(e-dispatch-call (method "times") (constraint-fn-var 1578)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3267,18 +3268,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1615)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1614)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1605)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1604)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1642)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1641)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1632)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1631)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3293,11 +3294,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1681)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1680)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1678)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1677)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3312,12 +3313,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1761)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1760)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1724)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1723)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
@@ -3428,7 +3429,11 @@ EndOfFile,
 	(s-expect
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(s-let
+				(p-assign (ident "f"))
+				(e-num (value "1")))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure
