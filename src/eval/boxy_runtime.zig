@@ -5936,7 +5936,7 @@ pub const BoxyRuntime = struct {
             },
             .record, .tuple => return try self.structHash(hooks, value, layout_idx, desc, hasher),
             .tag_union => {
-                var row_names = std.ArrayList([]const u8).empty;
+                var row_names = std.ArrayList(LIR.BoxyNameId).empty;
                 defer row_names.deinit(self.scratch);
                 try self.collectBoxyRowTagNames(hooks, desc, &row_names);
                 return try self.tagUnionHashInRow(hooks, value, layout_idx, desc, row_names.items, hasher);
@@ -6059,14 +6059,14 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         desc: *const LirProgram.BoxyTypeDesc,
-        names: *std.ArrayList([]const u8),
+        names: *std.ArrayList(LIR.BoxyNameId),
     ) Error!void {
         var current = desc;
         while (true) {
             for (self.requireBoxyTagVariants(current.tag_variants)) |variant| {
-                const name = self.store.getBoxyName(variant.name);
+                const name = variant.name;
                 for (names.items) |existing| {
-                    if (std.mem.eql(u8, existing, name)) break;
+                    if (existing == name) break;
                 } else try names.append(self.scratch, name);
             }
             if (current.tag_ext_desc == null) return;
@@ -6095,14 +6095,14 @@ pub const BoxyRuntime = struct {
         value: Value,
         union_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
-        row_names: []const []const u8,
+        row_names: []const LIR.BoxyNameId,
         hasher: u64,
     ) Error!u64 {
         const layout_val = self.layout_store.getLayout(union_layout);
         switch (layout_val.tag) {
             .zst => {
                 const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
-                const state = hashU64(hasher, .u64, rowTagIndex(row_names, self.store.getBoxyName(variant.name)), 8);
+                const state = hashU64(hasher, .u64, self.rowTagIndex(row_names, variant.name), 8);
                 return try self.tagPayloadsHash(hooks, variant, Value.zst, .zst, state);
             },
             .erased_box => {
@@ -6128,15 +6128,15 @@ pub const BoxyRuntime = struct {
             }
         }
         const variant = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-        const state = hashU64(hasher, .u64, rowTagIndex(row_names, self.store.getBoxyName(variant.name)), 8);
+        const state = hashU64(hasher, .u64, self.rowTagIndex(row_names, variant.name), 8);
         return try self.tagPayloadsHash(hooks, variant, tag_base.value, variant.payload_layout, state);
     }
 
     /// The index of `name` among `row_names` in tag layout order.
-    fn rowTagIndex(row_names: []const []const u8, name: []const u8) u64 {
+    fn rowTagIndex(self: *const BoxyRuntime, row_names: []const LIR.BoxyNameId, name: LIR.BoxyNameId) u64 {
         var index: u64 = 0;
         for (row_names) |other| {
-            if (base.Ident.textLessThan(other, name)) index += 1;
+            if (base.Ident.textLessThan(self.store.getBoxyName(other), self.store.getBoxyName(name))) index += 1;
         }
         return index;
     }

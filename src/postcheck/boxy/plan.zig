@@ -20510,7 +20510,7 @@ fn isLookupExpr(data: anytype) bool {
     };
 }
 
-/// Return the module identity and canonical labels used for cross-module comparison.
+/// Return the module identity and label store used for cross-module comparison.
 pub fn moduleNamesOf(view: ModuleView) ModuleNames {
     return .{ .key = view.key, .canonical_names = view.canonical_names };
 }
