@@ -9,6 +9,46 @@ steps, and the native, generated Zig glue, and small WASM gates below pass.
 A published roc-bootstrap release is still pending. ReleaseFast measurements
 and their source checkpoint are recorded below.
 
+## Full local validation in progress
+
+The complete ReleaseSafe unit aggregate at `52f60bd7ca` completed 332 of
+352 build steps, with 6,555 passed tests and 10 skips. Nine compilation
+groups failed. Repairs cover duplicate OS switch cases, the standalone
+LSP root's explicit version-module import, HTTP error sets, immutable test
+array slices, scalar PPC NaN construction, and Snapshot field/error APIs.
+The repaired bundle leaf passes all 26 tests, and focused PPC NaN and real
+local HTTP probes pass. Full repaired producers and the aggregate still
+need validation on the consolidated source.
+
+Unit reports now use an actual temporary directory owned by each summary.
+After a test writer succeeds, an explicitly dependent cached copy retains
+its report before the summary reads it. This avoids shared mutable outputs
+across producers, build modes, source edits, filters, and concurrent build
+invocations. The actual build regression passes 13 controls, including
+concurrent identical and full/filtered runs, preserved prior report bytes,
+a named failing test, and rejection of duplicate producer names. Failed
+runs block the retained copy; Zig may remove their temporary reports, while
+stderr keeps the diagnostics. Temporary paths affect copy identity, so
+this change does not claim report-content deduplication.
+
+Optional Git display metadata uses file-content dependencies for existing
+regular files and directory-entry dependencies on the nearest existing
+parent for absent paths. Source archives no longer declare nonexistent Git
+files as mandatory configure inputs. The real cached build passes 21
+controls covering Gitless sources, checkouts, worktrees, loose and packed
+refs, creation/deletion, and explicit failure on malformed metadata paths.
+A separate negative control creates `.git` and restores the parent
+mtime: stock Zig 0.17 reuses stale configure output when size, inode, and
+mtime remain unchanged. This is a recorded upstream cache assumption,
+not a passing control or a reason to poison routine build configurations.
+
+Full validation remains broader than MiniCI: all four evaluator backends,
+full CLI size/speed cases, Debug/ReleaseSafe/ReleaseFast correctness,
+Nix and Tracy builds, instrumented AFL, Valgrind, and cache/fixture gates.
+Executed results retain their actual source revisions; earlier counts
+below do not establish completion of these final gates. Compatible bundle
+publication and supported-platform CI remain pending.
+
 ## Current upstream integration
 
 The integration of upstream `1665a944c27f1be90dc8928d37d64cd4be8ae977`
