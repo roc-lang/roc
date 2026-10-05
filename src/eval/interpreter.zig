@@ -2794,6 +2794,7 @@ pub const Interpreter = struct {
                                 self.pending_erased.?.conversion = .{
                                     .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
                                     .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                    .keeps_own_desc = pending_return.keeps_own_desc,
                                 };
                                 return .returned_pending;
                             }
@@ -2923,6 +2924,7 @@ pub const Interpreter = struct {
                                 self.pending_erased.?.conversion = .{
                                     .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
                                     .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                    .keeps_own_desc = pending_return.keeps_own_desc,
                                 };
                                 return .returned_pending;
                             }
@@ -4150,6 +4152,9 @@ pub const Interpreter = struct {
     const PendingConversion = struct {
         layout: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc,
+        /// The conversion stores the result under the descriptor the value
+        /// arrives with.
+        keeps_own_desc: bool,
     };
 
     /// Whether calls pending after a statement are made in this frame.
@@ -4191,7 +4196,7 @@ pub const Interpreter = struct {
                         current.value,
                         current_layout,
                         current.desc,
-                        conversion.desc,
+                        if (conversion.keeps_own_desc) current.desc else conversion.desc,
                         conversion.layout,
                     );
                     current_layout = conversion.layout;

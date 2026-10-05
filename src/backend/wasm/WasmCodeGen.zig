@@ -8515,6 +8515,7 @@ fn emitReturnIfCallPending(self: *Self, pending: LIR.PendingReturn) Allocator.Er
         wasmInvariantFmt("WASM/codegen invariant violated: a pending-call return outside a procedure", .{});
     if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
     try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout))));
+    try self.emitI32Const(@intFromBool(pending.keeps_own_desc));
     try self.emitBoxyCall("roc_boxy_return_pending");
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
@@ -9058,7 +9059,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_drive_pending", &.{ .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_caller_drives", &.{.i32}, &.{.i32});
-    try self.registerBoxySymbol("roc_boxy_return_pending", &.{ .i32, .i32 }, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_return_pending", &.{ .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_list_concat", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_prepend", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_sublist", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32 }, &.{});

@@ -1071,8 +1071,11 @@ pub const PendingDrive = enum(u8) {
 /// layout in the procedure's place.
 pub const PendingReturn = struct {
     /// The descriptor the last skipped conversion would have stored the
-    /// result as.
+    /// result as, when it is one the procedure holds before the call.
     result_desc: ?BoxyDescRef,
+    /// The last skipped conversion stores the result under the descriptor
+    /// the value arrives with, so `result_desc` names none.
+    keeps_own_desc: bool = false,
 };
 
 /// Identity shared by procedures that reach one another through

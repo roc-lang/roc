@@ -2191,8 +2191,12 @@ pub const MonoLlvmCodeGen = struct {
         const flag = try self.callBoxy(
             "roc_boxy_return_pending",
             .i8,
-            &.{ try self.ptrType(), .i32 },
-            &.{ result_desc_ptr, try self.boxyInt(.i32, @intFromEnum(self.layouts().runtimeRepresentationLayoutIdx(self.current_ret_layout))) },
+            &.{ try self.ptrType(), .i32, .i8 },
+            &.{
+                result_desc_ptr,
+                try self.boxyInt(.i32, @intFromEnum(self.layouts().runtimeRepresentationLayoutIdx(self.current_ret_layout))),
+                try self.boxyInt(.i8, @intFromBool(pending_return.keeps_own_desc)),
+            },
         );
         const pending = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
         const return_block = wip.block(0, "return_pending") catch return error.OutOfMemory;

@@ -16602,9 +16602,9 @@ deferred call `returns_pending` when its value reaches the return through
 conversions alone and the only reference counts adjusted on the way are that
 value's own. If a call is still pending once the statement has run its drive,
 the procedure returns at once without a value, and nothing it owns is left
-behind. It records, on the pending call, the layout it returns and the
-descriptor its last skipped conversion stores the value as, which must be one
-the procedure already holds at that point. Each procedure that returns early
+behind. It records, on the pending call, the layout it returns and how its
+last skipped conversion describes the value: by a descriptor the procedure
+already holds at that point, or by the descriptor the value arrives with. Each procedure that returns early
 replaces the record of the one before, so the record names the conversion
 nearest whoever makes the call.
 

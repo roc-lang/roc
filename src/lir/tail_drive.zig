@@ -36,11 +36,17 @@ const DirectCall = struct {
     returns: Returns,
 };
 
-/// A descriptor local written by a call or after it, and the descriptor it
-/// is another name for, when it is one.
+/// A descriptor local written by a call or after it, and what it names.
 const LateDescLocal = struct {
     local: LIR.LocalId,
-    names: ?LIR.BoxyDescRef,
+    names: union(enum) {
+        /// Another descriptor, whole.
+        descriptor: LIR.BoxyDescRef,
+        /// The descriptor the call returned with its value.
+        returned,
+        /// Something read out of a descriptor, which nothing else names.
+        part,
+    },
 };
 
 const Returns = union(enum) {
@@ -52,8 +58,8 @@ const Returns = union(enum) {
     /// The value is returned after representation conversions only. The
     /// only reference counts adjusted in between are the value's own, so
     /// returning right after the call leaves nothing the frame owns behind.
-    /// The payload is the descriptor the last conversion stores the value as.
-    converted: ?LIR.BoxyDescRef,
+    /// The payload says how the last conversion describes the value.
+    converted: LIR.PendingReturn,
 };
 
 const DeferredCall = struct {
@@ -155,7 +161,7 @@ pub fn run(
         // The conversions that follow would read a value that is not there
         // while the call is pending, so the procedure returns before them.
         if (deferred.returns == .converted and drive.canLeavePending()) {
-            updated.returns_pending = .{ .result_desc = deferred.returns.converted };
+            updated.returns_pending = deferred.returns.converted;
         }
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@enumFromInt(deferred.caller)).reads_caller_drives = true;
     }
@@ -168,7 +174,7 @@ pub fn run(
         // the caller's to make, before the conversions that follow read a
         // value that is not there yet.
         if (call.returns == .converted and drive.canLeavePending()) {
-            updated.returns_pending = .{ .result_desc = call.returns.converted };
+            updated.returns_pending = call.returns.converted;
         }
         // A call that runs pending calls afterwards keeps its frame to do so.
         if (drive.canDriveHere()) updated.replaces_frame = false;
@@ -225,7 +231,7 @@ fn returnOf(
     // returns right after a call that left another pending has none of them,
     // so the last conversion's descriptor is named without them.
     late_desc_locals.clearRetainingCapacity();
-    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, .{ .local = out_desc, .names = null });
+    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, .{ .local = out_desc, .names = .returned });
     // Each jump enters a join body, and a body that jumps back to its own
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
@@ -235,9 +241,9 @@ fn returnOf(
             if (stmt.ret.value != returned) return .no;
             if (!converts) return .unchanged;
             if (counts_other) return .no;
-            // Each late local names an earlier descriptor or none, so this
-            // reaches a descriptor that exists before the call in at most
-            // one step per late local.
+            // Each late local names an earlier descriptor, so this reaches
+            // one that exists before the call, or the one the call returned,
+            // in at most one step per late local.
             var stored_as = converted_to;
             var index = late_desc_locals.items.len;
             while (index > 0) {
@@ -245,9 +251,11 @@ fn returnOf(
                 const late = late_desc_locals.items[index];
                 const named = stored_as orelse break;
                 if (named.localOrNull() != late.local) continue;
-                stored_as = late.names orelse return .no;
+                if (late.names == .part) return .no;
+                if (late.names == .returned) return .{ .converted = .{ .result_desc = null, .keeps_own_desc = true } };
+                stored_as = late.names.descriptor;
             }
-            return .{ .converted = stored_as };
+            return .{ .converted = .{ .result_desc = stored_as } };
         }
         if (stmt == .jump) {
             const join_index = @intFromEnum(stmt.jump.target);
@@ -276,7 +284,7 @@ fn returnOf(
                 desc_ref.captures.len == 0;
             try late_desc_locals.append(allocator, .{
                 .local = desc_ref.target,
-                .names = if (names_whole_descriptor) desc_ref.desc else null,
+                .names = if (names_whole_descriptor) .{ .descriptor = desc_ref.desc } else .part,
             });
             current = stmt.assign_boxy_desc_ref.next;
             continue;

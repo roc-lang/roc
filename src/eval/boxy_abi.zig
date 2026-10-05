@@ -248,6 +248,9 @@ const PendingErasedCall = struct {
 const PendingConversion = struct {
     layout: u32,
     desc: ?*const BoxyTypeDesc,
+    /// The conversion stores the result under the descriptor the value
+    /// arrives with.
+    keeps_own_desc: bool,
 };
 
 /// Per-thread state of the deferred-call protocol.
@@ -398,7 +401,8 @@ pub fn roc_boxy_drive_pending(
                 var value_desc = site_desc;
                 for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
                     const conversion = skipped orelse continue;
-                    const converted = g.runtime.materializeCallResult(hooks(g), value, value_layout, value_desc, conversion.desc, layoutIdx(conversion.layout)) catch
+                    const stored_as = if (conversion.keeps_own_desc) value_desc else conversion.desc;
+                    const converted = g.runtime.materializeCallResult(hooks(g), value, value_layout, value_desc, stored_as, layoutIdx(conversion.layout)) catch
                         abiCrash(g, "pending erased call result conversion");
                     value = converted.value;
                     value_layout = layoutIdx(conversion.layout);
@@ -461,12 +465,13 @@ pub fn roc_boxy_caller_drives(callee: ?*const anyopaque) callconv(.c) u8 {
 /// Whether an erased call is pending on this thread, asked by a procedure
 /// that returns at once when one is, skipping its conversions of the call's
 /// result. `layout` is the layout that procedure returns and `result_desc`
-/// the descriptor its last conversion stores the result as. Being nearer
-/// whoever makes the call than any conversion already recorded, this one
-/// replaces it.
-pub fn roc_boxy_return_pending(result_desc: ?*const BoxyTypeDesc, layout: u32) callconv(.c) u8 {
+/// the descriptor its last conversion stores the result as, unless
+/// `keeps_own_desc` says it keeps the one the value arrives with. Being
+/// nearer whoever makes the call than any conversion already recorded, this
+/// one replaces it.
+pub fn roc_boxy_return_pending(result_desc: ?*const BoxyTypeDesc, layout: u32, keeps_own_desc: u8) callconv(.c) u8 {
     const pending = &(TailStateSelection.get().pending orelse return 0);
-    pending.conversion = .{ .layout = layout, .desc = result_desc };
+    pending.conversion = .{ .layout = layout, .desc = result_desc, .keeps_own_desc = keeps_own_desc != 0 };
     return 1;
 }
 

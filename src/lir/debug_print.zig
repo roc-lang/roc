@@ -140,6 +140,7 @@ const Printer = struct {
                             try writer.writeAll("=");
                             try writeBoxyDescRef(result_desc, writer);
                         }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
                     }
                     try writer.writeByte('\n');
                     current = s.next;
@@ -166,6 +167,7 @@ const Printer = struct {
                             try writer.writeAll("=");
                             try writeBoxyDescRef(result_desc, writer);
                         }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
                     }
                     try writer.writeByte('\n');
                     current = s.next;

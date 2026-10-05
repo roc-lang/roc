@@ -59,6 +59,14 @@ pair_through_apply = |n, label| if n == 0 { count: 7, label } else apply(|m| pai
 list_through_apply : U64, List(Str) -> List(Str)
 list_through_apply = |n, items| if n == 0 items else apply(|m| list_through_apply(m - 1, items), n)
 
+# A generic result that is not a bare type variable keeps the descriptor it
+# arrives with when it is converted.
+keep_list : U64, List(a) -> List(a)
+keep_list = |n, items| if n == 0 items else apply(|m| keep_list(m - 1, items), n)
+
+keep_pair : U64, (a, Str) -> (a, Str)
+keep_pair = |n, pair| if n == 0 pair else apply(|m| keep_pair(m - 1, pair), n)
+
 expect ping(20_000, wider(1), "done") == "done"
 expect countdown(20_000, wider(1), "done") == "done"
 expect through_apply(30_000, "done") == "done"
@@ -68,3 +76,5 @@ expect through_generic_value(30_000) == 0
 expect label_through_apply(30_000, "a label long enough to live on the heap") == "a label long enough to live on the heap!"
 expect pair_through_apply(30_000, "a label long enough to live on the heap") == { count: 7, label: "a label long enough to live on the heap" }
 expect list_through_apply(30_000, ["one", "two"]) == ["one", "two"]
+expect keep_list(30_000, ["one", "two"]) == ["one", "two"]
+expect keep_pair(30_000, (1.U8, "two")) == (1.U8, "two")

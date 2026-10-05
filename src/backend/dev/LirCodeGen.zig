@@ -17225,6 +17225,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const returned_layout = self.early_return_ret_layout orelse
                 std.debug.panic("Dev/codegen invariant violated: a procedure returning a pending call has no return layout", .{});
             try builder.addImmArg(@intFromEnum(self.runtimeRepresentationLayoutIdx(returned_layout)));
+            try builder.addImmArg(@intFromBool(pending.keeps_own_desc));
             try self.callBoxyBuiltin(&builder, .return_pending);
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
             const flag_reg = try self.allocTempGeneral();
