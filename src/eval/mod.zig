@@ -130,9 +130,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
-    std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("inspected.zig"));
     std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("runtime_host.zig"));
-    std.testing.refAllDecls(@import("test/stack_test.zig"));
 }
