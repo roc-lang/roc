@@ -4023,18 +4023,6 @@ const ClosedDirectCallIdentity = struct {
 /// Tracks a memoized structural-derivation helper def (is_eq / inspect /
 /// to_hash). `reserved` means the def id is allocated but its body has not yet
 /// been filled in (used to break recursion); `ready` means the body is complete.
-const GeneratedHelperDefEntry = union(enum) {
-    reserved: Ast.DefId,
-    ready: Ast.DefId,
-
-    fn id(self: GeneratedHelperDefEntry) Ast.DefId {
-        return switch (self) {
-            .reserved => |def_id| def_id,
-            .ready => |def_id| def_id,
-        };
-    }
-};
-
 const DraftGeneratedHelperDefEntry = union(enum) {
     reserved: DraftDefId,
     ready: DraftDefId,
@@ -4232,9 +4220,6 @@ const Builder = struct {
     /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
     static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
-    inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
-    equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
-    hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -4406,9 +4391,6 @@ const Builder = struct {
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
             .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
-            .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
-            .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
-            .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
@@ -4619,9 +4601,6 @@ const Builder = struct {
         self.scoped_method_targets.deinit(self.allocator);
         self.scoped_inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
-        self.hash_defs.deinit();
-        self.equality_defs.deinit();
-        self.inspect_defs.deinit();
         self.static_data_eligibility.deinit();
         self.static_data_uses.deinit(self.allocator);
         self.static_data_ids.deinit();
@@ -9127,51 +9106,6 @@ const Builder = struct {
         }
     }
 
-    fn typeHasBuiltinOwner(self: *Builder, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (methodOwnerFromType(self.activeTypeStore(), ty) orelse return false) {
-            .builtin => |actual| actual == owner,
-            .nominal => false,
-        };
-    }
-
-    fn recordFieldByTextOptional(self: *Builder, ty: Type.TypeId, text: []const u8) ?Type.Field {
-        const fields = switch (self.shapeContent(ty)) {
-            .record => |span| self.activeTypeStore().fieldSpan(span),
-            .zst => return null,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
-        };
-        for (0..GuardedList.borrowLen(fields)) |index| {
-            const field = GuardedList.at(fields, index);
-            if (Ident.textEql(self.activeNameStore().recordFieldLabelText(field.name), text)) return field;
-        }
-        return null;
-    }
-
-    fn generatedFieldNamesBackingInfo(self: *Builder, fields_ty: Type.TypeId) bool {
-        if (!self.typeHasBuiltinOwner(fields_ty, .fields)) return false;
-        const backing_ty = self.namedBackingType(fields_ty) orelse return false;
-        const items_field = self.recordFieldByTextOptional(backing_ty, "items") orelse return false;
-        const shortest_field = self.recordFieldByTextOptional(backing_ty, "shortest_name") orelse return false;
-        const longest_field = self.recordFieldByTextOptional(backing_ty, "longest_name") orelse return false;
-        if (!self.typeHasBuiltinOwner(shortest_field.ty, .u64)) return false;
-        if (!self.typeHasBuiltinOwner(longest_field.ty, .u64)) return false;
-        _ = switch (self.shapeContent(items_field.ty)) {
-            .record, .zst => {},
-            _ => return false,
-        };
-        return true;
-    }
-
-    fn generatedParseTagUnionSpecBackingInfo(self: *Builder, spec_ty: Type.TypeId) bool {
-        if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return false;
-        const backing_ty = self.namedBackingType(spec_ty) orelse return false;
-        return switch (self.shapeContent(backing_ty)) {
-            .record => |span| self.activeTypeStore().fieldSpan(span).len != 0,
-            .zst => false,
-            _ => return false,
-        };
-    }
-
     fn functionShape(self: *Builder, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
         return switch (self.shapeContent(ty)) {
             .func => |func| .{ .args = func.args, .ret = func.ret },
@@ -9306,14 +9240,6 @@ const Builder = struct {
         return self.activeTypeStore().span(self.tupleItemSpan(ty));
     }
 
-    fn recordField(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
-        return sortedRecordField(self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty)), self.activeNameStore(), name);
-    }
-
-    fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
-        return self.recordField(ty, name).ty;
-    }
-
     fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
         return self.activeTypeStore().span(self.tagPayloadSpan(ty, name));
     }
@@ -9333,36 +9259,6 @@ const Builder = struct {
             .{ .name = present, .checked_name = present, .payloads = &.{payload_ty} },
         };
         return try type_store.internTagUnion(name_store, &tags);
-    }
-
-    /// The tags and payload type of an optional field's Monotype tagged slot.
-    fn optionalSlotInfo(self: *Builder, slot_ty: Type.TypeId) Allocator.Error!OptionalSlotInfo {
-        const type_store = self.activeTypeStore();
-        const name_store = self.activeNameStore();
-        const missing_name = try name_store.internTagLabel(optional_slot_missing_tag);
-        const present_name = try name_store.internTagLabel(optional_slot_present_tag);
-        const missing_tag = self.tagByNameOrNull(slot_ty, missing_name) orelse
-            Common.invariant("optional field slot type had no Missing tag");
-        const present_tag = self.tagByNameOrNull(slot_ty, present_name) orelse
-            Common.invariant("optional field slot type had no Present tag");
-        if (type_store.span(missing_tag.payloads).len != 0) {
-            Common.invariant("optional field slot Missing tag unexpectedly had payloads");
-        }
-        const present_payloads = type_store.span(present_tag.payloads);
-        if (present_payloads.len != 1) {
-            Common.invariant("optional field slot Present tag must carry exactly one payload");
-        }
-        return .{
-            .payload_ty = GuardedList.at(present_payloads, 0),
-            .missing_tag = missing_tag,
-            .present_tag = present_tag,
-        };
-    }
-
-    /// Recognize the compiler-reserved optional-slot encoding when only a
-    /// completed Monotype is available (design.md "Field Kinds").
-    fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
-        return optionalFieldSlotForType(self.activeTypeStore(), self.activeNameStore(), slot_ty);
     }
 
     /// Translate a checked `??` identity into the Monotype name store.
@@ -9927,16 +9823,6 @@ const Builder = struct {
                 bare_fn = .allow;
             },
         };
-    }
-
-    fn lookupMethodTarget(
-        self: *Builder,
-        scope: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_view: ModuleView,
-        method: names.MethodNameId,
-    ) Allocator.Error!?MethodLookup {
-        return try self.lookupMethodTargetByName(scope, owner, method_view.names.methodNameText(method));
     }
 
     fn lookupMethodTargetByName(
@@ -13152,375 +13038,6 @@ const Builder = struct {
             visiting[dep_index] = true;
             try frames.append(self.allocator, .{ .index = dep_index, .next_dep = 0 });
         }
-    }
-
-    /// Whether `expr` reads `target` where it is not rebound, following
-    /// calls into function bodies. Subexpressions are searched from an
-    /// explicit continuation stack; binder scopes, function bodies, and the
-    /// active function set open and close as steps of that stack.
-    fn exprDependsOnFreeLocal(
-        self: *Builder,
-        expr: Ast.ExprId,
-        target: Ast.LocalId,
-    ) Allocator.Error!bool {
-        var search = AstFreeLocalSearch{
-            .builder = self,
-            .target = target,
-            .active_fns = collections.DenseMap(Ast.FnId, void).init(self.allocator),
-        };
-        defer search.deinit();
-        try search.bound_sets.append(self.allocator, collections.DenseMap(Ast.LocalId, void).init(self.allocator));
-        return try search.run(expr);
-    }
-
-    const AstFreeLocalSearch = struct {
-        builder: *Builder,
-        target: Ast.LocalId,
-        active_fns: collections.DenseMap(Ast.FnId, void),
-        /// One bound set per function body being searched; a body sees its
-        /// caller's bindings plus its own.
-        bound_sets: std.ArrayListUnmanaged(collections.DenseMap(Ast.LocalId, void)) = .empty,
-        /// Every local bound so far in the innermost body, in binding order;
-        /// a scope closes by unbinding back to its mark.
-        bound_log: std.ArrayListUnmanaged(Ast.LocalId) = .empty,
-        pending: std.ArrayListUnmanaged(Step) = .empty,
-
-        const Step = union(enum) {
-            expr: Ast.ExprId,
-            stmt: Ast.StmtId,
-            local: Ast.LocalId,
-            bind_pat: Ast.PatId,
-            bind_typed: Ast.Span(Ast.TypedLocal),
-            bind_local: Ast.LocalId,
-            /// Unbind every local bound since this mark.
-            unbind: usize,
-            fn_call: Ast.FnId,
-            /// A function body's search is done: drop its bound set and
-            /// leave the function.
-            fn_exit: struct { fn_id: Ast.FnId, log_mark: usize },
-        };
-
-        fn deinit(search: *AstFreeLocalSearch) void {
-            const gpa = search.builder.allocator;
-            search.pending.deinit(gpa);
-            search.bound_log.deinit(gpa);
-            for (search.bound_sets.items) |*set| set.deinit();
-            search.bound_sets.deinit(gpa);
-            search.active_fns.deinit();
-        }
-
-        fn bound(search: *AstFreeLocalSearch) *collections.DenseMap(Ast.LocalId, void) {
-            return &search.bound_sets.items[search.bound_sets.items.len - 1];
-        }
-
-        fn run(search: *AstFreeLocalSearch, root: Ast.ExprId) Allocator.Error!bool {
-            const gpa = search.builder.allocator;
-            try search.pending.append(gpa, .{ .expr = root });
-            while (search.pending.pop()) |step| {
-                const start = search.pending.items.len;
-                switch (step) {
-                    .expr => |expr_id| if (try search.expandExpr(expr_id)) return true,
-                    .stmt => |stmt_id| try search.expandStmt(stmt_id),
-                    .local => |local| if (search.builder.localDependsOnTarget(local, search.target, search.bound())) return true,
-                    .bind_pat => |pat| try search.bindPat(pat),
-                    .bind_typed => |span| for (search.builder.program.typedLocalSpan(span)) |local| try search.bind(local.local),
-                    .bind_local => |local| try search.bind(local),
-                    .unbind => |mark| while (search.bound_log.items.len > mark) {
-                        _ = search.bound().remove(search.bound_log.pop().?);
-                    },
-                    .fn_call => |fn_id| try search.enterFn(fn_id),
-                    .fn_exit => |exit| {
-                        var set = search.bound_sets.pop().?;
-                        set.deinit();
-                        search.bound_log.shrinkRetainingCapacity(exit.log_mark);
-                        _ = search.active_fns.remove(exit.fn_id);
-                    },
-                }
-                std.mem.reverse(Step, search.pending.items[start..]);
-            }
-            return false;
-        }
-
-        fn bind(search: *AstFreeLocalSearch, local: Ast.LocalId) Allocator.Error!void {
-            try search.bound().put(local, {});
-            try search.bound_log.append(search.builder.allocator, local);
-        }
-
-        fn push(search: *AstFreeLocalSearch, step: Step) Allocator.Error!void {
-            try search.pending.append(search.builder.allocator, step);
-        }
-
-        fn pushExprs(search: *AstFreeLocalSearch, exprs: []const Ast.ExprId) Allocator.Error!void {
-            for (exprs) |expr| try search.push(.{ .expr = expr });
-        }
-
-        /// Search a called function's body under its caller's bindings plus
-        /// its arguments, unless it is already being searched.
-        fn enterFn(search: *AstFreeLocalSearch, fn_id: Ast.FnId) Allocator.Error!void {
-            if (search.active_fns.contains(fn_id)) return;
-            const program = &search.builder.program;
-            const args: Ast.Span(Ast.TypedLocal), const body: ?Ast.ExprId = found: {
-                for (program.defsView()) |def| {
-                    if (def.fn_id == null or def.fn_id.? != fn_id) continue;
-                    break :found .{ def.args, switch (def.body) {
-                        .roc => |expr| expr,
-                        .hosted => null,
-                    } };
-                }
-                for (program.nestedDefsView()) |def| {
-                    if (def.fn_id != fn_id) continue;
-                    break :found .{ def.args, def.body };
-                }
-                return;
-            };
-            const body_expr = body orelse return;
-            try search.active_fns.put(fn_id, {});
-            const log_mark = search.bound_log.items.len;
-            try search.bound_sets.append(search.builder.allocator, try search.bound().clone());
-            for (program.typedLocalSpan(args)) |local| try search.bind(local.local);
-            try search.push(.{ .expr = body_expr });
-            try search.push(.{ .fn_exit = .{ .fn_id = fn_id, .log_mark = log_mark } });
-        }
-
-        /// Bind every local a pattern introduces: an `as` local after its
-        /// subpattern's.
-        fn bindPat(search: *AstFreeLocalSearch, root: Ast.PatId) Allocator.Error!void {
-            const gpa = search.builder.allocator;
-            const program = &search.builder.program;
-            const Visit = union(enum) { pat: Ast.PatId, local: Ast.LocalId };
-            var visits: std.ArrayListUnmanaged(Visit) = .empty;
-            defer visits.deinit(gpa);
-            try visits.append(gpa, .{ .pat = root });
-            while (visits.pop()) |visit| {
-                const pat_id = switch (visit) {
-                    .local => |local| {
-                        try search.bind(local);
-                        continue;
-                    },
-                    .pat => |pat_id| pat_id,
-                };
-                const start = visits.items.len;
-                switch (program.getPat(pat_id).data) {
-                    .bind => |local| try search.bind(local),
-                    .wildcard,
-                    .int_lit,
-                    .dec_lit,
-                    .frac_f32_lit,
-                    .frac_f64_lit,
-                    .str_lit,
-                    => {},
-                    .as => |as| {
-                        try visits.append(gpa, .{ .pat = as.pattern });
-                        try visits.append(gpa, .{ .local = as.local });
-                    },
-                    .record => |fields| for (program.recordDestructSpan(fields)) |field| try visits.append(gpa, .{ .pat = field.pattern }),
-                    .tuple => |items| for (program.patSpan(items)) |child| try visits.append(gpa, .{ .pat = child }),
-                    .list => |list| {
-                        for (program.patSpan(list.patterns)) |child| try visits.append(gpa, .{ .pat = child });
-                        if (list.rest) |rest| if (rest.pattern) |rest_pat| try visits.append(gpa, .{ .pat = rest_pat });
-                    },
-                    .tag => |tag| for (program.patSpan(tag.payloads)) |payload| try visits.append(gpa, .{ .pat = payload }),
-                    .nominal => |backing| try visits.append(gpa, .{ .pat = backing }),
-                    .str_pattern => |str| for (program.strPatternStepSpan(str.steps)) |str_step| {
-                        if (str_step.capture) |capture| try visits.append(gpa, .{ .pat = capture });
-                    },
-                }
-                std.mem.reverse(Visit, visits.items[start..]);
-            }
-        }
-
-        fn expandStmt(search: *AstFreeLocalSearch, stmt_id: Ast.StmtId) Allocator.Error!void {
-            switch (search.builder.program.getStmt(stmt_id)) {
-                .uninitialized => |pat| try search.push(.{ .bind_pat = pat }),
-                .let_ => |let_| if (let_.recursive) {
-                    try search.push(.{ .bind_pat = let_.pat });
-                    try search.push(.{ .expr = let_.value });
-                } else {
-                    try search.push(.{ .expr = let_.value });
-                    try search.push(.{ .bind_pat = let_.pat });
-                },
-                .expr,
-                .expect,
-                .dbg,
-                => |expr| try search.push(.{ .expr = expr }),
-                .return_ => |ret| try search.push(.{ .expr = ret.value }),
-                .crash => {},
-            }
-        }
-
-        /// Queue the steps an expression's search takes; true when the
-        /// expression itself reads the target.
-        fn expandExpr(search: *AstFreeLocalSearch, expr_id: Ast.ExprId) Allocator.Error!bool {
-            const builder = search.builder;
-            const program = &builder.program;
-            const mark = search.bound_log.items.len;
-            switch (program.getExpr(expr_id).data) {
-                .local => |local| return builder.localDependsOnTarget(local, search.target, search.bound()),
-                .@"unreachable",
-                .unit,
-                .int_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .dec_lit,
-                .str_lit,
-                .bytes_lit,
-                .uninitialized,
-                .crash,
-                .comptime_exhaustiveness_failed,
-                .def_ref,
-                => {},
-                .fn_ref => |fn_ref| for (program.captureOperandSpan(fn_ref.captures)) |operand| try search.push(.{ .expr = operand.value }),
-                .uninitialized_payload => |payload| return builder.localDependsOnTarget(payload.condition, search.target, search.bound()),
-                .list,
-                .tuple,
-                => |items| try search.pushExprs(program.exprSpan(items)),
-                .record => |fields| for (program.fieldExprSpan(fields)) |field| try search.push(.{ .expr = field.value }),
-                .tag => |tag| try search.pushExprs(program.exprSpan(tag.payloads)),
-                .static_data_candidate => |candidate| try search.push(.{ .expr = candidate.runtime_expr }),
-                .comptime_value => |candidate| try search.push(.{ .expr = candidate.initializer }),
-                .nominal,
-                .dbg,
-                .expect,
-                => |child| try search.push(.{ .expr = child }),
-                .return_ => |ret| try search.push(.{ .expr = ret.value }),
-                .expect_err => |expect_err| try search.push(.{ .expr = expect_err.msg }),
-                .comptime_branch_taken => |taken| try search.push(.{ .expr = taken.body }),
-                .let_ => |let_| {
-                    try search.push(.{ .expr = let_.value });
-                    try search.push(.{ .bind_pat = let_.bind });
-                    try search.push(.{ .expr = let_.rest });
-                    try search.push(.{ .unbind = mark });
-                },
-                .lambda => |lambda| {
-                    try search.push(.{ .bind_typed = lambda.args });
-                    try search.push(.{ .expr = lambda.body });
-                    try search.push(.{ .unbind = mark });
-                },
-                .fn_def => |fn_def| {
-                    const captures = program.fnDefCaptureSpan(fn_def.captures);
-                    if (captures.len == 0) {
-                        try search.push(.{ .fn_call = fn_def.fn_id });
-                    } else for (captures) |capture| try search.push(.{ .expr = capture.value });
-                },
-                .call_value => |call| {
-                    try search.push(.{ .expr = call.callee });
-                    try search.pushExprs(program.exprSpan(call.args));
-                },
-                .call_proc => |call| {
-                    switch (call.callee) {
-                        .func => |fn_id| try search.push(.{ .fn_call = fn_id }),
-                        .lifted => {},
-                    }
-                    try search.pushExprs(program.exprSpan(call.args));
-                    for (program.captureOperandSpan(call.captures)) |operand| try search.push(.{ .expr = operand.value });
-                },
-                .low_level => |call| try search.pushExprs(program.exprSpan(call.args)),
-                .field_access => |field| try search.push(.{ .expr = field.receiver }),
-                .tuple_access => |access| try search.push(.{ .expr = access.tuple }),
-                .structural_eq => |eq| {
-                    try search.push(.{ .expr = eq.lhs });
-                    try search.push(.{ .expr = eq.rhs });
-                },
-                .structural_hash => |hash| {
-                    try search.push(.{ .expr = hash.value });
-                    try search.push(.{ .expr = hash.hasher });
-                },
-                .match_ => |match| {
-                    try search.push(.{ .expr = match.scrutinee });
-                    for (program.branchSpan(match.branches)) |branch| {
-                        try search.push(.{ .bind_pat = branch.pat });
-                        for (program.stmtSpan(branch.bindings)) |stmt| try search.push(.{ .stmt = stmt });
-                        if (branch.guard) |guard| try search.push(.{ .expr = guard });
-                        try search.push(.{ .expr = branch.body });
-                        try search.push(.{ .unbind = mark });
-                    }
-                },
-                .if_ => |if_| {
-                    for (program.ifBranchSpan(if_.branches)) |branch| {
-                        try search.push(.{ .expr = branch.cond });
-                        try search.push(.{ .expr = branch.body });
-                    }
-                    try search.push(.{ .expr = if_.final_else });
-                },
-                .if_initialized_payload => |payload| {
-                    try search.push(.{ .expr = payload.cond });
-                    try search.push(.{ .local = payload.payload });
-                    try search.push(.{ .expr = payload.initialized });
-                    try search.push(.{ .expr = payload.uninitialized });
-                },
-                .try_sequence => |sequence| {
-                    try search.push(.{ .expr = sequence.try_expr });
-                    try search.push(.{ .bind_local = sequence.ok_local });
-                    try search.push(.{ .expr = sequence.ok_body });
-                    try search.push(.{ .unbind = mark });
-                },
-                .try_record_sequence => |sequence| {
-                    try search.push(.{ .expr = sequence.try_expr });
-                    try search.push(.{ .bind_local = sequence.value_local });
-                    try search.push(.{ .bind_local = sequence.rest_local });
-                    try search.push(.{ .expr = sequence.ok_body });
-                    try search.push(.{ .unbind = mark });
-                },
-                .block => |block| {
-                    for (program.stmtSpan(block.statements)) |stmt| try search.push(.{ .stmt = stmt });
-                    try search.push(.{ .expr = block.final_expr });
-                    try search.push(.{ .unbind = mark });
-                },
-                .loop_ => |loop| {
-                    try search.pushExprs(program.exprSpan(loop.initial_values));
-                    try search.push(.{ .bind_typed = loop.params });
-                    try search.push(.{ .expr = loop.body });
-                    try search.push(.{ .unbind = mark });
-                },
-                .break_ => |maybe| if (maybe) |value| try search.push(.{ .expr = value }),
-                .continue_ => |continue_| try search.pushExprs(program.exprSpan(continue_.values)),
-            }
-            return false;
-        }
-    };
-
-    fn localDependsOnTarget(
-        self: *Builder,
-        local: Ast.LocalId,
-        target: Ast.LocalId,
-        bound: *collections.DenseMap(Ast.LocalId, void),
-    ) bool {
-        if (!self.sameLocalIdentity(local, target)) return false;
-        return !self.boundContainsLocalIdentity(bound, local);
-    }
-
-    fn boundContainsLocalIdentity(
-        self: *Builder,
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        local: Ast.LocalId,
-    ) bool {
-        if (bound.contains(local)) return true;
-        const local_data = self.program.getLocal(local);
-        const binder = local_data.binder orelse return false;
-        var iter = bound.keyIterator();
-        while (iter.next()) |active| {
-            const active_data = self.program.getLocal(active.*);
-            if (active_data.binder == null or active_data.binder.? != binder) continue;
-            if (self.sameMonotype(active_data.ty, local_data.ty)) return true;
-        }
-        return false;
-    }
-
-    fn sameLocalIdentity(self: *Builder, lhs: Ast.LocalId, rhs: Ast.LocalId) bool {
-        if (lhs == rhs) return true;
-        const lhs_data = self.program.getLocal(lhs);
-        const rhs_data = self.program.getLocal(rhs);
-        if (lhs_data.binder == null or rhs_data.binder == null or lhs_data.binder.? != rhs_data.binder.?) {
-            return false;
-        }
-        return self.sameMonotype(lhs_data.ty, rhs_data.ty);
-    }
-
-    fn sameMonotype(self: *Builder, lhs: Type.TypeId, rhs: Type.TypeId) bool {
-        if (lhs == rhs) return true;
-        const lhs_digest = self.program.types.equalityDigest(&self.program.names, lhs);
-        const rhs_digest = self.program.types.equalityDigest(&self.program.names, rhs);
-        return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
     }
 
     fn restoreConstFnExpr(
@@ -34152,31 +33669,6 @@ const BodyContext = struct {
             }
         }
         return requestLowerChild(self, checked_arg, .{ .sealed = ty });
-    }
-
-    fn lowerCallableEvalBindingValue(
-        self: *BodyContext,
-        view: ModuleView,
-        template_id: checked.CallableEvalTemplateId,
-        mono_fn_ty: Type.TypeId,
-        evidence: []const SpecEvidence,
-    ) Allocator.Error!DraftExprId {
-        const previous_restore_evidence = self.restore_evidence;
-        self.restore_evidence = rootEvidence(self.owner_template, evidence);
-        defer self.restore_evidence = previous_restore_evidence;
-
-        const raw = @intFromEnum(template_id);
-        if (raw >= view.callable_eval_templates.templates.len) {
-            Common.invariant("callable eval binding referenced a missing checked template");
-        }
-        const template = view.callable_eval_templates.templates[raw];
-        const root = view.compile_time_roots.root(template.root);
-        return switch (root.payload) {
-            .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
-            .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
-            .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
-        };
     }
 
     fn lowerPendingCallableEvalBindingValue(
@@ -65734,26 +65226,6 @@ const HashDeriver = struct {
         } } });
     }
 };
-
-/// Record a local's source-level name from its pattern binder. An `assign`
-/// pattern's region is exactly the identifier token's span, so the name is
-/// the source text at that region. Binders from other pattern forms (`as`)
-/// stay unnamed.
-fn bindLocalName(
-    program: *Ast.Program,
-    view: ModuleView,
-    local: Ast.LocalId,
-    binder: checked.PatternBinderId,
-) Allocator.Error!void {
-    const entry = view.bodies.patternBinder(binder);
-    const pattern = view.bodies.pattern(entry.pattern);
-    if (pattern.data != .assign) return;
-    const source = view.module_env.common.source;
-    const start = pattern.source_region.start.offset;
-    const end = pattern.source_region.end.offset;
-    if (start >= end or end > source.len) return;
-    try program.setLocalName(local, source[start..end]);
-}
 
 fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
     return .{

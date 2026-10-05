@@ -6539,10 +6539,6 @@ pub const InstGraph = struct {
         return .{ .fields = flat_fields, .ext = ext };
     }
 
-    fn tagLabelText(self: *InstGraph, name: names.TagNameId) []const u8 {
-        return self.name_store.tagLabelText(name);
-    }
-
     fn fieldLabelText(self: *InstGraph, name: names.RecordFieldNameId) []const u8 {
         return self.name_store.recordFieldLabelText(name);
     }
@@ -7265,14 +7261,6 @@ pub const InstGraph = struct {
         var sealer = GraphTypeFinals.init(self);
         defer sealer.deinit();
         return try sealer.sealNode(node);
-    }
-
-    /// Materialize a TypeId into a final copy. If the TypeId is an active
-    /// snapshot, seal its current solved node instead of reusing the snapshot.
-    pub fn sealType(self: *InstGraph, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        var sealer = GraphTypeFinals.init(self);
-        defer sealer.deinit();
-        return try sealer.sealType(ty);
     }
 
     pub fn assertTypeHasNoActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!void {
@@ -8741,26 +8729,6 @@ fn tagPayloadAt(tags: []const InstTag, raw_index: usize) NodeId {
         index -= tag.payloads.len;
     }
     Common.invariant("generated iterator depth tag payload index was out of bounds");
-}
-
-/// Panics with the given message if a sorted field list contains a repeated label.
-pub fn assertNoDuplicateRecordFields(name_store: *const names.NameStore, fields: []const Type.Field, comptime message: []const u8) void {
-    if (fields.len < 2) return;
-    for (fields[1..], 1..) |field, i| {
-        if (name_store.recordFieldLabelTextEql(fields[i - 1].name, field.name)) {
-            Common.invariant(message);
-        }
-    }
-}
-
-/// Panics with the given message if a sorted tag list contains a repeated label.
-pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const Type.Tag, comptime message: []const u8) void {
-    if (tags.len < 2) return;
-    for (tags[1..], 1..) |tag, i| {
-        if (name_store.tagLabelTextEql(tags[i - 1].name, tag.name)) {
-            Common.invariant(message);
-        }
-    }
 }
 
 fn contentHasGeneratedPrivateBacking(content: InstNode) bool {
