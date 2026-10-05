@@ -23,7 +23,6 @@ pub const ReportedError =
     Allocator.Error ||
     backend.wasm.WasmModule.MergeError ||
     backend.wasm.WasmModule.ParseError ||
-    backend.wasm.ObjectArchive.ParseError ||
     linker.LinkError ||
     lir.LirImage.ImageError ||
     std.zig.system.DetectError ||
@@ -916,10 +915,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.HttpError,
         error.InputOutput,
         error.Internal,
-        error.InvalidArchiveHeader,
-        error.InvalidArchiveMagic,
-        error.InvalidArchiveName,
-        error.InvalidArchiveSize,
         error.InvalidArguments,
         error.InvalidBatchScriptArg,
         error.InvalidDependency,
