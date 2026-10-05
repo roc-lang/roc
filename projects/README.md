@@ -72,9 +72,6 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/bundle-unbundle-shared-path-rules.md](small/bundle-unbundle-shared-path-rules.md)—
-  one archive path-safety validator; the writer's and reader's
-  copies already disagree.
 - [small/nodestore-serde-enrollment.md](small/nodestore-serde-enrollment.md)—
   comptime-drive NodeStore's eight hand-enumerated field lists;
   derive the parse-side node counts.
