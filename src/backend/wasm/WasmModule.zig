@@ -5,6 +5,7 @@
 //! for surgical linking.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const shim_symbols = @import("builtins").shim_symbols;
 const Allocator = std.mem.Allocator;
@@ -1045,7 +1046,7 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
 pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_type_idx: u32) void {
     if (self.functionType(function) == expected_type_idx) return;
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic(
+        invariant(
             "WasmModule invariant violated: function {d} has type {d}, expected {d}",
             .{ function.raw(), self.functionType(function), expected_type_idx },
         );

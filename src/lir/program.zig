@@ -815,7 +815,7 @@ pub const Result = struct {
     pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
         const raw = @intFromEnum(id);
         if (raw >= self.lowering_modules.items.len) {
-            @panic("LIR program invariant violated: lowering module id has no published checked module");
+            base.invariant("{s}", .{"LIR program invariant violated: lowering module id has no published checked module"});
         }
         return self.lowering_modules.items[raw];
     }

@@ -109,7 +109,7 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
                 // every row of this span was prepared, without scanning it.
                 const last = first + len - 1;
                 if (last >= self.ids.items.len or self.ids.items[last] != start + len - 1)
-                    @panic("LirStore invariant violated: unprepared rewrite span");
+                    base.invariant("{s}", .{"LirStore invariant violated: unprepared rewrite span"});
             }
             return first;
         }
@@ -118,7 +118,7 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
         /// borrow, then record the span as written.
         fn mark(self: *Column, source: *const Self, start: u32, len: u32) u32 {
             const first = self.index(start, len) orelse
-                @panic("LirStore invariant violated: unprepared prefix mutation");
+                base.invariant("{s}", .{"LirStore invariant violated: unprepared prefix mutation"});
             if (!self.materialized) {
                 for (self.ids.items, 0..) |id, dense_index| {
                     self.rows.getPtrImmediate(dense_index).* = @field(source, field).get(id);
@@ -282,7 +282,7 @@ pub fn commitProcRewrite(self: *Self, worker: *const Self) AppendBodyError!void 
 /// patches, and procedure metadata. The coordinator supplies the allocator range.
 pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, relocation: ?JoinPointRelocation) AppendBodyError!void {
     std.debug.assert(worker.body_coordinator == self);
-    const rewrite = if (worker.proc_rewrite) |*prepared| prepared else @panic("LirStore invariant violated: expected procedure rewrite shard");
+    const rewrite = if (worker.proc_rewrite) |*prepared| prepared else base.invariant("{s}", .{"LirStore invariant violated: expected procedure rewrite shard"});
     const shard = try worker.captureBodyShard(worker.body_prefix);
     const appended = try self.appendBodyShardWithJoinRelocation(shard, null, .empty(), relocation);
     inline for (rewrite_columns) |field|
@@ -901,7 +901,7 @@ pub fn init(allocator: Allocator) Self {
 /// metadata only; asking it for code is a missing-body bug, not a read of
 /// stale storage.
 pub fn releaseCode(self: *Self) void {
-    if (self.body_coordinator != null) @panic("LIR store invariant violated: a body shard cannot release program code");
+    if (self.body_coordinator != null) base.invariant("{s}", .{"LIR store invariant violated: a body shard cannot release program code"});
     for (0..self.proc_specs.len()) |index| {
         const spec = self.proc_specs.getPtrImmediate(@intCast(index));
         spec.body = null;
@@ -1286,7 +1286,7 @@ pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Alloca
         @intFromEnum(local),
     ) catch {
         if (builtin.mode == .Debug) {
-            std.debug.panic("LirStore invariant violated: worker string identity overflow", .{});
+            base.invariant("LirStore invariant violated: worker string identity overflow", .{});
         }
         unreachable;
     });
@@ -1315,7 +1315,7 @@ pub fn insertStringViewAligned(
     const len_usize: usize = len;
     if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("LirStore invariant violated: string literal view exceeded backing bytes", .{});
+            base.invariant("LirStore invariant violated: string literal view exceeded backing bytes", .{});
         }
         unreachable;
     }
@@ -1344,7 +1344,7 @@ pub fn getStringLiteral(self: *const Self, literal: lir_defs.StrLiteral) []const
     const len: usize = literal.len;
     if (offset > backing.len or len > backing.len - offset) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
+            base.invariant("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
         }
         unreachable;
     }
@@ -1359,7 +1359,7 @@ pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) 
 fn assertStringsInsertable(self: *const Self) void {
     if (self.strings_insertable) return;
     if (comptime builtin.mode == .Debug) {
-        std.debug.panic("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
+        base.invariant("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
     }
     unreachable;
 }
@@ -1367,7 +1367,7 @@ fn assertStringsInsertable(self: *const Self) void {
 fn assertBodyMetadataImmutable(self: *const Self) void {
     if (self.body_coordinator == null) return;
     if (comptime builtin.mode == .Debug) {
-        std.debug.panic("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
+        base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
     }
     unreachable;
 }
@@ -1414,7 +1414,7 @@ pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) vo
     const local = self.getLocalPtr(id);
     if (local.boxy_desc) |existing| {
         if (!std.meta.eql(existing, desc)) {
-            std.debug.panic(
+            base.invariant(
                 "LIR store invariant violated: local {d} was assigned two different boxy descriptors: existing={any} new={any}",
                 .{ @intFromEnum(id), existing, desc },
             );
@@ -1657,7 +1657,7 @@ fn verifyCFStmtId(self: *const Self, id: CFStmtId) void {
     if (builtin.mode == .Debug) {
         const idx = @intFromEnum(id);
         if (idx >= self.cfStmtCount()) {
-            std.debug.panic(
+            base.invariant(
                 "LirStore invariant violated: statement id {d} exceeds statement storage len {d}",
                 .{ idx, self.cfStmtCount() },
             );

@@ -17,6 +17,7 @@
 //! - CC: Calling convention constants
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 const target_mod = @import("roc_target");
 const RocTarget = target_mod.RocTarget;
@@ -104,7 +105,7 @@ pub const CallingConvention = struct {
 
     fn unsupportedArchCallingConvention(target: RocTarget) CallingConvention {
         if (std.debug.runtime_safety) {
-            std.debug.panic("CallingConvention.forTarget called for unsupported arch: {s}", .{@tagName(target.toCpuArch())});
+            invariant("CallingConvention.forTarget called for unsupported arch: {s}", .{@tagName(target.toCpuArch())});
         }
         unreachable;
     }
@@ -123,7 +124,7 @@ pub const CallingConvention = struct {
             .x86_64 => |regs| regs[index],
             .aarch64 => {
                 if (std.debug.runtime_safety) {
-                    @panic("getX86ParamReg called for aarch64 calling convention");
+                    invariant("{s}", .{"getX86ParamReg called for aarch64 calling convention"});
                 }
                 unreachable;
             },
@@ -136,7 +137,7 @@ pub const CallingConvention = struct {
             .aarch64 => |regs| regs[index],
             .x86_64 => {
                 if (std.debug.runtime_safety) {
-                    @panic("getAarch64ParamReg called for x86_64 calling convention");
+                    invariant("{s}", .{"getAarch64ParamReg called for x86_64 calling convention"});
                 }
                 unreachable;
             },

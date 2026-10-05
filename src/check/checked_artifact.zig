@@ -275,7 +275,7 @@ fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
 /// directory the build ran in.
 fn computeStableModuleIdentityHash(module_env: *const ModuleEnv) [32]u8 {
     const hash = module_env.contentIdentityHash() orelse {
-        std.debug.panic(
+        base.invariant(
             "checked artifact identity requested before module content identity was finalized for module '{s}'",
             .{module_env.module_name},
         );
@@ -1699,13 +1699,13 @@ fn verifyCompileTimeRequestsScheduled(
     if (builtin.mode != .Debug) return;
     for (requests, 0..) |request, i| {
         if (request.abi != .compile_time) {
-            std.debug.panic("checked artifact invariant violated: scheduled compile-time requests contained a non compile-time request", .{});
+            base.invariant("checked artifact invariant violated: scheduled compile-time requests contained a non compile-time request", .{});
         }
         const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
         for (requests[0..i]) |previous| {
             const previous_id = compileTimeRootIdForRequest(compile_time_roots, previous);
             if (previous_id == root_id) {
-                std.debug.panic("checked artifact invariant violated: compile-time root was scheduled more than once", .{});
+                base.invariant("checked artifact invariant violated: compile-time root was scheduled more than once", .{});
             }
         }
     }
@@ -2019,27 +2019,27 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
             if (!request.evaluation_complete) compile_time_count += 1;
         } else {
             if (runtime_index >= root_requests.runtime_requests.len) {
-                std.debug.panic("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
+                base.invariant("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
             }
             if (!std.meta.eql(root_requests.runtime_requests[runtime_index], request)) {
-                std.debug.panic("checked artifact invariant violated: runtime root request subset is out of order", .{});
+                base.invariant("checked artifact invariant violated: runtime root request subset is out of order", .{});
             }
             runtime_index += 1;
         }
     }
 
     if (runtime_index != root_requests.runtime_requests.len) {
-        std.debug.panic("checked artifact invariant violated: runtime root request subset has extra entries", .{});
+        base.invariant("checked artifact invariant violated: runtime root request subset has extra entries", .{});
     }
     if (compile_time_count != root_requests.compile_time_requests.len) {
-        std.debug.panic("checked artifact invariant violated: compile-time root request subset has extra entries", .{});
+        base.invariant("checked artifact invariant violated: compile-time root request subset has extra entries", .{});
     }
     for (root_requests.compile_time_requests) |request| {
         if (request.abi != .compile_time) {
-            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains a runtime request", .{});
+            base.invariant("checked artifact invariant violated: compile-time root request subset contains a runtime request", .{});
         }
         if (!rootRequestSliceContains(root_requests.requests, request)) {
-            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains an unknown request", .{});
+            base.invariant("checked artifact invariant violated: compile-time root request subset contains an unknown request", .{});
         }
     }
 }
@@ -2274,7 +2274,7 @@ fn checkedTypeIdForRootSource(
             const module_env = module.moduleEnvConst();
             if (binding_idx >= module_env.requires_types.items.items.len) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: explicit required-binding root {d} is out of range",
                         .{binding_idx},
                     );
@@ -2306,7 +2306,7 @@ fn checkedTypeIdForVar(
 ) Allocator.Error!CheckedTypeId {
     return checked_types.rootForSourceVar(module, var_) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: root request type was not published", .{});
+            base.invariant("checked artifact invariant violated: root request type was not published", .{});
         }
         unreachable;
     };
@@ -2365,7 +2365,7 @@ fn entryWrapperForRoot(
 ) EntryWrapper {
     const wrapper = entry_wrappers.lookupByRoot(root) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: compile-time/test root has no entry wrapper", .{});
+            base.invariant("checked artifact invariant violated: compile-time/test root has no entry wrapper", .{});
         }
         unreachable;
     };
@@ -11867,7 +11867,7 @@ const CheckedSourceNodeMap = struct {
         if (node_idx >= self.entries.len) checkedArtifactInvariant("checked source node map write was out of range", .{});
         if (id_raw >= checked_source_node_id_limit) return error.OutOfMemory;
         if (builtin.mode == .Debug and self.entries[node_idx] != checked_source_node_empty) {
-            std.debug.panic("checked artifact invariant violated: checked source node map wrote source node {d} twice", .{node_idx});
+            base.invariant("checked artifact invariant violated: checked source node map wrote source node {d} twice", .{node_idx});
         }
         self.entries[node_idx] = (@as(u32, @intFromEnum(kind)) << checked_source_node_id_bits) | id_raw;
     }
@@ -12776,7 +12776,7 @@ pub const CheckedBodyStore = struct {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("checked artifact invariant violated: checked expr type root was not published", .{});
+                        base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
                     }
                     unreachable;
                 };
@@ -12792,7 +12792,7 @@ pub const CheckedBodyStore = struct {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("checked artifact invariant violated: checked pattern type root was not published", .{});
+                        base.invariant("checked artifact invariant violated: checked pattern type root was not published", .{});
                     }
                     unreachable;
                 };
@@ -13608,7 +13608,7 @@ pub const CheckedBodyStore = struct {
                 continue;
             } else {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: static dispatch plan {d} points at non-dispatch checked expression {d}",
                         .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
                     );
@@ -13734,7 +13734,7 @@ pub const CheckedBodyStore = struct {
             const ref_id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(i)));
             const indexed = refs.lookupIdByCheckedExpr(record.expr) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: resolved value ref {d} is missing from checked expression index",
                         .{i},
                     );
@@ -13787,7 +13787,7 @@ pub const CheckedBodyStore = struct {
                 data.* = .{ .lookup_required = ref_id };
             } else {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: resolved value ref {d} points at non-lookup checked expression {d}",
                         .{ i, @intFromEnum(record.expr) },
                     );
@@ -16082,7 +16082,7 @@ const CheckedBodyPayloadCopier = struct {
 
         if (candidate_binders.items.len != representative_binders.len) {
             if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: non-degenerate alternative binder count differs from representative", .{});
+                base.invariant("checked artifact invariant violated: non-degenerate alternative binder count differs from representative", .{});
             }
             unreachable;
         }
@@ -16092,7 +16092,7 @@ const CheckedBodyPayloadCopier = struct {
         for (candidate_binders.items) |candidate| {
             const representative = self.representativeBinderForIdent(representative_binders, candidate.ident) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: non-degenerate alternative binder has no representative binder", .{});
+                    base.invariant("checked artifact invariant violated: non-degenerate alternative binder has no representative binder", .{});
                 }
                 unreachable;
             };
@@ -16195,7 +16195,7 @@ const CheckedBodyPayloadCopier = struct {
             .underscore,
             .runtime_error,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
         std.mem.reverse(@TypeOf(pending.items[0]), pending.items[start..]);
     }
@@ -16283,7 +16283,7 @@ const CheckedBodyPayloadCopier = struct {
         const raw = @intFromEnum(expr);
         if (self.source_node_map.expr(expr)) |id| return id;
         if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
+            base.invariant("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
         }
         unreachable;
     }
@@ -16320,7 +16320,7 @@ const CheckedBodyPayloadCopier = struct {
         const raw = @intFromEnum(pattern);
         if (self.source_node_map.pattern(pattern)) |id| return id;
         if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
+            base.invariant("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
         }
         unreachable;
     }
@@ -16370,7 +16370,7 @@ const CheckedBodyPayloadCopier = struct {
         const raw = @intFromEnum(statement);
         if (self.source_node_map.statement(statement)) |id| return id;
         if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
+            base.invariant("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
         }
         unreachable;
     }
@@ -16530,7 +16530,7 @@ fn verifyCheckedExprDataComplete(
     checked_type_count: usize,
 ) void {
     switch (data) {
-        .pending => std.debug.panic("checked artifact invariant violated: checked expression payload was not filled", .{}),
+        .pending => base.invariant("checked artifact invariant violated: checked expression payload was not filled", .{}),
         .lookup_local => |lookup| std.debug.assert(lookup.resolved != null),
         .lookup_external => |ref| std.debug.assert(ref != null),
         .lookup_required => |ref| std.debug.assert(ref != null),
@@ -16569,12 +16569,12 @@ fn verifyCheckedExprDataComplete(
 }
 
 fn verifyCheckedPatternDataComplete(data: StoredCheckedPatternData) void {
-    if (data == .pending) std.debug.panic("checked artifact invariant violated: checked pattern payload was not filled", .{});
+    if (data == .pending) base.invariant("checked artifact invariant violated: checked pattern payload was not filled", .{});
 }
 
 fn verifyCheckedStatementDataComplete(data: StoredCheckedStatementData) void {
     switch (data) {
-        .pending => std.debug.panic("checked artifact invariant violated: checked statement payload was not filled", .{}),
+        .pending => base.invariant("checked artifact invariant violated: checked statement payload was not filled", .{}),
         .for_ => |for_| {
             std.debug.assert(for_.plan != null);
             std.debug.assert(for_.mutations != null);
@@ -17340,7 +17340,7 @@ pub const ResolvedValueRefTable = struct {
             );
             const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
+                    base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
                 unreachable;
             };
@@ -17349,7 +17349,7 @@ pub const ResolvedValueRefTable = struct {
             if (builtin.mode == .Debug) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
-                    std.debug.panic("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
+                    base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
                 }
             }
             try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
@@ -17703,7 +17703,7 @@ fn categorizeValueRef(
         .e_run_low_level,
         => {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: expression {d} is not a value reference",
                     .{@intFromEnum(expr_idx)},
                 );
@@ -17782,7 +17782,7 @@ fn categorizeLocalValueRef(
 ) ResolvedValueRef {
     const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: local lookup pattern {d} has no checked pattern id",
                 .{@intFromEnum(pattern)},
             );
@@ -17793,7 +17793,7 @@ fn categorizeLocalValueRef(
     if (top_level_values.lookupByPattern(checked_pattern)) |entry| {
         if (entry.pattern != checked_pattern) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: top-level pattern index {d} resolved to mismatched entry",
                     .{@intFromEnum(pattern)},
                 );
@@ -17806,7 +17806,7 @@ fn categorizeLocalValueRef(
 
     const binder = checked_bodies.patternBinderForSource(pattern) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: local lookup pattern {d} has no checked pattern binder",
                 .{@intFromEnum(pattern)},
             );
@@ -17857,7 +17857,7 @@ fn categorizeLocalValueRef(
     }
 
     if (builtin.mode == .Debug) {
-        std.debug.panic(
+        base.invariant(
             "checked artifact invariant violated: local lookup pattern {d} has no categorized binding",
             .{@intFromEnum(pattern)},
         );
@@ -17924,7 +17924,7 @@ fn categorizeImportedValueRef(
 ) ResolvedValueRef {
     const resolved_module_idx = module.resolvedImportModule(import_idx) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: external lookup import {d} has no resolved module",
                 .{@intFromEnum(import_idx)},
             );
@@ -17933,7 +17933,7 @@ fn categorizeImportedValueRef(
     };
     const import_artifact = publishImportForModule(imports, resolved_module_idx) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: external lookup import {d} resolved to module {d} without a published artifact key",
                 .{ @intFromEnum(import_idx), resolved_module_idx },
             );
@@ -17960,7 +17960,7 @@ fn categorizeImportedValueRef(
     }
 
     if (builtin.mode == .Debug) {
-        std.debug.panic(
+        base.invariant(
             "checked artifact invariant violated: external lookup target {d} in module {d} was not exported by the imported checked artifact",
             .{ target_node_idx, resolved_module_idx },
         );
@@ -18071,7 +18071,7 @@ fn collectPublishedExportDefs(
         const raw_node_idx: u32 = entry.target.valueDefNode() orelse continue;
         if (raw_node_idx >= node_count) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: exposed item {s} points at out-of-range node {d}",
                     .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
                 );
@@ -18096,7 +18096,7 @@ fn appendPublishedExportDef(
     const raw = @intFromEnum(def_idx);
     if (raw >= seen.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: published export def {d} is outside the module node store",
                 .{raw},
             );
@@ -18156,7 +18156,7 @@ fn categorizeRequiredValueRef(
         }
         const declaration = platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: required lookup {d} has no platform declaration",
                     .{requires_idx},
                 );
@@ -18340,7 +18340,7 @@ const LocalPatternRoleIndex = struct {
 
         for (lambda_args, statement_roles, 0..) |is_lambda_arg, maybe_statement_role, raw_pattern| {
             if (is_lambda_arg and maybe_statement_role != null) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: local pattern {d} is both a lambda argument and statement binding",
                     .{raw_pattern},
                 );
@@ -20497,7 +20497,7 @@ const EvidencePass = struct {
                         // (every view the checker resolved against is searched
                         // above).
                         if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
-                        std.debug.panic("publication could not resolve a checked dispatch target for an owned method", .{});
+                        base.invariant("publication could not resolve a checked dispatch target for an owned method", .{});
                     }
                     // No owner head: a genuinely structural shape.
                     if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
@@ -23107,7 +23107,7 @@ pub const CheckedProcedureTemplateTable = struct {
             });
             const checked_fn_root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: checked procedure function root was not published", .{});
+                    base.invariant("checked artifact invariant violated: checked procedure function root was not published", .{});
                 }
                 unreachable;
             };
@@ -23120,7 +23120,7 @@ pub const CheckedProcedureTemplateTable = struct {
             } } else blk: {
                 const root_expr = checked_bodies.exprIdForSource(def.expr.idx) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("checked artifact invariant violated: checked procedure body root expression was not published", .{});
+                        base.invariant("checked artifact invariant violated: checked procedure body root expression was not published", .{});
                     }
                     unreachable;
                 };
@@ -24277,7 +24277,7 @@ pub const HostedProcTable = struct {
                 const hosted = def.expr.data.e_hosted_lambda;
                 const template_ref = templates.lookupByDef(def_idx) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("checked artifact invariant violated: hosted procedure def has no checked template", .{});
+                        base.invariant("checked artifact invariant violated: hosted procedure def has no checked template", .{});
                     }
                     unreachable;
                 };
@@ -25006,7 +25006,7 @@ pub const PlatformRequirementRelationTable = struct {
         );
         if (active_relation.relations.len != active_relation.bindings.len) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform/app relation has {d} checked relation rows for {d} bindings",
                     .{ active_relation.relations.len, active_relation.bindings.len },
                 );
@@ -25033,7 +25033,7 @@ pub const PlatformRequirementRelationTable = struct {
         for (active_relation.relations, 0..) |input, i| {
             const declaration = declarations.lookupByDeclarationId(input.declaration) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app checked relation {d} references unknown requirement declaration",
                         .{i},
                     );
@@ -25043,7 +25043,7 @@ pub const PlatformRequirementRelationTable = struct {
             const declaration_index: usize = @intCast(@intFromEnum(input.declaration));
             if (builtin.mode == .Debug) {
                 if (seen_declarations[declaration_index]) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app checked relation binds declaration {d} more than once",
                         .{declaration_index},
                     );
@@ -25052,7 +25052,7 @@ pub const PlatformRequirementRelationTable = struct {
             }
             if (input.requires_idx != declaration.requires_idx) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app checked relation {d} maps declaration {d} to required index {d}, expected {d}",
                         .{ i, declaration_index, input.requires_idx, declaration.requires_idx },
                     );
@@ -25061,7 +25061,7 @@ pub const PlatformRequirementRelationTable = struct {
             }
             if (!std.meta.eql(input.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app checked relation {d} points at a value outside the app artifact",
                         .{i},
                     );
@@ -25245,7 +25245,7 @@ fn platformRequirementSolutionTableFromInputs(
                 },
             };
             if (!is_exported) {
-                std.debug.panic("checked artifact invariant violated: platform requirement solution references an unexported app value", .{});
+                base.invariant("checked artifact invariant violated: platform requirement solution references an unexported app value", .{});
             }
         }
 
@@ -25309,7 +25309,7 @@ pub const PlatformRequiredBindingTable = struct {
         );
         if (active_relation.bindings.len + active_relation.checked_error_requires.len != declarations.declarations.len) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform/app relation has {d} bindings and {d} checked errors for {d} platform requirements",
                     .{ active_relation.bindings.len, active_relation.checked_error_requires.len, declarations.declarations.len },
                 );
@@ -25337,14 +25337,14 @@ pub const PlatformRequiredBindingTable = struct {
         if (builtin.mode == .Debug) {
             for (checked_error_requires) |requires_idx| {
                 const declaration = declarations.lookupByRequiredIndex(requires_idx) orelse {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform checked-error requirement {d} has no declaration",
                         .{requires_idx},
                     );
                 };
                 const declaration_index: usize = @intCast(@intFromEnum(declaration.id));
                 if (seen_declarations[declaration_index]) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform requirement declaration {d} has multiple outcomes",
                         .{declaration_index},
                     );
@@ -25356,7 +25356,7 @@ pub const PlatformRequiredBindingTable = struct {
         for (active_relation.bindings, 0..) |binding, i| {
             const declaration = declarations.lookupByDeclarationId(binding.declaration) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app binding {d} references unknown requirement declaration",
                         .{i},
                     );
@@ -25366,7 +25366,7 @@ pub const PlatformRequiredBindingTable = struct {
             const declaration_index: usize = @intCast(@intFromEnum(binding.declaration));
             if (builtin.mode == .Debug) {
                 if (seen_declarations[declaration_index]) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app relation binds platform requirement declaration {d} more than once",
                         .{declaration_index},
                     );
@@ -25375,7 +25375,7 @@ pub const PlatformRequiredBindingTable = struct {
             }
             if (declaration.requires_idx != binding.requires_idx) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app binding {d} maps declaration {d} to required index {d}, expected {d}",
                         .{ i, declaration_index, binding.requires_idx, declaration.requires_idx },
                     );
@@ -25384,7 +25384,7 @@ pub const PlatformRequiredBindingTable = struct {
             }
             if (!std.meta.eql(binding.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app binding {d} points at a value outside the app artifact",
                         .{i},
                     );
@@ -25393,7 +25393,7 @@ pub const PlatformRequiredBindingTable = struct {
             }
             const checked_relation = relations.lookupByRelationId(binding.checked_relation) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform/app binding {d} references missing checked relation",
                         .{i},
                     );
@@ -25483,7 +25483,7 @@ fn validatePlatformAppRelationForModule(
 ) void {
     if (active_relation.platform_module_idx != module_identity.module_idx) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
                 .{ active_relation.platform_module_idx, module_identity.module_idx },
             );
@@ -25496,7 +25496,7 @@ fn validatePlatformAppRelationForModule(
     );
     if (!std.meta.eql(active_relation.requirement_context.bytes, expected_requirement_context.bytes)) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
                 .{},
             );
@@ -25509,7 +25509,7 @@ fn validatePlatformAppRelationForModule(
     );
     if (!std.meta.eql(active_relation.key.bytes, expected_key.bytes)) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
                 .{},
             );
@@ -25526,7 +25526,7 @@ fn platformRequiredPayloadForDeclaration(
     const module_env = module.moduleEnvConst();
     if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform requirement declaration {d} has out-of-range required index {d}",
                 .{ @intFromEnum(declaration.id), declaration.requires_idx },
             );
@@ -25536,7 +25536,7 @@ fn platformRequiredPayloadForDeclaration(
     const required_type = module_env.requires_types.items.items[declaration.requires_idx];
     return checked_types.rootForSourceVar(module, ModuleEnv.varFrom(required_type.type_anno)) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform requirement declaration {d} has no platform-owned checked payload",
                 .{@intFromEnum(declaration.id)},
             );
@@ -26860,7 +26860,7 @@ fn validatePlatformBindingRelation(
 ) void {
     if (relation.declaration != declaration or relation.requires_idx != requires_idx) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different requirement",
                 .{binding_index},
             );
@@ -26871,7 +26871,7 @@ fn validatePlatformBindingRelation(
         relation.app_value.pattern != app_value.pattern)
     {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different app value",
                 .{binding_index},
             );
@@ -26881,7 +26881,7 @@ fn validatePlatformBindingRelation(
     switch (value_use_kind) {
         .const_value => if (relation.value_kind != .const_value) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform/app binding {d} has const value use but procedure checked relation",
                     .{binding_index},
                 );
@@ -26890,7 +26890,7 @@ fn validatePlatformBindingRelation(
         },
         .procedure_value => if (relation.value_kind != .procedure_value) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform/app binding {d} has procedure value use but const checked relation",
                     .{binding_index},
                 );
@@ -27955,13 +27955,13 @@ pub const ModuleInterfaceCapabilities = struct {
     ) Allocator.Error!ModuleInterfaceCapabilities {
         const current_module_hash = module.moduleEnvConst().contentIdentityHash() orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: module content identity missing during interface capability publication", .{});
+                base.invariant("checked artifact invariant violated: module content identity missing during interface capability publication", .{});
             }
             unreachable;
         };
         const current_module = names.lookupModuleIdentity(current_module_hash) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: module identity was not interned before interface capability publication", .{});
+                base.invariant("checked artifact invariant violated: module identity was not interned before interface capability publication", .{});
             }
             unreachable;
         };
@@ -28160,7 +28160,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 for (self.exported_nominal_representations) |representation| {
                     if (representation.box_payload_capability == entry.id) break;
                 } else {
-                    std.debug.panic("checked artifact invariant violated: opaque boxed-payload capability has no nominal representation row", .{});
+                    base.invariant("checked artifact invariant violated: opaque boxed-payload capability has no nominal representation row", .{});
                 }
             }
         }
@@ -28177,24 +28177,24 @@ pub const ModuleInterfaceCapabilities = struct {
             std.debug.assert(@intFromEnum(entry.id) == i);
             const capability_index: usize = @intFromEnum(entry.box_payload_capability);
             if (capability_index >= self.boxed_payload_templates.len) {
-                std.debug.panic("checked artifact invariant violated: nominal representation references missing boxed-payload capability", .{});
+                base.invariant("checked artifact invariant violated: nominal representation references missing boxed-payload capability", .{});
             }
             const capability = self.boxed_payload_templates[capability_index];
             if (!canonicalNominalTypeKeyEql(entry.nominal, capability.nominal) or
                 !canonicalTypeKeyEql(entry.source_ty, capability.source_ty))
             {
-                std.debug.panic("checked artifact invariant violated: nominal representation disagrees with boxed-payload capability identity", .{});
+                base.invariant("checked artifact invariant violated: nominal representation disagrees with boxed-payload capability identity", .{});
             }
             if (entry.opaque_atomic_proof) |proof| {
                 const proof_index: usize = @intFromEnum(proof);
                 if (proof_index >= self.opaque_atomic_proofs.len) {
-                    std.debug.panic("checked artifact invariant violated: nominal representation references missing opaque atomic proof", .{});
+                    base.invariant("checked artifact invariant violated: nominal representation references missing opaque atomic proof", .{});
                 }
                 const proof_entry = self.opaque_atomic_proofs[proof_index];
                 if (!canonicalNominalTypeKeyEql(entry.nominal, proof_entry.nominal) or
                     !canonicalTypeKeyEql(entry.source_ty, proof_entry.source_ty))
                 {
-                    std.debug.panic("checked artifact invariant violated: nominal representation disagrees with opaque atomic proof identity", .{});
+                    base.invariant("checked artifact invariant violated: nominal representation disagrees with opaque atomic proof identity", .{});
                 }
             }
         }
@@ -29998,7 +29998,7 @@ pub const TopLevelValueTable = struct {
                 }
                 const root_id = compile_time_roots.lookupIdByPattern(checked_pattern) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "checked artifact invariant violated: function-valued binding {d} has no compile-time callable root",
                             .{@intFromEnum(def.pattern.idx)},
                         );
@@ -30008,7 +30008,7 @@ pub const TopLevelValueTable = struct {
                 const root = compile_time_roots.root(root_id);
                 if (root.kind != .callable_binding) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "checked artifact invariant violated: function-valued binding {d} mapped to non-callable compile-time root",
                             .{@intFromEnum(def.pattern.idx)},
                         );
@@ -32291,7 +32291,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         const scheme = self.checked_types.schemeForKey(scheme_key) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: exported template references missing checked type scheme", .{});
+                base.invariant("checked artifact invariant violated: exported template references missing checked type scheme", .{});
             }
             unreachable;
         };
@@ -32514,7 +32514,7 @@ const ImportedTemplateClosureBuilder = struct {
 
         const scheme = self.checked_types.schemeForKey(const_ref.source_scheme) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: const template references missing checked type scheme", .{});
+                base.invariant("checked artifact invariant violated: const template references missing checked type scheme", .{});
             }
             unreachable;
         };
@@ -32984,7 +32984,7 @@ fn buildProcedureBindingClosure(
             ),
             .lifted => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: exported checked binding cannot reference lifted templates before mono", .{});
+                    base.invariant("checked artifact invariant violated: exported checked binding cannot reference lifted templates before mono", .{});
                 }
                 unreachable;
             },
@@ -33225,7 +33225,7 @@ pub const ConstTemplateTable = struct {
                 // A declaration with no implementation is sealed on
                 // publication; there is never a value to fill in later.
                 .eval_template, .stored_const, .unimplemented => {},
-                .reserved => std.debug.panic(
+                .reserved => base.invariant(
                     "checked artifact invariant violated: constant template {d} was not sealed before publication",
                     .{i},
                 ),
@@ -33429,7 +33429,7 @@ pub const ExportedConstTemplateTable = struct {
 
 fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("checked artifact invariant violated: " ++ message, args);
+        base.invariant("checked artifact invariant violated: " ++ message, args);
     }
     unreachable;
 }
@@ -34301,7 +34301,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.checked_types.payloads.items, 0..) |payload, i| {
             switch (payload) {
-                .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
+                .pending => base.invariant("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
                 .err,
                 .flex,
                 .rigid,
@@ -34351,13 +34351,13 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.items.len);
             if (request.abi == .compile_time) {
                 const template_ref = request.procedure_template orelse {
-                    std.debug.panic("checked artifact invariant violated: compile-time root has no private wrapper template", .{});
+                    base.invariant("checked artifact invariant violated: compile-time root has no private wrapper template", .{});
                 };
                 std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.items.len);
                 const template = self.checked_procedure_templates.get(template_ref.template);
                 switch (template.target) {
                     .comptime_only => {},
-                    .roc, .hosted, .intrinsic, .entry => std.debug.panic("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
+                    .roc, .hosted, .intrinsic, .entry => base.invariant("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
                 }
             }
         }
@@ -34384,7 +34384,7 @@ pub const CheckedModuleArtifact = struct {
                     .fn_value,
                     .discarded,
                     .runtime,
-                    => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
+                    => base.invariant("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
         }
@@ -35309,14 +35309,14 @@ pub const CheckedModuleArtifact = struct {
                 .local_proc, .structural => continue,
             };
             if (!std.meta.eql(procedure.template.artifact.bytes, self.key.bytes)) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: method registry procedure {d} referenced a foreign checked template",
                     .{entry_index},
                 );
             }
             const template_index = @intFromEnum(procedure.template.template);
             if (template_index >= self.checked_procedure_templates.templates.items.len) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: method registry procedure {d} referenced a missing checked template",
                     .{entry_index},
                 );
@@ -35326,14 +35326,14 @@ pub const CheckedModuleArtifact = struct {
                 .intrinsic_wrapper => |wrapper_id| blk: {
                     const wrapper_index = @intFromEnum(wrapper_id);
                     if (wrapper_index >= self.intrinsic_wrappers.wrappers.items.len) {
-                        std.debug.panic(
+                        base.invariant(
                             "checked artifact invariant violated: method registry procedure {d} referenced a missing intrinsic wrapper",
                             .{entry_index},
                         );
                     }
                     const wrapper = self.intrinsic_wrappers.wrappers.items[wrapper_index];
                     if (wrapper.template.template != procedure.template.template) {
-                        std.debug.panic(
+                        base.invariant(
                             "checked artifact invariant violated: method registry procedure {d} referenced the wrong intrinsic wrapper template",
                             .{entry_index},
                         );
@@ -35349,7 +35349,7 @@ pub const CheckedModuleArtifact = struct {
                         template_intrinsic == null or
                         template_intrinsic.? != runtime_intrinsic)
                     {
-                        std.debug.panic(
+                        base.invariant(
                             "checked artifact invariant violated: method registry procedure {d} had inconsistent call-site intrinsic metadata",
                             .{entry_index},
                         );
@@ -35358,7 +35358,7 @@ pub const CheckedModuleArtifact = struct {
                 .procedure, .low_level, .graph_participating => {
                     if (template_intrinsic) |intrinsic| {
                         if (intrinsic.callsiteArity() != null) {
-                            std.debug.panic(
+                            base.invariant(
                                 "checked artifact invariant violated: method registry procedure {d} lost its call-site intrinsic runtime target",
                                 .{entry_index},
                             );
@@ -35381,7 +35381,7 @@ pub const CheckedModuleArtifact = struct {
         if (self.hasUnboundPlatformRequirements()) {
             for (self.root_requests.runtime_requests) |request| {
                 if (request.kind == .provided_export) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: relationless required platform published a provided runtime root",
                         .{},
                     );
@@ -35392,7 +35392,7 @@ pub const CheckedModuleArtifact = struct {
         if (try self.validateDispatchEvidence()) |failure| {
             const expr_idx: ?u32 = if (failure.expr) |expr| @intFromEnum(expr) else null;
             const method_text: []const u8 = if (failure.method) |method| self.canonical_names.methodNameText(method) else "<none>";
-            std.debug.panic(
+            base.invariant(
                 "checked artifact invariant violated: dispatch evidence boundary: {s} (expr {?d}, index {?d}, method {s})",
                 .{ @tagName(failure.kind), expr_idx, failure.index, method_text },
             );
@@ -35409,11 +35409,11 @@ pub const CheckedModuleArtifact = struct {
                 ));
                 std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.items.len);
                 const evidence = request.root_evidence orelse {
-                    std.debug.panic("checked artifact invariant violated: procedure template root has no checked evidence vector", .{});
+                    base.invariant("checked artifact invariant violated: procedure template root has no checked evidence vector", .{});
                 };
                 std.debug.assert(checkedArtifactKeyEql(evidence.checked_module, self.key));
                 if (@as(u64, evidence.span.start) + evidence.span.len > self.static_dispatch_plans.evidence_refs.len) {
-                    std.debug.panic("checked artifact invariant violated: procedure template root evidence was outside the app evidence table", .{});
+                    base.invariant("checked artifact invariant violated: procedure template root evidence was outside the app evidence table", .{});
                 }
             }
             if (request.kind == .test_expect or
@@ -35421,13 +35421,13 @@ pub const CheckedModuleArtifact = struct {
                 request.kind == .compile_time_callable)
             {
                 const template_ref = request.procedure_template orelse {
-                    std.debug.panic("checked artifact invariant violated: compile-time/test root has no entry wrapper template", .{});
+                    base.invariant("checked artifact invariant violated: compile-time/test root has no entry wrapper template", .{});
                 };
                 std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.items.len);
             }
             if (request.kind == .platform_required_binding and request.procedure_use != null) {
                 _ = request.root_evidence orelse {
-                    std.debug.panic("checked artifact invariant violated: platform procedure root has no checked evidence vector", .{});
+                    base.invariant("checked artifact invariant violated: platform procedure root has no checked evidence vector", .{});
                 };
             }
         }
@@ -35435,7 +35435,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.platform_requirement_solutions.solutions) |solution| {
             if (solution.value_kind != .procedure_value) continue;
             if (@as(u64, solution.root_evidence.start) + solution.root_evidence.len > self.static_dispatch_plans.evidence_refs.len) {
-                std.debug.panic("checked artifact invariant violated: platform requirement root evidence was outside the app evidence table", .{});
+                base.invariant("checked artifact invariant violated: platform requirement root evidence was outside the app evidence table", .{});
             }
             // Direct procedures consume this vector as template arguments.
             // Evaluated callable bindings instead retain the returned value's
@@ -35454,7 +35454,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    .pending, .const_node, .fn_value, .discarded, .runtime => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value, .discarded, .runtime => base.invariant("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -35467,12 +35467,12 @@ pub const CheckedModuleArtifact = struct {
             switch (root.payload) {
                 .pending => {
                     if (has_request) {
-                        std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
+                        base.invariant("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
                 .const_node, .fn_value, .discarded, .expect, .runtime => {
                     if (!has_request) {
-                        std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
+                        base.invariant("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
                     verifyCompileTimeRootPayloadMatchesKind(root, root.payload);
                 },
@@ -35490,7 +35490,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(self.checked_types.payloads.items.len == self.checked_types.roots.items.len);
             switch (self.checked_types.payloads.items[i]) {
-                .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled", .{i}),
+                .pending => base.invariant("checked artifact invariant violated: checked type payload {d} was not filled", .{i}),
                 .err,
                 .flex,
                 .rigid,
@@ -35522,7 +35522,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(binder.id) == i);
             std.debug.assert(@intFromEnum(binder.pattern) < self.checked_bodies.patternCount());
             const indexed = self.checked_bodies.pattern_binder_by_pattern.items[@intFromEnum(binder.pattern)] orelse {
-                std.debug.panic("checked artifact invariant violated: pattern binder was not indexed by pattern", .{});
+                base.invariant("checked artifact invariant violated: pattern binder was not indexed by pattern", .{});
             };
             std.debug.assert(indexed == binder.id);
         }
@@ -35547,7 +35547,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(template.template_id) == i);
             std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.items.len);
             _ = self.checked_types.schemeForKey(template.checked_fn_scheme) orelse {
-                std.debug.panic("checked artifact invariant violated: checked procedure template references missing type scheme", .{});
+                base.invariant("checked artifact invariant violated: checked procedure template references missing type scheme", .{});
             };
             switch (template.body) {
                 .checked_body => |body| {
@@ -35712,7 +35712,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@intFromEnum(stored.node) < self.const_store.values.items.len);
                     std.debug.assert(@intFromEnum(stored.root_type) < self.const_store.type_store.types.items.len);
                 },
-                .reserved => std.debug.panic(
+                .reserved => base.invariant(
                     "checked artifact invariant violated: exported const template was not sealed",
                     .{},
                 ),
@@ -35752,7 +35752,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(relation.id) == i);
             std.debug.assert(relation.module_idx == self.module_identity.module_idx);
             const declaration = self.platform_required_declarations.lookupByDeclarationId(relation.declaration) orelse {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform requirement relation {d} has no declaration",
                     .{i},
                 );
@@ -35760,13 +35760,13 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(declaration.requires_idx == relation.requires_idx);
             const payload_index = @intFromEnum(relation.requested_source_ty_payload);
             if (payload_index >= self.checked_types.roots.items.len) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform requirement relation {d} requested payload is out of range",
                     .{i},
                 );
             }
             if (!canonicalTypeKeyEql(self.checked_types.roots.items[payload_index].key, relation.requested_source_ty)) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform requirement relation {d} requested payload key disagrees with relation key",
                     .{i},
                 );
@@ -35780,13 +35780,13 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(binding.id) == i);
             std.debug.assert(binding.module_idx == self.module_identity.module_idx);
             _ = self.platform_required_declarations.lookupByRequiredIndex(binding.requires_idx) orelse {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform required binding {d} has no declaration",
                     .{i},
                 );
             };
             const relation = self.platform_requirement_relations.lookupByRelationId(binding.checked_relation) orelse {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform required binding {d} has no checked relation",
                     .{i},
                 );
@@ -35796,13 +35796,13 @@ pub const CheckedModuleArtifact = struct {
         }
         for (self.platform_required_bindings.checked_error_requires) |requires_idx| {
             _ = self.platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform checked-error requirement {d} has no declaration",
                     .{requires_idx},
                 );
             };
             if (self.platform_required_bindings.lookupByRequiredIndex(requires_idx) != null) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact invariant violated: platform requirement {d} is both bound and a checked error",
                     .{requires_idx},
                 );
@@ -35819,7 +35819,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
             std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.items.len);
             _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
-                std.debug.panic("checked artifact invariant violated: callable eval template references missing type scheme", .{});
+                base.invariant("checked artifact invariant violated: callable eval template references missing type scheme", .{});
             };
         }
 
@@ -35829,7 +35829,7 @@ pub const CheckedModuleArtifact = struct {
             switch (entry.value) {
                 .const_ref => |const_ref| {
                     const owner = constRefTopLevelOwner(const_ref) orelse {
-                        std.debug.panic("checked artifact invariant violated: top-level value table referenced a non-top-level ConstRef", .{});
+                        base.invariant("checked artifact invariant violated: top-level value table referenced a non-top-level ConstRef", .{});
                     };
                     std.debug.assert(owner.module_idx == self.module_identity.module_idx);
                     std.debug.assert(owner.pattern == entry.pattern);
@@ -35850,7 +35850,7 @@ pub const CheckedModuleArtifact = struct {
                                     std.debug.assert(std.meta.eql(synthetic.template.artifact.bytes, direct.proc_value.artifact.bytes));
                                     std.debug.assert(@intFromEnum(synthetic.template.template) < self.checked_procedure_templates.templates.items.len);
                                 },
-                                .lifted => std.debug.panic(
+                                .lifted => base.invariant(
                                     "checked artifact invariant violated: direct top-level binding cannot use lifted template before mono",
                                     .{},
                                 ),
@@ -35868,12 +35868,12 @@ pub const CheckedModuleArtifact = struct {
         for (self.provides_requires.requires) |entry| {
             _ = self.canonical_names.exportNameText(entry.platform_name);
             _ = self.checked_types.schemeForKey(entry.declared_source_ty) orelse {
-                std.debug.panic("checked artifact invariant violated: require metadata source type was not published", .{});
+                base.invariant("checked artifact invariant violated: require metadata source type was not published", .{});
             };
         }
 
         if (self.provided_exports.exports.len != self.provides_requires.provides.len) {
-            std.debug.panic("checked artifact invariant violated: provided export table does not match provides metadata", .{});
+            base.invariant("checked artifact invariant violated: provided export table does not match provides metadata", .{});
         }
         for (self.provided_exports.exports, self.provides_requires.provides) |provided, metadata| {
             switch (provided) {
@@ -35883,14 +35883,14 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(procedure.def == metadata.def);
                     std.debug.assert(@intFromEnum(procedure.checked_type) < self.checked_types.roots.items.len);
                     const top_level = self.top_level_values.lookupByDef(procedure.def) orelse {
-                        std.debug.panic("checked artifact invariant violated: provided procedure export references missing top-level value", .{});
+                        base.invariant("checked artifact invariant violated: provided procedure export references missing top-level value", .{});
                     };
                     std.debug.assert(top_level.pattern == procedure.pattern);
                     std.debug.assert(top_level.source_name == procedure.source_name);
                     std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, procedure.source_scheme.bytes));
                     switch (top_level.value) {
                         .procedure_binding => |binding| std.debug.assert(binding == procedure.binding),
-                        .const_ref => std.debug.panic("checked artifact invariant violated: provided procedure export references const top-level value", .{}),
+                        .const_ref => base.invariant("checked artifact invariant violated: provided procedure export references const top-level value", .{}),
                     }
                 },
                 .data => |data| {
@@ -35899,14 +35899,14 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(data.def == metadata.def);
                     std.debug.assert(@intFromEnum(data.checked_type) < self.checked_types.roots.items.len);
                     const top_level = self.top_level_values.lookupByDef(data.def) orelse {
-                        std.debug.panic("checked artifact invariant violated: provided data export references missing top-level value", .{});
+                        base.invariant("checked artifact invariant violated: provided data export references missing top-level value", .{});
                     };
                     std.debug.assert(top_level.pattern == data.pattern);
                     std.debug.assert(top_level.source_name == data.source_name);
                     std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, data.source_scheme.bytes));
                     switch (top_level.value) {
                         .const_ref => |const_ref| std.debug.assert(constRefEql(const_ref, data.const_ref)),
-                        .procedure_binding => std.debug.panic("checked artifact invariant violated: provided data export references procedure top-level value", .{}),
+                        .procedure_binding => base.invariant("checked artifact invariant violated: provided data export references procedure top-level value", .{}),
                     }
                 },
             }
@@ -35926,14 +35926,14 @@ pub const CheckedModuleArtifact = struct {
         self.interface_capabilities.verifyComplete();
         for (self.interface_capabilities.hosted_representations) |entry| {
             if (@intFromEnum(entry.host_checked_fn_root) >= self.checked_types.roots.items.len) {
-                std.debug.panic("checked artifact invariant violated: hosted representation references missing host checked function root", .{});
+                base.invariant("checked artifact invariant violated: hosted representation references missing host checked function root", .{});
             }
         }
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprCount());
             if (self.checking_context_identity.platform_app_relation != null) {
                 switch (record.ref) {
-                    .platform_required_declaration => std.debug.panic(
+                    .platform_required_declaration => base.invariant(
                         "checked artifact invariant violated: executable platform artifact kept a declaration-only required lookup",
                         .{},
                     ),
@@ -35970,7 +35970,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
         .const_value => |const_use| {
             std.debug.assert(std.meta.eql(const_use.const_use.const_ref.artifact.bytes, binding.app_value.artifact.bytes));
             const owner = constRefTopLevelOwner(const_use.const_use.const_ref) orelse {
-                std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
+                base.invariant("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
             };
             std.debug.assert(owner.pattern == binding.app_value.pattern);
         },
@@ -35979,20 +35979,20 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
                 std.debug.assert(std.meta.eql(required.artifact.bytes, binding.app_value.artifact.bytes));
                 std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
                 if (self.platform_required_bindings.relationClosure(binding).interface_capabilities.len == 0) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked artifact invariant violated: platform-required procedure use has no relation template closure",
                         .{},
                     );
                 }
                 const evidence = procedure_use.root_evidence orelse {
-                    std.debug.panic("checked artifact invariant violated: platform-required procedure use has no root evidence", .{});
+                    base.invariant("checked artifact invariant violated: platform-required procedure use has no root evidence", .{});
                 };
                 std.debug.assert(std.meta.eql(evidence.checked_module.bytes, binding.app_value.artifact.bytes));
             },
             .top_level,
             .imported,
             .hosted,
-            => std.debug.panic(
+            => base.invariant(
                 "checked artifact invariant violated: platform-required procedure use must reference the app requirement binding explicitly",
                 .{},
             ),
@@ -36722,7 +36722,7 @@ fn directImportArtifactKeysFromModule(
         const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
         const key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked artifact publication invariant violated: import {d} resolved to module {d} without a published artifact key",
                     .{ i, resolved_module_idx },
                 );
@@ -36928,7 +36928,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .e_for,
                     .e_run_low_level,
                     => {},
-                    .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+                    .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
                 }
             },
             .pattern_applied_tag => {
@@ -36954,7 +36954,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .underscore,
                     .runtime_error,
                     => {},
-                    .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+                    .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
                 }
             },
             .type_header => {

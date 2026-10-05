@@ -77,7 +77,7 @@ pub fn runtimeBoxySpanStart(span: LIR.BoxySpan) ?usize {
 /// Encode a span over interpreter-owned runtime descriptor tables.
 pub fn makeRuntimeBoxySpan(start: usize, len: usize) LIR.BoxySpan {
     if (start >= runtimeBoxySpanTag) {
-        @panic("LIR/interpreter invariant violated: runtime boxy span exceeded encodable range");
+        base.invariant("{s}", .{"LIR/interpreter invariant violated: runtime boxy span exceeded encodable range"});
     }
     return .{ .start = runtimeBoxySpanTag | @as(u32, @intCast(start)), .len = @intCast(len) };
 }
@@ -142,7 +142,7 @@ pub fn isUnsigned(layout_idx: layout_mod.Idx) bool {
 /// `host_drop` names a generated adapter's signature, not an operation the
 /// runtime performs, so an RC statement can never carry it.
 fn hostDropInRcStatement() noreturn {
-    @panic("LIR/interpreter invariant violated: RC statement carried a host-shaped drop adapter");
+    base.invariant("{s}", .{"LIR/interpreter invariant violated: RC statement carried a host-shaped drop adapter"});
 }
 
 /// The nested op an aggregate's children receive when the parent is released:

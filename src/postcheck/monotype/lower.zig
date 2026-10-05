@@ -56114,7 +56114,7 @@ const BodyContext = struct {
         }
         for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |call| {
             if (!call.debug_consumed) {
-                std.debug.panic(
+                base.invariant(
                     "postcheck invariant violated: Monotype did not consume checker-required generated codec call {s} role {} (subject: {s})",
                     .{
                         call.view.names.methodNameText(call.checked.method),
@@ -56172,7 +56172,7 @@ const BodyContext = struct {
         anchor: CheckedCodecContractAnchor,
     } {
         const call = self.generatedCodecCall(method_name, subject_node) orelse
-            std.debug.panic(
+            base.invariant(
                 "postcheck invariant violated: checked generated codec contract was missing required method call {s} (subject: {s})",
                 .{ method_name, if (subject_node == null) "none" else "present" },
             );

@@ -108,7 +108,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn putAssumeCapacity(self: *Self, key: K, value: V) void {
-            self.put(key, value) catch @panic("DenseMap.putAssumeCapacity exceeded reserved storage");
+            self.put(key, value) catch collectionsInvariant("{s}", .{"DenseMap.putAssumeCapacity exceeded reserved storage"});
         }
 
         pub fn getOrPut(self: *Self, key: K) Allocator.Error!GetOrPutResult {
@@ -132,7 +132,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn getOrPutAssumeCapacity(self: *Self, key: K) GetOrPutResult {
-            return self.getOrPut(key) catch @panic("DenseMap.getOrPutAssumeCapacity exceeded reserved storage");
+            return self.getOrPut(key) catch collectionsInvariant("{s}", .{"DenseMap.getOrPutAssumeCapacity exceeded reserved storage"});
         }
 
         pub fn getOrPutValue(self: *Self, key: K, value: V) Allocator.Error!GetOrPutResult {
@@ -531,4 +531,11 @@ test "DenseMapPool reuses released map storage and supports nested acquires" {
     try std.testing.expectEqual(outer_chunks, reused.sparse_chunks.items.len);
     try reused.put(@enumFromInt(5_000), 3);
     try std.testing.expectEqual(@as(?u32, 3), reused.get(@enumFromInt(5_000)));
+}
+
+/// A violated compiler invariant (design.md): builds with runtime safety
+/// panic with this message, and optimized builds treat it as unreachable.
+inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
+    if (std.debug.runtime_safety) std.debug.panic(fmt, args);
+    unreachable;
 }

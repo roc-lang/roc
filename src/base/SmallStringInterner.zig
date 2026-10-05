@@ -7,6 +7,7 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -145,7 +146,7 @@ fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
 
     if (comptime builtin.mode == .Debug) {
-        std.debug.panic("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
+        invariant("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
 }

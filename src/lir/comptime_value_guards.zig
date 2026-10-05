@@ -1,5 +1,6 @@
 //! Final post-ARC guards borrow the immutable compile-time failure image.
 const std = @import("std");
+const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const DenseMap = @import("collections").DenseMap;
 const LIR = core.LIR;
@@ -40,7 +41,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         const admitted = proc.shapes.static_literal;
         if (!admitted and @import("builtin").mode != .Debug) continue;
         const uses_before = uses.items.len;
-        defer if (!admitted and uses.items.len != uses_before) @panic("compile-time value guards found a use in a procedure whose shapes excluded it");
+        defer if (!admitted and uses.items.len != uses_before) invariant("{s}", .{"compile-time value guards found a use in a procedure whose shapes excluded it"});
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
         if (proc.body) |body| try work.append(allocator, body);
@@ -174,7 +175,7 @@ fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, f
 /// `failed` flag of its failure record in the frozen image.
 fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
     const fields = program.static_data_values.items[@intFromEnum(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@intFromEnum(failure_slot)] orelse @panic("completed program omitted a compile-time value's failure record");
+    const index = exports[@intFromEnum(failure_slot)] orelse invariant("{s}", .{"completed program omitted a compile-time value's failure record"});
     const record = frozen.exports[index];
     return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
 }

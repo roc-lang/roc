@@ -10,6 +10,7 @@
 //! depth, not per call.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -214,7 +215,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     defer store.allocator.free(call_args);
     const source_frame = try GuardedList.dupe(store.allocator, LIR.LocalId, store.getLocalSpan(callee.frame_locals));
     defer store.allocator.free(source_frame);
-    if (source_args.len != call_args.len) @panic("single-use inline call arity differed from callee");
+    if (source_args.len != call_args.len) invariant("{s}", .{"single-use inline call arity differed from callee"});
 
     const inline_scope = try store.addInlineScope(.{
         .source_symbol = callee.name,

@@ -283,7 +283,7 @@ pub fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
 /// Panic in debug builds for a violated post-check invariant.
 pub fn invariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("postcheck invariant violated: {s}", .{message});
+        base.invariant("postcheck invariant violated: {s}", .{message});
     }
     unreachable;
 }
@@ -291,7 +291,7 @@ pub fn invariant(comptime message: []const u8) noreturn {
 /// `invariant` with runtime context formatted into the panic message.
 pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("postcheck invariant violated: " ++ fmt, args);
+        base.invariant("postcheck invariant violated: " ++ fmt, args);
     }
     unreachable;
 }
@@ -306,7 +306,7 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
 /// no crash. That check has to hold in release builds too, so this one reports
 /// and aborts instead of becoming undefined behavior.
 pub fn compilerBug(message: []const u8) noreturn {
-    std.debug.panic("compiler bug: {s}", .{message});
+    base.invariant("compiler bug: {s}", .{message});
 }
 
 /// Monotonic symbol id generator for post-check stages.

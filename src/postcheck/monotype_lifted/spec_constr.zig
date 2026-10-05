@@ -216,6 +216,7 @@
 //! whose store this walk never grows is unnecessary.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
@@ -1492,7 +1493,7 @@ const Pass = struct {
                     // verification for it is the producer scan itself.
                     if (phase == .iterator_fusion) {
                         if (try exprContainsIteratorProducer(self.allocator, self.program, body.roc)) {
-                            std.debug.panic("SpecConstr iterator_fusion excluded function {d} whose shapes {any} hide an iterator producer", .{ @intFromEnum(fn_id), self.program.getFn(fn_id).shapes });
+                            invariant("SpecConstr iterator_fusion excluded function {d} whose shapes {any} hide an iterator producer", .{ @intFromEnum(fn_id), self.program.getFn(fn_id).shapes });
                         }
                         continue;
                     }
@@ -1546,7 +1547,7 @@ const Pass = struct {
                 const output = item.output orelse Common.invariant("SpecConstr task completed without output");
                 if (item.verify_only) {
                     if (output.changed or output.requests.items.items.len != 0) {
-                        std.debug.panic("SpecConstr {s} changed function {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(item.fn_id), self.program.getFn(item.fn_id).shapes });
+                        invariant("SpecConstr {s} changed function {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(item.fn_id), self.program.getFn(item.fn_id).shapes });
                     }
                     if (self.options.metrics_out) |metrics| {
                         if (self.options.executor != null) {
@@ -14668,12 +14669,12 @@ const ProgramProcedureUsage = struct {
             const shapes = program.getFnAt(owner_index).shapes;
             if (builtin.mode == .Debug) {
                 if (try exprContainsReturn(allocator, program, body) and !shapes.contains_return) {
-                    std.debug.panic("function {d} contains a return its shapes {any} do not record", .{ owner_index, shapes });
+                    invariant("function {d} contains a return its shapes {any} do not record", .{ owner_index, shapes });
                 }
                 if (!shapes.self_call) {
                     const summary = try tailSelfCallSummary(allocator, program, body, owner);
                     if (!summary.valid or summary.count != 0) {
-                        std.debug.panic("function {d} calls itself although its shapes {any} do not record it", .{ owner_index, shapes });
+                        invariant("function {d} calls itself although its shapes {any} do not record it", .{ owner_index, shapes });
                     }
                 }
             }

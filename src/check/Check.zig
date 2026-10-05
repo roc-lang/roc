@@ -1764,7 +1764,7 @@ fn specializationDefaultTargetForConstraints(
 ) ?literal_defaulting.DefaultTarget {
     const phase = self.numericDefaultPhaseForConstraints(constraints) orelse return null;
     return literal_defaulting.defaultTargetForPhase(phase) orelse {
-        std.debug.panic("checker received a checking-finalized specialization default", .{});
+        base.invariant("checker received a checking-finalized specialization default", .{});
     };
 }
 
@@ -2768,7 +2768,7 @@ const HoistSelectionTransaction = struct {
             .e_type_method_call => |call| try self.pushStageExprs(run, store.sliceExpr(call.args)),
             .e_type_dispatch_call => |call| try self.pushStageExprs(run, store.sliceExpr(call.args)),
             .e_tuple_access => |access| try self.pushStageExpr(run, access.tuple),
-            .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
+            .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
         }
     }
 
@@ -2811,7 +2811,7 @@ const HoistSelectionTransaction = struct {
 
         for (self.known_updates.items) |update| {
             const value = self.checker.hoist_known_values.getPtr(update.pattern) orelse {
-                std.debug.panic("check invariant violated: hoist-known value disappeared before selected-root commit", .{});
+                base.invariant("check invariant violated: hoist-known value disappeared before selected-root commit", .{});
             };
             self.checker.deinitHoistKnownValue(value.*);
             value.value = .{ .selected_root = update.root_index };
@@ -3162,7 +3162,7 @@ fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
         if (cir.imports.importFailedBeforeChecking(import_idx)) continue;
 
         const import_name = cir.getString(cir.imports.imports.items.items[i]);
-        std.debug.panic(
+        base.invariant(
             "Check.init requires resolved import mapping before type checking; unresolved import \"{s}\" in module \"{s}\"",
             .{ import_name, cir.module_name },
         );
@@ -3219,7 +3219,7 @@ fn initAssumePrepared(
     const builtin_origin_identity = blk: {
         if (builtin_ctx.builtin_module) |builtin_env| {
             const builtin_hash = builtin_env.contentIdentityHash() orelse {
-                std.debug.panic(
+                base.invariant(
                     "type checker invariant violated: Builtin module env has no content identity while checking module '{s}'",
                     .{cir.module_name},
                 );
@@ -3327,7 +3327,7 @@ fn initAssumePrepared(
         if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) continue;
         const entry = try rehydrated_where_method_uses.getOrPut(gpa, @enumFromInt(record.slot_data));
         if (entry.found_existing) {
-            std.debug.panic("body constraint callable has multiple where-method use records", .{});
+            base.invariant("body constraint callable has multiple where-method use records", .{});
         }
         entry.value_ptr.* = @intCast(record_idx);
     }
@@ -4541,7 +4541,7 @@ fn poisonCapturingLocalTypeUsesOutside(self: *Self, decl: CIR.Statement.Idx, blo
     for (sites.items) |expr| {
         if (!outside.contains(expr)) continue;
         if (!escaped) {
-            std.debug.panic("check invariant violated: a capturing local method was dispatched outside its block without a reported escape", .{});
+            base.invariant("check invariant violated: a capturing local method was dispatched outside its block without a reported escape", .{});
         }
         try self.poisonCapturingLocalTypeSite(expr);
     }
@@ -4688,11 +4688,11 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_pos
 
 fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     if (self.hoist_frames.items.len == 0) {
-        std.debug.panic("check invariant violated: missing hoist frame during abort", .{});
+        base.invariant("check invariant violated: missing hoist frame during abort", .{});
     }
     const frame = self.hoist_frames.items[self.hoist_frames.items.len - 1];
     if (frame.expr != expr) {
-        std.debug.panic("check invariant violated: aborting non-top hoist frame", .{});
+        base.invariant("check invariant violated: aborting non-top hoist frame", .{});
     }
     _ = self.hoist_frames.pop();
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
@@ -4702,7 +4702,7 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
 
 fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Error!void {
     if (self.hoist_frames.items.len == 0) {
-        std.debug.panic("check invariant violated: missing hoist frame", .{});
+        base.invariant("check invariant violated: missing hoist frame", .{});
     }
     const frame_index = self.hoist_frames.items.len - 1;
     var frame = self.hoist_frames.items[frame_index];
@@ -5140,7 +5140,7 @@ fn recordHoistPatternProvenance(
         .frac_f64_literal,
         .str_literal,
         => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern, .deferred, completed.promotion_dependency),
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -5208,7 +5208,7 @@ fn patternIntroducesValueBinding(self: *const Self, root: CIR.Pattern.Idx) Alloc
             .frac_f64_literal,
             .str_literal,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
     return false;
@@ -5237,7 +5237,7 @@ fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
         .frac_f64_literal,
         .str_literal,
         => false,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -5295,7 +5295,7 @@ fn patternIsIrrefutableForHoistExtraction(self: *Self, root: CIR.Pattern.Idx) Al
             .frac_f64_literal,
             .str_literal,
             => return false,
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
     return true;
@@ -5353,7 +5353,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
             .frac_f64_literal,
             .str_literal,
             => {},
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         }
         try self.pushCirSubpatterns(&pending, pattern);
     }
@@ -5401,7 +5401,7 @@ fn recordHoistContextualPatternBindings(
             .frac_f64_literal,
             .str_literal,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
         try self.pushCirSubpatterns(&pending, pattern);
     }
@@ -5445,7 +5445,7 @@ fn popHoistContextualBindingScope(self: *Self, start: usize) void {
 fn markHoistContextualDependencyForLookup(self: *Self, pattern: CIR.Pattern.Idx) bool {
     const owner_frame_index = self.hoist_contextual_bindings.get(pattern) orelse return false;
     if (owner_frame_index >= self.hoist_frames.items.len) {
-        std.debug.panic("check invariant violated: contextual hoist binding outlived its owner frame", .{});
+        base.invariant("check invariant violated: contextual hoist binding outlived its owner frame", .{});
     }
 
     var frame_index = owner_frame_index + 1;
@@ -5457,11 +5457,11 @@ fn markHoistContextualDependencyForLookup(self: *Self, pattern: CIR.Pattern.Idx)
 
 fn currentHoistFrameIndexForExpr(self: *const Self, expr: CIR.Expr.Idx) usize {
     if (self.hoist_frames.items.len == 0) {
-        std.debug.panic("check invariant violated: missing contextual hoist owner frame", .{});
+        base.invariant("check invariant violated: missing contextual hoist owner frame", .{});
     }
     const frame_index = self.hoist_frames.items.len - 1;
     if (self.hoist_frames.items[frame_index].expr != expr) {
-        std.debug.panic("check invariant violated: contextual hoist owner was not the current expression frame", .{});
+        base.invariant("check invariant violated: contextual hoist owner was not the current expression frame", .{});
     }
     return frame_index;
 }
@@ -5586,7 +5586,7 @@ fn moduleHoistExprInvalidated(self: *const Self, module: *const ModuleEnv, expr:
 
 fn selectedHoistedRootInvalidated(self: *const Self, root_index: u32) bool {
     if (root_index >= self.selected_hoisted_roots.items.len) {
-        std.debug.panic("check invariant violated: hoist-known selected root index out of range", .{});
+        base.invariant("check invariant violated: hoist-known selected root index out of range", .{});
     }
     return self.hoistExprInvalidated(self.selected_hoisted_roots.items[root_index].expr);
 }
@@ -5670,7 +5670,7 @@ fn retirePatternMetadata(self: *Self, root: CIR.Pattern.Idx, diagnostic: ?CIR.Di
             },
             .as, .applied_tag, .nominal, .nominal_external, .tuple, .list, .record_destructure, .str_interpolation => {},
             .assign, .var_assign, .underscore, .runtime_error => {},
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         }
         try self.pushCirSubpatterns(&pending, pattern_idx);
     }
@@ -5890,7 +5890,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
         .e_break,
         .e_hosted_lambda,
         => {},
-        .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
+        .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
     }
 }
 
@@ -5937,7 +5937,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         } else {
             switch (root.body) {
                 .expr => {},
-                .pattern_extraction, .pattern_error => std.debug.panic("check invariant violated: pattern extraction hoisted root had no binding pattern", .{}),
+                .pattern_extraction, .pattern_error => base.invariant("check invariant violated: pattern extraction hoisted root had no binding pattern", .{}),
                 .pattern_validation => {},
             }
         }
@@ -6077,7 +6077,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             .e_lambda,
             .e_hosted_lambda,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
     return error.ExpectedHoistSelectionTestExpr;
@@ -6414,7 +6414,7 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_break,
         .e_run_low_level,
         => true,
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -6486,7 +6486,7 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_dispatch_call,
         .e_tuple_access,
         => true,
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -6556,7 +6556,7 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_typed_num_from_numeral,
         .e_str,
         => !self.exprHasDedicatedLiteralConversionRoot(expr),
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -6650,7 +6650,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const region_nodes = self.regions.len();
         const type_nodes = self.types.len();
         if (!(region_nodes == type_nodes)) {
-            std.debug.panic(
+            base.invariant(
                 "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
                 .{ type_nodes, region_nodes },
             );
@@ -6806,7 +6806,7 @@ fn recordAbsorbedDefaults(self: *Self, construction_var: ?Var, a: Var, b: Var) s
         if (mb_expr == null) mb_expr = self.sourceRecordConstructionForVar(b);
         if (mb_expr == null) mb_expr = self.sourceRecordConstructionForVar(a);
         const expr = mb_expr orelse
-            std.debug.panic("type checker invariant violated: defaulted-field width absorption lost its source record construction", .{});
+            base.invariant("type checker invariant violated: defaulted-field width absorption lost its source record construction", .{});
 
         // Settlement coalesces equal decisions before distributing them to
         // constructions. Recording an event must not scan the module's prefix.
@@ -8640,7 +8640,7 @@ fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
 /// a predeclared scheme as its root.
 fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
     if (self.waiting_predeclared_dispatch_uses.items.len != 0) {
-        std.debug.panic("type checker invariant violated: a dispatch use of a predeclared scheme was never recorded", .{});
+        base.invariant("type checker invariant violated: a dispatch use of a predeclared scheme was never recorded", .{});
     }
     if (builtin.mode != .Debug) return;
     var predeclared_roots: std.AutoHashMapUnmanaged(u32, void) = .empty;
@@ -8649,7 +8649,7 @@ fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
     while (slots_iter.next()) |slots| try predeclared_roots.put(self.gpa, @intFromEnum(slots.scheme_var), {});
     for (self.cir.scheme_uses.items.items) |record| {
         if (predeclared_roots.contains(record.scheme_root)) {
-            std.debug.panic("type checker invariant violated: a {s} scheme-use record is rooted at a predeclared scheme", .{
+            base.invariant("type checker invariant violated: a {s} scheme-use record is rooted at a predeclared scheme", .{
                 @tagName(@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))),
             });
         }
@@ -8842,11 +8842,11 @@ fn recordWhereMethodUse(
         });
     }
     if (self.scratch_evidence_pairs.items.len == 0) {
-        std.debug.panic("where-method use instantiation produced no callable copy", .{});
+        base.invariant("where-method use instantiation produced no callable copy", .{});
     }
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
     if (self.where_method_use_record_by_fn_var.contains(constraint.fn_var)) {
-        std.debug.panic("body constraint callable already has a where-method use record", .{});
+        base.invariant("body constraint callable already has a where-method use record", .{});
     }
     try self.where_method_use_record_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
     const record_index: u32 = @intCast(self.cir.scheme_uses.items.items.len);
@@ -8874,12 +8874,12 @@ fn existingWhereMethodUse(
     if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
         record.slot_data != @intFromEnum(constraint_fn_var))
     {
-        std.debug.panic("where-method use index named the wrong scheme-use record", .{});
+        base.invariant("where-method use index named the wrong scheme-use record", .{});
     }
     if (self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_ !=
         self.types.resolveVar(signature_var).var_)
     {
-        std.debug.panic("body constraint callable was matched to two where-method signatures", .{});
+        base.invariant("body constraint callable was matched to two where-method signatures", .{});
     }
     const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
     const signature_root = self.types.resolveVar(signature_var).var_;
@@ -8888,7 +8888,7 @@ fn existingWhereMethodUse(
             return @enumFromInt(pair.fresh_var);
         }
     }
-    std.debug.panic("where-method use record omitted its signature callable copy", .{});
+    base.invariant("where-method use record omitted its signature callable copy", .{});
 }
 
 /// The builtin `Try(ok, err)` identity handed to an instantiation that resolves
@@ -10127,7 +10127,7 @@ fn debugAssertSourceDeclKindInEnv(env: *const ModuleEnv, source_decl: u32, kind:
     if (builtin.mode != .Debug) return;
 
     if (source_decl >= env.store.nodes.len()) {
-        std.debug.panic("type checker invariant violated: source declaration {} is outside node store", .{source_decl});
+        base.invariant("type checker invariant violated: source declaration {} is outside node store", .{source_decl});
     }
 
     const node = env.store.nodes.get(@enumFromInt(source_decl));
@@ -10136,7 +10136,7 @@ fn debugAssertSourceDeclKindInEnv(env: *const ModuleEnv, source_decl: u32, kind:
         .nominal => node.tag == .statement_nominal_decl,
     };
     if (!ok) {
-        std.debug.panic("type checker invariant violated: source declaration {} has tag {}, expected {s}", .{
+        base.invariant("type checker invariant violated: source declaration {} has tag {}, expected {s}", .{
             source_decl,
             node.tag,
             @tagName(kind),
@@ -10165,14 +10165,14 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
     }
 
     const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
+            base.invariant("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
         }
         unreachable;
     };
@@ -10187,7 +10187,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
             .tag_union => indices.parse_tag_union_spec_type,
             .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
+                    base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
                 }
                 unreachable;
             },
@@ -10199,7 +10199,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
     }
@@ -10208,14 +10208,14 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
+                base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
             unreachable;
         },
     };
     const stmt_idx = self.findLocalTypeDeclByName(ident) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
+            base.invariant("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
         }
         unreachable;
     };
@@ -10264,7 +10264,7 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
     const decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+                base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
             }
             unreachable;
         };
@@ -10280,7 +10280,7 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
         };
         const stmt_idx = self.findLocalTypeDeclByName(type_ident) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: {s} declaration not found while checking Builtin", .{type_name});
+                base.invariant("type checker invariant violated: {s} declaration not found while checking Builtin", .{type_name});
             }
             unreachable;
         };
@@ -10291,14 +10291,14 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
     const sequence_content = self.types.resolveVar(sequence_var).desc.content;
     const nominal = sequence_content.unwrapNominalType() orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: {s} declaration did not instantiate to a nominal type", .{type_name});
+            base.invariant("type checker invariant violated: {s} declaration did not instantiate to a nominal type", .{type_name});
         }
         unreachable;
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: {s} expected one type argument, found {d}", .{ type_name, args.len });
+            base.invariant("type checker invariant violated: {s} expected one type argument, found {d}", .{ type_name, args.len });
         }
         unreachable;
     }
@@ -10315,7 +10315,7 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
     const range_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+                base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
             }
             unreachable;
         };
@@ -10323,7 +10323,7 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
     } else blk: {
         const range_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_range) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
+                base.invariant("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
             }
             unreachable;
         };
@@ -10334,14 +10334,14 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
     const range_content = self.types.resolveVar(range_var).desc.content;
     const nominal = range_content.unwrapNominalType() orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
+            base.invariant("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
         }
         unreachable;
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
+            base.invariant("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
         }
         unreachable;
     }
@@ -10891,7 +10891,7 @@ fn mkFlexWithFromQuoteConstraint(
 fn recordedNumeralLiteralForNode(self: *const Self, node_idx: CIR.Node.Idx) ModuleEnv.NumeralLiteral {
     return self.cir.numeralLiteralForNode(node_idx) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("missing recorded exact numeral for source node {}", .{@intFromEnum(node_idx)});
+            base.invariant("missing recorded exact numeral for source node {}", .{@intFromEnum(node_idx)});
         }
         unreachable;
     };
@@ -11046,7 +11046,7 @@ fn mkParseSpecVar(
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
+                base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
             unreachable;
         },
@@ -11155,7 +11155,7 @@ fn unifyWithFresh(
                 const target_var_rank = self.types.resolveVar(target_var).desc.rank;
                 const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
                 if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
-                    std.debug.panic("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+                    base.invariant("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
                 }
             }
             _ = try self.unify(target_var, fresh_var, env);
@@ -11224,7 +11224,7 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const bool_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.bool_type) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
+                base.invariant("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
             }
             unreachable;
         }
@@ -11233,7 +11233,7 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const str_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.builtin_str) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
+                base.invariant("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
             }
             unreachable;
         }
@@ -11242,14 +11242,14 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const u64_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.u64_type) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: local Builtin.U64 declaration not found while checking Builtin", .{});
+                base.invariant("type checker invariant violated: local Builtin.U64 declaration not found while checking Builtin", .{});
             }
             unreachable;
         }
     else blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: builtin indices missing while copying Builtin.U64", .{});
+                base.invariant("type checker invariant violated: builtin indices missing while copying Builtin.U64", .{});
             }
             unreachable;
         };
@@ -11301,7 +11301,7 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
     const builtin_env = self.builtin_ctx.builtin_module orelse return;
     const indices = self.builtin_ctx.builtin_indices orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
     };
@@ -11854,7 +11854,7 @@ fn debugAssertNominalDeclTableComplete(self: *const Self) void {
         const nominal = content.structure.nominal_type;
         if (!nominal.sourceDecl().present) continue;
         if (self.types.lookupNominalDecl(nominal) == null) {
-            std.debug.panic(
+            base.invariant(
                 "type checker invariant violated: nominal application '{s}' (origin {}, statement {}) has no declaration table entry in its store",
                 .{
                     self.cir.getIdentStoreConst().getText(nominal.ident.ident_idx),
@@ -12076,7 +12076,7 @@ fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType)
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse {
         if (nominal.sourceDecl().present) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
                     .{self.cir.getIdentStoreConst().getText(nominal.ident.ident_idx)},
                 );
@@ -12292,7 +12292,7 @@ const HoistedDependencyContext = struct {
 
 fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("check invariant violated: " ++ message, .{});
+        base.invariant("check invariant violated: " ++ message, .{});
     }
     unreachable;
 }
@@ -12557,7 +12557,7 @@ fn hoistedRootExprStep(
         )) and
             try self.pushHoistedKeptExprs(pending, call.args),
         .e_tuple_access => |access| try pushHoistedKeptExpr(gpa, pending, access.tuple),
-        .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
+        .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
     };
 }
 
@@ -12820,7 +12820,7 @@ const StoredConstScan = struct {
             .e_return => |ret| try addExpr(items, module, ret.expr),
             .e_closure => |closure| try addExpr(items, module, closure.lambda_idx),
             .e_lambda => |lambda| try addExpr(items, module, lambda.body),
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
         return .{ .group = .all };
     }
@@ -12922,7 +12922,7 @@ fn hoistedCallableDefForExpr(
         .e_return,
         .e_break,
         => null,
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -13022,7 +13022,7 @@ fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.N
             .underscore,
             .runtime_error,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
     return false;
@@ -13147,7 +13147,7 @@ fn appendHoistedDependencyPatternBinders(
             .frac_f64_literal,
             .str_literal,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
         try self.pushCirSubpatterns(&pending, pattern);
     }
@@ -15717,7 +15717,7 @@ fn instantiatePlatformRequiredType(
     for (declared_aliases) |alias| {
         const binding = forClauseAliasBinding(bindings, alias.alias_stmt_idx) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("platform requirement for-clause alias was not collected for the requires clause", .{});
+                base.invariant("platform requirement for-clause alias was not collected for the requires clause", .{});
             }
             unreachable;
         };
@@ -15762,7 +15762,7 @@ fn instantiatePlatformRequiredType(
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
         slot_var.* = self.var_map.get(platform_var) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("platform requirement identity var was not copied into the app store", .{});
+                base.invariant("platform requirement identity var was not copied into the app store", .{});
             }
             unreachable;
         };
@@ -15787,7 +15787,7 @@ fn instantiatePlatformRequiredType(
         const resolved = self.types.resolveVar(slot_var.*);
         slot_var.* = self.var_map.get(resolved.var_) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("platform requirement identity var was not instantiated with its requirement root", .{});
+                base.invariant("platform requirement identity var was not instantiated with its requirement root", .{});
             }
             unreachable;
         };
@@ -15843,7 +15843,7 @@ fn collectForClauseAliasBindings(
             const alias_statement = input.env.store.getStatement(alias.alias_stmt_idx);
             if (alias_statement != .s_alias_decl) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("platform requirement for-clause alias referenced a non-alias statement", .{});
+                    base.invariant("platform requirement for-clause alias referenced a non-alias statement", .{});
                 }
                 unreachable;
             }
@@ -15852,7 +15852,7 @@ fn collectForClauseAliasBindings(
             const platform_alias_content = platform_alias_resolved.desc.content;
             if (platform_alias_content != .alias) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("platform requirement for-clause alias statement had no alias type", .{});
+                    base.invariant("platform requirement for-clause alias statement had no alias type", .{});
                 }
                 unreachable;
             }
@@ -15861,7 +15861,7 @@ fn collectForClauseAliasBindings(
                 .origin_module = platform_alias.origin_module,
                 .source_decl = platform_alias.source_decl.toOptional() orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("platform requirement for-clause alias had no source declaration", .{});
+                        base.invariant("platform requirement for-clause alias had no source declaration", .{});
                     }
                     unreachable;
                 },
@@ -16732,7 +16732,7 @@ fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, sch
 
 fn predeclaredSlotsPtr(self: *Self, annotation_idx: CIR.Annotation.Idx) *PredeclaredSlots {
     return self.predeclared_slots.getPtr(annotation_idx) orelse
-        std.debug.panic("type checker invariant violated: predeclared scheme use named an annotation that was never predeclared", .{});
+        base.invariant("type checker invariant violated: predeclared scheme use named an annotation that was never predeclared", .{});
 }
 
 fn predeclaredSchemeVarForAnnotation(self: *Self, annotation_idx: CIR.Annotation.Idx) Var {
@@ -16841,7 +16841,7 @@ fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx
     for (predeclared) |slot_var| {
         const root = self.types.resolveVar(slot_var).var_;
         const slot_copy = self.var_map.get(root) orelse
-            std.debug.panic("type checker invariant violated: predeclared scheme instantiation did not copy an identity slot", .{});
+            base.invariant("type checker invariant violated: predeclared scheme instantiation did not copy an identity slot", .{});
         try self.predeclared_use_fresh_vars.append(self.gpa, slot_copy);
     }
     for (predeclared) |slot_var| {
@@ -16849,7 +16849,7 @@ fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx
         for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
             const fn_root = self.types.resolveVar(constraint.fn_var).var_;
             const fresh_fn = self.var_map.get(fn_root) orelse
-                std.debug.panic("type checker invariant violated: predeclared scheme instantiation did not copy a slot's dispatch callable", .{});
+                base.invariant("type checker invariant violated: predeclared scheme instantiation did not copy a slot's dispatch callable", .{});
             try self.predeclared_use_fresh_vars.append(self.gpa, fresh_fn);
         }
     }
@@ -16869,10 +16869,10 @@ fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, us
     const predeclared = try self.predeclaredSchemeSlots(annotation_idx);
     const slots = self.predeclaredSlotsPtr(annotation_idx);
     const body_range = slots.body orelse
-        std.debug.panic("type checker invariant violated: predeclared scheme use composed before its body generated the annotation", .{});
+        base.invariant("type checker invariant violated: predeclared scheme use composed before its body generated the annotation", .{});
     const body = body_range.slice(self.predeclared_slot_vars.items);
     if (body.len != predeclared.len) {
-        std.debug.panic("type checker invariant violated: predeclared scheme and body annotation enumerated different identity slots", .{});
+        base.invariant("type checker invariant violated: predeclared scheme and body annotation enumerated different identity slots", .{});
     }
     for (body, use_copies[0..body.len]) |body_var, fresh_var| {
         const resolved = self.types.resolveVar(body_var);
@@ -16899,7 +16899,7 @@ fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, us
         if (body_content != .rigid) continue;
         const body_constraints = self.types.sliceStaticDispatchConstraints(body_content.rigid.constraints);
         if (body_constraints.len != predeclared_constraints.len) {
-            std.debug.panic("type checker invariant violated: predeclared scheme and body annotation carry different where-clause callables", .{});
+            base.invariant("type checker invariant violated: predeclared scheme and body annotation carry different where-clause callables", .{});
         }
         for (body_constraints, fresh_fns) |body_constraint, fresh_fn| {
             try self.scratch_evidence_pairs.append(self.gpa, .{
@@ -18914,7 +18914,7 @@ fn markBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
         try self.types.markBoundedRowExt(current);
         current = self.boundedRowChainNext(current) orelse return;
     }
-    std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+    base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
 }
 
 fn clearBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
@@ -18924,7 +18924,7 @@ fn clearBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
         try self.types.clearBoundedRowExt(current);
         current = self.boundedRowChainNext(current) orelse return;
     }
-    std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+    base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
 }
 
 fn boundedRowChainNext(self: *Self, current: Var) ?Var {
@@ -18958,7 +18958,7 @@ fn auditImplicitOpenExts(
         // the unifier refused every tag the annotation does not list at the
         // expression that produced it.
         if (self.implicitOpenExtCarriesTags(entry)) {
-            std.debug.panic("checker invariant violated: a bounded annotation row gained a tag during its definition's body check", .{});
+            base.invariant("checker invariant violated: a bounded annotation row gained a tag during its definition's body check", .{});
         }
         try self.late_implicit_open_ext_audits.append(self.gpa, .{
             .ext = entry,
@@ -22822,7 +22822,7 @@ fn stepPatternCheck(
             valid.* = false;
             try self.markErroneous(pattern_var);
         },
-        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+        .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 
     return .{ .done = pattern_var };
@@ -22851,7 +22851,7 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
         .underscore,
         .runtime_error,
         => return null,
-        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+        .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 }
 
@@ -22885,7 +22885,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_literal,
             .str_interpolation,
             => .can_miss,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -22912,7 +22912,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -22939,7 +22939,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -22966,7 +22966,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -22993,7 +22993,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -23024,7 +23024,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -23051,7 +23051,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -23078,7 +23078,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -23105,7 +23105,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 };
@@ -23151,7 +23151,7 @@ fn collectPatternBindings(
             .underscore,
             .runtime_error,
             => {},
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+            .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         }
         try self.pushCirSubpatterns(&pending, pattern_idx);
     }
@@ -24313,7 +24313,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             // frame before any member body ran.
                             if (builtin.mode == .Debug) {
                                 if (!self.defInCurrentRecursiveGroup(processing_def.def_idx)) {
-                                    std.debug.panic("type checker invariant violated: name reference to unchecked def outside the current binding group", .{});
+                                    base.invariant("type checker invariant violated: name reference to unchecked def outside the current binding group", .{});
                                 }
                             }
                             if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr)) and
@@ -24703,7 +24703,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
         .e_runtime_error => {
             try self.markErroneous(expr_var);
         },
-        .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
+        .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
         .e_str,
         .e_list,
         .e_tuple,
@@ -28511,7 +28511,7 @@ fn appendOwnerEnvByIdentity(
     is_this_module: bool,
 ) std.mem.Allocator.Error!void {
     const identity = env.contentIdentityHash() orelse {
-        std.debug.panic(
+        base.invariant(
             "type checker invariant violated: owner module '{s}' has no content identity",
             .{env.module_name},
         );
@@ -28655,7 +28655,7 @@ fn ownerEnvForOriginModule(
     }
 
     if (builtin.mode == .Debug) {
-        std.debug.panic(
+        base.invariant(
             "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
             .{ context, self.cir.moduleIdentityDisplayText(origin_module), owner_source_decl, origin_is_builtin },
         );
@@ -28666,7 +28666,7 @@ fn ownerEnvForOriginModule(
 fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, context: []const u8) void {
     if (builtin.mode != .Debug) return;
     if (ownerModuleEnvSourceDeclMatches(candidate, source_decl)) return;
-    std.debug.panic(
+    base.invariant(
         "type checker invariant violated: {s} owner resolved by content identity to module '{s}' whose node {d} is not a type declaration",
         .{ context, candidate.module_name, source_decl },
     );
@@ -28675,7 +28675,7 @@ fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, 
 fn nonBuiltinOwnerSourceDecl(source_decl: ?u32, context: []const u8, origin_text: []const u8) u32 {
     if (source_decl) |raw_decl| return raw_decl;
     if (builtin.mode == .Debug) {
-        std.debug.panic(
+        base.invariant(
             "type checker invariant violated: {s} owner {s} has no source declaration",
             .{ context, origin_text },
         );
@@ -28690,7 +28690,7 @@ fn builtinOwnerEnvForSourceDecl(
 ) struct { *const ModuleEnv, bool } {
     if (source_decl == null) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "type checker invariant violated: {s} compiler-builtin owner has no source declaration",
                 .{context},
             );
@@ -28701,7 +28701,7 @@ fn builtinOwnerEnvForSourceDecl(
     if (self.maybeBuiltinOwnerEnvForSourceDecl(source_decl.?)) |owner| return .{ owner.env, owner.is_this_module };
 
     if (builtin.mode == .Debug) {
-        std.debug.panic(
+        base.invariant(
             "type checker invariant violated: unable to find compiler-builtin module environment for {s} owner",
             .{context},
         );
@@ -28792,7 +28792,7 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
+        .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
     };
 }
 
@@ -29374,7 +29374,7 @@ fn typeDispatchOwnerVar(self: *Self, stmt_idx: CIR.Statement.Idx) Var {
         .s_where_alias_decl,
         .s_type_anno,
         .s_runtime_error,
-        => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+        => base.invariant("{s}", .{"type dispatch owner statement was not a type-var alias or type alias"}),
     };
 }
 
@@ -31242,7 +31242,7 @@ fn internCheckedTargetModuleIdentity(
 ) Allocator.Error!base.ModuleIdentity.Idx {
     if (target_env == self.cir) return self.cir.selfModuleIdentity();
     const target_hash = target_env.contentIdentityHash() orelse {
-        std.debug.panic("type checker invariant violated: associated lookup target has no content identity", .{});
+        base.invariant("type checker invariant violated: associated lookup target has no content identity", .{});
     };
     const display_ident = try self.cir.insertIdent(base.Ident.for_text(target_env.module_name));
     return try self.cir.internModuleIdentity(target_hash, display_ident);
@@ -31258,7 +31258,7 @@ fn moduleEnvForIdentity(
     const target_hash = source_module.moduleIdentityHash(module_identity);
     return self.owner_envs_by_identity.get(target_hash.*) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "type checker invariant violated: resolved associated lookup target is unavailable in module '{s}', identity={d}",
                 .{ source_module.module_name, @intFromEnum(module_identity) },
             );
@@ -31415,7 +31415,7 @@ fn openNominalBackingForApp(
     const decl_idx = self.types.lookupNominalDecl(nominal_type) orelse {
         if (nominal_type.sourceDecl().present) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
                     .{self.cir.getIdentStoreConst().getText(nominal_type.ident.ident_idx)},
                 );
@@ -31758,7 +31758,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const poisoned_expr = self.cir.store.getExpr(entry.value_ptr.*);
         if (poisoned_expr != .e_runtime_error) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("check invariant violated: rejected pattern statement RHS was not poisoned", .{});
+                base.invariant("check invariant violated: rejected pattern statement RHS was not poisoned", .{});
             }
             unreachable;
         }
@@ -32031,7 +32031,7 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
     // Commit-probes must not nest: a nested `beginCommitProbe` would clobber the
     // shared `probe_var_pool_lens` buffer the outer probe's rollback depends on.
     if (self.probe_depth != 0) {
-        @panic("commit probes cannot nest inside another solver probe");
+        base.invariant("{s}", .{"commit probes cannot nest inside another solver probe"});
     }
     self.commit_probe_active = true;
     errdefer self.commit_probe_active = false;
@@ -32586,7 +32586,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
                 // cycle through, so it must fail loudly, in release too.
                 const entry = try evidence.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
                 if (entry.found_existing) {
-                    std.debug.panic(
+                    base.invariant(
                         "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
                         .{record.slot_data},
                     );
@@ -33125,7 +33125,7 @@ fn defaultMaterializationIsRecursive(
                 .e_hosted_lambda,
                 .e_run_low_level,
                 => {},
-                .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
+                .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
             }
         }
         const expr_idx = expr_work.pop() orelse break;
@@ -33341,7 +33341,7 @@ fn defaultMaterializationIsRecursive(
             .e_break,
             .e_hosted_lambda,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
     return false;
@@ -35315,7 +35315,7 @@ fn captureSchemeDispatchRequirements(
     // this invariant explicit means probes only need to rewind append-only
     // candidates; they can never create or destructively capture TypeSchemes.
     if (self.probe_depth != 0) {
-        @panic("scheme requirements cannot be captured inside a solver probe");
+        base.invariant("{s}", .{"scheme requirements cannot be captured inside a solver probe"});
     }
     var codec_relation_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer codec_relation_vars.deinit();
@@ -37026,7 +37026,7 @@ fn tailTrySuffixStep(self: *const Self, expr_idx: CIR.Expr.Idx, pending: *std.Ar
         .e_hosted_lambda,
         .e_run_low_level,
         => return null,
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -39113,7 +39113,7 @@ fn cachedDispatchTargetInstantiationIndex(
         !std.meta.eql(existing.target_binding, method_lookup.binding) or
         !existing.method_name.eql(constraint.fn_name))
     {
-        std.debug.panic("one static-dispatch edge selected two different method bindings", .{});
+        base.invariant("one static-dispatch edge selected two different method bindings", .{});
     }
     return raw_index;
 }
@@ -40199,7 +40199,7 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
         self.setRegionAt(edge_var, self.getRegionAt(edge_fn));
         const result = try self.unify(frozen_class, edge_var, env);
         if (!result.isEstablished()) {
-            std.debug.panic("whole-use replay could not name a frozen dispatch edge", .{});
+            base.invariant("whole-use replay could not name a frozen dispatch edge", .{});
         }
         try frozen_edges.put(self.gpa, edge_fn, edge_var);
     }
@@ -40353,7 +40353,7 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
         // checked representative; the class keeps the frozen descriptor.
         const result = try self.unify(relation.source, relation.target, env);
         if (!result.isEstablished()) {
-            std.debug.panic("whole-use replay could not relate a use's instance to its source's settled instance", .{});
+            base.invariant("whole-use replay could not relate a use's instance to its source's settled instance", .{});
         }
     }
     if (std.debug.runtime_safety) try self.verifyUseReplay(relations.items);
@@ -40382,7 +40382,7 @@ fn verifyUseReplay(self: *Self, relations: []const DispatchReplayPair) Allocator
         try self.appendReplayTree(relation.target, &actual);
     }
     if (!replayShapeEql(expected.items, actual.items)) {
-        std.debug.panic("whole-use replay left a use's instance different from its source's settled instance", .{});
+        base.invariant("whole-use replay left a use's instance different from its source's settled instance", .{});
     }
 }
 
@@ -40410,7 +40410,7 @@ fn replayDispatchTarget(
         !std.meta.eql(source.target_binding, method_lookup.binding) or
         !source.method_name.eql(constraint.fn_name))
     {
-        std.debug.panic("dispatch replay key matched an edge with a different method binding", .{});
+        base.invariant("dispatch replay key matched an edge with a different method binding", .{});
     }
     switch (replay_source.freeze) {
         .frozen => {},
@@ -40459,7 +40459,7 @@ fn replayDispatchTarget(
         // checked representative; the class keeps the frozen descriptor.
         const result = try self.unify(graft.source, graft.target, env);
         if (!result.isEstablished()) {
-            std.debug.panic("concrete dispatch replay could not relate a callable variable to its source's ground instance", .{});
+            base.invariant("concrete dispatch replay could not relate a callable variable to its source's ground instance", .{});
         }
     }
     const method_var = constraint.fn_var;
@@ -40523,12 +40523,12 @@ fn verifyDispatchReplayAgainstFresh(
         defer self.types.rollbackToSavepoint(&savepoint);
         const fresh_instance = try self.copySchemeForReplayCheck(scheme_root);
         if (!(try self.probeUnifyResultWithoutRecordingProblems(fresh_instance, constraint.fn_var)).isEstablished()) {
-            std.debug.panic("a replayed dispatch edge's callable does not relate to a fresh instance of its method", .{});
+            base.invariant("a replayed dispatch edge's callable does not relate to a fresh instance of its method", .{});
         }
         try self.appendReplayTree(fresh_instance, &fresh_tree);
     }
     if (!replayShapeEql(frozen_tree.items, fresh_tree.items)) {
-        std.debug.panic("concrete dispatch replay shared an instance a fresh instantiation would not produce", .{});
+        base.invariant("concrete dispatch replay shared an instance a fresh instantiation would not produce", .{});
     }
 }
 
@@ -40617,7 +40617,7 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
                 tree.clearRetainingCapacity();
                 try self.appendReplayTree(source.frozen_root, &tree);
                 if (!replayShapeEql(self.dispatch_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
-                    std.debug.panic("a frozen dispatch replay instance changed while replayed edges shared it", .{});
+                    base.invariant("a frozen dispatch replay instance changed while replayed edges shared it", .{});
                 }
             }
         }
@@ -40631,7 +40631,7 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
                     try self.appendReplayTree(@enumFromInt(pair.fresh_var), &tree);
                 }
                 if (!replayShapeEql(self.use_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
-                    std.debug.panic("a frozen whole-use replay instance changed while replayed uses shared it", .{});
+                    base.invariant("a frozen whole-use replay instance changed while replayed uses shared it", .{});
                 }
             }
         }
@@ -41825,7 +41825,7 @@ inline fn processDeferredDispatchEntry(
                         continue;
                     }
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("derived-method marker registered for unsupported method", .{});
+                        base.invariant("derived-method marker registered for unsupported method", .{});
                     }
                     unreachable;
                 }
@@ -42670,7 +42670,7 @@ fn satisfyBuiltinStrInterpolation(
     const metadata = constraint.interpolation;
     const expr_region = metadata.expr_region.get() orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: builtin Str interpolation constraint had no metadata", .{});
+            base.invariant("type checker invariant violated: builtin Str interpolation constraint had no metadata", .{});
         }
         unreachable;
     };
@@ -42703,7 +42703,7 @@ fn ensureCustomInterpolationPartsChecked(
     const metadata = constraint.interpolation;
     if (!metadata.isPresent()) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
+            base.invariant("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
         }
         unreachable;
     }
@@ -44977,7 +44977,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     // after this loop, so the validated slice stays stable throughout.
     for (plans) |plan| {
         if (plan.dispatchResolution() != .unresolved) {
-            std.debug.panic("literal dispatch plan reached finalization already resolved", .{});
+            base.invariant("literal dispatch plan reached finalization already resolved", .{});
         }
 
         const target_var: Var = @enumFromInt(plan.target_var);
@@ -45057,7 +45057,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                 .alias => |alias| self.cir.getIdent(alias.ident.ident_idx),
                 .flex, .rigid, .field_presence, .err => "<unnamed>",
             };
-            std.debug.panic(
+            base.invariant(
                 "live concrete {s} literal plan for node {d} has no checked builtin or custom resolution (target var {d}: {s} {s}, callable var {d}: {s})",
                 .{
                     @tagName(plan.dispatchKind()),
@@ -46541,7 +46541,7 @@ fn mappedStructuralTagUnion(
         defer self.gpa.free(args);
         if (tag.name.eql(plan.tag_name)) {
             if (plan.payload_index >= args.len) {
-                std.debug.panic("checked derived map payload plan was outside the selected tag's payloads", .{});
+                base.invariant("checked derived map payload plan was outside the selected tag's payloads", .{});
             }
             args[plan.payload_index] = replacement;
         }

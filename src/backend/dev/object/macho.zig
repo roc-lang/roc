@@ -6,6 +6,7 @@
 //! Reference: https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
@@ -845,7 +846,7 @@ pub const MachOWriter = struct {
 
         const section = self.symbols.items[symbol_idx].section;
         if (builtin.mode == .Debug and section == 0) {
-            std.debug.panic("Mach-O invariant violated: local relocation targets undefined symbol {d}", .{symbol_idx});
+            invariant("Mach-O invariant violated: local relocation targets undefined symbol {d}", .{symbol_idx});
         }
         if (section == 0) unreachable;
         return @intCast(section);
@@ -854,7 +855,7 @@ pub const MachOWriter = struct {
     fn localRelocationValue(self: *const Self, symbol_idx: u32, addend: i64) i64 {
         const symbol = self.symbols.items[symbol_idx];
         if (builtin.mode == .Debug and symbol.section == 0) {
-            std.debug.panic("Mach-O invariant violated: local relocation value requested for undefined symbol {d}", .{symbol_idx});
+            invariant("Mach-O invariant violated: local relocation value requested for undefined symbol {d}", .{symbol_idx});
         }
         if (symbol.section == 0) unreachable;
 

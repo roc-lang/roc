@@ -144,7 +144,7 @@ const BitCountOp = enum(u16) {
 /// backend performs, so an RC statement can never carry it.
 fn hostDropInRcStatement() noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
+        base.invariant("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
     }
     unreachable;
 }
@@ -597,7 +597,7 @@ fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_by
                     "wrapStrConcat invalid RocStr {s}: len={d} cap=0x{x} raw_bytes=0x{x}\n",
                     .{ label, s.len(), s.capacity_or_alloc_ptr, @intFromPtr(s.bytes) },
                 );
-                std.debug.panic(
+                base.invariant(
                     "LIR/codegen invariant violated: wrapStrConcat received invalid RocStr {s} (len={d}, cap=0x{x})",
                     .{ label, s.len(), s.capacity_or_alloc_ptr },
                 );
@@ -1441,7 +1441,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return switch (layout_idx) {
                     .f32 => .f32,
                     .f64 => .f64,
-                    .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => std.debug.panic(
+                    .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => base.invariant(
                         "LIR/codegen invariant violated: expected float layout, got {s}",
                         .{@tagName(layout_idx)},
                     ),
@@ -2345,7 +2345,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (builtin.mode == .Debug and ret_layout_val.tag != .list and ret_layout_val.tag != .list_of_zst) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: list_append ret_layout must be list/list_of_zst, got {s}",
                             .{@tagName(ret_layout_val.tag)},
                         );
@@ -2357,7 +2357,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .list => {},
                             .list_of_zst => {
                                 if (ret_layout_val.tag != .list_of_zst) {
-                                    std.debug.panic(
+                                    base.invariant(
                                         "LIR/codegen invariant violated: list_append expected list_of_zst return layout",
                                         .{},
                                     );
@@ -2374,7 +2374,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .tag_union,
                             .ptr,
                             => {
-                                std.debug.panic(
+                                base.invariant(
                                     "LIR/codegen invariant violated: list_append first argument must have list/list_of_zst layout, got {s}",
                                     .{@tagName(list_layout_val.tag)},
                                 );
@@ -2579,7 +2579,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .ptr,
                         => {
                             if (builtin.mode == .Debug) {
-                                std.debug.panic(
+                                base.invariant(
                                     "LIR/codegen invariant violated: list_get argument must have list/list_of_zst layout, got {s}",
                                     .{@tagName(list_layout_val.tag)},
                                 );
@@ -2597,7 +2597,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const elem_box_like = elem_layout_val.tag == .box or elem_layout_val.tag == .box_of_zst or elem_layout_val.tag == .erased_box;
 
                         if (!(ret_list_like and elem_list_like) and !(ret_box_like and elem_box_like)) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d} {s}, elem={d} {s})",
                                 .{ @intFromEnum(ll.ret_layout), @tagName(ret_layout_val.tag), @intFromEnum(list_elem_layout), @tagName(elem_layout_val.tag) },
                             );
@@ -4012,7 +4012,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const a_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const b_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     if (builtin.mode == .Debug and (a_loc != .stack_str or b_loc != .stack_str)) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: str_concat expects stack_str args, got lhs={s} rhs={s}",
                             .{ @tagName(a_loc), @tagName(b_loc) },
                         );
@@ -4079,7 +4079,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag != .struct_) {
-                        std.debug.panic("LIR/codegen invariant violated: str_split_first expected record return layout", .{});
+                        base.invariant("LIR/codegen invariant violated: str_split_first expected record return layout", .{});
                     }
                     const record_idx = ret_layout_val.getStruct().idx;
                     const record_data = ls.getStructData(record_idx);
@@ -4089,7 +4089,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
                     {
-                        std.debug.panic("LIR/codegen invariant violated: str_split_first expected fields after Str, before Str, found Bool", .{});
+                        base.invariant("LIR/codegen invariant violated: str_split_first expected fields after Str, before Str, found Bool", .{});
                     }
 
                     const record_size = record_data.size.get(ls.targetUsize());
@@ -4131,7 +4131,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag != .struct_) {
-                        std.debug.panic("LIR/codegen invariant violated: str_split_last expected record return layout", .{});
+                        base.invariant("LIR/codegen invariant violated: str_split_last expected record return layout", .{});
                     }
                     const record_idx = ret_layout_val.getStruct().idx;
                     const record_data = ls.getStructData(record_idx);
@@ -4141,7 +4141,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
                     {
-                        std.debug.panic("LIR/codegen invariant violated: str_split_last expected fields after Str, before Str, found Bool", .{});
+                        base.invariant("LIR/codegen invariant violated: str_split_last expected fields after Str, before Str, found Bool", .{});
                     }
 
                     const record_size = record_data.size.get(ls.targetUsize());
@@ -4182,7 +4182,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag != .struct_) {
-                        std.debug.panic("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected record return layout", .{});
+                        base.invariant("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected record return layout", .{});
                     }
                     const record_idx = ret_layout_val.getStruct().idx;
                     const record_data = ls.getStructData(record_idx);
@@ -4191,7 +4191,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool)
                     {
-                        std.debug.panic("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected fields after Str, found Bool", .{});
+                        base.invariant("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected fields after Str, found Bool", .{});
                     }
 
                     const record_size = record_data.size.get(ls.targetUsize());
@@ -4417,11 +4417,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
-                        const resolved_ok = ok_disc orelse std.debug.panic(
+                        const resolved_ok = ok_disc orelse base.invariant(
                             "LIR/codegen invariant violated: str_from_utf8 had no Ok(Str) variant",
                             .{},
                         );
-                        const resolved_err = err_disc orelse std.debug.panic(
+                        const resolved_err = err_disc orelse base.invariant(
                             "LIR/codegen invariant violated: str_from_utf8 had no Err variant",
                             .{},
                         );
@@ -4463,19 +4463,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 else => {},
                             }
                         }
-                        const resolved_index_off = index_off orelse std.debug.panic(
+                        const resolved_index_off = index_off orelse base.invariant(
                             "LIR/codegen invariant violated: str_from_utf8 could not resolve index offset",
                             .{},
                         );
-                        const resolved_index_size = index_size orelse std.debug.panic(
+                        const resolved_index_size = index_size orelse base.invariant(
                             "LIR/codegen invariant violated: str_from_utf8 could not resolve index size",
                             .{},
                         );
-                        const resolved_problem_off = problem_off orelse std.debug.panic(
+                        const resolved_problem_off = problem_off orelse base.invariant(
                             "LIR/codegen invariant violated: str_from_utf8 could not resolve problem offset",
                             .{},
                         );
-                        const resolved_problem_size = problem_size orelse std.debug.panic(
+                        const resolved_problem_size = problem_size orelse base.invariant(
                             "LIR/codegen invariant violated: str_from_utf8 could not resolve problem size",
                             .{},
                         );
@@ -4483,13 +4483,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
                         const disc_size = tu_data.discriminant_size;
                         if (builtin.mode == .Debug and resolved_index_size != 8) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: str_from_utf8 index size {d} != 8",
                                 .{resolved_index_size},
                             );
                         }
                         if (builtin.mode == .Debug and resolved_problem_size != 1) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: str_from_utf8 problem size {d} != 1",
                                 .{resolved_problem_size},
                             );
@@ -4533,7 +4533,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return self.stackLocationForLayout(ll.ret_layout, result_slot);
                     }
 
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: str_from_utf8 expected tag union layout",
                         .{},
                     );
@@ -5045,7 +5045,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const rhs_layout = self.valueLayout(GuardedList.at(args, 1));
                     if (lhs_layout != rhs_layout) {
                         if (builtin.mode == .Debug) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: num_abs_diff argument layouts differ: lhs={s} rhs={s}",
                                 .{ @tagName(lhs_layout), @tagName(rhs_layout) },
                             );
@@ -5134,7 +5134,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const is_i128_op = operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128;
                     if (is_float and CheckedArithmetic.classify(ll.op) != null) {
                         if (builtin.mode == .Debug) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: checked integer op {s} used float layout {s}",
                                 .{ @tagName(ll.op), @tagName(operand_layout) },
                             );
@@ -5390,7 +5390,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .dec => self.callDecToStr(value_loc),
                         .f32 => self.callFloatToStr(value_loc, true),
                         .f64 => self.callFloatToStr(value_loc, false),
-                        .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => std.debug.panic(
+                        .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => base.invariant(
                             "LirCodeGen invariant violated: num_to_str received non-numeric layout {s}",
                             .{@tagName(self.valueLayout(GuardedList.at(args, 0)))},
                         ),
@@ -5427,7 +5427,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emit.sqrtsdRegReg(result_reg, src_reg);
                             }
                         },
-                        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => std.debug.panic(
+                        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => base.invariant(
                             "LirCodeGen invariant violated: num_sqrt received non-float return layout {s}",
                             .{@tagName(ll.ret_layout)},
                         ),
@@ -6043,12 +6043,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expected_kind: builtins.simd.Kind,
             protected_mask: u32,
         ) Allocator.Error!AcquiredVector {
-            const actual_kind = self.simdKindForLayout(self.localLayout(local)) orelse std.debug.panic(
+            const actual_kind = self.simdKindForLayout(self.localLayout(local)) orelse base.invariant(
                 "LIR/codegen invariant violated: SIMD operand has a non-vector layout",
                 .{},
             );
             if (actual_kind != expected_kind) {
-                std.debug.panic(
+                base.invariant(
                     "LIR/codegen invariant violated: expected {s} SIMD operand, found {s}",
                     .{ @tagName(expected_kind), @tagName(actual_kind) },
                 );
@@ -6075,7 +6075,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64,
                 .immediate_i128,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LIR/codegen invariant violated: SIMD operand has unsupported location {s}",
                     .{@tagName(loc)},
                 ),
@@ -6266,7 +6266,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f32,
                 .immediate_f64,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LIR/codegen invariant violated: SIMD from_u128_bits received {s}",
                     .{@tagName(loc)},
                 ),
@@ -8001,7 +8001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // binary that still requires SSSE3 or later. Fail rather
                     // than encode it.
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "baseline codegen invariant violated: SIMD op needs an opcode above the x86-64 baseline",
                             .{},
                         );
@@ -9031,7 +9031,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (builtin.mode == .Debug) {
                 const sorted_fields = ls.struct_fields.sliceRange(ls.getStructData(record_idx).getFields());
                 if (sorted_fields.len != 2) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: list_sublist record expected 2 fields, got {d}",
                         .{sorted_fields.len},
                     );
@@ -9042,7 +9042,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     ls.getStructFieldSizeByOriginalIndex(record_idx, 0) != 8 or
                     ls.getStructFieldSizeByOriginalIndex(record_idx, 1) != 8)
                 {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: list_sublist record expected canonical fields len/start as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
                         .{
                             ls.getStructFieldLayoutByOriginalIndex(record_idx, 0),
@@ -9753,7 +9753,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const index: usize = @intFromEnum(id);
             if (index < self.native_static_data.len) return self.native_static_data[index];
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: static data value {d} has no native address",
                     .{@intFromEnum(id)},
                 );
@@ -9770,7 +9770,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (std.debug.runtime_safety) {
-                std.debug.panic(
+                base.invariant(
                     "generateLookup: missing local location for local={d} layout={d} current_proc={d} current_stmt={d} current_stmt_tag={s}",
                     .{
                         @intFromEnum(local),
@@ -9798,12 +9798,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (value_loc == .vector_reg) {
-                const expected_kind = self.simdKindForLayout(local_layout) orelse std.debug.panic(
+                const expected_kind = self.simdKindForLayout(local_layout) orelse base.invariant(
                     "LIR/codegen invariant violated: vector register assigned to non-vector local",
                     .{},
                 );
                 if (value_loc.vector_reg.kind != expected_kind) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: {s} register assigned to {s} local",
                         .{ @tagName(value_loc.vector_reg.kind), @tagName(expected_kind) },
                     );
@@ -9876,7 +9876,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64,
                 .immediate_i128,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LIR/codegen invariant violated: box local {d} did not lower to a stack stable location",
                     .{@intFromEnum(local)},
                 ),
@@ -9926,7 +9926,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64,
                 .immediate_i128,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LIR/codegen invariant violated: str local {d} did not lower to a stack_str stable location",
                     .{@intFromEnum(local)},
                 ),
@@ -10022,7 +10022,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             const identity = self.current_proc_identity orelse
-                std.debug.panic("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@intFromEnum(local)});
+                base.invariant("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@intFromEnum(local)});
             const frame = self.store.getLocalSpan(self.current_proc_frame_locals);
             var frame_index: u32 = std.math.maxInt(u32);
             var low: usize = 0;
@@ -10067,7 +10067,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .vector_reg => |destination| switch (normalized) {
                     .vector_reg => |source| {
                         if (source.kind != destination.kind) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: cannot assign {s} vector register to {s} vector register",
                                 .{ @tagName(source.kind), @tagName(destination.kind) },
                             );
@@ -10088,7 +10088,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_f64,
                     .immediate_i128,
                     .noreturn,
-                    => std.debug.panic(
+                    => base.invariant(
                         "LIR/codegen invariant violated: cannot assign {s} to vector register",
                         .{@tagName(normalized)},
                     ),
@@ -10101,7 +10101,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         switch (runtime_layout_idx) {
                             .u128 => .unsigned,
                             .i128, .dec => .signed,
-                            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .opaque_ptr, .zst, .f32, .f64, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => std.debug.panic(
+                            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .opaque_ptr, .zst, .f32, .f64, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => base.invariant(
                                 "LirCodeGen invariant violated: stack_i128 stable location used for non-wide layout {d}",
                                 .{@intFromEnum(runtime_layout_idx)},
                             ),
@@ -10117,7 +10117,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64,
                 .immediate_i128,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LirCodeGen invariant violated: assigned local has unsupported stable location {s}",
                     .{@tagName(stable_loc)},
                 ),
@@ -10194,7 +10194,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f32,
                 .immediate_f64,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LirCodeGen invariant violated: unsupported wide scalar spill from {s}",
                     .{@tagName(loc)},
                 ),
@@ -10228,7 +10228,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64,
                 .immediate_i128,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LirCodeGen invariant violated: uninitialized local used non-stack stable location {s}",
                     .{@tagName(stable_loc)},
                 ),
@@ -11915,12 +11915,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
             const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
-                std.debug.panic("generateNumFromStr: expected typed from_str op, got {s}", .{@tagName(ll.op)});
+                base.invariant("generateNumFromStr: expected typed from_str op, got {s}", .{@tagName(ll.op)});
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) {
-                std.debug.panic("generateNumFromStr: expected tag_union layout, got {s}", .{@tagName(ret_layout_val.tag)});
+                base.invariant("generateNumFromStr: expected tag_union layout, got {s}", .{@tagName(ret_layout_val.tag)});
             }
             const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
             const tu_size = tu_data.size.get(ls.targetUsize());
@@ -11975,7 +11975,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateNumFromStrPrefix(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
             const spec = numeric_conversion.getNumericPrefixParseSpec(ll.op) orelse
-                std.debug.panic("generateNumFromStrPrefix: expected prefix parse op, got {s}", .{@tagName(ll.op)});
+                base.invariant("generateNumFromStrPrefix: expected prefix parse op, got {s}", .{@tagName(ll.op)});
             const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
             const src_off = try self.ensureOnStack(src_loc, switch (spec.source) {
                 .str => roc_str_size,
@@ -11985,13 +11985,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .struct_) {
-                std.debug.panic("LIR/codegen invariant violated: {s} expected record return layout", .{@tagName(ll.op)});
+                base.invariant("LIR/codegen invariant violated: {s} expected record return layout", .{@tagName(ll.op)});
             }
             const record_idx = ret_layout_val.getStruct().idx;
             const record_data = ls.getStructData(record_idx);
             const fields = ls.struct_fields.sliceRange(record_data.getFields());
             if (fields.len != 3 or ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u8) {
-                std.debug.panic("LIR/codegen invariant violated: {s} expected fields err : U8, rest, value", .{@tagName(ll.op)});
+                base.invariant("LIR/codegen invariant violated: {s} expected fields err : U8, rest, value", .{@tagName(ll.op)});
             }
 
             const record_size = record_data.size.get(ls.targetUsize());
@@ -12050,7 +12050,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn tryUnsafeOffsets(self: *Self, ret_layout: layout.Idx) TryUnsafeOffsets {
             const ret_layout_val = self.layout_store.getLayout(ret_layout);
             if (ret_layout_val.tag != .struct_) {
-                std.debug.panic("try_unsafe result expected struct layout, got {s}", .{@tagName(ret_layout_val.tag)});
+                base.invariant("try_unsafe result expected struct layout, got {s}", .{@tagName(ret_layout_val.tag)});
             }
             const struct_idx = ret_layout_val.getStruct().idx;
             return .{
@@ -12475,7 +12475,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: lir.LowLevel,
         ) Allocator.Error!void {
             if (builtin.mode == .Debug and operand_layout == .dec) {
-                std.debug.panic(
+                base.invariant(
                     "LirCodeGen invariant violated: decimal layout reached i128 shift lowering",
                     .{},
                 );
@@ -13809,7 +13809,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f32, .f64 => return self.generateFloatAbs(val_loc, operand_layout),
                 .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: num_abs unsupported operand layout {s}",
                             .{@tagName(operand_layout)},
                         );
@@ -14284,7 +14284,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
                 const stmt_id: u32 = if (self.current_stmt_id) |current| @intFromEnum(current) else std.math.maxInt(u32);
                 const stmt = if (self.current_stmt_id) |current| self.store.getCFStmt(current) else null;
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated at {s} stmt {}: actual layout {} ({s}) did not match expected layout {} ({s}); stmt={any}",
                     .{
                         site,
@@ -14463,7 +14463,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     (actual_is_box and expected_is_erased_ptr) or
                     (expected_is_box and actual_is_erased_ptr);
                 if (!boxing_compatible or actual_is_list or expected_is_list) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated at {s}: explicit nominal reinterpret expected non-list layouts on the same side of layout boxing, got actual={} ({s}) expected={} ({s})",
                         .{
                             site,
@@ -14518,7 +14518,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
                 const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
                 if (!actual_is_list or !expected_is_list) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated at {s}: explicit list reinterpret expected list layouts, got actual={} expected={}",
                         .{ site, @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
                     );
@@ -14604,7 +14604,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn getArgumentRegister(_: *Self, index: u8) GeneralReg {
             if (index >= max_arg_regs) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "dev backend ABI invariant violated: argument register index {d} exceeds available register count {d}",
                         .{ index, max_arg_regs },
                     );
@@ -15019,7 +15019,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
+                    base.invariant("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
                 }
                 unreachable;
             }
@@ -15028,7 +15028,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const value_size = self.layout_store.layoutSizeAlign(layout_val).size;
             if (value_size == 0) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@intFromEnum(helper.key.layout_idx)});
+                    base.invariant("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@intFromEnum(helper.key.layout_idx)});
                 }
                 unreachable;
             }
@@ -15750,7 +15750,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
+                    base.invariant("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
                 }
                 unreachable;
             }
@@ -15975,7 +15975,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const struct_layout = ls.getLayout(base_layout_idx);
             if (struct_layout.tag != .struct_) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: struct_access expected struct_ layout, got {s} (field_idx={d})",
                         .{ @tagName(struct_layout.tag), access.field_idx },
                     );
@@ -16084,7 +16084,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ptr,
                 => blk: {
                     if (builtin.mode == .Debug and tpa.payload_idx != 0) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: scalar tag payload access requested payload_idx {d}",
                             .{tpa.payload_idx},
                         );
@@ -16381,7 +16381,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const inner_layout = box_abi.elem_layout;
                     if (inner_layout.tag != .struct_) {
                         if (builtin.mode == .Debug) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: assign_struct target box layout {} did not box a struct",
                                 .{@intFromEnum(s.target_layout)},
                             );
@@ -16467,7 +16467,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ptr,
                 => {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: assign_struct target local {d} layout {d} ({s}) is not runtime struct or zst layout; proc={d} stmt={d}",
                             .{
                                 @intFromEnum(s.target),
@@ -16489,7 +16489,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (union_layout.tag == .zst) {
                 if (tag.discriminant != 0) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
                             .{tag.discriminant},
                         );
@@ -16512,7 +16512,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const inner_layout = box_abi.elem_layout;
                 if (inner_layout.tag != .tag_union) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: generateTag expected boxed tag union layout, got boxed {s}",
                             .{@tagName(inner_layout.tag)},
                         );
@@ -16535,7 +16535,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const variants = ls.getTagUnionVariants(inner_tu_data);
                 if (@as(usize, tag.variant_index) >= variants.len) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
                             .{ tag.variant_index, variants.len },
                         );
@@ -16577,7 +16577,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             if (union_layout.tag != .tag_union) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: generateTag expected tag_union/scalar/zst layout, got {s}",
                         .{@tagName(union_layout.tag)},
                     );
@@ -16590,7 +16590,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const variants = ls.getTagUnionVariants(tu_data);
             if (@as(usize, tag.variant_index) >= variants.len) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
                         .{ tag.variant_index, variants.len },
                     );
@@ -16646,7 +16646,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .args = proc.args,
             };
 
-            if (std.debug.runtime_safety) std.debug.panic(
+            base.invariant(
                 "proc call target {d} ({d}) is missing from the compiled proc registry",
                 .{ @intFromEnum(proc_id), proc.name.raw() },
             );
@@ -16667,7 +16667,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer args_alloc.free(arg_layouts);
 
             if (builtin.mode == .Debug and param_refs.len != arg_refs.len) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: call to proc {d} passed {d} args but callee expects {d}",
                     .{ @intFromEnum(call.proc), arg_refs.len, param_refs.len },
                 );
@@ -16684,7 +16684,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (builtin.mode == .Debug and proc_spec.ret_layout != call.ret_layout) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: direct call target layout {} did not match callee ret layout {} for proc {d}",
                     .{ @intFromEnum(call.ret_layout), @intFromEnum(proc_spec.ret_layout), @intFromEnum(call.proc) },
                 );
@@ -16700,7 +16700,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 }
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: direct call from proc {?d} to proc {d} descriptor output ({}) did not match callee ABI ({})",
                     .{ caller_proc, @intFromEnum(call.proc), call.out_desc != null, proc_spec.runtime_ret_desc != null },
                 );
@@ -16734,7 +16734,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_desc_slot: ?i32 = if (result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
             const arg_desc_refs = self.store.getLocalSpan(arg_descs);
             if (builtin.mode == .Debug and arg_desc_refs.len != arg_desc_keys.len) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: erased call passed {d} descriptors but {d} descriptor keys",
                     .{ arg_desc_refs.len, arg_desc_keys.len },
                 );
@@ -16758,7 +16758,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
             const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
             if (builtin.mode == .Debug and closure_layout_val.tag != .erased_callable) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: erased call closure local {d} must have erased_callable layout, got {s}",
                     .{ @intFromEnum(closure_local), @tagName(closure_layout_val.tag) },
                 );
@@ -16901,13 +16901,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const target_layout_val = self.layout_store.getLayout(target_layout);
             if (builtin.mode == .Debug and target_layout_val.tag != .erased_callable) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: packed erased fn target layout must be erased_callable, got {s}",
                     .{@tagName(target_layout_val.tag)},
                 );
             }
             if ((capture != null) != (capture_layout != null)) {
-                std.debug.panic("Dev/codegen invariant violated: packed erased fn capture/layout presence differed", .{});
+                base.invariant("Dev/codegen invariant violated: packed erased fn capture/layout presence differed", .{});
             }
 
             const capture_size: u32 = if (capture_layout) |layout_idx| self.getLayoutSize(layout_idx) else 0;
@@ -16915,7 +16915,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (capture_layout) |layout_idx| {
                     const capture_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(layout_idx)).alignment.toByteUnits();
                     if (capture_align > builtins.erased_callable.capture_alignment) {
-                        std.debug.panic(
+                        base.invariant(
                             "Dev/codegen invariant violated: erased callable capture layout alignment {d} exceeds fixed capture alignment {d}",
                             .{ capture_align, builtins.erased_callable.capture_alignment },
                         );
@@ -17224,7 +17224,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .interpreter_context_drop => {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "Dev/codegen invariant violated: interpreter_context_drop reached native backend",
                             .{},
                         );
@@ -17560,7 +17560,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(args.len == arg_layouts.len);
             const has_runtime_ret_desc = self.store.getProcSpec(proc.id).runtime_ret_desc != null;
             if (builtin.mode == .Debug and out_desc != null and !has_runtime_ret_desc) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: proc {d} call requested an unsupported runtime descriptor output",
                     .{@intFromEnum(proc.id)},
                 );
@@ -17991,7 +17991,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
             } else if (builtin.mode == .Debug and Builder.packs_stack_args and builder.stack_args.items.len > 0) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: {s} overflowed {d} arguments onto the stack without declared parameter ABI sizes",
                     .{ boxy_fn.symbolName(), builder.stack_args.items.len },
                 );
@@ -18001,7 +18001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.callRelocatable(try self.boxySymbol(boxy_fn), &self.codegen);
                 },
                 .native_execution => {
-                    const table = self.boxy_native_fns orelse std.debug.panic(
+                    const table = self.boxy_native_fns orelse base.invariant(
                         "Dev/codegen invariant violated: boxy dev codegen requires shim execution",
                         .{},
                     );
@@ -18068,7 +18068,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
                     return slot;
                 },
-                .runtime => std.debug.panic(
+                .runtime => base.invariant(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
                 ),
@@ -18129,7 +18129,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (elem_is_erased_box) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
                     .{@intFromEnum(elem_layout)},
                 );
@@ -18156,7 +18156,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const loc = try self.emitValueLocal(local);
                     return try self.ensureOnStack(loc, 8);
                 },
-                .runtime => std.debug.panic("Dev/codegen invariant violated: a runtime dictionary reference reached dev codegen", .{}),
+                .runtime => base.invariant("Dev/codegen invariant violated: a runtime dictionary reference reached dev codegen", .{}),
             }
         }
 
@@ -18200,7 +18200,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const captures = self.store.getLocalSpan(assign.captures);
             if (assign.tag_residual_for) |target_desc| {
                 if (assign.nested_index != null or assign.box_payload_layout != null or assign.tag_payload != null or assign.tag_ext or captures.len != 0) {
-                    std.debug.panic("Dev/codegen invariant violated: residual tag descriptor materialization had another projection or captures", .{});
+                    base.invariant("Dev/codegen invariant violated: residual tag descriptor materialization had another projection or captures", .{});
                 }
                 const source_slot = try self.boxyDescRefToSlot(assign.desc);
                 const target_slot = try self.boxyDescRefToSlot(target_desc);
@@ -18229,7 +18229,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const slot = try self.boxyDescRefToSlot(assign.desc);
                         return self.stackLocationForLayout(target_layout, slot);
                     },
-                    .runtime => std.debug.panic(
+                    .runtime => base.invariant(
                         "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                         .{},
                     ),
@@ -18286,7 +18286,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return try self.emitValueLocal(local);
                 },
-                .runtime, .dict_method_arg, .dict_method_hidden => std.debug.panic(
+                .runtime, .dict_method_arg, .dict_method_hidden => base.invariant(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
                 ),
@@ -18319,7 +18319,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const projection_count = @intFromBool(assign.tag_ext) + @intFromBool(assign.tag_payload != null) +
                 @intFromBool(assign.nested_index != null) + @intFromBool(assign.box_payload_layout != null);
             if (projection_count > 1) {
-                std.debug.panic("Dev/codegen invariant violated: descriptor projection selected multiple paths", .{});
+                base.invariant("Dev/codegen invariant violated: descriptor projection selected multiple paths", .{});
             }
             if (projection_count != 0) {
                 const base_slot = self.codegen.allocStackSlot(8);
@@ -18390,14 +18390,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return self.stackLocationForLayout(target_layout, slot);
                 },
                 .local => |local| return try self.emitValueLocal(local),
-                .runtime => std.debug.panic("Dev/codegen invariant violated: a runtime dictionary reference reached dev codegen", .{}),
+                .runtime => base.invariant("Dev/codegen invariant violated: a runtime dictionary reference reached dev codegen", .{}),
             }
         }
 
         fn generateBoxyBox(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
             const target_layout = self.localLayout(assign.target);
             const payload_off = try self.boxyLocalBytesOffset(assign.payload);
-            const payload_desc_ref = assign.payload_desc orelse std.debug.panic(
+            const payload_desc_ref = assign.payload_desc orelse base.invariant(
                 "Dev/codegen invariant violated: assign_boxy_box reached dev codegen without a payload descriptor",
                 .{},
             );
@@ -18648,7 +18648,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn allocTempGeneral(self: *Self) Allocator.Error!GeneralReg {
-            return self.codegen.allocGeneral() orelse std.debug.panic(
+            return self.codegen.allocGeneral() orelse base.invariant(
                 "LirCodeGen invariant violated: bounded instruction selection exhausted the general-register pool",
                 .{},
             );
@@ -18656,7 +18656,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Allocate a short-lived floating-point register used only during instruction selection.
         fn allocTempFloat(self: *Self) Allocator.Error!FloatReg {
-            return self.codegen.allocFloat() orelse std.debug.panic(
+            return self.codegen.allocFloat() orelse base.invariant(
                 "LirCodeGen invariant violated: bounded instruction selection exhausted the float-register pool",
                 .{},
             );
@@ -18672,13 +18672,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const value = self.local_locations.get(local_key) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is absent", .{local_key});
+                    base.invariant("LIR/codegen invariant violated: tracked vector local {d} is absent", .{local_key});
                 }
                 unreachable;
             };
             if (value != .vector_reg) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is {s}", .{ local_key, @tagName(value) });
+                    base.invariant("LIR/codegen invariant violated: tracked vector local {d} is {s}", .{ local_key, @tagName(value) });
                 }
                 unreachable;
             }
@@ -18717,7 +18717,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.vector_local_by_reg.getPtr(reg);
             if (slot.* != null or (self.vector_local_mask & floatRegMask(reg)) != 0) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: vector register {s} already has a resident local", .{@tagName(reg)});
+                    base.invariant("LIR/codegen invariant violated: vector register {s} already has a resident local", .{@tagName(reg)});
                 }
                 unreachable;
             }
@@ -18729,7 +18729,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.vector_local_by_reg.getPtr(reg);
             if (slot.* != local_key or (self.vector_local_mask & floatRegMask(reg)) == 0) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: vector register {s} does not contain local {d}", .{ @tagName(reg), local_key });
+                    base.invariant("LIR/codegen invariant violated: vector register {s} does not contain local {d}", .{ @tagName(reg), local_key });
                 }
                 unreachable;
             }
@@ -18750,7 +18750,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const reg: FloatReg = @enumFromInt(reg_index);
                 const local_key = self.vector_local_by_reg.get(reg) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
+                        base.invariant("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
                     }
                     unreachable;
                 };
@@ -18771,7 +18771,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const reg: FloatReg = @enumFromInt(reg_index);
                 const local_key = self.vector_local_by_reg.get(reg) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
+                        base.invariant("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
                     }
                     unreachable;
                 };
@@ -18779,7 +18779,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return self.codegen.allocFloat() orelse unreachable;
             }
 
-            std.debug.panic(
+            base.invariant(
                 "LirCodeGen invariant violated: bounded SIMD instruction selection exhausted the shared FP/vector register pool",
                 .{},
             );
@@ -18805,7 +18805,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .object_file => {
                     if (builtin_fn.payload() == .jit_only) {
-                        std.debug.panic(
+                        base.invariant(
                             "dev object-file codegen referenced JIT-only builtin {s}",
                             .{builtin_fn.symbolName()},
                         );
@@ -19027,7 +19027,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
             const entry = self.static_data_symbols.getPtr(id) orelse {
-                if (builtin.mode == .Debug) std.debug.panic("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@intFromEnum(id)});
+                if (builtin.mode == .Debug) base.invariant("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@intFromEnum(id)});
                 unreachable;
             };
             if (self.fragment_mode and self.fragment_source_mode != .object_file) {
@@ -19110,7 +19110,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .vector_reg => |vector| blk: {
                     if (builtin.mode == .Debug and size != 16) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: vector stack materialization has size {d}",
                             .{size},
                         );
@@ -19122,7 +19122,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .immediate_i64 => |val| blk: {
                     if (builtin.mode == .Debug and size > 8) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: ensureOnStack cannot materialize immediate_i64 into {d}-byte value",
                             .{size},
                         );
@@ -19239,10 +19239,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(reg, @as(i64, bits));
                     return reg;
                 },
-                .immediate_f64 => std.debug.panic("LIR/codegen invariant violated: materializing F32 bits from F64 immediate", .{}),
+                .immediate_f64 => base.invariant("LIR/codegen invariant violated: materializing F32 bits from F64 immediate", .{}),
                 .float_reg => |float| {
                     if (float.width != .f32) {
-                        std.debug.panic("LIR/codegen invariant violated: materializing F32 bits from F64 register", .{});
+                        base.invariant("LIR/codegen invariant violated: materializing F32 bits from F64 register", .{});
                     }
                     const reg = try self.allocTempGeneral();
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -19256,7 +19256,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack => |s| {
                     const reg = try self.allocTempGeneral();
-                    if (s.size != .dword) std.debug.panic("LIR/codegen invariant violated: materializing F32 bits from non-F32 stack slot", .{});
+                    if (s.size != .dword) base.invariant("LIR/codegen invariant violated: materializing F32 bits from non-F32 stack slot", .{});
                     try self.codegen.emitLoadStack(.w32, reg, s.offset);
                     return reg;
                 },
@@ -19272,7 +19272,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return switch (target_layout) {
                 .str => switch (loc) {
                     .immediate_i64, .immediate_i128 => if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: scalar immediate cannot stand in for RocStr layout",
                             .{},
                         );
@@ -19292,7 +19292,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f32 => switch (loc) {
                     .immediate_i64 => |v| .{ .immediate_f32 = @floatFromInt(v) },
                     .immediate_i128 => |v| .{ .immediate_f32 = @floatFromInt(v) },
-                    .immediate_f64 => std.debug.panic("LIR/codegen invariant violated: F64 immediate used for F32 layout without an explicit conversion", .{}),
+                    .immediate_f64 => base.invariant("LIR/codegen invariant violated: F64 immediate used for F32 layout without an explicit conversion", .{}),
                     .general_reg,
                     .float_reg,
                     .vector_reg,
@@ -19307,7 +19307,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64 => switch (loc) {
                     .immediate_i64 => |v| .{ .immediate_f64 = @floatFromInt(v) },
                     .immediate_i128 => |v| .{ .immediate_f64 = @floatFromInt(v) },
-                    .immediate_f32 => std.debug.panic("LIR/codegen invariant violated: F32 immediate used for F64 layout without an explicit conversion", .{}),
+                    .immediate_f32 => base.invariant("LIR/codegen invariant violated: F32 immediate used for F64 layout without an explicit conversion", .{}),
                     .general_reg,
                     .float_reg,
                     .vector_reg,
@@ -19406,7 +19406,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const width: FloatWidth = switch (size) {
                         4 => .f32,
                         8 => .f64,
-                        else => std.debug.panic("LIR/codegen invariant violated: float copy has size {d}", .{size}),
+                        else => base.invariant("LIR/codegen invariant violated: float copy has size {d}", .{size}),
                     };
                     break :blk .{ .float_reg = .{ .reg = try self.ensureInFloatReg(loc, width), .width = width } };
                 },
@@ -19428,7 +19428,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             while (true) switch (loc) {
                 .float_reg => |float| {
                     if (float.width != width) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: requested {s} register from {s} value",
                             .{ @tagName(width), @tagName(float.width) },
                         );
@@ -19438,7 +19438,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f32 => |val| {
                     const reg = try self.allocTempFloat();
                     if (width != .f32) {
-                        std.debug.panic("LIR/codegen invariant violated: requested F64 register from F32 immediate", .{});
+                        base.invariant("LIR/codegen invariant violated: requested F64 register from F32 immediate", .{});
                     }
                     const bits: u32 = @bitCast(val);
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -19455,7 +19455,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64 => |val| {
                     const reg = try self.allocTempFloat();
                     if (width != .f64) {
-                        std.debug.panic("LIR/codegen invariant violated: requested F32 register from F64 immediate", .{});
+                        base.invariant("LIR/codegen invariant violated: requested F32 register from F64 immediate", .{});
                     }
                     const bits: u64 = @bitCast(val);
                     if (bits == 0) {
@@ -19481,7 +19481,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const reg = try self.allocTempFloat();
                     if (width == .f32) {
                         if (s.size != .dword) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: F32 register load from {s} stack slot",
                                 .{@tagName(s.size)},
                             );
@@ -19493,7 +19493,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     } else {
                         if (s.size != .qword) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: F64 register load from {s} stack slot",
                                 .{@tagName(s.size)},
                             );
@@ -19553,7 +19553,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64 => {
                     switch (loc) {
                         .float_reg => |float| {
-                            if (float.width != .f64) std.debug.panic("LIR/codegen invariant violated: storing F32 register as F64", .{});
+                            if (float.width != .f64) base.invariant("LIR/codegen invariant violated: storing F32 register as F64", .{});
                             try self.emitStoreFloatToMem(saved_ptr_reg, float.reg);
                         },
                         .immediate_f64 => |val| {
@@ -19563,7 +19563,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitStoreToMem(saved_ptr_reg, reg);
                             self.codegen.freeGeneral(reg);
                         },
-                        .immediate_f32 => std.debug.panic("LIR/codegen invariant violated: storing F32 immediate as F64", .{}),
+                        .immediate_f32 => base.invariant("LIR/codegen invariant violated: storing F32 immediate as F64", .{}),
                         .general_reg,
                         .vector_reg,
                         .stack,
@@ -19582,7 +19582,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f32 => {
                     switch (loc) {
                         .float_reg => |float| {
-                            if (float.width != .f32) std.debug.panic("LIR/codegen invariant violated: storing F64 register as F32", .{});
+                            if (float.width != .f32) base.invariant("LIR/codegen invariant violated: storing F64 register as F32", .{});
                             if (comptime target.toCpuArch() == .aarch64) {
                                 try self.codegen.emit.fstrRegMemUoff(.single, float.reg, saved_ptr_reg, 0);
                             } else {
@@ -19596,9 +19596,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
                             self.codegen.freeGeneral(reg);
                         },
-                        .immediate_f64 => std.debug.panic("LIR/codegen invariant violated: storing F64 immediate as F32", .{}),
+                        .immediate_f64 => base.invariant("LIR/codegen invariant violated: storing F64 immediate as F32", .{}),
                         .stack => |s| {
-                            if (s.size != .dword) std.debug.panic("LIR/codegen invariant violated: storing non-F32 stack slot as F32", .{});
+                            if (s.size != .dword) base.invariant("LIR/codegen invariant violated: storing non-F32 stack slot as F32", .{});
                             const reg = try self.allocTempGeneral();
                             try self.codegen.emitLoadStack(.w32, reg, s.offset);
                             try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
@@ -19718,7 +19718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .closure => {
                             if (builtin.mode == .Debug) {
-                                std.debug.panic(
+                                base.invariant(
                                     "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for result layout {}",
                                     .{@intFromEnum(result_layout)},
                                 );
@@ -19962,12 +19962,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .float_reg => |float| {
                     switch (size) {
                         4 => {
-                            if (float.width != .f32) std.debug.panic("LIR/codegen invariant violated: copying F64 register into F32 slot", .{});
+                            if (float.width != .f32) base.invariant("LIR/codegen invariant violated: copying F64 register into F32 slot", .{});
                             try self.codegen.emitStoreStackF32(dest_offset, float.reg);
                             self.codegen.freeFloat(float.reg);
                         },
                         8 => {
-                            if (float.width != .f64) std.debug.panic("LIR/codegen invariant violated: copying F32 register into F64 slot", .{});
+                            if (float.width != .f64) base.invariant("LIR/codegen invariant violated: copying F32 register into F64 slot", .{});
                             if (comptime target.toCpuArch() == .aarch64) {
                                 try self.codegen.emitStoreStackF64(dest_offset, float.reg);
                             } else {
@@ -19980,7 +19980,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .vector_reg => |vector| {
                     if (size != 16) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: copying vector register into {d}-byte stack slot",
                             .{size},
                         );
@@ -20494,7 +20494,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 4 => try self.emitStoreToPtr(.w32, src_reg, ptr_reg, 0),
                 8 => try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0),
                 else => if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: scalar result size {d} is not register-sized", .{size});
+                    base.invariant("LIR/codegen invariant violated: scalar result size {d} is not register-sized", .{size});
                 } else unreachable,
             }
         }
@@ -20773,7 +20773,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 if (proc.external) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
+                        base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
                     }
                     unreachable;
                 }
@@ -20819,7 +20819,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 if (proc.external) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{@intFromEnum(proc_id)});
+                        base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{@intFromEnum(proc_id)});
                     }
                     unreachable;
                 }
@@ -20840,19 +20840,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const proc = self.store.getProcSpec(proc_id);
                 if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
                     }
                     unreachable;
                 }
                 const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} was not compiled", .{@intFromEnum(proc_id)});
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} was not compiled", .{@intFromEnum(proc_id)});
                     }
                     unreachable;
                 };
                 if (compiled.code_start == unresolved_proc_code_start) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had no code address", .{@intFromEnum(proc_id)});
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had no code address", .{@intFromEnum(proc_id)});
                     }
                     unreachable;
                 }
@@ -20876,7 +20876,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (helpers) |helper_key| {
                 if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "Dev/codegen invariant violated: static data requested noop RC helper for layout {d}",
                             .{@intFromEnum(helper_key.layout_idx)},
                         );
@@ -21354,7 +21354,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn requireProcBody(proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) lir.LIR.CFStmtId {
-            return proc.body orelse std.debug.panic(
+            return proc.body orelse base.invariant(
                 "Dev/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
                 .{ @intFromEnum(proc_id), proc.name.raw() },
             );
@@ -21366,7 +21366,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             proc: LirProcSpec,
         ) Allocator.Error!void {
             if (builtin.mode == .Debug and proc.body != null) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
                     .{proc.name.raw()},
                 );
@@ -21576,7 +21576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_f64,
                     .noreturn,
                     => if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "freezeCallArg expected stack-backed multi-reg arg, got {s} for layout {any}",
                             .{ @tagName(info.loc), info.layout_idx },
                         );
@@ -21603,7 +21603,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     .float_reg => |float| {
-                        if (float.width != .f32) std.debug.panic("LIR/codegen invariant violated: passing F64 register as F32", .{});
+                        if (float.width != .f32) base.invariant("LIR/codegen invariant violated: passing F64 register as F32", .{});
                         const slot = self.codegen.allocStackSlot(4);
                         try self.codegen.emitStoreStackF32(slot, float.reg);
                         return .{
@@ -21643,7 +21643,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
                     },
                     .stack => |s| {
-                        if (s.size != .dword) std.debug.panic("LIR/codegen invariant violated: passing non-F32 stack slot as F32", .{});
+                        if (s.size != .dword) base.invariant("LIR/codegen invariant violated: passing non-F32 stack slot as F32", .{});
                         try self.codegen.emitLoadStack(.w32, scratch_reg, s.offset);
                         try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
                     },
@@ -21656,7 +21656,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_i128,
                     .noreturn,
                     => if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "freezeCallArg unsupported F32 source {s} for layout {any}",
                             .{ @tagName(info.loc), info.layout_idx },
                         );
@@ -21706,7 +21706,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                 },
                 .float_reg => |float| {
-                    if (float.width != .f64) std.debug.panic("LIR/codegen invariant violated: passing F32 register as F64", .{});
+                    if (float.width != .f64) base.invariant("LIR/codegen invariant violated: passing F32 register as F64", .{});
                     const slot = self.codegen.allocStackSlot(8);
                     try self.codegen.emitStoreStackF64(slot, float.reg);
                     return .{
@@ -21753,7 +21753,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f32,
                 .immediate_i128,
                 => if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "freezeCallArg unsupported scalar source {s} for layout {any}",
                         .{ @tagName(info.loc), info.layout_idx },
                     );
@@ -21997,7 +21997,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const start: usize = offsets_span.start;
             const end = start + offsets_span.len;
             if (builtin.mode == .Debug and end > self.erased_arg_desc_offsets.len) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: erased descriptor-offset span [{d}, {d}) exceeded table length {d}",
                     .{ start, end, self.erased_arg_desc_offsets.len },
                 );
@@ -22006,7 +22006,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.erased_arg_desc_offsets[start..end]) |offset| {
                 if (!std.meta.eql(offset.key, key)) continue;
                 if (builtin.mode == .Debug and result != null) {
-                    std.debug.panic("Dev/codegen invariant violated: erased descriptor key had multiple capture offsets", .{});
+                    base.invariant("Dev/codegen invariant violated: erased descriptor key had multiple capture offsets", .{});
                 }
                 result = offset.offset;
             }
@@ -22033,7 +22033,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const locals = self.store.getLocalSpan(proc.args);
             if (locals.len < 2) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("Dev/codegen invariant violated: erased callable adapter requires hidden capture and reuse args", .{});
+                    base.invariant("Dev/codegen invariant violated: erased callable adapter requires hidden capture and reuse args", .{});
                 }
                 unreachable;
             }
@@ -22046,12 +22046,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
             const capture_arg = proc.erased_capture_arg orelse if (builtin.mode == .Debug)
-                std.debug.panic("Dev/codegen invariant violated: erased callable proc had no capture argument", .{})
+                base.invariant("Dev/codegen invariant violated: erased callable proc had no capture argument", .{})
             else
                 unreachable;
             const explicit_count = locals.len - 2;
             if (builtin.mode == .Debug and GuardedList.at(locals, explicit_count) != capture_arg) {
-                std.debug.panic("Dev/codegen invariant violated: erased callable capture argument was not the first hidden parameter", .{});
+                base.invariant("Dev/codegen invariant violated: erased callable capture argument was not the first hidden parameter", .{});
             }
             const plan = self.store.getErasedCallArgsPlan(arg_plan);
             const arg_offsets = self.store.getErasedCallArgOffsets(plan);
@@ -22096,7 +22096,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const params_start: usize = proc.erased_arg_desc_params.start;
             const params_end = params_start + proc.erased_arg_desc_params.len;
             if (builtin.mode == .Debug and params_end > self.erased_arg_desc_params.len) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: erased descriptor-param span [{d}, {d}) exceeded table length {d}",
                     .{ params_start, params_end, self.erased_arg_desc_params.len },
                 );
@@ -22114,7 +22114,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(capture_reg);
                 } else {
                     if (builtin.mode == .Debug and param.read == .call_key) {
-                        std.debug.panic(
+                        base.invariant(
                             "Dev/codegen invariant violated: exact erased descriptor parameter had no capture offset",
                             .{},
                         );
@@ -22129,7 +22129,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                     const source = source_local orelse if (builtin.mode == .Debug)
-                        std.debug.panic("Dev/codegen invariant violated: projected erased descriptor had no parent parameter", .{})
+                        base.invariant("Dev/codegen invariant violated: projected erased descriptor had no parent parameter", .{})
                     else
                         unreachable;
                     const source_slot = try self.boxyDescRefToSlot(.{ .local = source });
@@ -22269,7 +22269,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 if (param_idx == locals.len) {
                     if (builtin.mode == .Debug and (num_regs != 1 or param_pass_by_ptr[param_idx])) {
-                        std.debug.panic("Dev/codegen invariant violated: runtime return descriptor pointer had an invalid ABI plan", .{});
+                        base.invariant("Dev/codegen invariant violated: runtime return descriptor pointer had an invalid ABI plan", .{});
                     }
                     const desc_ptr_slot = self.codegen.allocStackSlot(8);
                     if (reg_idx < max_arg_regs) {
@@ -22356,7 +22356,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const layout_val = ls.getLayout(runtime_ret_layout);
 
             if (builtin.mode == .Debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.getScalar().tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
-                std.debug.panic(
+                base.invariant(
                     "LIR/codegen invariant violated: stack_str result with non-string/list return layout {s} (layout_idx={})",
                     .{
                         @tagName(layout_val.tag),
@@ -22450,7 +22450,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const width: FloatWidth = if (precision == .f32) .f32 else .f64;
                                 switch (loc) {
                                     .float_reg => |float| {
-                                        if (float.width != width) std.debug.panic("LIR/codegen invariant violated: float return width mismatch", .{});
+                                        if (float.width != width) base.invariant("LIR/codegen invariant violated: float return width mismatch", .{});
                                         if (comptime target.toCpuArch() == .aarch64) {
                                             if (float.reg != .V0) try self.codegen.emit.fmovRegReg(if (width == .f32) .single else .double, .V0, float.reg);
                                         } else {
@@ -22464,7 +22464,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     },
                                     .stack => |s| {
                                         if (s.size != (if (width == .f32) ValueSize.dword else ValueSize.qword)) {
-                                            std.debug.panic("LIR/codegen invariant violated: float return stack width mismatch", .{});
+                                            base.invariant("LIR/codegen invariant violated: float return stack width mismatch", .{});
                                         }
                                         if (width == .f32) {
                                             try self.codegen.emitLoadStackF32(if (comptime target.toCpuArch() == .aarch64) .V0 else .XMM0, s.offset);
@@ -22473,7 +22473,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         }
                                     },
                                     .immediate_f32 => |val| {
-                                        if (width != .f32) std.debug.panic("LIR/codegen invariant violated: returning F32 immediate as F64", .{});
+                                        if (width != .f32) base.invariant("LIR/codegen invariant violated: returning F32 immediate as F64", .{});
                                         const immediate_loc: ValueLocation = .{ .immediate_f32 = val };
                                         const reg = try self.ensureInFloatReg(immediate_loc, width);
                                         if (comptime target.toCpuArch() == .aarch64) {
@@ -22484,7 +22484,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         self.codegen.freeFloat(reg);
                                     },
                                     .immediate_f64 => |val| {
-                                        if (width != .f64) std.debug.panic("LIR/codegen invariant violated: returning F64 immediate as F32", .{});
+                                        if (width != .f64) base.invariant("LIR/codegen invariant violated: returning F64 immediate as F32", .{});
                                         const immediate_loc: ValueLocation = .{ .immediate_f64 = val };
                                         const reg = try self.ensureInFloatReg(immediate_loc, width);
                                         if (comptime target.toCpuArch() == .aarch64) {
@@ -22619,7 +22619,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .box, .box_of_zst, .erased_box, .erased_callable, .ptr => try self.moveOneRegToReturn(loc),
                 .closure => {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for return layout {}",
                             .{@intFromEnum(ret_layout)},
                         );
@@ -22655,7 +22655,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .noreturn,
                 => {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic(
+                        base.invariant(
                             "LIR/codegen invariant violated: moveOneRegToReturn does not support loc={s}",
                             .{@tagName(loc)},
                         );
@@ -22707,7 +22707,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // A general register holds at most 8 bytes; a wider
                         // return value can never be materialized here.
                         if (builtin.mode == .Debug and ret_size > 8) {
-                            std.debug.panic(
+                            base.invariant(
                                 "LIR/codegen invariant violated: general-register return value has size {d}",
                                 .{ret_size},
                             );
@@ -23174,7 +23174,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .immediate_f64,
                                 .immediate_i128,
                                 .noreturn,
-                                => std.debug.panic(
+                                => base.invariant(
                                     "Dev/codegen invariant violated: debug message local {d} did not lower to a RocStr stack value",
                                     .{@intFromEnum(debug_stmt.message)},
                                 ),
@@ -23218,7 +23218,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .immediate_f64,
                                 .immediate_i128,
                                 .noreturn,
-                                => std.debug.panic(
+                                => base.invariant(
                                     "Dev/codegen invariant violated: expect_err message local {d} did not lower to a RocStr stack value",
                                     .{@intFromEnum(expect_err_stmt.message)},
                                 ),
@@ -23276,7 +23276,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const value_layout = self.valueLayout(r.value);
                             const ret_layout = self.early_return_ret_layout orelse value_layout;
                             if (builtin.mode == .Debug and ret_layout != value_layout) {
-                                std.debug.panic(
+                                base.invariant(
                                     "Dev/codegen invariant violated: proc return local layout {} did not match proc ret_layout {} at stmt {d}",
                                     .{
                                         @intFromEnum(value_layout),
@@ -23496,7 +23496,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         .immediate_f64,
                                         .immediate_i128,
                                         .noreturn,
-                                        => std.debug.panic(
+                                        => base.invariant(
                                             "Dev/codegen invariant violated: crash message local {d} did not lower to a RocStr stack value",
                                             .{@intFromEnum(message)},
                                         ),
@@ -23512,7 +23512,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .loop_continue => {
                             if (builtin.mode == .Debug and self.loop_continue_targets.items.len == 0) {
-                                std.debug.panic(
+                                base.invariant(
                                     "Dev/codegen invariant violated: loop_continue encountered outside a loop",
                                     .{},
                                 );
@@ -23524,7 +23524,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .loop_break => {
                             if (builtin.mode == .Debug and self.loop_break_patch_starts.items.len == 0) {
-                                std.debug.panic(
+                                base.invariant(
                                     "Dev/codegen invariant violated: loop_break encountered outside a loop",
                                     .{},
                                 );
@@ -23643,7 +23643,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = state.owner;
                     self.restoreStmtEnv(&state.before_env);
                     if (builtin.mode == .Debug and state.index >= state.arms.len) {
-                        std.debug.panic("Dev/codegen invariant violated: string-match-set arm index exceeded arm count", .{});
+                        base.invariant("Dev/codegen invariant violated: string-match-set arm index exceeded arm count", .{});
                     }
                     const arm = GuardedList.at(state.arms, state.index);
                     const source = try self.emitStrMatchSourceRegs(state.source);
@@ -23720,7 +23720,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f64,
                 .immediate_i128,
                 .noreturn,
-                => std.debug.panic(
+                => base.invariant(
                     "LIR/codegen invariant violated: str_match source local {d} did not lower to a RocStr stack value",
                     .{@intFromEnum(source)},
                 ),
@@ -24079,7 +24079,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn registerJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
             const jp_key = @intFromEnum(join_point);
             if (builtin.mode == .Debug and self.join_point_params.contains(jp_key)) {
-                std.debug.panic(
+                base.invariant(
                     "LIR/codegen invariant violated: duplicate join-point registration for id {d}",
                     .{jp_key},
                 );
@@ -24240,7 +24240,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn staticStringEntry(self: *Self, str_idx: base.StringLiteral.Idx) StaticStringData.Entry {
             return self.static_strings.find(str_idx) orelse {
-                if (builtin.mode == .Debug) std.debug.panic("Dev/codegen invariant violated: literal {d} has no readonly data entry", .{@intFromEnum(str_idx)});
+                if (builtin.mode == .Debug) base.invariant("Dev/codegen invariant violated: literal {d} has no readonly data entry", .{@intFromEnum(str_idx)});
                 unreachable;
             };
         }
@@ -24258,11 +24258,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const data_addr = @intFromPtr(str_bytes.ptr);
             if (data_addr % @alignOf(isize) != 0) {
-                std.debug.panic("Dev/codegen invariant violated: static string literal bytes are not refcount-aligned", .{});
+                base.invariant("Dev/codegen invariant violated: static string literal bytes are not refcount-aligned", .{});
             }
             const refcount_ptr: *const isize = @ptrCast(@alignCast(str_bytes.ptr - @sizeOf(isize)));
             if (refcount_ptr.* != builtins.utils.REFCOUNT_STATIC_DATA) {
-                std.debug.panic("Dev/codegen invariant violated: static string literal missing static refcount", .{});
+                base.invariant("Dev/codegen invariant violated: static string literal missing static refcount", .{});
             }
         }
 
@@ -25044,7 +25044,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const proc = self.store.getProcSpec(proc_id);
             if (builtin.mode == .Debug and (runtime_ret_desc_slot != null) != (proc.runtime_ret_desc != null)) {
-                std.debug.panic(
+                base.invariant(
                     "Dev/codegen invariant violated: dictionary thunk runtime return descriptor slot disagreed with proc {d} ABI",
                     .{@intFromEnum(proc_id)},
                 );
@@ -25055,8 +25055,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (desc_ref) {
                     .static => try self.boxyDescRefToSlot(desc_ref),
                     .local => |local| paramSlotForLocal(param_refs, param_slots, local) orelse
-                        @panic("Dev/codegen invariant violated: dictionary thunk return descriptor was not a procedure parameter"),
-                    .runtime, .dict_method_arg, .dict_method_hidden => std.debug.panic(
+                        base.invariant("{s}", .{"Dev/codegen invariant violated: dictionary thunk return descriptor was not a procedure parameter"}),
+                    .runtime, .dict_method_arg, .dict_method_hidden => base.invariant(
                         "Dev/codegen invariant violated: runtime boxy desc ref in dictionary thunk return",
                         .{},
                     ),
@@ -25086,7 +25086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const proc_index = @intFromEnum(proc_id);
                 const thunk_offset = self.boxy_dict_thunks.get(proc_index) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had no generated dispatch thunk", .{proc_index});
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had no generated dispatch thunk", .{proc_index});
                     }
                     unreachable;
                 };
@@ -25319,7 +25319,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const compiled = try self.compiledProcForId(entry_proc);
             if (compiled.code_start == unresolved_proc_code_start) {
                 if (std.debug.runtime_safety) {
-                    std.debug.panic(
+                    base.invariant(
                         "entrypoint proc {d} was not compiled before wrapper generation",
                         .{@intFromEnum(entry_proc)},
                     );
@@ -25673,7 +25673,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const compiled = try self.compiledProcForId(entry_proc);
             if (compiled.code_start == unresolved_proc_code_start) {
                 if (std.debug.runtime_safety) {
-                    std.debug.panic(
+                    base.invariant(
                         "entrypoint proc {d} was not compiled before wrapper generation",
                         .{@intFromEnum(entry_proc)},
                     );
@@ -25887,7 +25887,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .proc => |identity| self.spliced_proc_starts.get(identity),
                     .boxy_thunk => |identity| self.assembled_thunks.get(identity),
                     .rc_helper => |name| self.spliced_helper_offsets.get(name),
-                } orelse std.debug.panic("unresolved independent machine-code fragment target", .{});
+                } orelse base.invariant("unresolved independent machine-code fragment target", .{});
                 try self.patchAssembledRef(reference.site, switch (reference.form) {
                     .call => .call,
                     .inline_call => .inline_call,
@@ -26095,7 +26095,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn assertImageFinished(self: *const Self) void {
             if (builtin.mode == .Debug and !self.image_finished) {
-                std.debug.panic("generated code was read before finishImage", .{});
+                base.invariant("generated code was read before finishImage", .{});
             }
         }
 
@@ -26103,7 +26103,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// message pool and far-call stubs; `reset` reopens the image.
         fn assertImageOpen(self: *const Self) void {
             if (builtin.mode == .Debug and self.image_finished) {
-                std.debug.panic("code was emitted after finishImage", .{});
+                base.invariant("code was emitted after finishImage", .{});
             }
         }
     };

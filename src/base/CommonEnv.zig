@@ -5,6 +5,7 @@
 //! different phases of compilation.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
@@ -309,7 +310,7 @@ fn assertStringsInsertable(self: *const CommonEnv) void {
     if (self.strings_insertable) return;
 
     if (comptime builtin.mode == .Debug) {
-        std.debug.panic("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
+        invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
     }
     unreachable;
 }

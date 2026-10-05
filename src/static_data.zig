@@ -4,6 +4,7 @@
 //! initializer procedures using target-width symbolic memory.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const collections = @import("collections");
 
 const builtins = @import("builtins");
@@ -226,7 +227,7 @@ const StaticInitializerMachine = struct {
             if (target_layout.tag == .box_of_zst) return result;
             if (@import("builtin").mode == .Debug) {
                 const source_layout = self.layoutValue(source.layout_idx);
-                std.debug.panic(
+                invariant(
                     "static data invariant violated: static initializer explicit reinterpret changed target byte size from layout {d} ({s}, {d} bytes) to layout {d} ({s}, {d} bytes)",
                     .{
                         @intFromEnum(source.layout_idx),
@@ -509,7 +510,7 @@ const StaticInitializerMachine = struct {
                 .join,
                 .jump,
                 .crash,
-                => std.debug.panic("static data invariant violated: {s} in initializer {d} is not construction LIR", .{
+                => invariant("static data invariant violated: {s} in initializer {d} is not construction LIR", .{
                     @tagName(self.store().getCFStmt(current)),
                     @intFromEnum(proc_id),
                 }),
@@ -1814,7 +1815,7 @@ fn alignForwardU32(value: u32, alignment: u32) u32 {
 
 fn staticDataInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("static data invariant violated: {s}", .{message});
+        invariant("static data invariant violated: {s}", .{message});
     }
     unreachable;
 }

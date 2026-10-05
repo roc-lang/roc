@@ -373,7 +373,7 @@ pub const LirImageProgram = struct {
     pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
             if (builtin.mode == .Debug) {
-                std.debug.panic("eval LIR image invariant violated: no root procedures", .{});
+                base.invariant("eval LIR image invariant violated: no root procedures", .{});
             }
             unreachable;
         }
@@ -1647,7 +1647,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             const root_name = evalRootName(source_kind, root_inspect_wrap);
             const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
+                    base.invariant("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
                 }
                 unreachable;
             };
@@ -1663,7 +1663,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             const root_name = evalRootName(source_kind, false);
             const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
+                    base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
                 }
                 unreachable;
             };
@@ -1671,7 +1671,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
                 const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse {
                     if (@import("builtin").mode == .Debug) {
-                        std.debug.panic("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
+                        base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
                     }
                     unreachable;
                 };
@@ -1872,7 +1872,7 @@ pub fn parseCheckModule(
     for (executable_roots) |root| {
         const root_def_idx = czer.explicitRootDefByName(root.name) orelse {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
+                base.invariant("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
             }
             unreachable;
         };
@@ -2051,7 +2051,7 @@ const ZeroArgRootBody = struct {
 
 fn zeroArgRootInvariant(message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("eval helper invariant violated: {s}", .{message});
+        base.invariant("eval helper invariant violated: {s}", .{message});
     }
     unreachable;
 }
@@ -2118,7 +2118,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_hosted_lambda,
         .e_run_low_level,
         => zeroArgRootInvariant("compile-time REPL root was not a lambda"),
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     const lambda = switch (module_env.store.getExpr(lambda_idx)) {
         .e_lambda => |lambda| lambda,
@@ -2180,11 +2180,11 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_hosted_lambda,
         .e_run_low_level,
         => zeroArgRootInvariant("compile-time REPL closure did not contain a lambda"),
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     if (lambda.args.span.len != 0) {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("eval helper invariant violated: compile-time REPL root had parameters", .{});
+            base.invariant("eval helper invariant violated: compile-time REPL root had parameters", .{});
         }
         unreachable;
     }
@@ -2299,7 +2299,7 @@ fn publishImportArtifacts(
 
         if (!made_progress) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
+                base.invariant("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
             }
             unreachable;
         }
@@ -3874,7 +3874,7 @@ fn copyReturnedRocStr(
         (layout_val.tag == .scalar and layout_val.getScalar().tag == .str);
 
     if (!is_str) {
-        std.debug.panic(
+        base.invariant(
             "eval inspect invariant violated: expected Str return layout, found {s}",
             .{@tagName(layout_val.tag)},
         );

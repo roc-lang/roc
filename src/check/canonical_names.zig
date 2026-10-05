@@ -376,17 +376,17 @@ pub const CanonicalNameStore = struct {
     }
 
     fn assertMutable(self: *const CanonicalNameStore) void {
-        if (self.borrowed_read_only) @panic("borrowed canonical name store cannot be mutated");
+        if (self.borrowed_read_only) base.invariant("{s}", .{"borrowed canonical name store cannot be mutated"});
     }
 
     fn preparedRecordFieldRanks(self: *const CanonicalNameStore) []const u32 {
-        const cache = self.record_field_text_rank orelse @panic("canonical record field ranks not prepared for sharing");
-        return cache.current(self.record_field_labels.count()) orelse @panic("borrowed canonical record field rank cache miss");
+        const cache = self.record_field_text_rank orelse base.invariant("{s}", .{"canonical record field ranks not prepared for sharing"});
+        return cache.current(self.record_field_labels.count()) orelse base.invariant("{s}", .{"borrowed canonical record field rank cache miss"});
     }
 
     fn preparedTagRanks(self: *const CanonicalNameStore) []const u32 {
-        const cache = self.tag_text_rank orelse @panic("canonical tag ranks not prepared for sharing");
-        return cache.current(self.tag_labels.count()) orelse @panic("borrowed canonical tag rank cache miss");
+        const cache = self.tag_text_rank orelse base.invariant("{s}", .{"canonical tag ranks not prepared for sharing"});
+        return cache.current(self.tag_labels.count()) orelse base.invariant("{s}", .{"borrowed canonical tag rank cache miss"});
     }
 
     pub fn deinit(self: *CanonicalNameStore) void {
@@ -950,7 +950,7 @@ pub const NameRelocation = struct {
 
     fn requireSource(self: *const NameRelocation, source: *const CanonicalNameStore) void {
         if (source != self.source) {
-            @panic("canonical name relocation used with an unrelated source store");
+            base.invariant("{s}", .{"canonical name relocation used with an unrelated source store"});
         }
     }
 

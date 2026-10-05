@@ -1,6 +1,7 @@
 //! Canonical deep-RC helper plans derived from canonical layout identities.
 
 const std = @import("std");
+const base = @import("base");
 const digest_mod = @import("digest.zig");
 const builtins = @import("builtins");
 
@@ -215,7 +216,7 @@ pub const Resolver = struct {
                 .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(key.layout_idx) },
             },
-            .erased_box => std.debug.panic(
+            .erased_box => base.invariant(
                 "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
                 .{},
             ),

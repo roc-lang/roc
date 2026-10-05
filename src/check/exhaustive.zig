@@ -45,7 +45,7 @@ const Var = types.Var;
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic(message, args);
+        base.invariant(message, args);
     }
     unreachable;
 }

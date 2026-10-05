@@ -2073,7 +2073,7 @@ fn applyHostedBindings(
             .def_idx = @intFromEnum(binding.target_def),
         }) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
+                base.invariant("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
             }
             unreachable;
         };
@@ -3112,7 +3112,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+            base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
         }
         unreachable;
     }
@@ -3228,7 +3228,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .interpreter => blk: {
                 const shm_handle = shm_handle_opt orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
                     }
                     unreachable;
                 };
@@ -3335,7 +3335,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 .interpreter => blk: {
                     const shm_handle = shm_handle_opt orelse {
                         if (builtin.mode == .Debug) {
-                            std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                            base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
                         }
                         unreachable;
                     };
@@ -3414,7 +3414,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     const shm_handle = shm_handle_opt orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
+            base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
         }
         unreachable;
     };
@@ -3423,7 +3423,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     if (args.watch) {
         const result = if (lowered_result) |*value| value else {
             if (builtin.mode == .Debug) {
-                std.debug.panic("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
+                base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
             }
             unreachable;
         };
@@ -3985,7 +3985,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     const entrypoint_names = lowered_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("default app run invariant violated: no platform entrypoints", .{});
+            base.invariant("default app run invariant violated: no platform entrypoints", .{});
         }
         unreachable;
     }
@@ -6068,7 +6068,7 @@ const LoweredCoordinatorResult = struct {
 fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: []const u8) []const backend.StaticDataExport {
     return result.internal_static_data orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
+            base.invariant("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
         }
         unreachable;
     };
@@ -6548,7 +6548,7 @@ fn writeDevRunImageToSharedMemory(
             const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
             const compiled = codegen.compiledProcSymbol(proc_id) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
+                    base.invariant("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
                 }
                 unreachable;
             };
@@ -6561,7 +6561,7 @@ fn writeDevRunImageToSharedMemory(
         for (static_rc_helpers) |helper_key| {
             const code_offset = codegen.compiledStaticDataRcHelperOffset(helper_key) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
                         .{helper_key.encode()},
                     );
@@ -6585,7 +6585,7 @@ fn writeDevRunImageToSharedMemory(
             const ordinal: usize = @intCast(platform_entrypoint.ordinal);
             if (ordinal >= entrypoint_names.len) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
+                    base.invariant("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
                 }
                 unreachable;
             }
@@ -6811,7 +6811,7 @@ fn evaluateLirImageEntrypoint(
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
         error.EntrypointNotFound => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
+                base.invariant("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
             }
             unreachable;
         },
@@ -9152,7 +9152,7 @@ fn nativeBuildEntrypoints(
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
                 .{ root_procs.len, root_metadata.len },
             );
@@ -9168,7 +9168,7 @@ fn nativeBuildEntrypoints(
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("native build invariant violated: missing root request order {d}", .{metadata.order});
+                base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
             }
             unreachable;
         };
@@ -9199,7 +9199,7 @@ fn nativeEntrypointSymbolName(
 ) []const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
                 .{},
             );
@@ -9802,13 +9802,13 @@ fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
 fn requiredWasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
     const wasm = link_inputs.wasm orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
         }
         unreachable;
     };
     return wasm.exports orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
         }
         unreachable;
     };
@@ -9842,7 +9842,7 @@ fn writeDevWasmObject(
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("wasm object invariant violated: no exported platform entrypoints", .{});
+            base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
         }
         unreachable;
     }
@@ -9942,7 +9942,7 @@ fn rocBuildWasm(
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("wasm build invariant violated: no exported platform entrypoints", .{});
+            base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
         }
         unreachable;
     }
@@ -10109,7 +10109,7 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
         .speed => .speed,
         .dev, .interpreter => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
+                base.invariant("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
             }
             unreachable;
         },
@@ -10463,7 +10463,7 @@ fn rocBuildWasmLlvm(
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
+            base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
         }
         unreachable;
     }
@@ -10721,7 +10721,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
+            base.invariant("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
         }
         unreachable;
     }
@@ -11188,7 +11188,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     reporter.begin(code_generation_phase_name);
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("native build invariant violated: no exported platform entrypoints or data symbols", .{});
+            base.invariant("native build invariant violated: no exported platform entrypoints or data symbols", .{});
         }
         unreachable;
     }
@@ -11551,7 +11551,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("embedded build invariant violated: no platform entrypoints", .{});
+            base.invariant("embedded build invariant violated: no platform entrypoints", .{});
         }
         unreachable;
     }
@@ -11844,7 +11844,7 @@ const CliTestPlanModule = struct {
     fn releaseCachedResults(self: *CliTestPlanModule) []CliTestResultItem {
         const results = self.cached_results orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("CLI test invariant violated: cached results were released from an uncached plan module", .{});
+                base.invariant("CLI test invariant violated: cached results were released from an uncached plan module", .{});
             }
             unreachable;
         };
@@ -12060,7 +12060,7 @@ fn storeCliTestResultsInCache(
         try appendU64(&bytes, ctx.gpa, result.inline_passed);
         try appendU64(&bytes, ctx.gpa, result.inline_failed);
         if (result.inline_expect and result.source_env == null) {
-            std.debug.panic("inline test cache result has no declaring module", .{});
+            base.invariant("inline test cache result has no declaring module", .{});
         }
         if (result.source_env) |source_env| {
             const qualified_name = source_env.qualifiedModuleName();
@@ -12422,7 +12422,7 @@ fn testRootRegion(
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("CLI test invariant violated: test root was not published from an expect statement", .{});
+                base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
             }
             unreachable;
         },
@@ -12607,7 +12607,7 @@ fn collectExpectBindingPatterns(
             .e_break,
             .e_hosted_lambda,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -12972,7 +12972,7 @@ fn collectCliTestRootRuns(
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("CLI test invariant violated: root proc count differs from root metadata count", .{});
+            base.invariant("CLI test invariant violated: root proc count differs from root metadata count", .{});
         }
         unreachable;
     }
@@ -12981,7 +12981,7 @@ fn collectCliTestRootRuns(
         if (metadata.kind != .test_expect) continue;
         const test_plan = metadata.test_plan orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
+                base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
             }
             unreachable;
         };
@@ -12989,7 +12989,7 @@ fn collectCliTestRootRuns(
             test_plan.result_index >= planned.first_entry_index + planned.entry_count) continue;
         if (test_plan.root_index >= planned.test_roots.len or test_plan.result_index >= plan_entries.len) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
                     .{ test_plan.root_index, test_plan.result_index, planned.test_roots.len, plan_entries.len },
                 );
@@ -13006,7 +13006,7 @@ fn collectCliTestRootRuns(
                 plan_entry.root_index != test_plan.root_index or
                 plan_entry.root_order != root.order))
         {
-            std.debug.panic(
+            base.invariant(
                 "CLI test invariant violated: explicit plan metadata ({d}/{d}/{d}/{d}) differs from plan entry/root ({d}/{d}/{d}/{d})",
                 .{
                     test_plan.result_index,
@@ -13038,7 +13038,7 @@ fn collectCliTestRootRuns(
 
     if (runs.items.len != planned.test_roots.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
                 .{ runs.items.len, planned.test_roots.len },
             );
@@ -13461,14 +13461,14 @@ fn appendInlineExpectResults(
         const result: CliTestResult = if (count.failed == 0) .passed else .failed;
         var source_env: ?*const ModuleEnv = null;
         var source_path: ?[]const u8 = null;
-        if (!site.loc.hasLocation()) std.debug.panic("test expect site has no source location", .{});
+        if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
         const qualified_name = store.sourceFileQualifiedName(site.loc.file);
         if (source_modules.get(qualified_name)) |source_module| {
             source_env = source_module.semantic.env;
             source_path = source_module.path;
         }
         if (source_env == null) {
-            std.debug.panic("test expect source module {s} was absent from the checked module plan", .{qualified_name});
+            base.invariant("test expect source module {s} was absent from the checked module plan", .{qualified_name});
         }
         try results.append(ctx.gpa, .{
             .result = result,
@@ -14117,7 +14117,7 @@ fn coalesceInlineExpectResults(
         for (@constCast(module_result.results)) |*result| {
             if (!result.inline_expect) continue;
             const source_env = result.source_env orelse {
-                std.debug.panic("inline test result has no declaring module", .{});
+                base.invariant("inline test result has no declaring module", .{});
             };
             const key: InlineExpectResultKey = .{
                 .env = source_env,
@@ -15497,7 +15497,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         const qualified_name = module.semantic.env.qualifiedModuleName();
         const entry = try source_modules.getOrPut(ctx.gpa, qualified_name);
         if (entry.found_existing) {
-            std.debug.panic("compiled module plan contains duplicate source module {s}", .{qualified_name});
+            base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
         entry.value_ptr.* = module;
     }
@@ -16098,7 +16098,7 @@ const CliTestTranscriptCoordinator = struct {
         event: CliTestTranscriptEvent,
     ) ReportRenderError!void {
         if (builtin.mode == .Debug and result_index >= self.entries.len) {
-            std.debug.panic("CLI test transcript coordinator received out-of-range event index {d} for {d} entries", .{ result_index, self.entries.len });
+            base.invariant("CLI test transcript coordinator received out-of-range event index {d} for {d} entries", .{ result_index, self.entries.len });
         }
         if (result_index < self.next_to_print) return;
         if (result_index == self.next_to_print) {
@@ -16123,7 +16123,7 @@ const CliTestTranscriptCoordinator = struct {
         entry: CliTestRenderEntry,
     ) ReportRenderError!void {
         if (builtin.mode == .Debug and result_index >= self.entries.len) {
-            std.debug.panic("CLI test transcript coordinator received out-of-range result index {d} for {d} entries", .{ result_index, self.entries.len });
+            base.invariant("CLI test transcript coordinator received out-of-range result index {d} for {d} entries", .{ result_index, self.entries.len });
         }
         self.entries[result_index] = entry;
         if (result_index == self.next_to_print) {
@@ -16229,10 +16229,10 @@ const CliOptimizedLiveTestOutput = struct {
 
         if (self.err != null) return;
         if (builtin.mode == .Debug and result_index >= self.owned_results.len) {
-            std.debug.panic("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
+            base.invariant("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
         }
         if (builtin.mode == .Debug and self.owned_results[result_index] != null) {
-            std.debug.panic("CLI optimized live output received duplicate result index {d}", .{result_index});
+            base.invariant("CLI optimized live output received duplicate result index {d}", .{result_index});
         }
 
         const copied = copyCliTestResultItem(self.ctx.gpa, result) catch |err| {
@@ -16255,7 +16255,7 @@ const CliOptimizedLiveTestOutput = struct {
         eval_result: eval.Inspected.BoolRootEvalResult,
     ) void {
         if (builtin.mode == .Debug and call_index >= self.runs.len) {
-            std.debug.panic("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
+            base.invariant("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
         }
         const run = self.runs[call_index];
         const result = cliTestResultItemFromEval(self.ctx, run, eval_result) catch |err| {
@@ -16274,10 +16274,10 @@ const CliOptimizedLiveTestOutput = struct {
         }
         const result_index: usize = @intCast(run.result_index);
         if (builtin.mode == .Debug and result_index >= self.owned_results.len) {
-            std.debug.panic("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
+            base.invariant("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
         }
         if (builtin.mode == .Debug and self.owned_results[result_index] != null) {
-            std.debug.panic("CLI optimized live output received duplicate result index {d}", .{result_index});
+            base.invariant("CLI optimized live output received duplicate result index {d}", .{result_index});
         }
 
         self.owned_results[result_index] = result;
@@ -16296,7 +16296,7 @@ const CliOptimizedLiveTestOutput = struct {
         event_view: eval.Inspected.BoolRootEventView,
     ) void {
         if (builtin.mode == .Debug and call_index >= self.runs.len) {
-            std.debug.panic("CLI optimized live output received out-of-range event call index {d} for {d} roots", .{ call_index, self.runs.len });
+            base.invariant("CLI optimized live output received out-of-range event call index {d} for {d} roots", .{ call_index, self.runs.len });
         }
         const run = self.runs[call_index];
         const event: CliTestTranscriptEvent = switch (event_view) {
@@ -16460,7 +16460,7 @@ fn renderCliTestResultEntry(
     transcript_events_already_rendered: usize,
 ) ReportRenderError!void {
     if (builtin.mode == .Debug and transcript_events_already_rendered > entry.result.transcript.len) {
-        std.debug.panic(
+        base.invariant(
             "CLI test transcript coordinator rendered {d} events before finished result with {d} events",
             .{ transcript_events_already_rendered, entry.result.transcript.len },
         );

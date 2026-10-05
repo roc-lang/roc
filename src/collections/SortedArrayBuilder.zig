@@ -205,7 +205,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             while (i < self.entries.items.len) : (i += 1) {
                 if (!keyEql(self.entries.items[i - 1].key, self.entries.items[i].key)) continue;
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("SortedArrayBuilder invariant violated: duplicate key reached unique finalization", .{});
+                    collectionsInvariant("SortedArrayBuilder invariant violated: duplicate key reached unique finalization", .{});
                 }
                 @trap();
             }
@@ -555,4 +555,11 @@ test "SortedArrayBuilder no duplicates case" {
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "unique1"));
     try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
+}
+
+/// A violated compiler invariant (design.md): builds with runtime safety
+/// panic with this message, and optimized builds treat it as unreachable.
+inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
+    if (std.debug.runtime_safety) std.debug.panic(fmt, args);
+    unreachable;
 }

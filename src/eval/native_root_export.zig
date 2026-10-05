@@ -6,6 +6,7 @@
 //! returns; the returned exports then own every reachable byte independently.
 
 const std = @import("std");
+const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -558,7 +559,7 @@ fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) error{RuntimeError}!Callabl
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic("native root export invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .Debug) compilerInvariant("native root export invariant violated: {s}", .{message});
     unreachable;
 }
 

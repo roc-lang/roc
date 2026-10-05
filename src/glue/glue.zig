@@ -456,7 +456,7 @@ fn compileGlueSpec(
 
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
+            base.invariant("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
         unreachable;
     };
@@ -1011,7 +1011,7 @@ fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeT
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: " ++ message, args);
+        base.invariant("glue invariant violated: " ++ message, args);
     }
     unreachable;
 }

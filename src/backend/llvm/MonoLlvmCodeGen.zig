@@ -16,6 +16,7 @@
 //! definitions when it loads an object in-process.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 
 const Base = @import("base");
 const builtin = @import("builtin");
@@ -221,7 +222,7 @@ fn getLlvmDataLayout(target: std.Target) []const u8 {
 
 fn unsupportedLlvmDataLayout(target: std.Target) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("LLVM codegen invariant violated: unsupported target for data layout: {s}-{s}", .{
+        invariant("LLVM codegen invariant violated: unsupported target for data layout: {s}-{s}", .{
             @tagName(target.cpu.arch),
             @tagName(target.os.tag),
         });
@@ -230,7 +231,7 @@ fn unsupportedLlvmDataLayout(target: std.Target) noreturn {
 }
 
 fn llvmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    std.debug.panic("LLVM codegen invariant violated: " ++ fmt, args);
+    invariant("LLVM codegen invariant violated: " ++ fmt, args);
 }
 
 /// Statement budget for a proc with no loop to be inlined everywhere: a
@@ -12121,7 +12122,7 @@ pub const MonoLlvmCodeGen = struct {
             64 => .i64,
             else => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
+                    invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
                 }
                 unreachable;
             },
@@ -12135,7 +12136,7 @@ pub const MonoLlvmCodeGen = struct {
             64 => 8,
             else => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
+                    invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
                 }
                 unreachable;
             },
@@ -12163,7 +12164,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn layouts(self: *MonoLlvmCodeGen) *const layout.Store {
-        return self.layout_store orelse @panic("LLVM codegen missing layout_store");
+        return self.layout_store orelse invariant("{s}", .{"LLVM codegen missing layout_store"});
     }
 
     fn boxyAwareBuiltinListAbi(self: *MonoLlvmCodeGen, list_layout: layout.Idx) layout.Store.BuiltinListAbi {
@@ -12187,7 +12188,7 @@ pub const MonoLlvmCodeGen = struct {
         const local_slot = self.local_slots[@intFromEnum(local)];
         if (!local_slot.allocated) {
             if (builtin.mode == .Debug) {
-                std.debug.panic("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@intFromEnum(local)});
+                invariant("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@intFromEnum(local)});
             }
             unreachable;
         }
@@ -13662,7 +13663,7 @@ pub const MonoLlvmCodeGen = struct {
                         else
                             (wip.names.items[instruction_index].slice(builder) orelse "<anonymous>");
                         const function_name = wip.function.name(builder).slice(builder) orelse "<anonymous>";
-                        std.debug.panic(
+                        invariant(
                             "LLVM/codegen invariant violated: fixed-lifetime alloca '{s}' emitted in block {d} outside procedure '{s}' entry block",
                             .{ instruction_name, block_idx, function_name },
                         );

@@ -48,6 +48,7 @@
 //! site, `runtime_error` otherwise.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 /// Pattern kinds the accessor context reports. This is the module's neutral
@@ -1360,7 +1361,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             const machinery = (self.ctx.stmtCount() - self.machinery_start) - self.delegated_stmts;
                             const bound = @as(usize, LINT_MULT) * @as(usize, self.tree_stats.pattern_nodes) + LINT_BASE;
                             if (machinery > bound) {
-                                std.debug.panic(
+                                base.invariant(
                                     "match_tree emitted {d} machinery statements for {d} pattern nodes (bound {d}); the linear-size guarantee regressed",
                                     .{ machinery, self.tree_stats.pattern_nodes, bound },
                                 );

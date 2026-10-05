@@ -6,6 +6,7 @@
 //! - Wasm: WebAssembly backend that generates wasm bytecode
 
 const StructuralTest = @import("structural_test.zig");
+const invariant = @import("base").invariant;
 const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
@@ -306,16 +307,16 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
         }
 
         fn abort(_: *builtins.host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {
-            @panic("erased callable ret-size test must not reach RocOps");
+            invariant("{s}", .{"erased callable ret-size test must not reach RocOps"});
         }
         fn abortAlloc(_: *builtins.host_abi.RocOps, _: usize, _: usize) callconv(.c) *anyopaque {
-            @panic("erased callable ret-size test must not allocate");
+            invariant("{s}", .{"erased callable ret-size test must not allocate"});
         }
         fn abortDealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize) callconv(.c) void {
-            @panic("erased callable ret-size test must not deallocate");
+            invariant("{s}", .{"erased callable ret-size test must not deallocate"});
         }
         fn abortRealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
-            @panic("erased callable ret-size test must not reallocate");
+            invariant("{s}", .{"erased callable ret-size test must not reallocate"});
         }
     };
 

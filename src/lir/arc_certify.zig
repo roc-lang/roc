@@ -514,7 +514,7 @@ pub fn certifyStoreOrPanic(
     certifyStore(allocator, store, layouts, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Certification => if (comptime builtin.target.os.tag == .freestanding) {
-            @panic("ARC certification failed");
+            base.invariant("{s}", .{"ARC certification failed"});
         } else {
             var context = FailureContext{};
             if (diag.context_proc) |proc_id| {
@@ -534,7 +534,7 @@ pub fn certifyStoreOrPanic(
                 debug_print.writeProc(allocator, store, layouts, proc_id, &buffer.writer) catch {};
                 std.debug.print("\n{s}\n", .{buffer.written()});
             }
-            std.debug.panic("ARC: {s}{s}", .{ diag.message(), context.text() });
+            base.invariant("ARC: {s}{s}", .{ diag.message(), context.text() });
         },
     };
 }
@@ -1351,7 +1351,7 @@ const State = struct {
     fn denseIndex(self: *const State, local: LIR.LocalId) usize {
         const raw = @intFromEnum(local);
         if (raw >= self.local_dense.len or self.local_dense[raw] == no_dense) {
-            std.debug.panic("ARC certifier invariant violated: local {d} is outside the current proc-local map", .{raw});
+            base.invariant("ARC certifier invariant violated: local {d} is outside the current proc-local map", .{raw});
         }
         return @intCast(self.local_dense[raw]);
     }
@@ -4410,7 +4410,7 @@ const Certifier = struct {
         }
 
         const cached = self.reads_before_rebind_cache.getPtr(start) orelse {
-            std.debug.panic("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@intFromEnum(start)});
+            base.invariant("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@intFromEnum(start)});
         };
         return cached;
     }

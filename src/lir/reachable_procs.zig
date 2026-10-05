@@ -1126,7 +1126,7 @@ const Pass = struct {
 
 fn reachableProcInvariant(msg: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("reachable procs invariant violated: {s}", .{msg});
+        base.invariant("reachable procs invariant violated: {s}", .{msg});
     }
     unreachable;
 }

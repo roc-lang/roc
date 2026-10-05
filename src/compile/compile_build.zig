@@ -2548,7 +2548,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .Debug) std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+            if (builtin.mode == .Debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
             unreachable;
         }
 
@@ -2565,7 +2565,7 @@ pub const BuildEnv = struct {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
             const state = pkg.root_file_state orelse {
-                if (builtin.mode == .Debug) std.debug.panic("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
+                if (builtin.mode == .Debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
                 unreachable;
             };
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
@@ -2578,7 +2578,7 @@ pub const BuildEnv = struct {
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
                     const state = mod.source_file_state orelse {
-                        if (builtin.mode == .Debug) std.debug.panic("coordinator module {s} has no source_file_state", .{mod.name});
+                        if (builtin.mode == .Debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
                         unreachable;
                     };
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
@@ -2926,7 +2926,7 @@ pub const BuildEnv = struct {
 
     pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
         const coord = self.coordinator orelse {
-            std.debug.panic("build env invariant violated: compiled modules requested before coordinator initialization", .{});
+            base.invariant("build env invariant violated: compiled modules requested before coordinator initialization", .{});
         };
 
         var modules = std.ArrayList(CompiledModuleInfo).empty;
@@ -2987,19 +2987,19 @@ pub const BuildEnv = struct {
     /// completed compiler outputs. Dependency modules are deliberately absent.
     pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
-            std.debug.panic("build env invariant violated: public modules requested before dependency discovery", .{});
+            base.invariant("build env invariant violated: public modules requested before dependency discovery", .{});
         };
         const root_pkg = self.packages.getPtr(root_name) orelse {
-            std.debug.panic("build env invariant violated: public-module root package is unavailable", .{});
+            base.invariant("build env invariant violated: public-module root package is unavailable", .{});
         };
         if (root_pkg.kind != .package and root_pkg.kind != .platform) {
-            std.debug.panic("build env invariant violated: public modules requested for a non-package root", .{});
+            base.invariant("build env invariant violated: public modules requested for a non-package root", .{});
         }
         const coord = self.coordinator orelse {
-            std.debug.panic("build env invariant violated: public modules requested before coordinator initialization", .{});
+            base.invariant("build env invariant violated: public modules requested before coordinator initialization", .{});
         };
         const root_coord_pkg = coord.packages.get(root_name) orelse {
-            std.debug.panic("build env invariant violated: public-module root coordinator package is unavailable", .{});
+            base.invariant("build env invariant violated: public-module root coordinator package is unavailable", .{});
         };
 
         var public_modules = std.ArrayList(PublicModuleInfo).empty;
@@ -3008,20 +3008,20 @@ pub const BuildEnv = struct {
         for (root_pkg.public_surface.modules.items, 0..) |public_module, public_index| {
             const module_name = public_module.name;
             const public_target = root_coord_pkg.getPublicModuleTarget(module_name) orelse {
-                std.debug.panic(
+                base.invariant(
                     "build env invariant violated: public module '{s}' has no source target",
                     .{module_name},
                 );
             };
             const module_id = root_coord_pkg.getPublicModuleId(module_name) orelse {
-                std.debug.panic(
+                base.invariant(
                     "build env invariant violated: public module '{s}' was not compiled",
                     .{module_name},
                 );
             };
             const module_state = root_coord_pkg.getModule(module_id).?;
             const module_data = module_state.semanticData() orelse {
-                std.debug.panic(
+                base.invariant(
                     "build env invariant violated: public module '{s}' has no completed compiler output",
                     .{module_name},
                 );
@@ -3035,7 +3035,7 @@ pub const BuildEnv = struct {
                 .public_type_decl = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
-                    .unresolved_nested_type => std.debug.panic(
+                    .unresolved_nested_type => base.invariant(
                         "build env invariant violated: public module '{s}' has an unresolved nested type",
                         .{module_name},
                     ),
@@ -3051,7 +3051,7 @@ pub const BuildEnv = struct {
     /// source-module names; type views additionally carry their exact root.
     pub fn getCompiledPublicModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const coord = self.coordinator orelse {
-            std.debug.panic("build env invariant violated: public modules requested before coordinator initialization", .{});
+            base.invariant("build env invariant violated: public modules requested before coordinator initialization", .{});
         };
 
         var public_modules = std.ArrayList(PublicModuleInfo).empty;
@@ -3071,7 +3071,7 @@ pub const BuildEnv = struct {
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
-                    .unresolved_nested_type => std.debug.panic(
+                    .unresolved_nested_type => base.invariant(
                         "build env invariant violated: compiled public module '{s}' has an unresolved nested type",
                         .{public_module.name},
                     ),
@@ -3095,10 +3095,10 @@ pub const BuildEnv = struct {
     /// their root module when the header exposes root-owned names.
     pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
-            std.debug.panic("build env invariant violated: documentation requested before dependency discovery", .{});
+            base.invariant("build env invariant violated: documentation requested before dependency discovery", .{});
         };
         const root_pkg = self.packages.getPtr(root_name) orelse {
-            std.debug.panic("build env invariant violated: documentation root package is unavailable", .{});
+            base.invariant("build env invariant violated: documentation root package is unavailable", .{});
         };
 
         if (root_pkg.kind == .package) {
@@ -3118,10 +3118,10 @@ pub const BuildEnv = struct {
 
             if (root_pkg.public_surface.root_names.items.len > 0) {
                 const root_module = self.rootModule(root_name) orelse {
-                    std.debug.panic("build env invariant violated: platform documentation root module is unavailable", .{});
+                    base.invariant("build env invariant violated: platform documentation root module is unavailable", .{});
                 };
                 const root_data = root_module.semanticData() orelse {
-                    std.debug.panic("build env invariant violated: platform documentation root module has no completed compiler output", .{});
+                    base.invariant("build env invariant violated: platform documentation root module has no completed compiler output", .{});
                 };
                 docs_modules.appendAssumeCapacity(.{
                     .name = root_module.name,
@@ -3288,13 +3288,13 @@ pub const BuildEnv = struct {
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
         const semantic = self.getExecutableRootSemanticData() orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("build env invariant violated: executable root semantic data is missing", .{});
+                base.invariant("build env invariant violated: executable root semantic data is missing", .{});
             }
             unreachable;
         };
         return semantic.checked_artifact orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("build env invariant violated: executable root has no checked artifact", .{});
+                base.invariant("build env invariant violated: executable root has no checked artifact", .{});
             }
             unreachable;
         };
@@ -3384,7 +3384,7 @@ pub const BuildEnv = struct {
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
             const artifact = self.artifactByKey(key) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("build env invariant violated: missing lowering visibility artifact", .{});
+                    base.invariant("build env invariant violated: missing lowering visibility artifact", .{});
                 }
                 unreachable;
             };
@@ -3405,7 +3405,7 @@ pub const BuildEnv = struct {
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const artifact = self.artifactByKey(binding.app_value.artifact) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("build env invariant violated: missing relation artifact", .{});
+                    base.invariant("build env invariant violated: missing relation artifact", .{});
                 }
                 unreachable;
             };
@@ -3799,7 +3799,7 @@ pub const BuildEnv = struct {
             .e_break,
             .e_hosted_lambda,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 

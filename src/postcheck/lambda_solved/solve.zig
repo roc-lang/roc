@@ -1,6 +1,7 @@
 //! Lambda solving over lifted Monotype IR.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
 const can = @import("can");
@@ -1944,7 +1945,7 @@ const Solver = struct {
         if (args.len == expected) return;
 
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            invariant(
                 "postcheck invariant violated: low-level op {s} had {d} args, expected {d}",
                 .{ @tagName(op), args.len, expected },
             );
