@@ -13394,6 +13394,20 @@ operand once, schedules that working variable against the backing, and defers
 its link action. Nested backing relations reuse the isolated variable instead
 of recursively entering the unifier or cloning it again at each nominal layer.
 
+Unification never splits a class. A pair's deferred link runs after the pair's
+children are unified, and in a cyclic type those children can bring either
+endpoint into another class first; for example, each generated interpolation
+step function's type reaches the next step function's type through
+`Iter`'s step field. The deferred link is written only when both endpoints are
+still the roots the pair was processed with. Otherwise the pair unifies again
+with the current roots of both sides. Merged lambda sets, erased callables,
+and tag unions are written when their pair is processed, before their capture
+or payload pairs, so a nested unification extends the merged content instead
+of being overwritten by a merge computed from earlier contents. Lambda Mono
+specializes each member of a lambda set once per solved function-type class,
+so a split class multiplies specializations: N generated step functions
+sharing one lambda set across N classes produce N² specializations.
+
 Monotype may carry both the definition-private nominal view and the opaque
 interface view of one checked `TypeDef`. Lambda solving relates those views only
 when their complete definition identities and builtin owners agree. It unifies

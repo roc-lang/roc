@@ -48,8 +48,10 @@ const UnifyPairContext = struct {
 
 const UnifyPairSet = std.HashMap(UnifyPair, void, UnifyPairContext, std.hash_map.default_max_load_percentage);
 
-/// The store writes a unification defers until every type it pushed onto the
-/// unify stack has been processed.
+/// The links a unification defers until every type it pushed onto the unify
+/// stack has been processed. A merged callable or tag union is written when
+/// its pair is processed instead, so no merge computed from a pair's contents
+/// can be applied after a nested unification has changed those contents.
 const UnifyFinishAction = union(enum) {
     none,
     link_rhs_to_lhs: struct {
@@ -64,23 +66,6 @@ const UnifyFinishAction = union(enum) {
         structural: Type.TypeVarId,
         named: Type.TypeVarId,
     },
-    set_left_erased_link_right: struct {
-        lhs: Type.TypeVarId,
-        rhs: Type.TypeVarId,
-        source_fn_ty: Type.names.TypeDigest,
-        members: Type.Span,
-        abi_fn: ?Type.TypeVarId,
-    },
-    set_left_lambda_set_link_right: struct {
-        lhs: Type.TypeVarId,
-        rhs: Type.TypeVarId,
-        members: Type.Span,
-    },
-    set_left_tag_union_link_right: struct {
-        lhs: Type.TypeVarId,
-        rhs: Type.TypeVarId,
-        tags: Type.Span,
-    },
 };
 
 const UnifyFrame = union(enum) {
@@ -92,6 +77,9 @@ const UnifyFrame = union(enum) {
     finish: struct {
         pair: UnifyPair,
         action: UnifyFinishAction,
+        /// The pair's own `structural_isolated`, kept so a pair whose
+        /// endpoint joined another class re-unifies under the same rules.
+        structural_isolated: bool,
     },
     /// Relate generated-private evidence for one public/private pair.
     relate: struct {
@@ -1981,8 +1969,8 @@ const Solver = struct {
                     process.structural_isolated,
                 ),
                 .finish => |finish| {
-                    self.applyUnifyFinish(finish.action);
                     _ = self.active_unifications.remove(finish.pair);
+                    try self.applyUnifyFinish(&self.unify_stack, finish.action, finish.structural_isolated);
                 },
                 .relate => |relate| try self.processRelate(&self.unify_stack, relate.public, relate.private),
                 .relate_exit => |pair| _ = self.active_private_evidence_relations.remove(pair),
@@ -2078,7 +2066,7 @@ const Solver = struct {
         // Reserve the finish frame before pushing any children so it pops last
         // and retires `pair` once every type it scheduled has been unified.
         const finish_index = stack.items.len;
-        try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none } });
+        try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none, .structural_isolated = structural_isolated } });
         try self.unifyRoots(stack, finish_index, a, b, left, right, structural_isolated);
     }
 
@@ -2137,26 +2125,22 @@ const Solver = struct {
                     var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
                     defer capture_pairs.deinit(self.allocator);
                     const merged = try self.mergeLambdaSets(left_erased.members, right_erased.members, &capture_pairs);
-                    stack.items[finish_index].finish.action = .{ .set_left_erased_link_right = .{
-                        .lhs = a,
-                        .rhs = b,
+                    self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = left_erased.abi_fn orelse right_erased.abi_fn,
-                    } };
+                    } });
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
                     const right_members = right.lambda_set;
                     var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
                     defer capture_pairs.deinit(self.allocator);
                     const merged = try self.mergeLambdaSets(left_erased.members, right_members, &capture_pairs);
-                    stack.items[finish_index].finish.action = .{ .set_left_erased_link_right = .{
-                        .lhs = a,
-                        .rhs = b,
+                    self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = left_erased.abi_fn,
-                    } };
+                    } });
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
                     Common.invariant("erased callable type failed Lambda Solved unification");
@@ -2168,24 +2152,18 @@ const Solver = struct {
                     var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
                     defer capture_pairs.deinit(self.allocator);
                     const merged = try self.mergeLambdaSets(left_members, right_erased.members, &capture_pairs);
-                    stack.items[finish_index].finish.action = .{ .set_left_erased_link_right = .{
-                        .lhs = a,
-                        .rhs = b,
+                    self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = right_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = right_erased.abi_fn,
-                    } };
+                    } });
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
                     const right_members = right.lambda_set;
                     var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
                     defer capture_pairs.deinit(self.allocator);
                     const merged = try self.mergeLambdaSets(left_members, right_members, &capture_pairs);
-                    stack.items[finish_index].finish.action = .{ .set_left_lambda_set_link_right = .{
-                        .lhs = a,
-                        .rhs = b,
-                        .members = merged,
-                    } };
+                    self.setMergedLinkRight(a, b, .{ .lambda_set = merged });
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
                     Common.invariant("lambda set failed Lambda Solved unification");
@@ -2233,11 +2211,7 @@ const Solver = struct {
                 var payload_pairs = std.ArrayList(DeferredSpanPair).empty;
                 defer payload_pairs.deinit(self.allocator);
                 const merged = try self.mergeTags(left_tags, right_tags, &payload_pairs);
-                stack.items[finish_index].finish.action = .{ .set_left_tag_union_link_right = .{
-                    .lhs = a,
-                    .rhs = b,
-                    .tags = merged,
-                } };
+                self.setMergedLinkRight(a, b, .{ .tag_union = merged });
                 try self.pushPayloadSpanPairs(stack, payload_pairs.items);
             },
             .named => |left_named| {
@@ -2280,34 +2254,70 @@ const Solver = struct {
         }
     }
 
-    fn applyUnifyFinish(self: *Solver, action: UnifyFinishAction) void {
+    /// Write a merged callable or tag union into `lhs` and link `rhs` to it
+    /// as soon as the pair is processed. The payload or capture pairs pushed
+    /// after this see one class, so a nested unification that reaches either
+    /// side extends the merged content rather than a stale copy of it.
+    fn setMergedLinkRight(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId, merged: Type.Content) void {
+        self.program.types.set(lhs, merged);
+        self.program.types.set(rhs, .{ .link = lhs });
+    }
+
+    fn applyUnifyFinish(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        action: UnifyFinishAction,
+        structural_isolated: bool,
+    ) Allocator.Error!void {
         switch (action) {
             .none => {},
-            .link_rhs_to_lhs => |link| self.program.types.set(link.rhs, .{ .link = link.lhs }),
-            .link_var_to_root => |link| self.program.types.set(link.var_, .{ .link = self.program.types.rootCompressed(link.target) }),
+            .link_rhs_to_lhs => |link| {
+                if (self.program.types.rootCompressed(link.lhs) == link.lhs and
+                    self.program.types.rootCompressed(link.rhs) == link.rhs)
+                {
+                    if (link.lhs != link.rhs) self.program.types.set(link.rhs, .{ .link = link.lhs });
+                    return;
+                }
+                try self.reunifyMovedPair(stack, link.lhs, link.rhs, structural_isolated);
+            },
+            .link_var_to_root => |link| {
+                // The alias resolves to whatever its backing's class is now.
+                if (self.program.types.rootCompressed(link.var_) == link.var_) {
+                    const target = self.program.types.rootCompressed(link.target);
+                    if (target != link.var_) self.program.types.set(link.var_, .{ .link = target });
+                    return;
+                }
+                try self.reunifyMovedPair(stack, link.var_, link.target, structural_isolated);
+            },
             .link_structural_to_inspectable_named => |link| {
                 const structural_root = self.program.types.rootCompressed(link.structural);
                 const named_root = self.program.types.rootCompressed(link.named);
                 if (structural_root == named_root or self.program.types.isOwnedNamedBacking(structural_root)) return;
                 self.program.types.set(structural_root, .{ .link = named_root });
             },
-            .set_left_erased_link_right => |set| {
-                self.program.types.set(set.lhs, .{ .erased = .{
-                    .source_fn_ty = set.source_fn_ty,
-                    .members = set.members,
-                    .abi_fn = set.abi_fn,
-                } });
-                self.program.types.set(set.rhs, .{ .link = set.lhs });
-            },
-            .set_left_lambda_set_link_right => |set| {
-                self.program.types.set(set.lhs, .{ .lambda_set = set.members });
-                self.program.types.set(set.rhs, .{ .link = set.lhs });
-            },
-            .set_left_tag_union_link_right => |set| {
-                self.program.types.set(set.lhs, .{ .tag_union = set.tags });
-                self.program.types.set(set.rhs, .{ .link = set.lhs });
-            },
         }
+    }
+
+    /// A cyclic type can bring an endpoint of a pair into another class while
+    /// the pair's own children are unified. Writing the pair's deferred link
+    /// over that endpoint would split the class it joined, so the pair instead
+    /// re-enters unification with the roots of the classes both sides belong
+    /// to now.
+    fn reunifyMovedPair(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+        structural_isolated: bool,
+    ) Allocator.Error!void {
+        const lhs_root = self.program.types.rootCompressed(lhs);
+        const rhs_root = self.program.types.rootCompressed(rhs);
+        if (lhs_root == rhs_root) return;
+        try stack.append(self.allocator, .{ .process = .{
+            .lhs = lhs_root,
+            .rhs = rhs_root,
+            .structural_isolated = structural_isolated,
+        } });
     }
 
     /// Relate the definition-private nominal and opaque interface views of one
@@ -4324,6 +4334,94 @@ test "generated-private evidence traverses a public inspectable named backing" {
     );
     try std.testing.expect(program.types.rootCompressed(public_named) != program.types.rootCompressed(private_record));
     try std.testing.expect(program.types.rootCompressed(public_backing) != program.types.rootCompressed(private_record));
+}
+
+test "unifying a cyclic function type keeps a class its endpoint joined during the unification" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const field_name = try program.lifted.names.internRecordFieldLabel("rest");
+    const callable = try program.types.add(.{ .lambda_set = .empty() });
+
+    // `X = () -> { rest: X }` and `B = () -> { rest: B }` are each their own
+    // cycle, and `A = () -> { rest: X }` enters X's. Unifying A with B unifies
+    // X with B inside A and B's own return types, so B joins X's class before
+    // A and B finish.
+    const x_record = try program.types.add(.unbound);
+    const x_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = x_record } });
+    program.types.set(x_record, .{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = x_fn, .default = null }}) });
+
+    const b_record = try program.types.add(.unbound);
+    const b_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = b_record } });
+    program.types.set(b_record, .{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = b_fn, .default = null }}) });
+
+    const a_record = try program.types.add(.{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = x_fn, .default = null }}) });
+    const a_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = a_record } });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.unify(a_fn, b_fn);
+
+    const fn_root = program.types.root(a_fn);
+    try std.testing.expectEqual(fn_root, program.types.root(b_fn));
+    try std.testing.expectEqual(fn_root, program.types.root(x_fn));
+    const record_root = program.types.root(a_record);
+    try std.testing.expectEqual(record_root, program.types.root(b_record));
+    try std.testing.expectEqual(record_root, program.types.root(x_record));
+}
+
+/// Unification compares a capture's identity and unifies its type; it never
+/// reads the capture's local, symbol, or binder.
+fn captureForTest(ty: Type.TypeVarId) Type.Capture {
+    return .{ .local = undefined, .symbol = undefined, .binder = null, .ty = ty };
+}
+
+test "lambda set unification keeps members its captures merged in" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const shared_lambda: Common.Symbol = @enumFromInt(1);
+    const other_lambda: Common.Symbol = @enumFromInt(2);
+    const ret_ty = try program.types.add(.zst);
+
+    // `shared_lambda` captures a function in both sets. In `left` that
+    // function's callable is `left` itself; in `right` it is `other`, so
+    // unifying the captures merges `other`'s member into `left` while `left`
+    // and `right` are being unified.
+    const other = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = other_lambda,
+        .captures = .empty(),
+    }}) });
+    const left = try program.types.add(.unbound);
+    const left_capture_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = left, .ret = ret_ty } });
+    const right_capture_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = other, .ret = ret_ty } });
+    program.types.set(left, .{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = shared_lambda,
+        .captures = try program.types.addCaptures(&.{captureForTest(left_capture_fn)}),
+    }}) });
+    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = shared_lambda,
+        .captures = try program.types.addCaptures(&.{captureForTest(right_capture_fn)}),
+    }}) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.unify(left, right);
+
+    const set_root = program.types.root(left);
+    try std.testing.expectEqual(set_root, program.types.root(right));
+    try std.testing.expectEqual(set_root, program.types.root(other));
+    const members = program.types.view().memberSpan(program.types.rootContent(left).lambda_set);
+    try std.testing.expectEqual(@as(usize, 2), members.len);
+    var saw_shared = false;
+    var saw_other = false;
+    for (members) |member| {
+        if (member.lambda == shared_lambda) saw_shared = true;
+        if (member.lambda == other_lambda) saw_other = true;
+    }
+    try std.testing.expect(saw_shared and saw_other);
 }
 
 test "lambda solved solve declarations are referenced" {
