@@ -39,7 +39,7 @@ fn buildChecksRun(b: *std.Build, command: []const u8) *Step.Run {
         const inputs = b.addWriteFiles();
         _ = inputs.addCopyDirectory(b.path("src"), "src", .{ .include_extensions = &.{ ".zig", ".roc", ".pl" } });
         _ = inputs.addCopyDirectory(b.path("test"), "test", .{ .include_extensions = &.{".roc"} });
-        _ = inputs.addCopyDirectory(b.path("ci"), "ci", .{});
+        _ = inputs.addCopyDirectory(b.path("ci"), "ci", .{ .exclude_extensions = &.{ ".pyc", ".pyo" } });
         _ = inputs.addCopyFile(b.path("design.md"), "design.md");
         run.setCwd(inputs.getDirectory());
         run.expectExitCode(0);
@@ -756,11 +756,14 @@ const CheckBuiltinBakeReproducibleStep = struct {
         const inputs = b.addWriteFiles();
         const sources = inputs.addCopyDirectory(b.path("src/build/roc"), "roc", .{});
         const compare = buildChecksRun(b, "check-builtin-bake-reproducible");
-        for (0..3) |_| {
+        for (0..3) |index| {
             const bake = b.addRunArtifact(exe);
             bake.addFileArg(sources.path(b, "Builtin.roc"));
             for ([_][]const u8{ "Builtin.bin", "builtin_indices.zig", "Builtin.artifact.bin" }) |name| {
-                compare.addFileArg(bake.addOutputFileArg(name));
+                // Distinct declared output names produce distinct Run keys.
+                // Identical keys could reuse one process's output three times,
+                // defeating this ASLR reproducibility check.
+                compare.addFileArg(bake.addOutputFileArg(b.fmt("bake-{d}-{s}", .{ index, name })));
             }
         }
         return compare;
@@ -1600,6 +1603,10 @@ pub fn build(b: *std.Build) void {
     compiler_version_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
     const compiler_identity = compilerIdentityModule(b, dependency_source, flag_enable_tracy, &.{
         b.fmt("enable-tracy={}", .{flag_enable_tracy != null}),
+        b.fmt("tracy-allocation={}", .{flag_enable_tracy != null and flag_tracy_allocation}),
+        b.fmt("tracy-callstack={}", .{flag_enable_tracy != null and flag_tracy_callstack}),
+        b.fmt("tracy-callstack-depth={d}", .{if (flag_enable_tracy != null and flag_tracy_callstack) (if (flag_tracy_callstack_depth > 0) flag_tracy_callstack_depth else 10) else @as(u32, 0)}),
+        b.fmt("valgrind={}", .{enable_valgrind}),
         b.fmt("trace-eval={}", .{trace_eval}),
         b.fmt("trace-refcount={}", .{trace_refcount}),
         b.fmt("debug-gpa={}", .{debug_gpa}),
@@ -3255,8 +3262,8 @@ pub fn build(b: *std.Build) void {
         run_echo_cmd.step.dependOn(&echo_native_install.step);
         run_echo_step.dependOn(&run_echo_cmd.step);
 
-        // test-echo-wasm: bytebox-driven integration test that loads
-        // zig-out/lib/echo/echo.wasm, supplies in-process js_echo + js_stderr,
+        // test-echo-wasm: bytebox-driven integration test that loads the
+        // declared echo.wasm artifact, supplies in-process js_echo + js_stderr,
         // and asserts the tutorial example produces the expected output.
         const echo_wasm_test_exe = b.addExecutable(.{
             .name = "echo_wasm_test",
@@ -3272,8 +3279,7 @@ pub fn build(b: *std.Build) void {
 
         const run_test_echo_wasm_step = b.step("run-test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
         const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
-        // Ensure the wasm is built before the test runs.
-        run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
+        run_echo_wasm_test.addFileArg(echo_wasm.getEmittedBin());
         run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
@@ -6429,15 +6435,13 @@ fn addMainExe(
         // must carry compiler-rt so its float math libcalls (sqrt, sin,
         // floor, ...) resolve into the -nostdlib executable. Excluded: wasm32
         // (gets compiler-rt via the dedicated merged object below) and macOS
-        // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
-        // crashes the Zig compiler for macOS targets under --listen). BSD is
-        // also excluded because Zig 0.16.0 segfaults when compiling compiler_rt
-        // for x86_64-*-bsd-none targets.
+        // (resolves them against -lSystem at the final link). The former BSD
+        // compiler-rt exclusion is unnecessary with Zig 0.17: both the minimal
+        // build-runner IPC repro and Roc's actual extern builtins compile for
+        // FreeBSD, OpenBSD, and NetBSD with compiler-rt bundled.
         const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
         const cross_is_macos = cross_target.query.os_tag == .macos;
-        const cross_os = roc_target.classifyOs(cross_target.query.os_tag orelse .freestanding);
-        const cross_is_bsd = cross_os == .freebsd or cross_os == .openbsd or cross_os == .netbsd;
-        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos and !cross_is_bsd;
+        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos;
 
         // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{
@@ -7167,6 +7171,7 @@ const llvm_libs = [_][]const u8{
     "LLVMMCA",
     "LLVMMCDisassembler",
     "LLVMLTO",
+    "LLVMPlugins",
     "LLVMPasses",
     "LLVMCGData",
     "LLVMHipStdPar",
@@ -7178,6 +7183,7 @@ const llvm_libs = [_][]const u8{
     "LLVMLinker",
     "LLVMInstrumentation",
     "LLVMFrontendOpenMP",
+    "LLVMFrontendDirective",
     "LLVMFrontendAtomic",
     "LLVMFrontendOffloading",
     "LLVMFrontendOpenACC",

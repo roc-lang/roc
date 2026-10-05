@@ -76,7 +76,14 @@ Debug test binary and checks production/test-only edits at unchanged `HEAD`:
 ```sh
 python3 ci/test_build_identity.py /path/to/zig
 python3 ci/test_fixture_isolation.py /path/to/zig
+python3 ci/test_build_cache.py /path/to/zig
 ```
+
+The last check builds the Debug builtin compiler in a private source snapshot.
+It compares three independently executed bakes, verifies reuse after version,
+documentation and dedicated test changes, and verifies invalidation after a
+production edit. Pass `--work-dir /new/path` to preserve its graph logs and
+artifact identities for review.
 
 ## CPU requirements
 

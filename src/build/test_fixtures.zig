@@ -80,9 +80,10 @@ pub const Plan = struct {
             // import libraries are fixture inputs and must remain included.
             .exclude_extensions = &.{ "libhost.a", "host.lib", "host.wasm", "libc.so", "libc.so.6", "libc_stub.s" },
         });
-        inline for (.{ "src", "vendor", "ci" }) |dir| {
+        inline for (.{ "src", "vendor" }) |dir| {
             _ = files.addCopyDirectory(self.b.path(dir), dir, .{});
         }
+        _ = files.addCopyDirectory(self.b.path("ci"), "ci", .{ .exclude_extensions = &.{ ".pyc", ".pyo" } });
         inline for (.{ "build.zig", "build.zig.zon", "design.md", "legal_details" }) |path| {
             _ = files.addCopyFile(self.b.path(path), path);
         }
