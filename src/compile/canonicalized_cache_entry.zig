@@ -7,6 +7,8 @@
 //! the import inventory the parser recorded. They are a pure function of the
 //! module's source, exactly like the env, but they live in the AST rather than
 //! in the env, and a cache hit has no AST.
+//! A declared source version pin also carries the normalized human version
+//! used to validate it; a hit checks that input before accepting the env.
 //!
 //! So they are encoded explicitly here, field by field in little-endian order,
 //! and decoded the same way. Nothing is recovered, re-derived, or re-parsed on
@@ -29,7 +31,49 @@ const DeclIndex = AST.DeclIndex;
 
 /// Version of the encoding below. Folded into the cache entry's version hash,
 /// so a format change invalidates every stored entry.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
+
+/// A readable source pin was checked against this version. Null means the
+/// caller did not report a recognized release/nightly version, which skips
+/// mismatch warnings. Unpinned source carries no stamp at all.
+pub const PinValidation = struct {
+    compiler_version: ?[]const u8,
+};
+
+pub fn recognizedPinVersion(version: ?[]const u8) ?[]const u8 {
+    const text = version orelse return null;
+    return if (@import("base").roc_version.parse(text) != null) text else null;
+}
+
+pub fn pinValidationForAst(ast: *const AST, version: ?[]const u8) ?PinValidation {
+    const field = switch (ast.store.getHeader(ast.store.getFile().header)) {
+        .app => |header| header.roc_version,
+        .package => |header| header.roc_version,
+        .platform => |header| header.roc_version,
+        .module, .hosted, .type_module, .default_app, .malformed => null,
+    } orelse return null;
+    const pinned = ast.rocVersionText(field) orelse return null;
+    if (@import("base").roc_version.parse(pinned) == null) return null;
+    return .{ .compiler_version = recognizedPinVersion(version) };
+}
+
+pub fn pinValidationMatches(stamp: ?PinValidation, version: ?[]const u8) bool {
+    const pinned = stamp orelse return true;
+    const current = recognizedPinVersion(version);
+    const previous = pinned.compiler_version orelse return current == null;
+    const actual = current orelse return false;
+    return std.mem.eql(u8, previous, actual);
+}
+
+/// Cache metadata for the source-pin validation input, independent of the
+/// checked artifact's semantic key and its target-independent identity.
+pub fn pinValidationHash(has_pin: bool, version: ?[]const u8) [32]u8 {
+    if (!has_pin) return @splat(0);
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    hash.update("roc-source-pin-validation-v1");
+    if (recognizedPinVersion(version)) |text| hash.update(text);
+    return hash.finalResult();
+}
 
 /// A local import exactly as the parser recorded it, before any
 /// importer-relative or package-root normalization.
@@ -44,6 +88,7 @@ pub const ParseStageRecord = struct {
     diagnostics: []const AST.ResolvedDiagnostic,
     local_imports: []const LocalImport,
     external_imports: []const []const u8,
+    pin_validation: ?PinValidation = null,
 };
 
 /// A decoded entry is only as trustworthy as its bytes; a corrupt body is a
@@ -60,6 +105,10 @@ pub fn encodedLen(record: ParseStageRecord) usize {
     len += 4;
     for (record.external_imports) |name| {
         len += 4 + name.len;
+    }
+    len += 4;
+    if (record.pin_validation) |stamp| {
+        if (stamp.compiler_version) |version| len += 4 + version.len;
     }
     return len;
 }
@@ -93,6 +142,19 @@ pub fn encode(record: ParseStageRecord, dest: []u8) void {
         offset = writeU32(dest, offset, @intCast(name.len));
         @memcpy(dest[offset..][0..name.len], name);
         offset += name.len;
+    }
+
+    if (record.pin_validation) |stamp| {
+        if (stamp.compiler_version) |version| {
+            offset = writeU32(dest, offset, 2);
+            offset = writeU32(dest, offset, @intCast(version.len));
+            @memcpy(dest[offset..][0..version.len], version);
+            offset += version.len;
+        } else {
+            offset = writeU32(dest, offset, 1);
+        }
+    } else {
+        offset = writeU32(dest, offset, 0);
     }
 
     std.debug.assert(offset == dest.len);
@@ -151,6 +213,15 @@ pub const Reader = struct {
     /// Read one package-qualified import name. It borrows from the buffer.
     pub fn readExternalImport(self: *Reader) DecodeError![]const u8 {
         return self.readSlice(try self.readU32());
+    }
+
+    pub fn readPinValidation(self: *Reader) DecodeError!?PinValidation {
+        return switch (try self.readU32()) {
+            0 => null,
+            1 => .{ .compiler_version = null },
+            2 => .{ .compiler_version = try self.readSlice(try self.readU32()) },
+            else => DecodeError.CorruptParseStageRecord,
+        };
     }
 
     /// Whether every encoded byte has been consumed. A record with trailing
@@ -243,6 +314,7 @@ test "parse-stage record round-trips every field" {
         .diagnostics = &diagnostics,
         .local_imports = &local_imports,
         .external_imports = &external_imports,
+        .pin_validation = .{ .compiler_version = "nightly-2026-10-05-abcdef0" },
     };
 
     const bytes = try gpa.alloc(u8, encodedLen(record));
@@ -272,6 +344,9 @@ test "parse-stage record round-trips every field" {
     for (external_imports) |expected| {
         try std.testing.expectEqualStrings(expected, try reader.readExternalImport());
     }
+
+    const stamp = (try reader.readPinValidation()).?;
+    try std.testing.expectEqualStrings(record.pin_validation.?.compiler_version.?, stamp.compiler_version.?);
 
     try std.testing.expect(reader.atEnd());
 }
@@ -305,7 +380,8 @@ test "parse-stage record rejects truncated and corrupt bytes" {
         _ = try reader.readDiagnostic();
         try std.testing.expectEqual(@as(u32, 1), try reader.readCount());
         _ = try reader.readLocalImport();
-        try std.testing.expectError(DecodeError.CorruptParseStageRecord, reader.readCount());
+        try std.testing.expectEqual(@as(u32, 0), try reader.readCount());
+        try std.testing.expectError(DecodeError.CorruptParseStageRecord, reader.readPinValidation());
     }
 
     // A length that reaches past the buffer is rejected, not trusted.

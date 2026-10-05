@@ -33825,8 +33825,7 @@ pub const CheckedModuleArtifact = struct {
     /// on load (`expectSerializedVersion`), so an artifact serialized by a compiler
     /// with a different `Serialized` layout is rejected rather than relocated into a
     /// mismatched struct (a real hazard during development, where
-    /// `build_options.compiler_version` is a fixed release string that does not move
-    /// between rebuilds).
+    /// a reported release version can remain unchanged between rebuilds).
     pub const SERIALIZED_VERSION_HASH: [32]u8 =
         artifact_serialize.layoutVersionHash(Serialized, serialized_layout_version);
 

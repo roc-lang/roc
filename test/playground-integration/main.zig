@@ -1200,7 +1200,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     // prefix in `compiler_version` comes from each binary's own
     // `@import("builtin").mode`. Falling back to this runner's own version keeps
     // manual invocations working when both were built the same way.
-    var playground_version: []const u8 = build_options.compiler_version;
+    var playground_version: []const u8 = @import("compiler_version").compiler_version;
     var stats_args: PlaygroundStatsArgs = .{};
     var case_filters = std.ArrayList([]const u8).empty;
     defer case_filters.deinit(allocator);

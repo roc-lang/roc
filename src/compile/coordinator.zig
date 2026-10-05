@@ -217,11 +217,12 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 }
 
 const checked_module_cache_magic = "roc-mod-cache-v11";
-const checked_module_entry_version: u32 = 12;
+const checked_module_entry_version: u32 = 13;
 const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), artifact key (32), env-blob
-// length (u64), and artifact-blob length (u64). The two length-prefixed bodies
+// length (u64), artifact-blob length (u64), and pin-validation stamp (32).
+// The two length-prefixed bodies
 // follow the header. The entry-version hash folds the
 // manual entry-envelope version, the artifact `Serialized` layout hash, and the
 // ModuleEnv `Serialized` layout hash, so a stale env or artifact body is rejected
@@ -233,7 +234,7 @@ const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersi
 // stale or wrong entries, and relocation bounds-checks every marker against the blob.
 // A corrupt-but-right-length body is the only residue, which for a recomputable local
 // cache does not justify hashing the whole blob on every read and write.
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8;
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
 
 fn checkedModuleEntryHashUpdate(state: *u64, bytes: []const u8) void {
     for (bytes) |byte| {
@@ -276,6 +277,7 @@ fn computeCheckedModuleEntryVersionHash() [32]u8 {
 const CheckedModuleCacheBodies = struct {
     env_body: []const u8,
     artifact_body: []const u8,
+    pin_validation_hash: [32]u8,
 };
 
 /// Write the fixed-size checked-module cache header into the first
@@ -286,6 +288,7 @@ fn writeCheckedModuleCacheHeader(
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     env_len: usize,
     artifact_len: usize,
+    pin_validation_hash: [32]u8,
 ) void {
     var offset: usize = 0;
     @memcpy(dest[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
@@ -297,6 +300,8 @@ fn writeCheckedModuleCacheHeader(
     std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
     offset += 8;
     std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
+    offset += 8;
+    @memcpy(dest[offset..][0..32], &pin_validation_hash);
 }
 
 fn decodeCheckedCacheEnvelope(
@@ -321,6 +326,8 @@ fn decodeCheckedCacheEnvelope(
     offset += 8;
     const artifact_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset += 8;
+    const pin_validation_hash = bytes[offset..][0..32].*;
+    offset += 32;
 
     const remaining = bytes.len - offset;
     if (env_len > remaining) return null;
@@ -334,6 +341,7 @@ fn decodeCheckedCacheEnvelope(
     return .{
         .env_body = env_body,
         .artifact_body = artifact_body,
+        .pin_validation_hash = pin_validation_hash,
     };
 }
 
@@ -360,7 +368,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
 
     var entry: [total_len]u8 = undefined;
     @memset(&entry, 0);
-    writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], key, env_len, artifact_len);
+    writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], key, env_len, artifact_len, @splat(0));
 
     const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, env_len), bodies.env_body.len);
@@ -670,6 +678,8 @@ pub const ModuleState = struct {
     explicit_root_ident_names: []const []const u8 = &.{},
     /// Post-canonicalization validation this module receives.
     validation: can.Can.Validation = .checking,
+    /// Declared source pin from the parse/canonicalization producer.
+    has_source_version_pin: bool = false,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -1310,6 +1320,9 @@ pub const Coordinator = struct {
 
     /// Compiler version for cache keys
     compiler_version: []const u8,
+    /// Human release/nightly version for source header pins, separate from
+    /// the embedder's cache namespace above.
+    source_pin_version: ?[]const u8 = null,
 
     /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
@@ -1389,6 +1402,9 @@ pub const Coordinator = struct {
     /// whenever their consumer's compile semantics could change, e.g.
     /// `"my-embedder@1.2.3+roc@" ++ build_options.compiler_compatibility_id`.
     /// Mismatching across runs causes cache misses, not corruption.
+    /// Set `source_pin_version` before starting the coordinator when the
+    /// embedding compiler reports a human release/nightly version for header
+    /// pin warnings; that display version is a separate validation input.
     pub fn init(
         gpa: Allocator,
         mode: Mode,
@@ -3217,7 +3233,7 @@ pub const Coordinator = struct {
             artifact.evaluation_diagnostics = diagnostics;
         }
         if (mod.reports.items.len == 0) {
-            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact) else self.storePlatformPairingInCache(artifact);
+            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin) else self.storePlatformPairingInCache(artifact);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -3582,7 +3598,7 @@ pub const Coordinator = struct {
             manager.recordStoreFailure();
             return;
         };
-        writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes);
+        writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
         manager.storeRawBytes(key.bytes, bytes, directory);
     }
@@ -3621,7 +3637,7 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+    fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, has_source_version_pin: bool) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
 
@@ -3668,6 +3684,7 @@ pub const Coordinator = struct {
             artifact.key,
             env_len,
             artifact_len,
+            canonicalized_cache_entry.pinValidationHash(has_source_version_pin, self.source_pin_version),
         );
         _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
         _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
@@ -3738,6 +3755,11 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         };
+        const expected_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version);
+        if (!std.mem.eql(u8, &bodies.pin_validation_hash, &expected_pin_validation)) {
+            manager.stats.recordMiss();
+            return false;
+        }
 
         // The env and artifact bodies are copied (not aliased) out of `entry`: each
         // needs its own 16-byte-aligned, independently-owned buffer whose lifetime
@@ -4502,6 +4524,7 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] CANONICALIZED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
+        mod.has_source_version_pin = result.has_source_version_pin;
         try self.applyCanonicalizedModule(
             mod,
             result.package_name,
@@ -4618,6 +4641,7 @@ pub const Coordinator = struct {
         };
 
         self.canonicalized_cache_hits += 1;
+        mod.has_source_version_pin = result.has_source_version_pin;
 
         // The parse stage's reports come first, exactly as they do when the
         // module is parsed, and the invalid-import reports the registration
@@ -5778,7 +5802,7 @@ pub const Coordinator = struct {
         // already loaded, so the miss is taken by discarding everything this
         // function produced and letting the caller parse the module.
         var reader = canonicalized_cache_entry.Reader.init(bodies.parse_record_body);
-        self.readCanonicalizedParseRecord(
+        const has_source_version_pin = self.readCanonicalizedParseRecord(
             task,
             task_allocs,
             env,
@@ -5788,6 +5812,12 @@ pub const Coordinator = struct {
             &discovered_external_imports,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            error.SourcePinVersionChanged => {
+                releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
+                deinitReports(&parse_reports, worker_alloc);
+                manager.recordMissFor(.canonicalized);
+                return null;
+            },
             error.CorruptParseStageRecord => {
                 releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
                 deinitReports(&parse_reports, worker_alloc);
@@ -5809,6 +5839,7 @@ pub const Coordinator = struct {
         env_owned = false;
         return .{
             .canonicalized_cached = .{
+                .has_source_version_pin = has_source_version_pin,
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
@@ -5834,7 +5865,7 @@ pub const Coordinator = struct {
         reports: *std.ArrayList(Report),
         discovered_local_imports: *std.ArrayList(DiscoveredLocalImport),
         discovered_external_imports: *std.ArrayList(DiscoveredExternalImport),
-    ) (Allocator.Error || canonicalized_cache_entry.DecodeError)!void {
+    ) (Allocator.Error || canonicalized_cache_entry.DecodeError || error{SourcePinVersionChanged})!bool {
         const worker_alloc = task_allocs.result;
 
         const diagnostic_count = try reader.readCount();
@@ -5869,7 +5900,13 @@ pub const Coordinator = struct {
             try discovered_external_imports.append(worker_alloc, .{ .import_name = owned_name });
         }
 
+        const pin_validation = try reader.readPinValidation();
+        if (!canonicalized_cache_entry.pinValidationMatches(pin_validation, self.source_pin_version)) {
+            return error.SourcePinVersionChanged;
+        }
+
         if (!reader.atEnd()) return canonicalized_cache_entry.DecodeError.CorruptParseStageRecord;
+        return pin_validation != null;
     }
 
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
@@ -5878,9 +5915,10 @@ pub const Coordinator = struct {
         const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
 
-        // Canonicalizing this module reads its source, basename, entry-module
-        // flag, role, and validation mode, and nothing else, so the key below
-        // names its complete canonicalization output. A hit skips parsing and
+        // The stable key names this module's source, basename, entry-module
+        // flag, role, validation mode and compiler compatibility. A declared
+        // source version pin carries its separate human-version validation
+        // stamp in the entry. A hit checks that stamp, then skips parsing and
         // canonicalization entirely.
         const canonicalized_key = self.canonicalizedModuleCacheKey(
             src,
@@ -6062,6 +6100,7 @@ pub const Coordinator = struct {
             .diagnostics = diagnostics.items,
             .local_imports = local_imports.items,
             .external_imports = external_imports,
+            .pin_validation = canonicalized_cache_entry.pinValidationForAst(ast, self.source_pin_version),
         });
     }
 
@@ -6080,6 +6119,7 @@ pub const Coordinator = struct {
             self.builtin_modules.builtin_indices,
             task.validation,
             task.is_entry_module,
+            self.source_pin_version,
         );
 
         // The module's canonicalization output is complete above, as a
@@ -6113,6 +6153,7 @@ pub const Coordinator = struct {
 
         return .{
             .canonicalized = .{
+                .has_source_version_pin = canonicalized_cache_entry.pinValidationForAst(ast, self.source_pin_version) != null,
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
@@ -6466,7 +6507,7 @@ fn compileAppWithCheckedModuleCache(
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
     );
@@ -6539,6 +6580,15 @@ fn compileAppFacts(
     cache_dir: ?[]const u8,
     app_path: []const u8,
 ) CheckedModuleCacheRunError!CompiledBuildFacts {
+    return compileAppFactsWithPinVersion(allocator, cache_dir, app_path, null);
+}
+
+fn compileAppFactsWithPinVersion(
+    allocator: Allocator,
+    cache_dir: ?[]const u8,
+    app_path: []const u8,
+    source_pin_version: ?[]const u8,
+) CheckedModuleCacheRunError!CompiledBuildFacts {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = cache_dir != null,
@@ -6553,11 +6603,12 @@ fn compileAppFacts(
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         if (cache_dir == null) null else &cache_manager,
         roc_ctx,
     );
     defer coord.deinit();
+    coord.source_pin_version = source_pin_version;
     coord.enable_hosted_transform = true;
 
     var arena_impl = base.SingleThreadArena.init(allocator);
@@ -6745,7 +6796,7 @@ fn compileAppRootIdentityExpecting(
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
     );
@@ -7059,7 +7110,7 @@ test "prepared checked imports finalize after frontend and release abandoned dia
             1,
             roc_target.RocTarget.detectNative(),
             builtin_modules,
-            build_options.compiler_version,
+            build_options.compiler_compatibility_id,
             null,
             CoreCtx.os(allocator, allocator, std.testing.io),
         );
@@ -7470,7 +7521,7 @@ test "app artifact records platform requirement solutions from checking" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         roc_ctx,
     );
@@ -7569,7 +7620,7 @@ test "erroneous function requirement publishes an explicit checked-error outcome
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         roc_ctx,
     );
@@ -7645,7 +7696,7 @@ test "platform requirement relation specializes identity reached through app ali
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         roc_ctx,
     );
@@ -7703,7 +7754,7 @@ test "diagnostic-only mode publishes the platform root during checking" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         roc_ctx,
     );
@@ -7767,7 +7818,7 @@ test "deferred platform publication retains compile-time diagnostics" {
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         roc_ctx,
     );
@@ -7834,7 +7885,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         roc_ctx,
     );
@@ -7962,7 +8013,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
     );
@@ -8905,7 +8956,7 @@ fn expectModulesQualifiedByOwningPackage(
         1,
         roc_target.RocTarget.detectNative(),
         try sharedBuiltinModules(),
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
     );
@@ -8996,6 +9047,83 @@ test "checked module cache hit keeps each package's qualified name for identical
     // Warm: both `Util` modules load the same checked entry, and each must
     // still be named by the package it belongs to.
     try expectModulesQualifiedByOwningPackage(allocator, cache_dir, app_path);
+}
+
+test "source version pins use current human version with canonicalized and checked cache hits" {
+    const allocator = std.testing.allocator;
+    const pinned = "nightly-2026-10-05-abcdef0";
+    const changed = "nightly-2026-10-06-fedcba0";
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    try writeImporterFixture(&tmp_dir, "pins",
+        \\Helper := [].{
+        \\    message : Str
+        \\    message = "from helper"
+        \\}
+    );
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "pins/app/main.roc",
+        .data =
+        \\app [main!] {
+        \\    pf: platform "./.roc_echo_platform/main.roc",
+        \\    roc: "nightly-2026-10-05-abcdef0",
+        \\}
+        \\import pf.Echo
+        \\import Helper
+        \\main! = |_args| {
+        \\    Echo.line!(Helper.message)
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "pins/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var cold = try compileAppFactsWithPinVersion(allocator, cache_dir, app_path, pinned);
+    defer cold.deinit(allocator);
+    try std.testing.expect(std.mem.find(u8, cold.reports, "Roc Version Mismatch") == null);
+    try std.testing.expect(cold.cache.stores > 0);
+    var warm = try compileAppFactsWithPinVersion(allocator, cache_dir, app_path, pinned);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(cold.build.canonicalized_cache_misses, warm.build.canonicalized_cache_hits);
+    try std.testing.expect(warm.build.cache_hits > 0);
+    try std.testing.expectEqualStrings(cold.reports, warm.reports);
+
+    // Only the pinned root acquires a different validation input. Its old
+    // canonicalized and checked entries must not hide the current warning.
+    var changed_cold = try compileAppFactsWithPinVersion(allocator, cache_dir, app_path, changed);
+    defer changed_cold.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), changed_cold.build.canonicalized_cache_misses);
+    try std.testing.expectEqual(cold.build.canonicalized_cache_misses - 1, changed_cold.build.canonicalized_cache_hits);
+    try std.testing.expect(std.mem.find(u8, changed_cold.reports, "Roc Version Mismatch") != null);
+    try std.testing.expect(std.mem.find(u8, changed_cold.reports, changed) != null);
+    try std.testing.expect(changed_cold.build.modules_compiled > 0);
+    try std.testing.expectEqual(cold.artifact_keys.len, changed_cold.artifact_keys.len);
+    for (cold.artifact_keys, changed_cold.artifact_keys) |a, b| {
+        try std.testing.expectEqualSlices(u8, &a, &b);
+    }
+    var changed_warm = try compileAppFactsWithPinVersion(allocator, cache_dir, app_path, changed);
+    defer changed_warm.deinit(allocator);
+    try std.testing.expectEqual(cold.build.canonicalized_cache_misses, changed_warm.build.canonicalized_cache_hits);
+    try std.testing.expectEqualStrings(changed_cold.reports, changed_warm.reports);
+    var changed_uncached = try compileAppFactsWithPinVersion(allocator, null, app_path, changed);
+    defer changed_uncached.deinit(allocator);
+    try std.testing.expectEqualStrings(changed_uncached.reports, changed_warm.reports);
+
+    // Local development versions deliberately skip pin warnings. A HEAD-only
+    // display change remains the same declared validation input.
+    var local = try compileAppFactsWithPinVersion(allocator, cache_dir, app_path, "debug-abcdef0");
+    defer local.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), local.build.canonicalized_cache_misses);
+    try std.testing.expect(std.mem.find(u8, local.reports, "Roc Version Mismatch") == null);
+    var local_head_change = try compileAppFactsWithPinVersion(allocator, cache_dir, app_path, "debug-fedcba0");
+    defer local_head_change.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), local_head_change.build.canonicalized_cache_misses);
+    try std.testing.expectEqual(cold.build.canonicalized_cache_misses, local_head_change.build.canonicalized_cache_hits);
+    try std.testing.expectEqualStrings(local.reports, local_head_change.reports);
 }
 
 test "canonicalized module cache produces the same build as a disabled cache" {
@@ -9872,7 +10000,7 @@ fn observeImportPhases(
         1,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null, // cache_manager
         roc_ctx,
     );
@@ -10382,7 +10510,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
                 jobs,
                 roc_target.RocTarget.detectNative(),
                 builtin_modules,
-                build_options.compiler_version,
+                build_options.compiler_compatibility_id,
                 null,
                 CoreCtx.os(allocator, allocator, std.testing.io),
             );
@@ -10517,7 +10645,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         ctx.ctx = capture;
         ctx.vtable.writeStderr = Capture.write;
         var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, ctx);
-        var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_version, &cache_manager, ctx);
+        var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
         defer coord.deinit();
         coord.enable_hosted_transform = true;
         var arena_impl = base.SingleThreadArena.init(allocator);
@@ -10611,7 +10739,7 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
         const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
         defer gpa.free(app_path);
         var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
-        var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_version, &cache_manager, ctx);
+        var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
         defer coord.deinit();
         var arena = base.SingleThreadArena.init(gpa);
         defer arena.deinit();

@@ -948,7 +948,7 @@ fn hashTarget() [32]u8 {
 
 fn hashCompiler() [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
-    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_version);
+    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_compatibility_id);
     hashTaggedBytes(&hasher, "compiler-artifact-hash", &build_options.compiler_artifact_hash);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);

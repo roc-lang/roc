@@ -623,7 +623,8 @@ pub const SyntaxChecker = struct {
             builtin_modules,
         );
         errdefer env.deinit();
-        env.compiler_version = build_options.compiler_version;
+        env.compiler_version = build_options.compiler_compatibility_id;
+        env.source_pin_version = @import("compiler_version").compiler_version;
         env.setFinalizeExecutableArtifacts(false);
 
         if (self.cache_config.enabled) {

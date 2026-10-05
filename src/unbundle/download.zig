@@ -308,10 +308,12 @@ fn initProxiesFromEnv(client: *std.http.Client, arena: Allocator) DownloadError!
     client.initDefaultProxies(arena, &environ_map) catch |err| switch (err) {
         error.InvalidFormat,
         error.InvalidHostName,
+        error.NameTooLong,
         error.InvalidPort,
         error.UnexpectedCharacter,
         error.UriMissingHost,
         => return error.InvalidProxyUrl,
+        error.Canceled => return error.NetworkError,
         error.OutOfMemory => return error.OutOfMemory,
     };
 }

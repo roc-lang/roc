@@ -65,7 +65,7 @@ pub const ModuleInitContext = struct {
     /// Version string of the compiler that is running, used to check a
     /// header's `roc` version pin against it. Null skips that check.
     ///
-    /// Real builds pass `build_options.compiler_version`. It is a parameter
+    /// Real builds pass `@import("compiler_version").compiler_version`. It is a parameter
     /// rather than something canonicalization reads for itself so that tools
     /// which canonicalize for inspection—the snapshot tool above all—
     /// produce output that does not change with whichever compiler built them.

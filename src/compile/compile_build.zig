@@ -197,7 +197,11 @@ pub const BuildEnv = struct {
     mode: Mode,
     max_threads: usize,
     target: roc_target.RocTarget,
+    /// Cache namespace passed to Coordinator.init; embedders may override it.
     compiler_version: []const u8 = build_options.compiler_compatibility_id,
+    /// Human release/nightly version used only for source header pin warnings.
+    /// Inspection tools leave it null and do not acquire Git metadata inputs.
+    source_pin_version: ?[]const u8 = null,
 
     // Workspace roots for sandboxing (absolute, canonical)
     workspace_roots: std.array_list.Managed([]const u8),
@@ -819,6 +823,7 @@ pub const BuildEnv = struct {
             self.cache_manager,
             self.filesystem,
         );
+        coord.source_pin_version = self.source_pin_version;
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
@@ -3929,7 +3934,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         1,
         roc_target.RocTarget.detectNative(),
         env.builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         env.filesystem,
     );

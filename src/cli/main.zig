@@ -211,6 +211,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_compatibility_id;
+    build_env.source_pin_version = @import("compiler_version").compiler_version;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
@@ -1578,7 +1579,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
         .glue => |glue_args| rocGlue(&ctx, glue_args),
-        .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
+        .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{@import("compiler_version").compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .deps => |deps_args| rocDeps(&ctx, deps_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
@@ -7790,7 +7791,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
         .kind = @tagName(install_kind),
         .url = args.url,
         .hash = parsed_url.hash,
-        .compiler_version = build_options.compiler_version,
+        .compiler_version = @import("compiler_version").compiler_version,
     });
     std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = staging.manifest_path, .data = manifest_json }) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = staging.manifest_path, .err = err } });
@@ -10291,7 +10292,7 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
-        codegen.debug_producer = "roc " ++ build_options.compiler_version;
+        codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
 
         const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
@@ -16936,7 +16937,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     // compiler is a newer nightly than the one it names.
     var builtin_facts = fmt.BuiltinFacts{ .allocator = ctx.gpa };
     defer builtin_facts.deinit();
-    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version, .builtin_facts = &builtin_facts };
+    const format_options: fmt.Options = .{ .compiler_version = @import("compiler_version").compiler_version, .builtin_facts = &builtin_facts };
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;

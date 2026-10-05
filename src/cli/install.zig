@@ -194,7 +194,7 @@ pub fn installRootDir(roc_ctx: CoreCtx, allocator: Allocator) (Allocator.Error |
 
 /// The compiler-version namespace directory under the install root.
 pub fn versionDir(allocator: Allocator, install_root: []const u8) Allocator.Error![]u8 {
-    return std.fs.path.join(allocator, &.{ install_root, build_options.compiler_version });
+    return std.fs.path.join(allocator, &.{ install_root, @import("compiler_version").compiler_version });
 }
 
 /// All the paths that make up one install entry.

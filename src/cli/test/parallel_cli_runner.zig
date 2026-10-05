@@ -4305,7 +4305,7 @@ const watch_refresh_dep_initial_source =
 
 const watch_refresh_wrapper_source =
     \\#!/usr/bin/env bash
-    \\real="./zig-out/bin/roc"
+    \\real="$ROC_WATCH_REAL_COMPILER"
     \\is_child=0
     \\for arg in "$@"; do
     \\    case "$arg" in
@@ -4342,6 +4342,15 @@ fn customWatchCompletedRunRefreshReruns(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
+    var watch_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone watch wrapper environment: {}", .{err}),
+    };
+    defer watch_env.env_map.deinit();
+    watch_env.env_map.put("ROC_WATCH_REAL_COMPILER", roc_binary_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to declare watch compiler artifact: {}", .{err});
+
     const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "watch_refresh.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate watch refresh app path: {}", .{err});
     defer allocator.free(app_path);
@@ -4373,7 +4382,7 @@ fn customWatchCompletedRunRefreshReruns(
     const result = runRawInEnv(
         io,
         allocator,
-        env,
+        &watch_env,
         &.{ wrapper_path, "check", "--watch", "--no-cache", app_path },
         project_root_path,
         null,

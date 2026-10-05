@@ -270,6 +270,8 @@ pub const ParsedResult = struct {
 /// result followed by a canonicalized result, in that order, because the
 /// coordinator handles it as exactly those two steps back to back.
 pub const CanonicalizedCachedResult = struct {
+    /// Declared, readable header pin; validation version is a build input.
+    has_source_version_pin: bool = false,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier
@@ -296,6 +298,8 @@ pub const CanonicalizedCachedResult = struct {
 
 /// Result of successfully canonicalizing a module
 pub const CanonicalizedResult = struct {
+    /// Declared, readable header pin; validation version is a build input.
+    has_source_version_pin: bool = false,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier

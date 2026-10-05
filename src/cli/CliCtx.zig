@@ -495,7 +495,7 @@ test "issue 10465 merged standard streams preserve both buffered outputs" {
     const combined_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "combined.log" });
     defer allocator.free(combined_path);
 
-    const helper_path = @import("build_options").cli_io_writer_test_helper_path;
+    const helper_path = @import("cli_test_helpers").cli_io_writer_test_helper_path;
 
     var child = try std.process.spawn(test_io, .{
         .argv = &.{ helper_path, combined_path },

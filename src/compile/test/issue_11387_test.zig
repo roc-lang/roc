@@ -160,7 +160,7 @@ fn expectReports(app_path: []const u8, expectation: ReportExpectation) TestError
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
     );

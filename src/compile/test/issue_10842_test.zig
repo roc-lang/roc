@@ -82,7 +82,7 @@ test "issue 10842: where-clause method arity that no target satisfies reports ty
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
     );
