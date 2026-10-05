@@ -16,6 +16,11 @@ const RocStr = @import("roc_str_view").RocStr;
 const roc_args = @import("roc_args");
 const RocList = @import("roc_str_view").RocList;
 const shim_symbols = @import("shim_symbols");
+const runtime_shared = @import("runtime_shared.zig");
+const SourceFrame = runtime_shared.SourceFrame;
+const normalizedAlignment = runtime_shared.normalizedAlignment;
+const alignForward = runtime_shared.alignForward;
+const defaultTrunc = runtime_shared.defaultTrunc;
 
 pub const panic = std.debug.no_panic;
 
@@ -33,15 +38,6 @@ const max_backtrace_frames = 64;
 const BacktraceEntry = extern struct {
     start: usize,
     end: usize,
-    name_ptr: [*]const u8,
-    name_len: usize,
-    file_ptr: [*]const u8,
-    file_len: usize,
-    line: u32,
-    column: u32,
-};
-
-const SourceFrame = extern struct {
     name_ptr: [*]const u8,
     name_len: usize,
     file_ptr: [*]const u8,
@@ -637,14 +633,6 @@ fn allocationHeaderPtr(user: [*]u8, index: usize) *usize {
     return @ptrCast(@alignCast(user - byte_offset));
 }
 
-fn normalizedAlignment(alignment: usize) usize {
-    return @max(alignment, @alignOf(usize));
-}
-
-fn alignForward(value: usize, alignment: usize) usize {
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
 fn writeLiteral(fd: i32, comptime text: []const u8) void {
     writeAll(fd, text);
 }
@@ -710,17 +698,4 @@ fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
         volatile_dest[i] = byte;
     }
     return dest;
-}
-
-fn defaultTrunc(value: f64) callconv(.c) f64 {
-    const bits: u64 = @bitCast(value);
-    const exponent_bits = (bits >> 52) & 0x7ff;
-    const exponent: i32 = @as(i32, @intCast(exponent_bits)) - 1023;
-
-    if (exponent >= 52) return value;
-    if (exponent < 0) return @bitCast(bits & (@as(u64, 1) << 63));
-
-    const fraction_bits: u6 = @intCast(52 - exponent);
-    const fraction_mask = (@as(u64, 1) << fraction_bits) - 1;
-    return @bitCast(bits & ~fraction_mask);
 }

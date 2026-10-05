@@ -11,6 +11,10 @@ const RocStr = @import("roc_str_view").RocStr;
 const RocList = @import("roc_str_view").RocList;
 const roc_args = @import("roc_args");
 const shim_symbols = @import("shim_symbols");
+const runtime_shared = @import("runtime_shared.zig");
+const SourceFrame = runtime_shared.SourceFrame;
+const normalizedAlignment = runtime_shared.normalizedAlignment;
+const alignForward = runtime_shared.alignForward;
 
 const c = switch (builtin.os.tag) {
     .windows => struct {
@@ -76,15 +80,6 @@ const c = switch (builtin.os.tag) {
 const AllocationHeader = extern struct {
     raw: [*]u8,
     len: usize,
-};
-
-const SourceFrame = extern struct {
-    name_ptr: [*]const u8,
-    name_len: usize,
-    file_ptr: [*]const u8,
-    file_len: usize,
-    line: u32,
-    column: u32,
 };
 
 const windows = if (builtin.os.tag == .windows) struct {
@@ -230,14 +225,6 @@ fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
 
 fn allocationHeader(user: [*]u8) *AllocationHeader {
     return @ptrCast(@alignCast(user - @sizeOf(AllocationHeader)));
-}
-
-fn normalizedAlignment(alignment: usize) usize {
-    return @max(alignment, @alignOf(usize));
-}
-
-fn alignForward(value: usize, alignment: usize) usize {
-    return (value + alignment - 1) & ~(alignment - 1);
 }
 
 fn writeAll(fd: i32, bytes: []const u8) void {
