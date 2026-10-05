@@ -6397,16 +6397,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return self.crashError();
-                var result: RocStr = undefined;
-                const roc_str = valueToRocStr(args[0]);
-                const entered = builtins.in_process_host.enter(&self.roc_ops, null);
-                defer builtins.in_process_host.leave(entered);
-                dev_wrappers.roc_builtins_str_escape_and_quote(
-                    &result,
-                    roc_str.bytes,
-                    roc_str.length,
-                    roc_str.capacity_or_alloc_ptr,
-                );
+                const result = builtins.str.strEscapeAndQuote(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
 

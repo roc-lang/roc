@@ -19238,6 +19238,14 @@ Because that startup also supplies no TLS, interpreter execution ownership on
 Linux without libc uses the kernel thread id directly, preserving concurrent
 host calls and same-thread reentrancy without accessing TLS.
 
+No code compiled into a platform archive or shim reads or writes a
+thread-local. The thread-local scope that names the current `RocOps` belongs to
+the compiler's in-process host alone: entering it from a platform build is a
+compile error, and every builtin the interpreter calls receives the
+interpreter's `RocOps` as an explicit argument. An interpreter-mode executable
+therefore runs every program the interpreter run path runs, including in a
+process that has no thread-local storage.
+
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
 `arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows

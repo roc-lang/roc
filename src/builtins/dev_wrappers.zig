@@ -552,50 +552,11 @@ pub fn roc_builtins_str_from_utf8_result(out: [*]u8, list_bytes: ?[*]u8, list_le
     writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 
-/// Wrapper: escape special characters and wrap in double quotes for Str.inspect
+/// Wrapper: strEscapeAndQuote(RocStr, *RocOps) -> RocStr
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) void {
     const roc_ops = in_process_host.ops();
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const slice = s.asSlice();
-
-    var extra: usize = 0;
-    for (slice) |ch| {
-        if (ch == '\\' or ch == '"') extra += 1;
-    }
-
-    const result_len = slice.len + extra + 2;
-    const small_string_size = @sizeOf(RocStr);
-
-    if (result_len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
-        buf[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                buf[pos] = '\\';
-                pos += 1;
-            }
-            buf[pos] = ch;
-            pos += 1;
-        }
-        buf[pos] = '"';
-        buf[small_string_size - 1] = @intCast(result_len | 0x80);
-        out.* = @bitCast(buf);
-    } else {
-        const heap_ptr = allocateWithRefcountC(result_len, 1, false, roc_ops);
-        heap_ptr[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                heap_ptr[pos] = '\\';
-                pos += 1;
-            }
-            heap_ptr[pos] = ch;
-            pos += 1;
-        }
-        heap_ptr[pos] = '"';
-        out.* = .{ .bytes = heap_ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(result_len), .length = result_len };
-    }
+    const arg = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = str.strEscapeAndQuote(arg, roc_ops);
 }
 
 /// Wrapper: project a runtime RocStr to the host crash ABI using the actual RocStr storage.

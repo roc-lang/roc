@@ -67,7 +67,13 @@ pub const Saved = struct {
 /// Make `ops` the host of every Roc call on this thread until `leave`. An
 /// evaluation that starts another evaluation nests: the inner one enters,
 /// runs, and leaves, restoring the outer one.
+///
+/// Only an in-process host enters. A platform's code passes its `RocOps`
+/// explicitly or uses `ops()`; a call from one is a compile error, because
+/// entering writes the thread-local and a platform may run where no
+/// thread-local storage exists.
 pub fn enter(roc_ops: *RocOps, expect_observer: ?ExpectObserver) Saved {
+    comptime assertInProcessHost("enter");
     const saved = Saved{ .ops = current_ops, .expect_observer = current_expect_observer };
     current_ops = roc_ops;
     current_expect_observer = expect_observer;
@@ -76,6 +82,7 @@ pub fn enter(roc_ops: *RocOps, expect_observer: ?ExpectObserver) Saved {
 
 /// Restore what `enter` displaced.
 pub fn leave(saved: Saved) void {
+    comptime assertInProcessHost("leave");
     current_ops = saved.ops;
     current_expect_observer = saved.expect_observer;
 }
@@ -127,6 +134,12 @@ pub fn takeCheckedErrorReached() bool {
 pub fn checkedErrorRecorder() ?CheckedErrorRecorder {
     if (host_abi.host_role == .platform) return null;
     return &rocCheckedErrorReached;
+}
+
+fn assertInProcessHost(comptime operation: []const u8) void {
+    if (host_abi.host_role == .platform) {
+        @compileError("in_process_host." ++ operation ++ " touches thread-local storage, which a platform build must never do; pass the RocOps explicitly instead");
+    }
 }
 
 fn requireOps() *RocOps {

@@ -377,6 +377,7 @@ fn glueRuntimeHostFileName(language: GlueLanguage, target: GlueRuntimeTarget) []
 const CustomCase = enum {
     noop,
     default_app_all_syntax_checked_cache,
+    build_all_syntax_interpreter_output_runs,
     pipeline_parity_diagnostics,
     pipeline_parity_shared_cache,
     source_file_identity,
@@ -1086,6 +1087,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: no main is not a default app (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/no_main.roc", .exit = .failure } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc run populates checked module cache", .backend = .interpreter, .body = .{ .custom = .default_app_all_syntax_checked_cache } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc built executable prints expected output (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_all_syntax_interpreter_output_runs } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: roc test all_syntax_test.roc passes", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/echo/all_syntax_test.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11737 imported callable contracts (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/issue_11737_callable_contracts_runtime.roc", .stdout_exact = "((\"xxx\", \"a\"), (\"xxx\", 42))\n" } } },
@@ -3835,6 +3837,7 @@ fn runCustomCase(
     const result: ?TestResult = switch (custom) {
         .noop => null,
         .default_app_all_syntax_checked_cache => customDefaultAppAllSyntaxCheckedCache(io, allocator, &env, &timer, timeout_ms),
+        .build_all_syntax_interpreter_output_runs => customBuildAllSyntaxInterpreterOutputRuns(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_diagnostics => customPipelineParityDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_shared_cache => customPipelineParitySharedCache(io, allocator, &env, &timer, timeout_ms),
         .source_file_identity => customSourceFileIdentity(io, allocator, &env, &timer, timeout_ms),
@@ -8672,6 +8675,34 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
     if (cached_module_count_after_second_run != cached_module_count_after_first_run) {
         return customFailure(allocator, timer, "expected second default app run to reuse {d} checked module cache entries, found {d}", .{ cached_module_count_after_first_run, cached_module_count_after_second_run });
     }
+
+    return null;
+}
+
+/// An interpreter-mode executable runs every program the interpreter run path
+/// runs. The default platform's executable starts without libc and without
+/// thread-local storage, so this covers every low-level operation the program
+/// reaches in a process where touching a thread-local faults.
+fn customBuildAllSyntaxInterpreterOutputRuns(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "all_syntax_interpreter" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=interpreter", "--no-cache", out_arg },
+        .roc_file = "test/echo/all_syntax_test.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+
+    const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = all_syntax_expected_stdout,
+        .stderr_exact = all_syntax_expected_stderr,
+    })) |failure| return failure;
 
     return null;
 }
