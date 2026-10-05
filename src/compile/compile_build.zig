@@ -619,9 +619,15 @@ pub const BuildEnv = struct {
     }
 
     pub fn buildWithMain(self: *BuildEnv, root_file: []const u8, main_file: []const u8) BuildWithMainError!void {
+        try self.discoverWithMain(root_file, main_file);
+        try self.compileDiscovered();
+    }
+
+    /// Phase 1 of `buildWithMain`: resolve dependencies from `main_file` and
+    /// make `root_file` the entry module. Follow with `compileDiscovered()`.
+    pub fn discoverWithMain(self: *BuildEnv, root_file: []const u8, main_file: []const u8) BuildError!void {
         try self.discoverDependencies(main_file);
         try self.setDiscoveredEntryModule(root_file);
-        try self.compileDiscovered();
     }
 
     /// Walk `start_dir` and its parents for a file named `main.roc`.
@@ -666,13 +672,21 @@ pub const BuildEnv = struct {
     /// when set and different from `root_file`. Otherwise module/type_module/hosted
     /// roots walk ancestor directories for `main.roc` (same convention as #6538).
     pub fn buildResolvingMain(self: *BuildEnv, root_file: []const u8, preferred_main: ?[]const u8) BuildWithMainError!void {
+        try self.discoverResolvingMain(root_file, preferred_main);
+        try self.compileDiscovered();
+    }
+
+    /// Phase 1 of `buildResolvingMain`: choose the discovery root and resolve
+    /// its dependencies (downloading any uncached packages). Follow with
+    /// `compileDiscovered()`.
+    pub fn discoverResolvingMain(self: *BuildEnv, root_file: []const u8, preferred_main: ?[]const u8) BuildError!void {
         const root_abs = try self.makeAbsolute(root_file);
         defer self.gpa.free(root_abs);
 
         const kind = self.peekPackageKind(root_abs) catch null;
         const carries_packages = kind == .app or kind == .default_app or kind == .package or kind == .platform;
         if (carries_packages) {
-            try self.build(root_file);
+            try self.discoverDependencies(root_file);
             return;
         }
 
@@ -680,7 +694,7 @@ pub const BuildEnv = struct {
             const main_abs = try self.makeAbsolute(main_path);
             defer self.gpa.free(main_abs);
             if (std.mem.eql(u8, root_abs, main_abs)) {
-                try self.build(root_file);
+                try self.discoverDependencies(root_file);
             } else {
                 // The main file is the discovery root here, so its bundle
                 // provenance—not the checked file's—is the root identity.
@@ -691,7 +705,7 @@ pub const BuildEnv = struct {
                     }
                     self.root_url = try package_source.UrlSource.init(self.gpa, main_url.view());
                 }
-                try self.buildWithMain(root_file, main_path);
+                try self.discoverWithMain(root_file, main_path);
             }
             return;
         }
@@ -700,12 +714,12 @@ pub const BuildEnv = struct {
         if (try findOwningMainRoc(self.gpa, self.filesystem, start_dir)) |main_abs| {
             defer self.gpa.free(main_abs);
             if (!std.mem.eql(u8, root_abs, main_abs)) {
-                try self.buildWithMain(root_file, main_abs);
+                try self.discoverWithMain(root_file, main_abs);
                 return;
             }
         }
 
-        try self.build(root_file);
+        try self.discoverDependencies(root_file);
     }
 
     /// Silently read the package/header kind of `file_abs` without emitting reports.
