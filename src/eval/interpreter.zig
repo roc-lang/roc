@@ -1509,9 +1509,14 @@ pub const Interpreter = struct {
 
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
-        const outer_interpreting = base.stack_overflow.interpreting_roc_program;
-        base.stack_overflow.interpreting_roc_program = true;
-        defer base.stack_overflow.interpreting_roc_program = outer_interpreting;
+        // Freestanding Linux programs own their signal handler and have no
+        // TLS startup. Only the compiler's handler reads this diagnostic flag.
+        const tracks_compiler_signals = builtin.os.tag != .linux or builtin.link_libc;
+        const outer_interpreting = if (comptime tracks_compiler_signals) base.stack_overflow.interpreting_roc_program else false;
+        if (comptime tracks_compiler_signals) base.stack_overflow.interpreting_roc_program = true;
+        defer if (comptime tracks_compiler_signals) {
+            base.stack_overflow.interpreting_roc_program = outer_interpreting;
+        };
         self.bindBoxyRuntime();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
