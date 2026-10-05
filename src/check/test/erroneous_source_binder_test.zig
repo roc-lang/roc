@@ -7,7 +7,7 @@
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
-fn expectOnlyCanError(source: []const u8, title: []const u8) !void {
+fn expectOnlyCanError(source: []const u8, title: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 

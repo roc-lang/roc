@@ -6214,6 +6214,36 @@ fn appendCheckedTypeRootFromDeclarationAnno(
     return try walk.run(declaration_formals, anno_idx);
 }
 
+/// A local alias expanded by declaration output: the alias statement and the
+/// checked roots bound to its formals. The expansion depends on nothing else,
+/// so a module publishes it once and every later reference reuses that root.
+const AliasExpansionKey = struct {
+    statement: CIR.Statement.Idx,
+    args: []const CheckedTypeId,
+};
+
+const AliasExpansionContext = struct {
+    /// Hash of the alias statement and its argument roots.
+    pub fn hash(_: AliasExpansionContext, key: AliasExpansionKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.statement);
+        std.hash.autoHash(&hasher, key.args.len);
+        for (key.args) |arg| std.hash.autoHash(&hasher, arg);
+        return hasher.final();
+    }
+
+    /// Whether both keys expand the same alias at the same argument roots.
+    pub fn eql(_: AliasExpansionContext, a: AliasExpansionKey, b: AliasExpansionKey) bool {
+        if (a.statement != b.statement or a.args.len != b.args.len) return false;
+        for (a.args, b.args) |left, right| {
+            if (left != right) return false;
+        }
+        return true;
+    }
+};
+
+const AliasExpansions = std.HashMapUnmanaged(AliasExpansionKey, CheckedTypeId, AliasExpansionContext, std.hash_map.default_max_load_percentage);
+
 const DeclarationAnnoWalk = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -6246,12 +6276,14 @@ const DeclarationAnnoWalk = struct {
         ops_start: usize,
         next: usize,
         results_start: usize,
-        /// Set once an application of a local alias has its arguments: the
-        /// alias body then walks under these formals, which the frame owns.
+        /// Set once a reference to a local alias has its arguments (at once
+        /// for an unapplied one): the alias body then walks under these
+        /// formals, which the frame owns.
         alias_body: ?AliasBody = null,
     };
 
     const AliasBody = struct {
+        statement: CIR.Statement.Idx,
         formals: []DeclarationFormal,
         alias: CheckedAliasType,
     };
@@ -6359,13 +6391,34 @@ const DeclarationAnnoWalk = struct {
                 try self.ops.append(gpa, .{ .child = func.ret });
             },
             .apply => |apply| for (module_env.store.sliceTypeAnnos(apply.args)) |arg| try self.ops.append(gpa, .{ .child = arg }),
-            .lookup => |lookup| return switch (lookup.base) {
-                .local => |local| try self.appendRoot(ModuleEnv.varFrom(self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx))),
+            .lookup => |lookup| switch (lookup.base) {
+                .local => |local| {
+                    const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
+                    if (self.module.getStatement(finalized) != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
+                    // A bare local alias walks its body like an alias
+                    // application with no arguments (checking rejects a bare
+                    // reference that leaves formals unapplied): the alias
+                    // declaration's own root keeps its output rows deferred
+                    // for its use sites, while a declaration body closes them
+                    // as written.
+                    if (self.publishedAliasExpansion(finalized, &.{})) |id| return id;
+                    const body = try self.beginAliasApplication(finalized, &.{});
+                    try self.ops.append(gpa, .{ .child = body.anno });
+                    try self.frames.append(gpa, .{
+                        .anno = current,
+                        .formals = formals,
+                        .ops_start = ops_start,
+                        .next = ops_start,
+                        .results_start = self.results.items.len,
+                        .alias_body = body.alias_body,
+                    });
+                    return null;
+                },
                 .builtin,
                 .external,
                 .external_identity,
                 .pending,
-                => try self.appendRoot(ModuleEnv.varFrom(current)),
+                => return try self.appendRoot(ModuleEnv.varFrom(current)),
             },
             .rigid_var => |rigid| return declarationFormalRoot(formals, rigid.name) orelse
                 try self.appendRoot(ModuleEnv.varFrom(current)),
@@ -6486,8 +6539,15 @@ const DeclarationAnnoWalk = struct {
                 } });
             },
             .apply => |apply| return try self.finishApply(index, apply, &results),
+            .lookup => {
+                // Only a bare local alias pushes a lookup frame; its op is
+                // the walked alias body.
+                const body = frame.alias_body.?;
+                var alias = body.alias;
+                alias.backing = results.typeId();
+                return try self.publishAliasExpansion(body.statement, alias);
+            },
             .parens,
-            .lookup,
             .rigid_var,
             .underscore,
             .rigid_var_lookup,
@@ -6514,7 +6574,7 @@ const DeclarationAnnoWalk = struct {
             var alias = body.alias;
             alias.backing = backing;
             alias.args = payload_args;
-            return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .alias = alias });
+            return try self.publishAliasExpansion(body.statement, alias);
         }
 
         const actual_args = try results.typeIds(gpa, arg_count);
@@ -6522,9 +6582,11 @@ const DeclarationAnnoWalk = struct {
         switch (apply.base) {
             .local => |local| {
                 const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
-                if (actual_args.len == 0) return try self.appendRoot(ModuleEnv.varFrom(finalized));
-                switch (self.module.getStatement(finalized)) {
+                const statement = self.module.getStatement(finalized);
+                if (actual_args.len == 0 and statement != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
+                switch (statement) {
                     .s_alias_decl => {
+                        if (self.publishedAliasExpansion(finalized, actual_args)) |id| return id;
                         const body = try self.beginAliasApplication(finalized, actual_args);
                         self.frames.items[index].alias_body = body.alias_body;
                         try self.ops.append(gpa, .{ .child = body.anno });
@@ -6572,7 +6634,7 @@ const DeclarationAnnoWalk = struct {
     }
 
     /// Bind an alias declaration's formals to an application's arguments and
-    /// publish its generic root; the application then walks the alias body.
+    /// publish its generic root; the reference then walks the alias body.
     fn beginAliasApplication(
         self: *DeclarationAnnoWalk,
         statement_idx: CIR.Statement.Idx,
@@ -6625,6 +6687,7 @@ const DeclarationAnnoWalk = struct {
         const generic_alias = generic_payload.alias;
         return .{
             .alias_body = .{
+                .statement = statement_idx,
                 .formals = declaration_formals,
                 .alias = .{
                     .name = generic_alias.name,
@@ -6638,6 +6701,25 @@ const DeclarationAnnoWalk = struct {
             },
             .anno = alias.anno,
         };
+    }
+
+    /// The root already published for this alias at these argument roots.
+    fn publishedAliasExpansion(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx, args: []const CheckedTypeId) ?CheckedTypeId {
+        return self.active.scratch.?.alias_expansions.get(.{ .statement = statement_idx, .args = args });
+    }
+
+    /// Publish a walked alias expansion, which owns `alias.args`, and record
+    /// it for every later reference at the same argument roots.
+    fn publishAliasExpansion(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx, alias: CheckedAliasType) Allocator.Error!CheckedTypeId {
+        const scratch = &self.active.scratch.?;
+        const key_args: []const CheckedTypeId = if (alias.args.len == 0) &.{} else scratch.allocator.dupe(CheckedTypeId, alias.args) catch |err| {
+            self.allocator.free(alias.args);
+            return err;
+        };
+        errdefer if (key_args.len != 0) scratch.allocator.free(key_args);
+        const id = try appendExplicitCheckedTypePayload(self.allocator, self.names, self.store, .{ .alias = alias });
+        try scratch.alias_expansions.putNoClobber(scratch.allocator, .{ .statement = statement_idx, .args = key_args }, id);
+        return id;
     }
 };
 
@@ -8251,9 +8333,14 @@ const SourceTypeGraphAnalysis = struct {
 const CheckedSourceTypeRoots = struct {
     roots: collections.DenseMap(Var, CheckedTypeId),
     scratch: ?struct {
+        allocator: Allocator,
         graph_analysis: SourceTypeGraphAnalysis,
         key_writer: canonical_type_keys.TypeWriter,
         local_nominal_declarations: LocalNominalDeclarationIds,
+        /// Every local alias expansion declaration output has published,
+        /// shared by all of the module's declaration walks. Keys own their
+        /// argument slices.
+        alias_expansions: AliasExpansions = .empty,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -8266,6 +8353,7 @@ const CheckedSourceTypeRoots = struct {
         return .{
             .roots = collections.DenseMap(Var, CheckedTypeId).init(allocator),
             .scratch = .{
+                .allocator = allocator,
                 .graph_analysis = graph_analysis,
                 .key_writer = key_writer,
                 .local_nominal_declarations = local_nominal_declarations,
@@ -8275,6 +8363,9 @@ const CheckedSourceTypeRoots = struct {
 
     fn releaseScratch(self: *CheckedSourceTypeRoots) void {
         if (self.scratch) |*scratch| {
+            var expansions = scratch.alias_expansions.keyIterator();
+            while (expansions.next()) |key| if (key.args.len != 0) scratch.allocator.free(key.args);
+            scratch.alias_expansions.deinit(scratch.allocator);
             scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
@@ -9880,6 +9971,143 @@ test "optional record fields publish through the declaration annotation path" {
     try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
     try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[1].name));
     try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+}
+
+/// A nominal declaration backing published by declaration output, with the
+/// state the walk published it into.
+const PublishedNominalBacking = struct {
+    store: *const CheckedTypeStore,
+    names: *const canonical.CanonicalNameStore,
+    active: *const CheckedSourceTypeRoots,
+    root: CheckedTypeId,
+};
+
+const PublishedNominalBackingCheckError = error{ TestUnexpectedResult, TestExpectedEqual };
+
+const PublishedNominalBackingTestError = @import("test/TestEnv.zig").TestEnvError || PublishedNominalBackingCheckError;
+
+/// Check `source`, publish the backing of its nominal declaration named
+/// `nominal_name` through declaration output, and hand the result to `check`.
+fn checkPublishedNominalBacking(
+    source: []const u8,
+    nominal_name: []const u8,
+    comptime check: fn (published: PublishedNominalBacking) PublishedNominalBackingCheckError!void,
+) PublishedNominalBackingTestError!void {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const module_env = module.moduleEnvConst();
+
+    const nominal_ident = module_env.getIdentStoreConst().lookup(Ident.for_text(nominal_name)) orelse return error.TestUnexpectedResult;
+    const backing_anno = blk: {
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            const statement = module_env.store.getStatement(statement_idx);
+            if (statement != .s_nominal_decl) continue;
+            const header = module_env.store.getTypeHeader(statement.s_nominal_decl.header);
+            if (header.relative_name != nominal_ident) continue;
+            break :blk statement.s_nominal_decl.anno;
+        }
+        return error.TestUnexpectedResult;
+    };
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+    var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, &source_nodes);
+    defer local_type_declarations.deinit();
+
+    const backing_root = try appendCheckedTypeRootFromDeclarationAnno(
+        allocator,
+        module,
+        &names,
+        imports,
+        &store,
+        &active,
+        &local_type_declarations,
+        &.{},
+        backing_anno,
+    );
+    try check(.{ .store = &store, .names = &names, .active = &active, .root = backing_root });
+}
+
+test "nominal declaration backing closes a referenced alias's tag union row" {
+    // repro for https://github.com/roc-lang/roc/issues/12033
+    // A nominal declaration body has no use-site polarity, so the `[POST]`
+    // reached through `Method` closes as written in `Endpoint`'s published
+    // backing, exactly like a `[POST]` written inline.
+    try checkPublishedNominalBacking(
+        \\Method : [POST]
+        \\
+        \\Endpoint :: { method : Method }
+        \\
+        \\books : Endpoint
+        \\books = { method: POST }
+    , "Endpoint", struct {
+        fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
+            const testing = std.testing;
+            const store = published.store;
+            const fields = store.payload(published.root).record.fields;
+            try testing.expectEqual(@as(usize, 1), fields.len);
+            try testing.expectEqualStrings("method", published.names.recordFieldLabelText(fields[0].name));
+
+            const method = store.payload(fields[0].ty);
+            try testing.expect(method == .alias);
+            const row = store.payload(method.alias.backing);
+            try testing.expect(row == .tag_union);
+            try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len);
+            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
+        }
+    }.check);
+}
+
+test "nominal declaration backing publishes each alias expansion once" {
+    // Every level references the one below twice, so walking each reference
+    // would be exponential in the chain. Each alias is expanded once and every
+    // later reference shares that root.
+    try checkPublishedNominalBacking(
+        \\A0 : [X, Y]
+        \\A1 : (A0, A0)
+        \\A2 : (A1, A1)
+        \\A3 : (A2, A2)
+        \\A4 : (A3, A3)
+        \\
+        \\Thing :: { a : A4, b : A4 }
+    , "Thing", struct {
+        fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
+            const testing = std.testing;
+            const store = published.store;
+            try testing.expectEqual(@as(u32, 5), published.active.scratch.?.alias_expansions.count());
+            const fields = store.payload(published.root).record.fields;
+            try testing.expectEqual(fields[0].ty, fields[1].ty);
+            var current = store.payload(fields[0].ty);
+            var depth: usize = 4;
+            while (depth > 0) : (depth -= 1) {
+                try testing.expect(current == .alias);
+                const elems = store.payload(current.alias.backing).tuple;
+                try testing.expectEqual(elems[0], elems[1]);
+                current = store.payload(elems[0]);
+            }
+            try testing.expect(current == .alias);
+            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(store.payload(current.alias.backing).tag_union.ext)));
+        }
+    }.check);
 }
 
 const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError || error{

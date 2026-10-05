@@ -282,6 +282,8 @@ pub const Constants = struct {
     /// 127: Type descriptors mark declared nominal backing structure.
     /// 128: Module environments carry no package-qualified module name, and
     ///      checked procedure names use the module's own name.
+    /// 129: If-expression metadata records source, and, or or origin instead
+    ///      of a boolean warning flag.
     pub const CACHE_VERSION = 129;
 };
 

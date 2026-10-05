@@ -100,7 +100,7 @@ NO CHANGE
 									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 237)
+		(e-call (constraint-fn-var 241)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
