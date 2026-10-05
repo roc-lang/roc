@@ -4737,6 +4737,7 @@ fn finishHotReloadRebuild(
             error.Canceled,
             error.CurrentDirUnlinked,
             error.NameTooLong,
+            error.PathExceedsLimit,
             error.OutOfMemory,
             error.Unexpected,
             => |e| return e,
@@ -14911,6 +14912,7 @@ fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_path
             error.Unexpected,
             error.Canceled,
             error.NameTooLong,
+            error.PathExceedsLimit,
             error.CurrentDirUnlinked,
             => try ctx.io.stderr().print("Error: failed to resolve an explicit watch path while reading source input state from {s}: {}\n", .{ file_path, err }),
         }
@@ -18016,6 +18018,7 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         error.MmapFailed,
         error.MprotectFailed,
         error.NameTooLong,
+        error.PathExceedsLimit,
         error.NetworkNotFound,
         error.NoCacheDir,
         error.NoDevice,
