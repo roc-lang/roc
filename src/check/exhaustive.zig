@@ -1196,6 +1196,24 @@ fn isTypeInhabitedWithKnownEmpty(
 
 const InhabitedMode = enum { general, payload, known_absent };
 
+/// Record extensions contribute fields through records and aliases only.
+/// An unresolved or non-record tail is not itself a required payload.
+const RecordRowStep = struct {
+    fields: ?types.RecordField.SafeMultiList.Range = null,
+    next: ?Var = null,
+};
+
+fn recordRowStep(type_store: *TypeStore, content: types.Content) RecordRowStep {
+    return switch (content) {
+        .alias => |alias| .{ .next = type_store.getAliasBackingVar(alias) },
+        .structure => |flat| if (flat == .record)
+            .{ .fields = flat.record.fields, .next = flat.record.ext }
+        else
+            .{},
+        else => .{},
+    };
+}
+
 /// Greatest fixed point of a finite monotone Boolean graph. Each effective
 /// type is expanded once; false facts propagate across each edge at most once.
 /// Payload recursion is coinductive. Row-extension cycles are only row lookup
@@ -1328,16 +1346,9 @@ const InhabitedGraph = struct {
             var next: ?RowKey = null;
             const content = (try resolveType(self.store, key.root)).desc.content;
             if (conjunction) {
-                switch (content) {
-                    .alias => |alias| next = .{ .root = self.store.getAliasBackingVar(alias), .role = .record_row },
-                    .structure => |flat| if (flat == .record) {
-                        item.fields = flat.record.fields;
-                        next = .{ .root = flat.record.ext, .role = .record_row };
-                    },
-                    // An unresolved tail contributes no required fields, even
-                    // in modes where the same variable as a payload is empty.
-                    else => {},
-                }
+                const row = recordRowStep(self.store, content);
+                item.fields = row.fields;
+                if (row.next) |root| next = .{ .root = root, .role = .record_row };
             } else if (key.role == .union_shape) {
                 switch (content) {
                     .alias => |alias| next = .{ .root = self.store.getAliasBackingVar(alias), .role = .union_shape },
@@ -1625,16 +1636,7 @@ fn collectCtorPayloadBlockersHelp(
                     seen,
                 );
             },
-            .record => |record| {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!try fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
-                        try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
+            .record => try collectRecordPayloadBlockers(.payload, type_store.gpa, type_store, builtin_idents, resolved.var_, out, seen),
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -1645,6 +1647,40 @@ fn collectCtorPayloadBlockersHelp(
             },
             .fn_pure, .fn_effectful, .fn_unbound => {},
         },
+    }
+}
+
+fn collectRecordPayloadBlockers(
+    comptime mode: InhabitedMode,
+    allocator: Allocator,
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    initial_row: Var,
+    out: *std.ArrayList(Var),
+    seen: *PayloadSeen,
+) Allocator.Error!void {
+    var seen_rows: PayloadSeen = .empty;
+    defer seen_rows.deinit(type_store.gpa);
+    var current = initial_row;
+    while (true) {
+        const resolved = try resolveType(type_store, current);
+        const gop = try seen_rows.getOrPut(type_store.gpa, resolved.var_);
+        if (gop.found_existing) return;
+        const row = recordRowStep(type_store, resolved.desc.content);
+        if (row.fields) |fields| {
+            for (0..fields.count) |offset| {
+                const presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                if (!try fieldIsAlwaysPresent(type_store, presence)) continue;
+                const field_var = presence.typeVar();
+                if (try solveInhabitedGraph(type_store, builtin_idents, field_var, mode, &.{})) continue;
+                switch (mode) {
+                    .payload => try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen),
+                    .known_absent => try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen),
+                    .general => unreachable,
+                }
+            }
+        }
+        current = row.next orelse return;
     }
 }
 
@@ -1833,16 +1869,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                     }
                 }
             },
-            .record => |record| {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!try fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
-                        try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
+            .record => try collectRecordPayloadBlockers(.known_absent, allocator, type_store, builtin_idents, resolved.var_, out, seen),
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -4832,6 +4859,106 @@ test "nominal views record rows preserve mode policies and graph-linear sharing"
 
 test "nominal views record rows clean up every graph allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
+}
+
+fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) !void {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 8, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const field = try idents.insert(gpa, try Ident.from_bytes("required"));
+    const optional_name = try idents.insert(gpa, try Ident.from_bytes("optional"));
+    const missing = try idents.insert(gpa, try Ident.from_bytes("Missing"));
+    const present = try idents.insert(gpa, try Ident.from_bytes("Present"));
+    var cache = NominalOpenCache.init(analysis_allocator);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |item| {
+        if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+
+    const blocker = try store.fresh();
+    const open_tail = try store.fresh();
+    const optional_payload = try store.fresh();
+    const optional_kind = try store.freshFromContent(.{ .field_presence = .optional });
+    const required = try store.appendRecordFields(&.{.{ .name = field, .presence = .required(blocker) }});
+    const optional = try store.appendRecordFields(&.{.{ .name = optional_name, .presence = .unknown(optional_kind, optional_payload) }});
+    var tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = open_tail } } });
+    for (0..depth) |_| {
+        tail = try store.freshFromContent(.{ .alias = .{
+            .ident = .{ .ident_idx = field },
+            .vars = .{ .nonempty = try store.appendVars(&.{tail}) },
+            .source_arg_count = 0,
+            .origin_module = @enumFromInt(0),
+        } });
+        tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
+    }
+    const root = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = tail } } });
+    const sibling = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
+    const shared = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ root, sibling }) } } });
+    const cycle = try store.fresh();
+    const cycle_tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = cycle } } });
+    try store.setVarContent(cycle, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = cycle_tail } } });
+    const empty_cycle = try store.fresh();
+    try store.setVarContent(empty_cycle, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = empty_cycle } } });
+    const open_record = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = open_tail } } });
+    const empty_union = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const target = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{
+            .{ .name = missing, .args = try store.appendVars(&.{root}) },
+            .{ .name = present, .args = .empty() },
+        }),
+        .ext = empty_union,
+    } } });
+    var query_arena = std.heap.ArenaAllocator.init(analysis_allocator);
+    defer query_arena.deinit();
+    const reader = cache.reader(&store);
+    for ([_]Var{ root, shared, cycle }) |payload| {
+        try std.testing.expect(try isTypeInhabitedWithKnownEmpty(reader, test_idents, payload, &.{}));
+        for ([_]InhabitedMode{ .payload, .known_absent }) |mode| {
+            try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, payload, mode, &.{}));
+            var blockers: std.ArrayList(Var) = .empty;
+            defer blockers.deinit(analysis_allocator);
+            switch (mode) {
+                .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
+                .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
+                .general => unreachable,
+            }
+            try std.testing.expectEqualSlices(Var, &.{blocker}, blockers.items);
+            try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(reader, test_idents, payload, blockers.items));
+        }
+    }
+    for ([_]Var{ open_record, empty_cycle }) |payload| {
+        for ([_]InhabitedMode{ .payload, .known_absent }) |mode| {
+            try std.testing.expect(try solveInhabitedGraph(reader, test_idents, payload, mode, &.{}));
+            var blockers: std.ArrayList(Var) = .empty;
+            defer blockers.deinit(analysis_allocator);
+            switch (mode) {
+                .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
+                .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
+                .general => unreachable,
+            }
+            // Neither optional fields nor an unresolved record tail is a blocker.
+            try std.testing.expectEqual(@as(usize, 0), blockers.items.len);
+        }
+    }
+
+    var exported: std.ArrayList(Var) = .empty;
+    defer exported.deinit(gpa);
+    try collectAbsentCtorPayloadBlockersForConstructedTags(query_arena.allocator(), &store, test_idents, target, &.{present}, &exported);
+    try std.testing.expectEqualSlices(Var, &.{blocker}, exported.items);
+}
+
+test "record tail blockers follow aliased required fields and preserve row policies" {
+    try recordTailBlockersCase(std.testing.allocator, 64);
+}
+
+test "record tail blockers clean up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, recordTailBlockersCase, .{@as(usize, 2)});
 }
 
 test "nominal views record tail emptiness removes impossible source constructor" {

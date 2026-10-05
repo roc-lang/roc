@@ -562,6 +562,10 @@ add no required fields in any mode. A record row-only cycle therefore has the
 empty conjunction as its identity, unlike a union's empty disjunction. Exact
 known-empty tail identities still make the record empty.
 
+Blocker collection uses the same record-row and required-field policies as
+inhabitedness. A blocker in an aliased record extension is not lost, and an
+optional field or unresolved tail is not mistaken for a required payload.
+
 Potential inhabitedness is the greatest fixed point of those equations.
 Only converged answers may be reused, with query mode, assumptions, and reader
 identity kept distinct. Shared DAGs above recursive components must have
