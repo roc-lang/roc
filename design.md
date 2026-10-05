@@ -8321,8 +8321,11 @@ unconstrained flexible extension after all of those uses have been checked.
 Once codec dispatch has deferred that record through constraint quiescence and
 no pending literal can add information, the checker closes that flexible
 extension to the empty record through ordinary unification and validates the
-codec against the complete closed row. Parser and encoder derivation use the
-same rule.
+codec against the complete closed row. The rule applies to every record the
+codec's value shape reaches as data, not only the outermost one: a record
+nested in a field, a tuple, a tag payload, or a type argument (`rec.person.name`,
+`List.map(rec.people, |p| p.name)`) closes the same way. Parser and encoder
+derivation use the same rule.
 
 Eligibility follows every concrete record extension and remains unresolved at
 a flexible tail, so generated-codec evidence is never frozen against a partial
@@ -8330,6 +8333,29 @@ row. The rule does not close a bare flexible shape before a record exists, an
 extension with a pending literal, or a rigid named extension. A polymorphic
 open record can contain fields for which no codec was checked, so its derived
 codec dispatch is rejected.
+
+A generalization boundary that owns such an extension closes it before
+generalizing, when no boundary root's interface reaches the extension. Such a
+row is invisible to every caller: nothing outside the definition can name its
+extension, so no later use can add a field, and the closed row is exactly the
+row module finalization would close. Closing at the boundary lets the codec
+produce its constraints, including its error row, before the definition's type
+is output. A row whose extension is still open when the definition
+generalizes would otherwise close at module finalization and add errors (such
+as `MissingRequiredField(Str)`) to a scheme that callers have already
+instantiated, so callers' exhaustiveness and annotation checks would run
+against an incomplete error row. An extension owned by an enclosing scope or
+by a non-generalized value binding waits for its owner.
+
+A row whose extension the boundary owns and an interface does reach (a record
+parameter, or a returned record) rejects the derived codec with a "Record
+Fields Not Known" report at the codec call. Callers could use such a record
+with more fields than the definition's own uses name, so the codec's field
+set is not known, and closing the row would narrow the definition's type
+merely because it called a function whose type only requires a method. No
+`where` clause can carry the codec requirement instead: a requirement names a
+type variable, and the record's unknown part is a row. The program
+destructures the record, which closes it, or annotates it.
 
 Both sides are pinned by tests: accepted—
 test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
@@ -8339,7 +8365,16 @@ known field use), and test/cli/issue_10824_generated_codec_contract/app.roc (an
 encoder contract waits for a platform model row to close before freezing all
 of its field calls); rejected—the issue #10824 tests in
 src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
-named rigid record extension).
+named rigid record extension). Boundary closure is pinned by
+src/check/test/derived_codec_local_record_row_test.zig and
+test/cli/JsonParseInferredRecordFieldAccess.roc: accepted—a parsed record
+used only through field access outputs its required-field error, and its
+field types stay generic; rejected—a caller's match or annotation that omits
+that error, and a parameter or returned record used only through field access
+(including a nested one), which reports "Record Fields Not Known"; the issue
+#10824 tests pin the same rejection for an encoded parameter. The same files pin
+nested records closing both at a boundary and outside any function, and that a
+shared value binding's record still collects fields from other definitions.
 
 ### Derived Parser Required-Field Error Composition
 
@@ -10101,9 +10136,17 @@ Other solved-graph mutations:
   `test/cli/platform_requirement_wider_error_row/`.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
-  dispatch reaches quiescence, a record inferred from use sites closes its
-  unconstrained flexible extension to the empty record through ordinary
-  unification; rigid extensions remain rejected.
+  dispatch reaches quiescence, every record the codec's value shape reaches
+  as data that was inferred from use sites closes its unconstrained flexible
+  extension to the empty record through ordinary unification; rigid
+  extensions remain rejected.
+- `closeBoundaryLocalDerivedCodecRecordRows`—policy: Derived Structural
+  Codec Record-Row Closure (above). At a generalization boundary, each record
+  row in a pending derived codec relation's value shape whose flexible
+  extension the boundary owns and no boundary interface reaches closes to the
+  empty record through ordinary unification before scheme capture. A row
+  whose extension an interface reaches is rejected instead
+  (`reportDerivedCodecOpenRecord`), never closed.
 - `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
