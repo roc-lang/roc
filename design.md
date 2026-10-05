@@ -13268,11 +13268,16 @@ holds no literal, the hint asks for a suffix (numbers only) or an annotation.
 The lookup checks the method's existence only, not its signature.
 
 Each defaulting decision records, immediately before it commits, every
-still-flex variable it is about to choose—the gathered open literals and the
+still-flex variable it is about to settle—the gathered open literals and the
 still-flex variables their method signatures reach, or the materialized
 receiver and the still-flex variables its signatures reach—together with that
-variable's flex content, and sets the class's `default_decided` descriptor
-flag. Unification and mismatch poisoning preserve the flag, as they preserve
+variable's flex content. Only a class the decision chooses, a gathered literal
+or a materialized receiver, gets the `default_decided` descriptor flag. A
+variable reached through a signature is determined by the selected method, not
+by the default: in `names = "a,b".split_on(",")`, `names.len()` is `U64`
+because `len` returns `U64`, so a requirement failing on it is an ordinary
+mismatch. Such a variable is recorded only so a report about a chosen class can
+show it as the program wrote it. Unification and mismatch poisoning preserve the flag, as they preserve
 `static_dispatch_rejected`. A record whose class the decision left flex is
 withdrawn along with its flag, since a later relation can still determine it.
 The dispatch failure paths consult only the flag; the record list is read on

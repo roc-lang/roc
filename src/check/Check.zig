@@ -1050,10 +1050,11 @@ conflicted_default_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// content it had at that moment: the gathered open literals and the still
 /// flex variables their method signatures reach, and each receiver whose
 /// specialization default is materialized together with the still flex
-/// variables its signatures reach. Each recorded class carries the
-/// `default_decided` descriptor flag, which is what the dispatch paths
-/// consult; this list is read only when a diagnostic about a default-decided
-/// class needs the class's pre-default type (`snapshotPreDefaultType`).
+/// variables its signatures reach. Only a class the default chose (a
+/// gathered literal or a materialized receiver, `DefaultDecision.chosen`)
+/// carries the `default_decided` descriptor flag, which is what the dispatch
+/// paths consult; this list is read only when a diagnostic about a
+/// default-decided class needs its pre-default type (`snapshotPreDefaultType`).
 default_decided_records: std.ArrayListUnmanaged(DefaultDecidedRecord) = .empty,
 /// Records (by recorded var) whose undetermined-type diagnostic was already
 /// reported: a defaulted type is reported once, however many of its
@@ -14216,15 +14217,16 @@ fn checkInstantiatedStaticDispatchConstraints(
                 entry.value_ptr.* = materialization.target;
                 try pending_creation_materializations.append(self.gpa, materialization);
 
-                // The materialized default chooses this receiver and, through
-                // the owner's method signatures, every still-flex variable
-                // those signatures reach.
-                try self.recordDefaultDecidedVar(resolved.var_);
+                // The materialized default chooses this receiver. The still-flex
+                // variables the owner's method signatures reach are determined
+                // by those signatures, not by the default; they are recorded
+                // only so a report can show their pre-default content.
+                try self.recordDefaultDecidedVar(resolved.var_, .chosen);
                 try self.collectConstraintSignatureReachable(resolved.desc.content.flex.constraints, &materialization_footprint);
                 var footprint_iter = materialization_footprint.keyIterator();
                 while (footprint_iter.next()) |footprint_var| {
                     if (self.types.resolveVar(footprint_var.*).desc.content != .flex) continue;
-                    try self.recordDefaultDecidedVar(footprint_var.*);
+                    try self.recordDefaultDecidedVar(footprint_var.*, .reached);
                 }
             }
         }
@@ -34036,7 +34038,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         self.literal_defaulting_is_driver.clearRetainingCapacity();
         self.literal_defaulting_footprint_owner.clearRetainingCapacity();
         for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
-            try self.recordDefaultDecidedVar(root);
+            try self.recordDefaultDecidedVar(root, .chosen);
             try self.literal_defaulting_component_parent.append(self.gpa, idx);
             // Seed each literal's own root so any driver whose footprint reaches
             // it is merged into its component. Roots are deduped, so no collision
@@ -34056,7 +34058,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 // pinning. (Union order is irrelevant: unions commute, so the
                 // partition is independent of hash-map iteration order.)
                 if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
-                try self.recordDefaultDecidedVar(fp_var.*);
+                try self.recordDefaultDecidedVar(fp_var.*, .reached);
                 const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
                 if (gop.found_existing) {
                     componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
@@ -36329,10 +36331,19 @@ fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.
     return default_var;
 }
 
-/// Record a still-flex variable that a defaulting decision is about to choose,
+/// How a defaulting decision relates to a recorded variable. A `chosen`
+/// variable's type is the default itself: the gathered literal or the
+/// materialized receiver, and its class carries the `default_decided` flag.
+/// A `reached` variable is a still-flex variable the chosen one's method
+/// signatures reach; the selected methods determine it, so a failure on it is
+/// an ordinary failure, and it is recorded only so a report about a chosen
+/// class can show its pre-default content.
+const DefaultDecision = enum { chosen, reached };
+
+/// Record a still-flex variable that a defaulting decision is about to settle,
 /// keeping the content it has now so a diagnostic can describe the type the
 /// program wrote. See design.md's "Diagnostics About Defaulted Types".
-fn recordDefaultDecidedVar(self: *Self, var_: Var) Allocator.Error!void {
+fn recordDefaultDecidedVar(self: *Self, var_: Var, decision: DefaultDecision) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     const flex = switch (resolved.desc.content) {
         .flex => |flex| flex,
@@ -36348,7 +36359,10 @@ fn recordDefaultDecidedVar(self: *Self, var_: Var) Allocator.Error!void {
         .name = flex.name,
         .constraints = flex.constraints,
     });
-    try self.types.markVarDefaultDecided(resolved.var_);
+    switch (decision) {
+        .chosen => try self.types.markVarDefaultDecided(resolved.var_),
+        .reached => {},
+    }
 }
 
 /// After a defaulting decision has run, withdraw every record from `start` on
