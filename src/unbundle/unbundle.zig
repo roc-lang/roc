@@ -245,16 +245,22 @@ pub const BufferExtractWriter = struct {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
         if (self.current_file_writer) |*writer| {
             if (self.current_file_path) |path| {
-                // Convert writer contents to Managed ArrayList
-                const unmanaged_list = writer.toArrayList();
-                var managed_list = std.array_list.Managed(u8).fromOwnedSlice(self.allocator, unmanaged_list.items);
+                var unmanaged = writer.toArrayList();
+                var contents = unmanaged.toManaged(self.allocator);
                 self.current_file_path = null;
                 self.current_file_writer = null;
-                self.files.put(path, managed_list) catch |err| {
-                    managed_list.deinit();
+                const slot = self.files.getOrPut(path) catch |err| {
+                    contents.deinit();
                     self.allocator.free(path);
                     return err;
                 };
+                if (slot.found_existing) {
+                    // A later entry for a path replaces the earlier contents;
+                    // the map keeps the key it already owns.
+                    self.allocator.free(path);
+                    slot.value_ptr.deinit();
+                }
+                slot.value_ptr.* = contents;
                 return;
             } else {
                 writer.deinit();

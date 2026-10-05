@@ -6,7 +6,6 @@
 //! - Error handling
 
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
@@ -134,12 +133,9 @@ test "validateBase58Hash - valid and invalid hashes" {
 }
 
 test "BufferExtractWriter - basic functionality" {
-    const allocator = testing.allocator;
-
-    var arena = collections.SingleThreadArena.init(allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    var writer = unbundle.BufferExtractWriter.init(alloc);
+    // The testing allocator checks every free and reports leaks, which pins
+    // the writer's ownership of file contents and path keys.
+    var writer = unbundle.BufferExtractWriter.init(testing.allocator);
     defer writer.deinit();
 
     // Create a file
@@ -286,12 +282,9 @@ test "validateBase58Hash - edge cases" {
 }
 
 test "BufferExtractWriter - overwrite existing file" {
-    const allocator = testing.allocator;
-
-    var arena = collections.SingleThreadArena.init(allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    var writer = unbundle.BufferExtractWriter.init(alloc);
+    // The testing allocator checks every free and reports leaks, which pins
+    // the writer's ownership of file contents and path keys.
+    var writer = unbundle.BufferExtractWriter.init(testing.allocator);
     defer writer.deinit();
 
     // Create a file with initial content
