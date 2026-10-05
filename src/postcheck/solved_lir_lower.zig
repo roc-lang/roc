@@ -10438,149 +10438,44 @@ const Lowerer = struct {
 
         pub fn sequenceLen(self: @This(), pat_id: PatternId) usize {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .tuple => |items| self.lowerer.solved.lifted.patSpan(items).len,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const items = pat_data.data.tuple;
+            return self.lowerer.solved.lifted.patSpan(items).len;
         }
 
         pub fn sequenceChild(self: @This(), pat_id: PatternId, index: usize) PatternId {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .tuple => |items| GuardedList.at(self.lowerer.solved.lifted.patSpan(items), index),
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const items = pat_data.data.tuple;
+            return GuardedList.at(self.lowerer.solved.lifted.patSpan(items), index);
         }
 
         pub fn recordLen(self: @This(), pat_id: PatternId) usize {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .record => |fields| self.lowerer.solved.lifted.recordDestructSpan(fields).len,
-                .bind,
-                .wildcard,
-                .as,
-                .tuple,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const fields = pat_data.data.record;
+            return self.lowerer.solved.lifted.recordDestructSpan(fields).len;
         }
 
         pub fn recordChild(self: @This(), pat_id: PatternId, index: usize) PatternId {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .record => |fields| GuardedList.at(self.lowerer.solved.lifted.recordDestructSpan(fields), index).pattern,
-                .bind,
-                .wildcard,
-                .as,
-                .tuple,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const fields = pat_data.data.record;
+            return GuardedList.at(self.lowerer.solved.lifted.recordDestructSpan(fields), index).pattern;
         }
 
         pub fn listFixedLen(self: @This(), pat_id: PatternId) usize {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .list => |list| list.patterns.len,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .tuple,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const list = pat_data.data.list;
+            return list.patterns.len;
         }
 
         pub fn listHasRest(self: @This(), pat_id: PatternId) bool {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .list => |list| list.rest != null,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .tuple,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const list = pat_data.data.list;
+            return list.rest != null;
         }
 
         pub fn listRestPattern(self: @This(), pat_id: PatternId) ?PatternId {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .list => |list| list.rest.?.pattern,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .tuple,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const list = pat_data.data.list;
+            return list.rest.?.pattern;
         }
     };
 

@@ -4336,7 +4336,7 @@ const Builder = struct {
 
     /// This scope's mapping from a stored scalar to expression data.
     fn constScalarData(_: *Builder, scalar: checked.ConstScalar) ConstExprData {
-        return restoreScalar(scalar);
+        return restoreScalar(Ast.ExprData, scalar);
     }
 
     /// An empty compile-time list restores as the `with_capacity` it was
@@ -4344,7 +4344,7 @@ const Builder = struct {
     /// evaluated with no capacity is the empty literal.
     fn constEmptyListData(self: *Builder, capacity: u64) Allocator.Error!ConstExprData {
         if (capacity == 0) return .{ .list = try self.program.addExprSpan(&[0]Ast.ExprId{}) };
-        const requested = try self.program.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(.{ .u64 = capacity }) });
+        const requested = try self.program.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = capacity }) });
         return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.program.addExprSpan(&.{requested}) } };
     }
 
@@ -9072,19 +9072,7 @@ const Builder = struct {
     /// qualified. Returns null when `ty` is structural, an alias of a
     /// structural type, or a named type whose backing is not present.
     fn nominalConstructionLayer(self: *Builder, ty: Type.TypeId) ?NominalConstructionLayer {
-        var current = ty;
-        while (true) {
-            switch (self.activeTypeStore().get(current)) {
-                .named => |named| {
-                    const backing = named.backing orelse return null;
-                    switch (named.kind) {
-                        .alias => current = backing.ty,
-                        .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
-                    }
-                },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-            }
-        }
+        return nominalConstructionLayerIn(NominalConstructionLayer, self.activeTypeStore(), ty);
     }
 
     fn shapeContent(self: *Builder, ty: Type.TypeId) Type.Content {
@@ -14551,6 +14539,25 @@ const PendingSealedExpr = struct {
     region: base.Region,
 };
 
+/// The nominal construction layer of `ty` in `types`: the nominal or opaque
+/// named type reached after unwrapping transparent alias layers, paired with
+/// its declared backing type, or null when no such layer is present.
+fn nominalConstructionLayerIn(comptime Layer: type, types: *const Type.Store, ty: Type.TypeId) ?Layer {
+    var current = ty;
+    while (true) {
+        switch (types.get(current)) {
+            .named => |named| {
+                const backing = named.backing orelse return null;
+                switch (named.kind) {
+                    .alias => current = backing.ty,
+                    .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
+                }
+            },
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+        }
+    }
+}
+
 const SealedNominalConstructionLayer = struct {
     named: Type.TypeId,
     backing: Type.TypeId,
@@ -18080,19 +18087,7 @@ const BodyDraftStore = struct {
     }
 
     fn sealedNominalConstructionLayer(program: *const Ast.Program, ty: Type.TypeId) ?SealedNominalConstructionLayer {
-        var current = ty;
-        while (true) {
-            switch (program.types.get(current)) {
-                .named => |named| {
-                    const backing = named.backing orelse return null;
-                    switch (named.kind) {
-                        .alias => current = backing.ty,
-                        .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
-                    }
-                },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-            }
-        }
+        return nominalConstructionLayerIn(SealedNominalConstructionLayer, &program.types, ty);
     }
 
     fn sealConstructorExprWithNominalBackings(
@@ -19640,19 +19635,7 @@ const BodyContext = struct {
     }
 
     fn nominalConstructionLayer(self: *const BodyContext, ty: Type.TypeId) ?Builder.NominalConstructionLayer {
-        var current = ty;
-        while (true) {
-            switch (self.typeStore().get(current)) {
-                .named => |named| {
-                    const backing = named.backing orelse return null;
-                    switch (named.kind) {
-                        .alias => current = backing.ty,
-                        .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
-                    }
-                },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-            }
-        }
+        return nominalConstructionLayerIn(Builder.NominalConstructionLayer, self.typeStore(), ty);
     }
 
     fn shapeContent(self: *const BodyContext, ty: Type.TypeId) Type.Content {
@@ -19880,7 +19863,7 @@ const BodyContext = struct {
 
     /// This scope's mapping from a stored scalar to expression data.
     fn constScalarData(_: *BodyContext, scalar: checked.ConstScalar) ConstExprData {
-        return restoreScalarBody(scalar);
+        return restoreScalar(BodyExprData, scalar);
     }
 
     /// An empty compile-time list restores as the `with_capacity` it was
@@ -19888,7 +19871,7 @@ const BodyContext = struct {
     /// evaluated with no capacity is the empty literal.
     fn constEmptyListData(self: *BodyContext, capacity: u64) Allocator.Error!ConstExprData {
         if (capacity == 0) return .{ .list = try self.addExprSpan(&[0]DraftExprId{}) };
-        const requested = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalarBody(.{ .u64 = capacity }) });
+        const requested = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = capacity }) });
         return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.addExprSpan(&.{requested}) } };
     }
 
@@ -37761,8 +37744,8 @@ const BodyContext = struct {
                     const field_text = texts[field_index];
                     const probe = switch (mode) {
                         .direct => Common.invariant("direct field handles do not use string matching"),
-                        .exact => try self.recordFieldNameStaticSmallWordMatch(key_local, key_ty, field_text, lane.offset, lane.active_len),
-                        .caseless => try self.recordFieldNameStaticSmallWordCaselessMatch(key_local, key_ty, field_text, lane.offset, lane.active_len),
+                        .exact => try self.recordFieldNameStaticSmallWordMatch(false, key_local, key_ty, field_text, lane.offset, lane.active_len),
+                        .caseless => try self.recordFieldNameStaticSmallWordMatch(true, key_local, key_ty, field_text, lane.offset, lane.active_len),
                     };
                     const matched_or_next = if (lane.offset == 0 and lane.active_len == length)
                         matched_bodies[field_index]
@@ -40571,13 +40554,14 @@ const BodyContext = struct {
 
     fn recordFieldNameStaticSmallWordMatch(
         self: *BodyContext,
+        comptime caseless: bool,
         key_local: DraftLocalId,
         key_ty: Type.TypeId,
         field_text: []const u8,
         offset: u32,
         active_len: u32,
     ) Allocator.Error!DraftExprId {
-        if (field_text.len > 24) Common.invariant("static small field lane requested for a long field name");
+        if (field_text.len > 24) Common.invariant(if (caseless) "static small caseless field lane requested for a long field name" else "static small field lane requested for a long field name");
         const word = staticFieldLaneWord(field_text, offset, active_len);
 
         const u64_ty = try self.primitiveType(.u64);
@@ -40588,7 +40572,7 @@ const BodyContext = struct {
             try self.intLiteralExpr(active_len, u64_ty),
             try self.intLiteralExpr(word, u64_ty),
         };
-        return try self.lowLevelExpr(.str_static_small_word_eq, &args, try self.primitiveType(.bool));
+        return try self.lowLevelExpr(if (caseless) .str_static_small_word_caseless_eq else .str_static_small_word_eq, &args, try self.primitiveType(.bool));
     }
 
     fn recordFieldNameStaticSmallCaselessMatch(
@@ -40606,7 +40590,7 @@ const BodyContext = struct {
             offset -= 8;
             const remaining: u32 = @intCast(field_text.len - offset);
             const active_len: u32 = @min(remaining, 8);
-            const cond = try self.recordFieldNameStaticSmallWordCaselessMatch(key_local, key_ty, field_text, offset, active_len);
+            const cond = try self.recordFieldNameStaticSmallWordMatch(true, key_local, key_ty, field_text, offset, active_len);
             body = try self.ifExpr(cond, body, try self.boolLiteral(false, bool_ty), bool_ty);
         }
 
@@ -40616,28 +40600,6 @@ const BodyContext = struct {
         const length_expr = try self.intLiteralExpr(@intCast(field_text.len), u64_ty);
         const length_matches = try self.lowLevelExpr(.num_is_eq, &.{ key_len_expr, length_expr }, bool_ty);
         return try self.ifExpr(length_matches, body, try self.boolLiteral(false, bool_ty), bool_ty);
-    }
-
-    fn recordFieldNameStaticSmallWordCaselessMatch(
-        self: *BodyContext,
-        key_local: DraftLocalId,
-        key_ty: Type.TypeId,
-        field_text: []const u8,
-        offset: u32,
-        active_len: u32,
-    ) Allocator.Error!DraftExprId {
-        if (field_text.len > 24) Common.invariant("static small caseless field lane requested for a long field name");
-        const word = staticFieldLaneWord(field_text, offset, active_len);
-
-        const u64_ty = try self.primitiveType(.u64);
-        const key_expr = try self.localExpr(key_local, key_ty);
-        const args = [_]DraftExprId{
-            key_expr,
-            try self.intLiteralExpr(offset, u64_ty),
-            try self.intLiteralExpr(active_len, u64_ty),
-            try self.intLiteralExpr(word, u64_ty),
-        };
-        return try self.lowLevelExpr(.str_static_small_word_caseless_eq, &args, try self.primitiveType(.bool));
     }
 
     fn renamedRecordFieldNameExpr(
@@ -43728,7 +43690,7 @@ const BodyContext = struct {
                 const data: BodyExprData = switch (frame.value) {
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
-                    .scalar => |scalar| restoreScalarBody(scalar),
+                    .scalar => |scalar| restoreScalar(BodyExprData, scalar),
                     .str => |str| .{ .str_lit = try self.addStringView(
                         store_view.const_store.blobData(str.data),
                         str.offset,
@@ -55280,6 +55242,31 @@ const BodyContext = struct {
         return true;
     }
 
+    /// Resolve the callee for the required codec target `exact` and record
+    /// the prepared call for `boundary_expr`.
+    fn appendPreparedRequiredCodecCall(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        kind: CodecKind,
+        shape_node: NodeId,
+        exact: anytype,
+    ) Allocator.Error!void {
+        const callee = try self.methodTargetCalleeAtNodeForFormat(exact.lookup, exact.callable_node, exact.contract);
+        try self.draft.prepared_codec_calls.append(self.allocator, .{
+            .boundary_expr = boundary_expr,
+            .kind = kind,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
+            .shape_node = shape_node,
+            .lookup = exact.lookup,
+            .callable_node = exact.callable_node,
+            .callee = callee,
+        });
+    }
+
     fn prepareRenameRecordFieldCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -55291,7 +55278,6 @@ const BodyContext = struct {
         if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
         const encoding_node = boundary.args[0];
         const exact = try self.requiredGeneratedCodecTarget("rename_field", null);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, kind, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -55302,20 +55288,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], str_node);
         try relateRequestComponent(self.graph, target.ret, str_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = kind,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, kind, shape_node, exact);
         return true;
     }
 
@@ -55333,7 +55306,6 @@ const BodyContext = struct {
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const state_node = runtime.args[1];
         const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -55342,20 +55314,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .encoder,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, shape_node, exact);
         return true;
     }
 
@@ -55776,7 +55735,6 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget("skip_record_field", null);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -55788,20 +55746,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try self.relateParserErrorInjection(target_try.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .parser,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, shape_node, exact);
         return true;
     }
 
@@ -55932,7 +55877,6 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget(method_name, shape_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -55945,20 +55889,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
         try self.relateParserErrorInjection(target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .parser,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, shape_node, exact);
         return true;
     }
 
@@ -55979,7 +55910,6 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -55991,20 +55921,7 @@ const BodyContext = struct {
         try self.relateParserErrorInjection(target_try.err, outer_result.err);
         if (result_is_state) try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .parser,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, shape_node, exact);
         return true;
     }
 
@@ -56022,7 +55939,6 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget("invalid_value", null);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56032,20 +55948,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .parser,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, shape_node, exact);
         return true;
     }
 
@@ -56061,7 +55964,6 @@ const BodyContext = struct {
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const state_node = runtime.args[1];
         const exact = try self.requiredGeneratedCodecTarget("encode_null", null);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56070,20 +55972,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .encoder,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, shape_node, exact);
         return true;
     }
 
@@ -56150,7 +56039,6 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
         const exact = try self.requiredGeneratedCodecTarget("encode_key_start", key_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56160,20 +56048,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .encoder,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = key_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, key_node, exact);
         return true;
     }
 
@@ -56306,7 +56181,6 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56322,20 +56196,7 @@ const BodyContext = struct {
         try self.relateParserErrorInjection(target_try.err, outer_result.err);
         try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .parser,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, shape_node, exact);
         return true;
     }
 
@@ -56354,7 +56215,6 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56367,20 +56227,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_result.rest, state_node);
         try self.relateParserErrorInjection(target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .parser,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = value_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, value_node, exact);
         return true;
     }
 
@@ -56399,7 +56246,6 @@ const BodyContext = struct {
         const state_node = runtime.args[1];
         const outer_try = try self.graphTryPayloads(runtime.ret);
         const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56412,20 +56258,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_try.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .encoder,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = value_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, value_node, exact);
         return true;
     }
 
@@ -56442,7 +56275,6 @@ const BodyContext = struct {
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const state_node = runtime.args[1];
         const exact = try self.requiredGeneratedCodecTarget(method_name, shape_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56452,20 +56284,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = .encoder,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, shape_node, exact);
         return true;
     }
 
@@ -56480,7 +56299,6 @@ const BodyContext = struct {
         ret_node: NodeId,
     ) Allocator.Error!bool {
         const exact = try self.requiredGeneratedCodecTarget(method_name, owner_node);
-        const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, kind, exact)) return false;
 
         const target_node = exact.callable_node;
@@ -56491,20 +56309,7 @@ const BodyContext = struct {
         }
         try relateRequestComponent(self.graph, target.ret, ret_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
-            .boundary_expr = boundary_expr,
-            .kind = kind,
-            .method_name = exact.method_name,
-            .method_role = exact.method_role,
-            .subject_bearing = exact.subject_bearing,
-            .contract_view = exact.anchor.view.key.bytes,
-            .contract_derivation = exact.anchor.derivation,
-            .shape_node = shape_node,
-            .lookup = lookup,
-            .callable_node = target_node,
-            .callee = callee,
-        });
+        try self.appendPreparedRequiredCodecCall(boundary_expr, kind, shape_node, exact);
         return true;
     }
 
@@ -58283,144 +58088,45 @@ const BodyContext = struct {
 
         pub fn sequenceLen(self: @This(), pattern_id: PatternId) usize {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .tuple => |items| items.len,
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .record_destructure,
-                .list,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
-            };
+            const items = pattern.data.tuple;
+            return items.len;
         }
 
         pub fn sequenceChild(self: @This(), pattern_id: PatternId, index: usize) PatternId {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .tuple => |items| items[index],
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .record_destructure,
-                .list,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
-            };
+            const items = pattern.data.tuple;
+            return items[index];
         }
 
         pub fn recordLen(self: @This(), pattern_id: PatternId) usize {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .record_destructure => |destructs| destructs.len,
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .list,
-                .tuple,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
-            };
+            const destructs = pattern.data.record_destructure;
+            return destructs.len;
         }
 
         pub fn recordChild(self: @This(), pattern_id: PatternId, index: usize) PatternId {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .record_destructure => |destructs| switch (destructs[index].kind) {
-                    .required, .sub_pattern, .rest => |child_pattern| child_pattern,
-                },
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .list,
-                .tuple,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
+            return switch (pattern.data.record_destructure[index].kind) {
+                .required, .sub_pattern, .rest => |child_pattern| child_pattern,
             };
         }
 
         pub fn listFixedLen(self: @This(), pattern_id: PatternId) usize {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .list => |list| list.patterns.len,
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .record_destructure,
-                .tuple,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
-            };
+            const list = pattern.data.list;
+            return list.patterns.len;
         }
 
         pub fn listHasRest(self: @This(), pattern_id: PatternId) bool {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .list => |list| list.rest != null,
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .record_destructure,
-                .tuple,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
-            };
+            const list = pattern.data.list;
+            return list.rest != null;
         }
 
         pub fn listRestPattern(self: @This(), pattern_id: PatternId) ?PatternId {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data) {
-                .list => |list| list.rest.?.pattern,
-                .pending,
-                .assign,
-                .as,
-                .applied_tag,
-                .nominal,
-                .record_destructure,
-                .tuple,
-                .numeral_literal,
-                .str_literal,
-                .str_interpolation,
-                .underscore,
-                .runtime_error,
-                => unreachable,
-            };
+            const list = pattern.data.list;
+            return list.rest.?.pattern;
         }
     };
 
@@ -65049,25 +64755,7 @@ fn constRestoreData(
     };
 }
 
-fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
-    return switch (scalar) {
-        .i8 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i16 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i32 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i64 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i128 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .u8 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u16 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u32 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u64 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u128 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .f32_bits => |bits| .{ .frac_f32_lit = @bitCast(bits) },
-        .f64_bits => |bits| .{ .frac_f64_lit = @bitCast(bits) },
-        .dec_bits => |bits| .{ .dec_lit = .{ .num = bits } },
-    };
-}
-
-fn restoreScalarBody(scalar: checked.ConstScalar) BodyExprData {
+fn restoreScalar(comptime Data: type, scalar: checked.ConstScalar) Data {
     return switch (scalar) {
         .i8 => |value| .{ .int_lit = signedIntLiteral(value) },
         .i16 => |value| .{ .int_lit = signedIntLiteral(value) },

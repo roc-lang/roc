@@ -3020,10 +3020,10 @@ const ProcedureBuilder = struct {
                 null;
             const fn_type = if (exact_method) |method| method.callable_type else requirement.fn_ty;
             const structural_method: ?Plan.DerivedMethod = if (structural_kind == .equality or
-                (exact_method == null and self.staticDictionarySlotIsStructuralEq(rep_id, requirement)))
+                (exact_method == null and self.staticDictionarySlotIsStructural("is_eq", rep_id, requirement)))
                 .equality
             else if (structural_kind == .hash or
-                (exact_method == null and self.staticDictionarySlotIsStructuralHash(rep_id, requirement)))
+                (exact_method == null and self.staticDictionarySlotIsStructural("to_hash", rep_id, requirement)))
                 .hash
             else
                 null;
@@ -5240,28 +5240,15 @@ const ProcedureBuilder = struct {
     /// comparison: the requirement is the equality method and the source type
     /// resolves no `is_eq` method of its own (an anonymous structural type, or a
     /// nominal that neither declares nor derives equality).
-    fn staticDictionarySlotIsStructuralEq(
+    fn staticDictionarySlotIsStructural(
         self: *ProcedureBuilder,
+        comptime structural_method: []const u8,
         rep_id: Plan.TypeRepId,
         requirement: Plan.DictionaryRequirement,
     ) bool {
         const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
         const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
-        if (!std.mem.eql(u8, method_text, "is_eq")) return false;
-        const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
-        const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
-        return self.lookupMethodTarget(source_module, owner, requirement_module, requirement.fn_name) == null;
-    }
-
-    fn staticDictionarySlotIsStructuralHash(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        requirement: Plan.DictionaryRequirement,
-    ) bool {
-        const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
-        const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
-        if (!std.mem.eql(u8, method_text, "to_hash")) return false;
+        if (!std.mem.eql(u8, method_text, structural_method)) return false;
         const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
@@ -16164,28 +16151,10 @@ const ProcBodyBuilder = struct {
     }
 
     fn bindHiddenDescriptorArgs(self: *ProcBodyBuilder) Allocator.Error!void {
+        try self.bindPassthroughHiddenDescriptorArgs();
         const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
         const params = self.parent.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
-        const layouts = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.hidden_descs);
-        if (params.len != layouts.len) {
-            boxyLowerInvariant("boxy worker hidden descriptor param count disagreed with layout plan");
-        }
-        if (params.len == 0) return;
-
-        try self.ensureDescriptorLocals();
-        for (params, layouts) |param, runtime_layout| {
-            const layout_idx = runtime_layout.layoutIdx();
-            if (layout_idx != .opaque_ptr) {
-                boxyLowerInvariant("boxy hidden descriptor arg layout was not opaque_ptr");
-            }
-            const local = try self.addArgLocal(layout_idx);
-            try self.markReadOnlyDescriptorInput(local);
-            try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
-            if (self.repOwnsDescriptor(param.rep, param.desc)) {
-                try self.bindDescriptorIdentityLocalForRep(param.rep, local, true);
-            }
-        }
-        try self.prepareHiddenDescriptorArgumentRoots(params);
+        if (params.len != 0) try self.prepareHiddenDescriptorArgumentRoots(params);
     }
 
     /// A static dictionary method adapter accepts the requirement's explicit
@@ -20757,7 +20726,7 @@ const ProcBodyBuilder = struct {
         if (try self.lowerPlannedLiteralInto(target, expr_id, checked_ty, next)) |body| return exprDone(body);
 
         switch (self.staticDispatchPlan(quote.plan).resolution) {
-            .evidence_dependent, .checked_error, .@"unreachable" => return try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next),
+            .evidence_dependent, .checked_error, .@"unreachable" => return try self.beginLiteralConversion("invalid string literal", target, expr_id, checked_ty, quote.plan, next),
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
@@ -20772,7 +20741,7 @@ const ProcBodyBuilder = struct {
                 .checked_ty = checked_ty,
                 .next = next,
             } } },
-            .pending => try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next),
+            .pending => try self.beginLiteralConversion("invalid string literal", target, expr_id, checked_ty, quote.plan, next),
             .fn_value,
             .discarded,
             .expect,
@@ -20789,11 +20758,12 @@ const ProcBodyBuilder = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginRuntimeQuoteConversion(target, expr_id, target_ty, maybe_plan, next));
+        return try self.runExprStep(try self.beginLiteralConversion("invalid string literal", target, expr_id, target_ty, maybe_plan, next));
     }
 
-    fn beginRuntimeQuoteConversion(
+    fn beginLiteralConversion(
         self: *ProcBodyBuilder,
+        comptime invalid_message: []const u8,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
         target_ty: checked.CheckedTypeId,
@@ -20809,7 +20779,7 @@ const ProcBodyBuilder = struct {
             self.repForType(target_ty),
             try_value,
             try_rep,
-            "invalid string literal",
+            invalid_message,
             next,
         );
         return try self.beginDispatchCall(try_value, expr_id, maybe_plan, callable.ret, unwrap);
@@ -21008,7 +20978,7 @@ const ProcBodyBuilder = struct {
                 .checked_ty = checked_ty,
                 .next = next,
             } } },
-            .pending => try self.beginPendingNumeralConversion(target, expr_id, checked_ty, maybe_plan, next),
+            .pending => try self.beginLiteralConversion("invalid numeric literal", target, expr_id, checked_ty, maybe_plan, next),
             .fn_value,
             .discarded,
             .expect,
@@ -21025,30 +20995,7 @@ const ProcBodyBuilder = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginPendingNumeralConversion(target, expr_id, target_ty, maybe_plan, next));
-    }
-
-    fn beginPendingNumeralConversion(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        expr_id: checked.CheckedExprId,
-        target_ty: checked.CheckedTypeId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!ExprStep {
-        const dispatch = self.staticDispatchPlan(maybe_plan);
-        const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
-        const try_rep = self.repForType(callable.ret);
-        const try_value = try self.addFrameLocalForRepWithFreshDescriptor(try_rep);
-        const unwrap = try self.lowerLiteralConversionResultInto(
-            target,
-            self.repForType(target_ty),
-            try_value,
-            try_rep,
-            "invalid numeric literal",
-            next,
-        );
-        return try self.beginDispatchCall(try_value, expr_id, maybe_plan, callable.ret, unwrap);
+        return try self.runExprStep(try self.beginLiteralConversion("invalid numeric literal", target, expr_id, target_ty, maybe_plan, next));
     }
 
     fn exprStorageRep(
@@ -21281,13 +21228,8 @@ const ProcBodyBuilder = struct {
         method_text: []const u8,
         subject_type: ?Plan.CheckedTypeIdentity,
     ) Plan.GeneratedCodecCallPlan {
-        for (self.parent.plan.generated_codec_calls.items) |call| {
-            if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
-            if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
-            const method_module = procedureModuleById(self.parent.modules, call.method_module);
-            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call;
-        }
-        boxyLowerInvariant("generated codec body referenced an unplanned method call");
+        return self.generatedCodecCallPlanOrNull(caller, dispatch_type, method_text, subject_type) orelse
+            boxyLowerInvariant("generated codec body referenced an unplanned method call");
     }
 
     fn generatedCodecCallPlanOrNull(
@@ -25550,7 +25492,7 @@ const ProcBodyBuilder = struct {
                     self.parent.result.store.setLocalBoxyDesc(raw_ret, desc);
                 }
             }
-            continuation = try self.lowerDirectCallReturnAdaptation(target, raw_ret, target_rep, worker_ret_rep, continuation);
+            continuation = try self.assignPlannedCallBoundary(target, raw_ret, target_rep, worker_ret_rep, continuation);
             if (runtime_result_desc) {
                 if (self.parent.result.store.getLocal(raw_ret).boxy_desc) |fresh_desc| {
                     fresh_raw_out_desc = fresh_desc.localOrNull();
@@ -25675,7 +25617,7 @@ const ProcBodyBuilder = struct {
                 substitutions[index].operand_rep
             else
                 self.repForTypeRef(arg_types[index]);
-            continuation = try self.lowerDirectCallArgAdaptation(
+            continuation = try self.assignPlannedCallBoundary(
                 targets[index],
                 sources[index],
                 target_rep,
@@ -25684,28 +25626,6 @@ const ProcBodyBuilder = struct {
             );
         }
         return continuation;
-    }
-
-    fn lowerDirectCallArgAdaptation(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
-    }
-
-    fn lowerDirectCallReturnAdaptation(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
     }
 
     fn assignPlannedCallBoundary(
