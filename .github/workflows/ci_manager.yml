@@ -185,6 +185,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: zig build run-test-zig-tidy-unit
 
+      # Uses real generated compiler options and an empty dependency bundle;
+      # no Roc CLI compilation or published LLVM bundle is needed.
+      - name: Check compiler artifact identities
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_compiler_artifact_identity.py zig \
+            --work-dir "$RUNNER_TEMP/roc-compiler-artifact-identity"
+
       - name: Install actionlint
         if: ${{ !cancelled() }}
         shell: bash
