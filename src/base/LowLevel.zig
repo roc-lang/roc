@@ -633,7 +633,9 @@ pub const LowLevel = enum(u16) {
     /// () -> Box(T): heap cell via allocateWithRefcount (rc=1), payload zero-filled.
     /// Bit-identical to a box_box whose payload is all zeroes.
     box_alloc_zeroed,
-    /// (Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into *ptr.
+    /// (Box(T) | Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into
+    /// the pointed-at payload. A Box address is borrowed for the store, so the
+    /// store keeps its allocation alive.
     ptr_store,
     /// (Ptr(T)) -> T: copy sizeOf(T) bytes out of *ptr.
     ptr_load,
@@ -1668,7 +1670,7 @@ pub const LowLevel = enum(u16) {
             .box_alloc_zeroed => RcEffect.allocates(),
 
             // The stored value's ownership transfers into the pointed-at structure.
-            // The pointer args/results are ptr layouts, which are never refcounted.
+            // A ptr address is never refcounted; a Box address is borrowed.
             .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
 
             .ptr_alloca,

@@ -283,7 +283,9 @@ pub const Constants = struct {
     /// 128: Module environments carry no package-qualified module name, and
     ///      checked procedure names use the module's own name.
     /// 129: Interpolation plans validate segments before assembling values.
-    pub const CACHE_VERSION = 129;
+    /// 130: Recursive value bindings, erased row evidence, and row-default
+    /// constraint discharge are explicit in checked artifacts.
+    pub const CACHE_VERSION = 130;
 };
 
 /// Configuration for the Roc cache system.

@@ -445,34 +445,31 @@ const AbiHooks = struct {
         };
     }
 
-    pub fn callInspectMethod(
+    /// Call the `kind` method slot the first argument's descriptor carries
+    /// with the borrowed `args`.
+    pub fn callDescriptorMethod(
         self: AbiHooks,
+        kind: boxy_runtime.DescriptorMethodKind,
         method: LirProgram.BoxyMethodSlotId,
-        value: Value,
-        value_layout: layout_mod.Idx,
-        desc: *const BoxyTypeDesc,
-    ) Error!boxy_runtime.InspectCallResult {
+        args: []const boxy_runtime.DictCallArg,
+    ) Error!boxy_runtime.DescriptorMethodCallResult {
         const scratch = self.g.value_scratch.allocator();
-        const prepared = try self.g.runtime.prepareInspectCall(
+        const prepared = try self.g.runtime.prepareDescriptorMethodCall(
             self,
             scratch,
+            kind,
             method,
-            .{ .value = value, .layout = value_layout, .source_desc = desc },
+            args,
         );
         const registered = self.g.procs.get(@intFromEnum(prepared.proc)) orelse return error.RuntimeError;
-        if (prepared.arg_values.len == 0) return error.RuntimeError;
-        const argument_is_borrowed = (prepared.borrowed_args & 1) != 0;
-        const worker_borrows_argument = (registered.borrowed_params & 1) != 0;
-        if (argument_is_borrowed and !worker_borrows_argument) {
-            try self.g.runtime.performBoxyLayoutDrop(
-                self,
-                prepared.arg_values[0],
-                prepared.arg_layouts[0],
-                prepared.arg_descs[0],
-                .incref,
-                1,
-                .atomic,
-            );
+        if (prepared.arg_values.len < args.len) return error.RuntimeError;
+        for (0..args.len) |index| {
+            const bit = @as(u64, 1) << @intCast(index);
+            const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
+            const worker_borrows_argument = (registered.borrowed_params & bit) != 0;
+            if (argument_is_borrowed and !worker_borrows_argument) {
+                try self.g.runtime.performBoxyLayoutDrop(self, prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .incref, 1, .atomic);
+            }
         }
 
         const arg_ptrs = try scratch.alloc(?*const anyopaque, prepared.arg_values.len);
@@ -487,16 +484,13 @@ const AbiHooks = struct {
             if (ret_size == 0) null else @ptrCast(ret_value.ptr),
             &ret_desc,
         );
-        if (!argument_is_borrowed and worker_borrows_argument) {
-            try self.g.runtime.performBoxyLayoutDrop(
-                self,
-                prepared.arg_values[0],
-                prepared.arg_layouts[0],
-                prepared.arg_descs[0],
-                .decref,
-                1,
-                .atomic,
-            );
+        for (0..args.len) |index| {
+            const bit = @as(u64, 1) << @intCast(index);
+            const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
+            const worker_borrows_argument = (registered.borrowed_params & bit) != 0;
+            if (!argument_is_borrowed and worker_borrows_argument) {
+                try self.g.runtime.performBoxyLayoutDrop(self, prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .decref, 1, .atomic);
+            }
         }
         return .{
             .value = ret_value,
@@ -1398,6 +1392,58 @@ pub fn roc_boxy_inspect(
     const out_ptr = out orelse abiCrash(g, "inspect result write without an out pointer");
     const out_str: *align(1) builtins.str.RocStr = @ptrCast(out_ptr);
     out_str.* = rendered;
+}
+
+/// Write whether the borrowed boxy values `lhs` and `rhs`, both stored in
+/// `value_layout` as `desc` describes, are equal under derived `is_eq`, as a
+/// Bool byte through `out`.
+pub fn roc_boxy_eq(
+    out: ?[*]u8,
+    lhs: ?[*]const u8,
+    rhs: ?[*]const u8,
+    value_layout: u32,
+    desc: *const BoxyTypeDesc,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+
+    const equal = g.runtime.boxyEq(
+        hooks(g),
+        valueAt(lhs),
+        valueAt(rhs),
+        layoutIdx(value_layout),
+        desc,
+    ) catch abiCrash(g, "equality");
+    const out_ptr = out orelse abiCrash(g, "equality result write without an out pointer");
+    out_ptr[0] = @intFromBool(equal);
+}
+
+/// Write the Hasher state `hasher` points at, fed the borrowed boxy value
+/// `value` (stored in `value_layout` as `desc` describes) under derived
+/// `to_hash`, through `out`.
+pub fn roc_boxy_hash(
+    out: ?[*]u8,
+    value: ?[*]const u8,
+    value_layout: u32,
+    desc: *const BoxyTypeDesc,
+    hasher: ?[*]const u8,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+
+    const hasher_ptr = hasher orelse abiCrash(g, "hash without a Hasher pointer");
+    const seed = std.mem.readInt(u64, hasher_ptr[0..8], .little);
+    const state = g.runtime.boxyHash(
+        hooks(g),
+        valueAt(value),
+        layoutIdx(value_layout),
+        desc,
+        seed,
+    ) catch abiCrash(g, "hash");
+    const out_ptr = out orelse abiCrash(g, "hash result write without an out pointer");
+    std.mem.writeInt(u64, out_ptr[0..8], state, .little);
 }
 
 /// Descriptor-guided refcount operation (`op`: 0 = incref, 1 = decref,

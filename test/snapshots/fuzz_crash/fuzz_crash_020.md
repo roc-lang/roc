@@ -202,6 +202,7 @@ MISSING METHOD - fuzz_crash_020.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_020.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
+TYPE MISMATCH - fuzz_crash_020.md:93:14:93:15
 TYPE MISMATCH - fuzz_crash_020.md:93:22:93:24
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
 MISSING METHOD - fuzz_crash_020.md:105:55:105:66
@@ -1385,6 +1386,31 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
+		(region (start 93 14) (end 93 15))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 93 14) (end 93 15) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "item where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
 		(region (start 93 22) (end 93 24))
 		(headline
 			(reflow "This expression is used in an unexpected way."))
@@ -1396,7 +1422,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Dec")
+			(text "item where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2175,7 +2201,7 @@ expect {
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "[Rum] -> Error"))
-		(patt (type "[Blue, ..] -> Error"))
+		(patt (type "[Blue, ..f] -> Error where [f.is_eq : f, f -> Bool]"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{}"))
@@ -2212,7 +2238,7 @@ expect {
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "[Rum] -> Error"))
-		(expr (type "[Blue, ..] -> Error"))
+		(expr (type "[Blue, ..f] -> Error where [f.is_eq : f, f -> Bool]"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{}"))

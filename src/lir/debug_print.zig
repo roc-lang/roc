@@ -281,6 +281,20 @@ const Printer = struct {
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
                     current = s.next;
                 },
+                .assign_boxy_eq => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{ @intFromEnum(s.lhs), @intFromEnum(s.rhs) });
+                    try writeBoxyDescRef(s.desc, writer);
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
+                .assign_boxy_hash => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_hash value=l{d} hasher=l{d} desc=", .{ @intFromEnum(s.value), @intFromEnum(s.hasher) });
+                    try writeBoxyDescRef(s.desc, writer);
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
                 .assign_boxy_tag => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("boxy_tag desc=");

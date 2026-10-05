@@ -408,6 +408,8 @@ pub const BoxyBuiltinFn = enum {
     tag_ext_desc,
     tag_residual_desc,
     inspect,
+    eq,
+    hash,
     box,
     unbox,
     record_update,
@@ -462,6 +464,8 @@ pub const BoxyBuiltinFn = enum {
             .tag_ext_desc => "roc_boxy_tag_ext_desc",
             .tag_residual_desc => "roc_boxy_tag_residual_desc",
             .inspect => "roc_boxy_inspect",
+            .eq => "roc_boxy_eq",
+            .hash => "roc_boxy_hash",
             .box => "roc_boxy_box",
             .unbox => "roc_boxy_unbox",
             .record_update => "roc_boxy_record_update",
@@ -533,6 +537,8 @@ pub const BoxyBuiltinFn = enum {
             .tag_ext_desc,
             .tag_residual_desc,
             .inspect,
+            .eq,
+            .hash,
             .box,
             .unbox,
             .adapt,
@@ -10352,6 +10358,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -10426,6 +10434,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_dict_ref,
                     .assign_boxy_reuse_box,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -10495,6 +10505,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -18541,6 +18553,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
+        fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const value_layout = self.localLayout(assign.lhs);
+            if (self.localLayout(assign.rhs) != value_layout) {
+                std.debug.panic(
+                    "LIR/codegen invariant violated: boxy equality operands had layouts {d} and {d}",
+                    .{ @intFromEnum(value_layout), @intFromEnum(self.localLayout(assign.rhs)) },
+                );
+            }
+            const lhs_off = try self.boxyLocalBytesOffset(assign.lhs);
+            const rhs_off = try self.boxyLocalBytesOffset(assign.rhs);
+            const desc_slot = try self.boxyDescRefToSlot(assign.desc);
+            const out_slot = self.codegen.allocStackSlot(8);
+            try self.zeroStackArea(out_slot, 8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            if (lhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            if (rhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addMemArg(frame_ptr, desc_slot);
+            try self.callBoxyBuiltin(&builder, .eq);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyHash(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const value_off = try self.boxyLocalBytesOffset(assign.value);
+            const value_layout = self.localLayout(assign.value);
+            const hasher_off = try self.boxyLocalBytesOffset(assign.hasher);
+            const desc_slot = try self.boxyDescRefToSlot(assign.desc);
+            const out_slot = self.codegen.allocStackSlot(8);
+            try self.zeroStackArea(out_slot, 8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            if (value_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addMemArg(frame_ptr, desc_slot);
+            if (hasher_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try self.callBoxyBuiltin(&builder, .hash);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
         /// Allocate a short-lived general register used only during instruction selection.
         /// Semantic values are materialized to `local_locations`; exhausting this pool
         /// therefore indicates an internal lifetime bug rather than source-level pressure.
@@ -22997,6 +23053,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .assign_boxy_inspect => |assign| {
                             const value_loc = try self.generateBoxyInspect(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_eq => |assign| {
+                            const value_loc = try self.generateBoxyEq(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_hash => |assign| {
+                            const value_loc = try self.generateBoxyHash(assign);
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },

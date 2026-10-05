@@ -209,6 +209,8 @@ comptime {
         "roc_boxy_tag_ext_desc",
         "roc_boxy_tag_residual_desc",
         "roc_boxy_inspect",
+        "roc_boxy_eq",
+        "roc_boxy_hash",
         "roc_boxy_box",
         "roc_boxy_unbox",
         "roc_boxy_record_update",

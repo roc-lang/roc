@@ -29135,7 +29135,7 @@ const BodyContext = struct {
         /// Produce a typed block's expression data rather than its expression.
         as_data: bool = false,
         result_node: NodeId = undefined,
-        stage: enum { start, statements, statement, uninhabited_statement, expanded, final_expr, discarded_final, finished } = .start,
+        stage: enum { start, statements, statement, uninhabited_statement, expanded, recursive_direct, final_expr, discarded_final, finished } = .start,
         saved_guard_frames: RuntimeDemandGuardFrameStack = undefined,
         lowered: LoweredStatements = .{ .items = &.{}, .len = 0, .termination = .none },
         index: usize = 0,
@@ -29148,6 +29148,10 @@ const BodyContext = struct {
         expanded: ExpandedPatternStatement = undefined,
         /// The binders an expanded stateful pattern statement reassigns. Owned.
         expanded_merge_binders: []MergeBinder = &.{},
+        recursive_binders: []checked.PatternBinderId = &.{},
+        recursive_locals: []DraftLocalId = &.{},
+        recursive_direct_pat: DraftPatId = undefined,
+        recursive_direct_cell: DraftTypeCell = undefined,
         /// The cell of the zero-branch match consuming a proven-uninhabited
         /// final value's scrutinee.
         final_wrap: ?DraftTypeCell = null,
@@ -61063,6 +61067,10 @@ const BodyContext = struct {
         self.restoreSourceLocation(&task.statement_saved);
         self.allocator.free(task.expanded_merge_binders);
         task.expanded_merge_binders = &.{};
+        self.allocator.free(task.recursive_binders);
+        task.recursive_binders = &.{};
+        self.allocator.free(task.recursive_locals);
+        task.recursive_locals = &.{};
         if (task.stage != .start) {
             self.runtime_demand_guard_frames = task.saved_guard_frames;
             self.allocator.free(task.lowered.items);
@@ -61095,6 +61103,27 @@ const BodyContext = struct {
                 if (!try self.finishBlockStatement(task, .{ .stmt = null, .termination = termination })) return self.beginBlockTail(task);
                 task.stage = .statements;
             },
+            .recursive_direct => {
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                const region = self.view.bodies.statement(task.statement).source_region;
+                self.builder.current_loc = try self.sourceLocFor(region);
+                self.builder.current_region = region;
+                const value = input.?.exprValue();
+                const requested_cell = task.recursive_direct_cell;
+                switch (requested_cell) {
+                    .sealed => |requested_ty| switch (self.exprTypeCell(value)) {
+                        .sealed => |produced_ty| if (!self.sameType(requested_ty, produced_ty)) Common.invariant("recursive declaration value produced a different sealed type"),
+                        .graph_node => Common.invariant("recursive declaration value produced a graph-backed type for a sealed request"),
+                    },
+                    .graph_node => |requested_node| try relateRequestComponent(self.graph, requested_node, try self.exprTypeCell(value).toGraphNode(self.graph)),
+                }
+                const stmt = try self.addStmt(.{ .let_ = .{ .pat = task.recursive_direct_pat, .value = value, .recursive = true } });
+                if (!try self.finishBlockStatement(task, .{ .stmt = stmt, .termination = .none })) return self.beginBlockTail(task);
+                task.stage = .statements;
+            },
             .final_expr => return self.finishBlockFinal(task, input.?.exprValue()),
             .discarded_final => {
                 const final_result = input.?.statementValue();
@@ -61124,6 +61153,12 @@ const BodyContext = struct {
             if (!statement_diverges) {
                 if (try self.uninhabitedStatementScrutineeStep(statement)) |step| {
                     task.stage = .uninhabited_statement;
+                    return step;
+                }
+            }
+            if (!statement_diverges) {
+                if (try self.beginRecursiveDeclStatement(task)) |step| {
+                    task.stage = .recursive_direct;
                     return step;
                 }
             }
@@ -61257,6 +61292,10 @@ const BodyContext = struct {
     fn finishBlockStatement(self: *BodyContext, task: *BlockTask, result: LoweredStatement) Allocator.Error!bool {
         self.restoreSourceLocation(&task.statement_saved);
         if (result.stmt) |stmt| try task.lowered.append(self.allocator, stmt);
+        if (task.recursive_binders.len != 0) {
+            if (!statementTerminationIsNone(result.termination)) Common.invariant("non-divergent recursive declaration terminated its block");
+            try self.finishRecursiveDeclStatement(task);
+        }
         {
             var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
             defer timing_scope.end();
@@ -61365,6 +61404,114 @@ const BodyContext = struct {
             .none => true,
             .checked_control_transfer, .uninhabited => false,
         };
+    }
+
+    /// Reserve a recursive declaration's binders before its initializer lowers.
+    fn beginRecursiveDeclStatement(self: *BodyContext, task: *BlockTask) Allocator.Error!?LowerStep {
+        const statement = self.view.bodies.statement(task.statement);
+        const decl = switch (statement.data) {
+            .decl => |decl| decl,
+            .pending, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
+        };
+        if (!decl.recursive or self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.current_region = statement.source_region;
+        const merge_binders: []MergeBinder = switch (self.view.bodies.expr(decl.expr).data) {
+            .if_, .match_, .for_ => try self.stateMergeBinders(decl.expr),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => try self.allocator.alloc(MergeBinder, 0),
+        };
+        defer self.allocator.free(merge_binders);
+        if (merge_binders.len == 0 and self.view.bodies.pattern(decl.pattern).data == .assign) {
+            const pattern = decl.pattern;
+            const expr = decl.expr;
+            const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(expr)) |ty|
+                .{ .sealed = ty }
+            else
+                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
+            if (requested_cell == .graph_node) {
+                try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell);
+            }
+            const pat = try self.lowerShapeFreePatternAtCell(pattern, requested_cell);
+            task.recursive_direct_pat = pat;
+            task.recursive_direct_cell = requested_cell;
+            return requestLowerChild(self, expr, requested_cell);
+        }
+        var pattern_binders = std.ArrayList(BinderRestore).empty;
+        defer pattern_binders.deinit(self.allocator);
+        try self.savePatternBinders(decl.pattern, &pattern_binders);
+        task.recursive_binders = try self.allocator.alloc(checked.PatternBinderId, pattern_binders.items.len + merge_binders.len);
+        const binders = task.recursive_binders;
+        task.recursive_locals = try self.allocator.alloc(DraftLocalId, binders.len);
+        const recursive_locals = task.recursive_locals;
+        for (pattern_binders.items, 0..) |item, index| {
+            const cell = DraftTypeCell.fromGraphNode(try self.instNode(checkedBinderType(self.view, item.binder)));
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, item.binder);
+            try self.bindLocalName(local, item.binder);
+            try self.binders.put(item.binder, local);
+            binders[index] = item.binder;
+            recursive_locals[index] = local;
+        }
+        // A reassigned `var` keeps its previous version while the value is
+        // lowered; only the statement's result version is recursive-bound.
+        for (merge_binders, pattern_binders.items.len..) |merge, index| {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.bindLocalName(local, merge.binder);
+            binders[index] = merge.binder;
+            recursive_locals[index] = local;
+        }
+
+        return null;
+    }
+
+    /// Wrap the initializer's ordinary statements in its recursive tuple binding.
+    fn finishRecursiveDeclStatement(self: *BodyContext, task: *BlockTask) Allocator.Error!void {
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        const region = self.view.bodies.statement(task.statement).source_region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
+        const binders = task.recursive_binders;
+        const recursive_locals = task.recursive_locals;
+        defer {
+            self.allocator.free(task.recursive_binders);
+            task.recursive_binders = &.{};
+            self.allocator.free(task.recursive_locals);
+            task.recursive_locals = &.{};
+        }
+        const item_nodes = try self.graph.arena().alloc(NodeId, binders.len);
+        const items = try self.allocator.alloc(DraftExprId, binders.len);
+        defer self.allocator.free(items);
+        const pats = try self.allocator.alloc(DraftPatId, binders.len);
+        defer self.allocator.free(pats);
+        for (binders, recursive_locals, 0..) |binder, recursive_local, index| {
+            const bound = self.binders.get(binder) orelse
+                Common.invariant("recursive declaration lowering did not bind one of its binders");
+            const bound_cell = self.localTypeCell(bound);
+            const recursive_cell = self.localTypeCell(recursive_local);
+            item_nodes[index] = try bound_cell.toGraphNode(self.graph);
+            try relateRequestComponent(self.graph, try recursive_cell.toGraphNode(self.graph), item_nodes[index]);
+            items[index] = try self.addExprWithTypeCell(bound_cell, .{ .local = bound });
+            pats[index] = try self.addPatWithTypeCell(recursive_cell, .{ .bind = recursive_local });
+            try self.binders.put(binder, recursive_local);
+        }
+        const tuple_cell = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .tuple = item_nodes }));
+        const tuple = try self.addExprWithTypeCell(tuple_cell, .{ .tuple = try self.addExprSpan(items) });
+        const value = try self.addExprWithTypeCell(tuple_cell, .{ .block = .{
+            .statements = try self.addStmtSpan(task.lowered.items[task.statement_start..task.lowered.len]),
+            .final_expr = tuple,
+        } });
+        task.lowered.len = task.statement_start;
+        try task.lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+            .pat = try self.addPatWithTypeCell(tuple_cell, .{ .tuple = try self.addPatSpan(pats) }),
+            .value = value,
+            .recursive = true,
+        } }));
     }
 
     /// Start a pattern statement that binds several block statements, its

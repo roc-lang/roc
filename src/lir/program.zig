@@ -411,6 +411,33 @@ pub const BoxyTypeDesc = struct {
     /// One descriptor: this value in the storage of `inspect_method`'s
     /// worker parameter, instantiated at this descriptor's type arguments.
     inspect_arg_descs: BoxySpan = .{},
+    /// The type's own `is_eq`, which descriptor-guided equality calls in
+    /// place of comparing the value's structure.
+    eq_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `eq_method`'s worker receives, in worker
+    /// parameter order, like `inspect_hidden_descs`.
+    eq_hidden_descs: BoxySpan = .{},
+    /// Two descriptors: this value in the storage of each of `eq_method`'s
+    /// worker parameters.
+    eq_arg_descs: BoxySpan = .{},
+    /// The static dictionaries `eq_method`'s worker receives at this
+    /// descriptor's type, in worker parameter order.
+    eq_nested_dicts: BoxySpan = .{},
+    /// The type's own `to_hash`, which descriptor-guided hashing calls in
+    /// place of hashing the value's structure.
+    hash_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `hash_method`'s worker receives, in worker
+    /// parameter order, like `inspect_hidden_descs`.
+    hash_hidden_descs: BoxySpan = .{},
+    /// Two descriptors: this value in the storage of `hash_method`'s worker
+    /// value parameter, and the Hasher.
+    hash_arg_descs: BoxySpan = .{},
+    /// The static dictionaries `hash_method`'s worker receives at this
+    /// descriptor's type, in worker parameter order.
+    hash_nested_dicts: BoxySpan = .{},
+    /// The described value is builtin Bool, which derived hashing writes as a
+    /// Bool rather than as a tag.
+    is_bool: bool = false,
     debug_checked_type: ?checked.CheckedTypeId = null,
     /// Set for static descriptors once lowering has produced every descriptor;
     /// a descriptor built at runtime reads runtime context.
@@ -944,6 +971,10 @@ pub const Result = struct {
                             }
                         }
                     },
+                    7 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_hidden_descs, &self.index)) |ref| return ref,
+                    8 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_arg_descs, &self.index)) |ref| return ref,
+                    9 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_hidden_descs, &self.index)) |ref| return ref,
+                    10 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_arg_descs, &self.index)) |ref| return ref,
                     else => return null,
                 }
                 self.section += 1;

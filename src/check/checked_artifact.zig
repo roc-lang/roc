@@ -2516,6 +2516,11 @@ pub const CheckedTypeVariable = struct {
     constraints: []const CheckedStaticDispatchConstraint = &.{},
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
+    /// A flex row tail whose every constraint is an `is_eq` or `to_hash`: the
+    /// obligations deriving those methods over an open row give its tail.
+    /// Closing the row satisfies them, so the tail still seals to its row
+    /// default (design.md "Derived Equality And Hashing Over Open Rows").
+    row_default_discharges_constraints: bool = false,
 };
 
 /// Artifact-stable identity of a `??` default in its declaring module; see
@@ -2993,7 +2998,7 @@ pub const CheckedTypePayload = union(enum) {
     /// classification's own question. Ask only at `.flex` or `.rigid`.
     pub fn variableSealsToRowDefault(self: CheckedTypePayload) bool {
         return switch (self) {
-            .flex => |variable| variable.constraints.len == 0 and
+            .flex => |variable| (variable.constraints.len == 0 or variable.row_default_discharges_constraints) and
                 variable.numeric_default_phase == null and
                 variable.row_default != null,
             .rigid => false,
@@ -3038,6 +3043,7 @@ pub const StoredTypeVariable = struct {
     constraints: CheckedTypeRange = .{},
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
+    row_default_discharges_constraints: bool = false,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -3171,6 +3177,7 @@ fn reconstructCheckedTypeVariable(pool_owner: anytype, v: StoredTypeVariable) Ch
         .constraints = pool_owner.constraintPool()[v.constraints.start .. v.constraints.start + v.constraints.len],
         .numeric_default_phase = v.numeric_default_phase,
         .row_default = v.row_default,
+        .row_default_discharges_constraints = v.row_default_discharges_constraints,
     };
 }
 
@@ -4446,6 +4453,7 @@ pub const CheckedTypeStore = struct {
             .constraints = constraints,
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
+            .row_default_discharges_constraints = variable.row_default_discharges_constraints,
         };
     }
 
@@ -5837,6 +5845,7 @@ fn cloneCheckedTypeBuildVariable(
         .constraints = constraints,
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
+        .row_default_discharges_constraints = variable.row_default_discharges_constraints,
     };
 }
 
@@ -5872,6 +5881,7 @@ fn snapshotCheckedTypeVariable(allocator: Allocator, variable: CheckedTypeVariab
         .constraints = constraints,
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
+        .row_default_discharges_constraints = variable.row_default_discharges_constraints,
     };
 }
 
@@ -8571,7 +8581,10 @@ const CheckedTypePublisher = struct {
 
         const resolved = self.module.typeStoreConst().resolveVar(task.var_);
         task.resolved_var = resolved.var_;
-        task.row_default = checkedTypeVariableRowDefault(resolved.desc.content, task.row_default_candidate);
+        task.row_default = checkedTypeVariableRowDefault(resolved.desc.content, task.row_default_candidate, switch (resolved.desc.content) {
+            .flex => |flex| rowDefaultDischargesConstraints(self.module, flex.constraints),
+            .rigid, .err, .alias, .field_presence, .structure => false,
+        });
         const resolved_var = task.resolved_var;
         const row_default = task.row_default;
 
@@ -8742,6 +8755,7 @@ const CheckedTypePublisher = struct {
                 else => {
                     task.build.flex.constraints = input.?.get(.constraints);
                     task.build.flex.numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
+                    task.build.flex.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, flex.constraints);
                 },
             },
             .rigid => |rigid| switch (cursor) {
@@ -9046,17 +9060,30 @@ const CheckedTypePublisher = struct {
 /// A row-tail occurrence supplies a close-to-empty default only when its
 /// variable has no static-dispatch requirements. A constrained row must stay
 /// open so each use can instantiate both the row and its evidence together.
+/// `flex_constraints_discharged` is `rowDefaultDischargesConstraints` of a
+/// flex `content`'s constraints.
 fn checkedTypeVariableRowDefault(
     content: types.Content,
     candidate: ?RowDefault,
+    flex_constraints_discharged: bool,
 ) ?RowDefault {
     const default = candidate orelse return null;
-    const constraints = switch (content) {
-        .flex => |flex| flex.constraints,
-        .rigid => |rigid| rigid.constraints,
-        .err, .alias, .field_presence, .structure => return null,
+    return switch (content) {
+        .flex => |flex| if (flex.constraints.len() == 0 or flex_constraints_discharged) default else null,
+        .rigid => |rigid| if (rigid.constraints.len() == 0) default else null,
+        .err, .alias, .field_presence, .structure => null,
     };
-    return if (constraints.len() == 0) default else null;
+}
+
+/// Whether closing a row satisfies every constraint on its flex tail: each is
+/// an `is_eq` or `to_hash`, which the empty row derives.
+fn rowDefaultDischargesConstraints(module: TypedCIR.Module, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
+    if (constraints.len() == 0) return false;
+    const idents = &module.moduleEnvConst().idents;
+    for (module.typeStoreConst().sliceStaticDispatchConstraints(constraints)) |constraint| {
+        if (!constraint.fn_name.eql(idents.is_eq) and !constraint.fn_name.eql(idents.to_hash)) return false;
+    }
+    return true;
 }
 
 fn applyCheckedTypeRowDefault(
@@ -9085,7 +9112,7 @@ fn applyCheckedTypeRowDefault(
 }
 
 fn setStoredTypeVariableRowDefault(variable: *StoredTypeVariable, row_default: RowDefault) void {
-    if (variable.constraints.len != 0) {
+    if (variable.constraints.len != 0 and !variable.row_default_discharges_constraints) {
         checkedArtifactInvariant("checked row default was assigned to a constrained type variable", .{});
     }
     if (variable.row_default) |existing| {
@@ -10125,19 +10152,19 @@ test "checked row defaults apply only to unconstrained type variables" {
 
     try std.testing.expectEqual(
         RowDefault.empty_record,
-        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = no_constraints } }, .empty_record).?,
+        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = no_constraints } }, .empty_record, false).?,
     );
     try std.testing.expectEqual(
         RowDefault.empty_tag_union,
-        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = no_constraints } }, .empty_tag_union).?,
+        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = no_constraints } }, .empty_tag_union, false).?,
     );
     try std.testing.expectEqual(
         null,
-        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = one_constraint } }, .empty_record),
+        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = one_constraint } }, .empty_record, false),
     );
     try std.testing.expectEqual(
         null,
-        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = one_constraint } }, .empty_tag_union),
+        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = one_constraint } }, .empty_tag_union, false),
     );
 }
 
@@ -10590,6 +10617,10 @@ pub const CheckedPatternBinder = struct {
     /// A generalized callable lookup binding. Its uses instantiate the
     /// referenced callable; the binding does not own a runtime value cell.
     is_scheme_alias: bool = false,
+    /// Bound by a recursive value declaration (`decl.recursive`): functions
+    /// inside the declaration's value capture this binder before the value
+    /// exists.
+    recursive_value: bool = false,
 };
 
 /// Public `CheckedStringLiteralId` declaration.
@@ -10801,7 +10832,11 @@ pub const CheckedConditionLoop = struct {
 /// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
-    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    /// `recursive` is true when checking recorded a reference to the
+    /// declaration's own binders from inside its expression. Such a reference
+    /// is always delayed through a function, so the binding is a recursive
+    /// value whose runtime construction must close over itself.
+    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId, recursive: bool = false },
     /// A local function binding promoted to a procedure of its own
     /// (`hoist_roots.PromotedLocalProcedure`). It evaluates nothing where it
     /// is written: `expr` is the root of the procedure's own template, and
@@ -11278,7 +11313,7 @@ pub const StoredCheckedPatternData = union(enum) {
 /// Internal, relocation-invariant (POD) form of `CheckedStatementData`.
 pub const StoredCheckedStatementData = union(enum) {
     pending,
-    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId, recursive: bool = false },
     promoted_proc: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_uninitialized: struct { pattern: CheckedPatternId },
@@ -11504,7 +11539,7 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
         .type_anno => .type_anno,
         .type_var_alias => .type_var_alias,
         .runtime_error => .runtime_error,
-        .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr } },
+        .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr, .recursive = s.recursive } },
         .promoted_proc => |s| .{ .promoted_proc = .{ .pattern = s.pattern, .expr = s.expr } },
         .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
         .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
@@ -12695,6 +12730,15 @@ pub const CheckedBodyStore = struct {
         defer promoted_patterns.deinit(allocator);
         try promoted_patterns.ensureTotalCapacity(allocator, @intCast(promoted_local_procedures.len));
         for (promoted_local_procedures) |promoted| promoted_patterns.putAssumeCapacity(promoted.pattern, {});
+        var recursively_referenced_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){};
+        defer recursively_referenced_patterns.deinit(allocator);
+        for (module.moduleEnvConst().scheme_uses.items.items) |record| {
+            if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
+            if (module.nodeTag(@enumFromInt(record.node_idx)) != .expr_var) continue;
+            const lookup = module.expr(@enumFromInt(record.node_idx)).data;
+            if (lookup != .e_lookup_local) continue;
+            try recursively_referenced_patterns.put(allocator, lookup.e_lookup_local.pattern_idx, {});
+        }
         var exprs = std.ArrayList(CheckedExpr).empty;
         errdefer exprs.deinit(allocator);
         errdefer deinitCheckedExprList(allocator, exprs.items);
@@ -12796,6 +12840,7 @@ pub const CheckedBodyStore = struct {
             .match_branch_pattern_pool = &match_branch_pattern_pool,
             .binder_remap_pool = &binder_remap_pool,
             .promoted_patterns = &promoted_patterns,
+            .recursively_referenced_patterns = &recursively_referenced_patterns,
         };
 
         node_idx = 0;
@@ -13323,7 +13368,7 @@ pub const CheckedBodyStore = struct {
             .type_anno => .type_anno,
             .type_var_alias => .type_var_alias,
             .runtime_error => .runtime_error,
-            .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr } },
+            .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr, .recursive = s.recursive } },
             .promoted_proc => |s| .{ .promoted_proc = .{ .pattern = s.pattern, .expr = s.expr } },
             .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
             .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
@@ -15331,6 +15376,29 @@ const CheckedBodyPayloadCopier = struct {
     /// Binding patterns of the local functions checking promoted to
     /// procedures of their own.
     promoted_patterns: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+    /// Local value binders that checking recorded as referenced from inside
+    /// their own binding's value.
+    recursively_referenced_patterns: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+
+    /// Whether the declaration is a recursive value, marking each of its
+    /// binders `recursive_value` when it is.
+    fn publishRecursiveValueDecl(self: *@This(), pattern: CIR.Pattern.Idx) Allocator.Error!bool {
+        if (self.recursively_referenced_patterns.count() == 0) return false;
+        var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binders.deinit(self.allocator);
+        var scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer scratch.deinit(self.allocator);
+        try can.DependencyGraph.appendPatternBinders(self.module.moduleEnvConst(), pattern, &binders, &scratch, self.allocator);
+        const recursive = for (binders.items) |binder| {
+            if (self.recursively_referenced_patterns.contains(binder)) break true;
+        } else false;
+        if (!recursive) return false;
+        for (binders.items) |binder| {
+            const id = try self.patternBinder(binder);
+            self.pattern_binders.items[@intFromEnum(id)].recursive_value = true;
+        }
+        return true;
+    }
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -15792,7 +15860,11 @@ const CheckedBodyPayloadCopier = struct {
                     const binder = try self.patternBinder(decl.pattern);
                     self.pattern_binders.items[@intFromEnum(binder)].is_scheme_alias = true;
                 }
-                break :blk .{ .decl = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } };
+                break :blk .{ .decl = .{
+                    .pattern = self.checkedPattern(decl.pattern),
+                    .expr = self.checkedExpr(decl.expr),
+                    .recursive = try self.publishRecursiveValueDecl(decl.pattern),
+                } };
             },
             .s_var => |var_| .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } },
             .s_var_uninitialized => |var_| .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } },
@@ -18508,7 +18580,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @enumFromInt(record.scheme_root),
                     {},
                 ),
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
             }
         }
 
@@ -19105,7 +19177,10 @@ const EvidencePass = struct {
             if (self.templateEvidenceSchemeVar(template.*, &template_defs)) |scheme_var| {
                 const schema = try self.publishScheme(scheme_var);
                 template.scheme_vars = schema.vars;
-                template.evidence_params = schema.params;
+                template.evidence_params = if (self.isCallableBindingWrapper(template.*))
+                    try self.appendReturnedCallableEvidenceParams(schema.params)
+                else
+                    schema.params;
             } else {
                 // Constant-evaluation wrappers retain the value's type variables,
                 // but have no caller-supplied dispatch parameters of their own.
@@ -19442,9 +19517,58 @@ const EvidencePass = struct {
         return .{ .start = start, .len = @intCast(identity_vars.len) };
     }
 
-    /// Only procedure definitions and hoisted source-pattern roots bind an
-    /// evidence chain. Constant and expression entry wrappers evaluate their
-    /// values without receiving the value's dispatch parameters as arguments.
+    fn isCallableBindingWrapper(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
+        return switch (template.body) {
+            .entry_wrapper => |wrapper_id| blk: {
+                const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
+                break :blk root.kind == .callable_binding and root.source_pattern == null;
+            },
+            .checked_body, .intrinsic_wrapper, .unimplemented => false,
+        };
+    }
+
+    /// A callable binding's wrapper takes no arguments and returns the
+    /// binding's callable, so a dispatcher at a path over that callable is at
+    /// the same path below the wrapper's return. The parameters keep the
+    /// binding's scheme order, which a use's evidence follows.
+    fn appendReturnedCallableEvidenceParams(self: *EvidencePass, params: artifact_serialize.Span) Allocator.Error!artifact_serialize.Span {
+        const start: u32 = @intCast(self.evidence_params_pool.items.len);
+        for (params.start..params.start + params.len) |index| {
+            var param = self.evidence_params_pool.items[index];
+            switch (param.source) {
+                .scheme_callable => if (param.path.len != 0) {
+                    var chain: std.ArrayList(static_dispatch.EvidencePathStep) = .empty;
+                    defer chain.deinit(self.allocator);
+                    var node = param.path.last;
+                    while (node != static_dispatch.no_evidence_path_node) {
+                        const path_node = self.evidence_path_nodes.items[node];
+                        try chain.append(self.allocator, path_node.step);
+                        node = path_node.parent;
+                    }
+                    var parent: u32 = @intCast(self.evidence_path_nodes.items.len);
+                    try self.evidence_path_nodes.append(self.allocator, .{ .parent = static_dispatch.no_evidence_path_node, .step = .{ .kind = @intFromEnum(static_dispatch.EvidencePathStep.Kind.fn_ret), .data = 0 } });
+                    var step_index = chain.items.len;
+                    while (step_index > 0) {
+                        step_index -= 1;
+                        const next_node: u32 = @intCast(self.evidence_path_nodes.items.len);
+                        try self.evidence_path_nodes.append(self.allocator, .{ .parent = parent, .step = chain.items[step_index] });
+                        parent = next_node;
+                    }
+                    param.path = .{ .last = parent, .len = param.path.len + 1 };
+                },
+                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => {},
+            }
+            try self.evidence_params_pool.append(self.allocator, param);
+        }
+        return .{ .start = start, .len = params.len };
+    }
+
+    /// Only procedure definitions, hoisted source-pattern roots, and callable
+    /// bindings bind an evidence chain. A callable binding's wrapper produces
+    /// the binding's callable for a use, which supplies the binding's
+    /// dispatch parameters exactly as a use of a procedure does. Constant and
+    /// expression entry wrappers evaluate their values without receiving the
+    /// value's dispatch parameters as arguments.
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -19454,7 +19578,8 @@ const EvidencePass = struct {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                break :blk if (root.source_pattern) |pattern| ModuleEnv.varFrom(pattern) else null;
+                if (root.source_pattern) |pattern| break :blk ModuleEnv.varFrom(pattern);
+                break :blk if (root.kind == .callable_binding) rootSchemeVar(root) else null;
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
         };
@@ -19547,7 +19672,7 @@ const EvidencePass = struct {
                     const root_entry = try self.where_method_use_by_fn_root.getOrPut(root);
                     if (!root_entry.found_existing) root_entry.value_ptr.* = @intCast(i);
                 },
-                .nested_function_use, .recursive_reference => {},
+                .nested_function_use, .recursive_reference, .recursive_value_reference => {},
             }
         }
 
@@ -21417,7 +21542,7 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity(evidence);
                 continue;
             }
-            if (param.path_len == 0 or param.source == .constraint_callable) {
+            if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
                 entries.appendAssumeCapacity((try self.evidenceForRecordParam(pairs, param, true)).?);
                 continue;
             }
@@ -36484,6 +36609,7 @@ const CheckedTypeStoreImportProjector = struct {
             .constraints = constraints,
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
+            .row_default_discharges_constraints = variable.row_default_discharges_constraints,
         };
     }
 

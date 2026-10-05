@@ -2117,6 +2117,14 @@ const Pass = struct {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
+                .assign_boxy_eq => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_hash => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
                 .assign_boxy_tag => |s| {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
@@ -2337,6 +2345,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2489,6 +2499,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2649,6 +2661,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2722,6 +2736,8 @@ const Pass = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -4253,6 +4269,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -4307,6 +4325,8 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -4409,6 +4429,8 @@ const Pass = struct {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -4726,6 +4748,16 @@ const Pass = struct {
                         current = s.next;
                     },
                     .assign_boxy_inspect => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_eq => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_hash => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -6333,6 +6365,8 @@ const RangeProveCertify = struct {
                 .assign_boxy_unbox => |t| try list.append(allocator, t.next),
                 .assign_boxy_adapt => |t| try list.append(allocator, t.next),
                 .assign_boxy_inspect => |t| try list.append(allocator, t.next),
+                .assign_boxy_eq => |t| try list.append(allocator, t.next),
+                .assign_boxy_hash => |t| try list.append(allocator, t.next),
                 .assign_boxy_tag => |t| try list.append(allocator, t.next),
                 .assign_boxy_tag_payload => |t| try list.append(allocator, t.next),
                 .assign_call_dict => |t| try list.append(allocator, t.next),

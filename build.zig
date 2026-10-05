@@ -791,6 +791,9 @@ const CheckTypeCheckerPatternsStep = struct {
 
     const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
     const excluded_ranges = [_]ExcludedRange{
+        // Runtime equality compares Roc value bytes, never compiler identifiers.
+        .{ .file = "boxy_runtime.zig", .start = 5614, .end = 5614 },
+        .{ .file = "boxy_runtime.zig", .start = 5624, .end = 5624 },
         // Cross-module name matching in Check.zig requires string comparison (lines 5530-5547)
         // This is necessary because origin_module is an ident from the type's defining module,
         // while module_name is from the importing module's ident store - no way to compare without strings

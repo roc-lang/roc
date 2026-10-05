@@ -8774,6 +8774,8 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_record_update", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_adapt", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_inspect", &.{ .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_eq", &.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_hash", &.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag_payload", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag_match", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
@@ -9118,6 +9120,37 @@ fn generateBoxyInspect(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.source))));
     try self.resolveBoxyDesc(assign.source_desc);
     try self.emitBoxyCall("roc_boxy_inspect");
+    try self.emitBoxyOutValue(target_layout, out_ptr);
+}
+
+fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!void {
+    const target_layout = self.procLocalLayoutIdx(assign.target);
+    const value_layout = self.procLocalLayoutIdx(assign.lhs);
+    if (self.procLocalLayoutIdx(assign.rhs) != value_layout) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: boxy equality operands had layouts {d} and {d}",
+            .{ @intFromEnum(value_layout), @intFromEnum(self.procLocalLayoutIdx(assign.rhs)) },
+        );
+    }
+    const out_ptr = try self.allocBoxyOutPtr(target_layout);
+    try self.emitLocalGet(out_ptr);
+    try self.emitBoxyValuePtr(assign.lhs);
+    try self.emitBoxyValuePtr(assign.rhs);
+    try self.emitI32Const(@intCast(@intFromEnum(value_layout)));
+    try self.resolveBoxyDesc(assign.desc);
+    try self.emitBoxyCall("roc_boxy_eq");
+    try self.emitBoxyOutValue(target_layout, out_ptr);
+}
+
+fn generateBoxyHash(self: *Self, assign: anytype) Allocator.Error!void {
+    const target_layout = self.procLocalLayoutIdx(assign.target);
+    const out_ptr = try self.allocBoxyOutPtr(target_layout);
+    try self.emitLocalGet(out_ptr);
+    try self.emitBoxyValuePtr(assign.value);
+    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.value))));
+    try self.resolveBoxyDesc(assign.desc);
+    try self.emitBoxyValuePtr(assign.hasher);
+    try self.emitBoxyCall("roc_boxy_hash");
     try self.emitBoxyOutValue(target_layout, out_ptr);
 }
 
@@ -9924,6 +9957,16 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .assign_boxy_inspect => |assign| {
             try self.generateBoxyInspect(assign);
+            try self.bindAssignedLocal(assign.target);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .assign_boxy_eq => |assign| {
+            try self.generateBoxyEq(assign);
+            try self.bindAssignedLocal(assign.target);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .assign_boxy_hash => |assign| {
+            try self.generateBoxyHash(assign);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
