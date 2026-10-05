@@ -3767,6 +3767,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
     );
     defer interp.deinit();
     static_data.install(&interp);
+    static_data.ownByInterpreter(&interp);
 
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);

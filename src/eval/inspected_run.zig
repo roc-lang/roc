@@ -366,6 +366,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
     );
     defer interp.deinit();
     static_data.install(&interp);
+    static_data.ownByInterpreter(&interp);
 
     const arg_layouts = try mainProcArgLayouts(allocator, program);
     defer allocator.free(arg_layouts);

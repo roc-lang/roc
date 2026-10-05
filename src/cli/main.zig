@@ -6802,6 +6802,7 @@ fn evaluateLirImageEntrypoint(
     );
     defer interpreter.deinit();
     static_data.install(&interpreter);
+    static_data.ownByInterpreter(&interpreter);
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
         error.EntrypointNotFound => {
@@ -13288,6 +13289,7 @@ fn runInterpreterTestRoots(
     defer interpreter.deinit();
 
     static_values.install(&interpreter);
+    static_values.ownByInterpreter(&interpreter);
 
     const expect_counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, lowered.lir_result.expect_sites.items.len);
     defer ctx.gpa.free(expect_counts);
