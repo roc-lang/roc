@@ -76,10 +76,6 @@ batches and of each other:
   `Severity.isError`/`toLspSeverity` helpers; snapshot tool and
   playground call the compiler's report-collection loop instead of
   copying it.
-- [small/lsp-and-docs-truth-reuse.md](small/lsp-and-docs-truth-reuse.md)—
-  the forked doc-comment gatherer (LSP and docs already disagree on
-  `###`), three line/column implementations, the positional
-  semantic-token legend, the hand-copied completion roster.
 - [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
   one module inventory (seven restatements plus minici's copy, with
   existing test-coverage divergence), one CI gate list, one Zig pin.
