@@ -394,3 +394,21 @@ shall not be used in advertising or otherwise to promote the sale,
 use or other dealings in these Data Files or Software without prior
 written authorization of the copyright holder.
 
+
+===========================================================
+
+* Bytebox - https://github.com/rtfeldman/bytebox
+
+This source code can be found in vendor/bytebox/. Its origin and local changes
+are documented in vendor/bytebox/ROC_VENDOR.md. The MIT license and copyright
+notice are retained in vendor/bytebox/LICENSE.
+
+===========================================================
+
+* kcov - https://github.com/roc-lang/zig-kcov
+
+This coverage tool source code can be found in vendor/kcov/. Its origin and
+local changes are documented in vendor/kcov/ROC_VENDOR.md. The GPL version 2
+license is retained in vendor/kcov/COPYING; licenses for embedded third-party
+report assets are retained in vendor/kcov/COPYING.externals and source headers.
+It is a separate optional coverage executable and is not linked into Roc.

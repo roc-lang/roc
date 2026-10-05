@@ -1,7 +1,7 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     // CPU baseline notes for each dependency.
     //
     // Dependencies fall into two groups that behave differently under `-Dcpu`:
@@ -92,10 +92,7 @@
         // `@Vector` in bytebox implements wasm's fixed-128-bit `v128` semantics,
         // which is already the natural SSE2 lowering. A lower `-Dcpu` costs it
         // nothing.
-        .bytebox = .{
-            .url = "https://github.com/rtfeldman/bytebox/archive/6565220e5d16eb230b05a85fd9609f280dc249c6.tar.gz",
-            .hash = "bytebox-0.0.1-SXc2sTB9DwDob3McsuMCelmt_O2h3mKZAnX2kVO1Hw5l",
-        },
+        .bytebox = .{ .path = "vendor/bytebox" },
         // Used for `roc bundle`, `roc unbundle`, and downloading .tar.zst bundles.
         //
         // zstd has runtime BMI2 dispatch, but it enables that dispatch only when
@@ -113,17 +110,14 @@
             .hash = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU",
         },
         // Coverage tooling only, and lazy, so it never reaches a release binary.
-        .kcov = .{
-            .url = "https://github.com/roc-lang/zig-kcov/archive/5e1954e53ce775a6ecf65abd03ae67deee64ac3c.tar.gz",
-            .hash = "kcov-42.0.1-EuAG4XacCwBu0G8YHvv6sFHfbMPZuwyBuZGqcRMi8IXq",
-            .lazy = true,
-        },
+        .kcov = .{ .path = "vendor/kcov", .lazy = true },
     },
     .fingerprint = 0x9eea22a6c3bd0034,
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "vendor",
         "LICENSE",
         "legal_details",
     },

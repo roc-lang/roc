@@ -23,9 +23,7 @@ let
         outputHashMode = "flat";
       }
       ''
-        touch "$TMPDIR/build.zig" # workaround <https://codeberg.org/ziglang/zig/issues/31866>
-        mkdir -p "$TMPDIR/tmp" # zig 0.16 writes the downloaded .zip to <cache>/tmp before extracting; it does not create this dir itself
-        hash="$(cd "$TMPDIR" && zig fetch --global-cache-dir "$TMPDIR" "${url}")"
+        hash="$(cd "$TMPDIR" && ZIG_GLOBAL_CACHE_DIR="$TMPDIR" zig fetch "${url}")"
         mv "$TMPDIR/p/$hash.tar.gz" "$out"
       '';
 
@@ -133,18 +131,10 @@ linkFarm name (map unpackZig [
     };
   }
   {
-    name = "bytebox-0.0.1-SXc2sTB9DwDob3McsuMCelmt_O2h3mKZAnX2kVO1Hw5l.tar.gz";
-    path = fetchZig {
-      name = "bytebox";
-      url = "https://github.com/rtfeldman/bytebox/archive/6565220e5d16eb230b05a85fd9609f280dc249c6.tar.gz";
-      hash = "sha256-BswVN0BQFm/+7Y8JC3OSXIpqGb7q6Rb9cXeTlMo6S60=";
-    };
-  }
-  {
     name = "stable_array-0.1.0-3ihgvd9eAAA5ozV4aOQZ6GI3d_gTyiR9tS6mwav2w18o.tar.gz";
     path = fetchZig {
       name = "zig-stable-array";
-      url = "git+https://github.com/lukewilliamboswell/zig-stable-array#b193182314f2ca65d97e391f0725707e36c0b56d";
+      url = "git+https://github.com/lukewilliamboswell/zig-stable-array.git#0931a8619b0e5429e1573caf1a1b34a421e4c76a";
       hash = "sha256-n/NV3r5ji4+fW+c/I8AzjnLsGU4nUSzmJtdAI6+TcRk=";
     };
   }
@@ -162,14 +152,6 @@ linkFarm name (map unpackZig [
       name = "zstd";
       url = "git+https://github.com/facebook/zstd.git?ref=v1.5.7#f8745da6ff1ad1e7bab384bd1f9d742439278e99";
       hash = "sha256-h35u+KqPsc9xZQ7xJu15M4etPnBIM33NUVG4NKzMZHw=";
-    };
-  }
-  {
-    name = "kcov-42.0.1-EuAG4XacCwBu0G8YHvv6sFHfbMPZuwyBuZGqcRMi8IXq.tar.gz";
-    path = fetchZig {
-      name = "kcov";
-      url = "git+https://github.com/roc-lang/zig-kcov.git?ref=zig-0.16.0#5e1954e53ce775a6ecf65abd03ae67deee64ac3c";
-      hash = "sha256-vFZLwp2H04EnMCPOxZYuQoVv84WBzknpmoXURbfmpR0=";
     };
   }
 ])
