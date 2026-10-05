@@ -376,6 +376,7 @@ pub const DocsArgs = struct {
     verbose: bool = false, // enable verbose output
     serve: bool = false, // start an HTTP server after generating docs
     with_lang_ref: bool = false, // include the language reference articles from docs/langref
+    builtins: bool = false, // document the builtin module embedded in this compiler instead of a file
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
@@ -1324,6 +1325,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
     var verbose: bool = false;
     var serve: bool = false;
     var with_lang_ref: bool = false;
+    var builtins: bool = false;
     var resolve_limits: ResolveLimitArgs = .{};
 
     for (args) |arg| {
@@ -1332,6 +1334,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\Generate documentation for a Roc package
             \\
             \\Usage: roc docs [OPTIONS] [ROC_FILE]
+            \\       roc docs --builtins [OPTIONS]
             \\
             \\Arguments:
             \\  [ROC_FILE]  The .roc file to generate docs for [default: main.roc]
@@ -1341,6 +1344,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
             \\      --serve          Start an HTTP server to view the documentation
             \\      --with-lang-ref  Include the language reference articles from docs/langref
+            \\      --builtins       Document the builtins of this roc compiler instead of a .roc file
             \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache       Disable caching
             \\      --verbose        Enable verbose output including cache statistics
@@ -1366,6 +1370,8 @@ fn parseDocs(args: []const []const u8) CliArgs {
             serve = true;
         } else if (mem.eql(u8, arg, "--with-lang-ref")) {
             with_lang_ref = true;
+        } else if (mem.eql(u8, arg, "--builtins")) {
+            builtins = true;
         } else if (mem.eql(u8, arg, "--time")) {
             time = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
@@ -1380,7 +1386,14 @@ fn parseDocs(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .with_lang_ref = with_lang_ref, .resolve_limits = resolve_limits } };
+    // `--builtins` documents the compiler's embedded builtin module, so there
+    // is no file to document and no main file to resolve packages from.
+    if (builtins) {
+        if (path) |file| return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = file } } };
+        if (main != null) return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = "--main" } } };
+    }
+
+    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .with_lang_ref = with_lang_ref, .builtins = builtins, .resolve_limits = resolve_limits } };
 }
 
 fn parseDeps(args: []const []const u8) CliArgs {
@@ -2548,6 +2561,24 @@ test "roc docs" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(false, result.docs.with_lang_ref);
+        try testing.expectEqual(false, result.docs.builtins);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--builtins", "--with-lang-ref", "--output=site" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(true, result.docs.builtins);
+        try testing.expectEqual(true, result.docs.with_lang_ref);
+        try testing.expectEqualStrings("site", result.docs.output);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--builtins", "Builtin.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("Builtin.roc", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--main=main.roc", "--builtins" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--main", result.problem.unexpected_argument.arg);
     }
 }
 

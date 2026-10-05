@@ -2237,10 +2237,7 @@ pub const MonoLlvmCodeGen = struct {
                 return error.CompilationFailed;
             };
             try self.collectStmtIncomingCounts(body);
-            const compiled_direct_tce_loop = try self.compileDirectEntryTceLoop(proc, body);
-            if (!compiled_direct_tce_loop) {
-                try self.compileStmt(body);
-            }
+            try self.compileStmt(body);
             if (!self.currentBlockHasTerminator()) {
                 if (self.fast_ret_registers != null) {
                     _ = wip.@"unreachable"() catch return error.OutOfMemory;
@@ -3265,36 +3262,6 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(block) catch return error.OutOfMemory;
         wip.cursor = .{ .block = block };
         return false;
-    }
-
-    /// TCE installs the proc body as `join J { remainder: <entry>, body: old_body }`.
-    /// That shape does not need the generic join continuation block: the
-    /// remainder is the run-once entry path that branches into the loop body,
-    /// and recursive sites jump back there after their explicit
-    /// `initialize_join_param` writes. The entry path is a bare `jump J` for a
-    /// plain TCE loop; when `scalarize_joins` splits a struct-typed join
-    /// parameter (such as a closure's capture record) it seeds the per-field
-    /// parameters on the remainder before that jump, so the entry path is a
-    /// statement chain ending in `jump J` rather than a single jump.
-    fn compileDirectEntryTceLoop(self: *MonoLlvmCodeGen, proc: LirProcSpec, stmt_id: CFStmtId) Error!bool {
-        if (proc.tail_transform != .tce) return false;
-
-        const stmt = self.store.getCFStmt(stmt_id);
-        if (stmt != .join) return error.CompilationFailed;
-        const join_stmt = stmt.join;
-
-        const wip = self.wip orelse return error.CompilationFailed;
-        const key = @intFromEnum(join_stmt.id);
-        const loop_block = wip.block(0, "tce_loop") catch return error.OutOfMemory;
-        try self.join_points.put(key, .{ .block = loop_block, .params = join_stmt.params, .body = join_stmt.body });
-
-        // Emit the run-once entry path, then the loop body. The remainder's
-        // terminal `jump J` branches into `loop_block` through `emitJump`, after
-        // any seeded join parameters have been initialized in the entry block.
-        try self.compileStmt(join_stmt.remainder);
-        wip.cursor = .{ .block = loop_block };
-        try self.compileStmt(join_stmt.body);
-        return true;
     }
 
     /// Processes a single statement node, queueing successors and nested-body
@@ -4950,7 +4917,12 @@ pub const MonoLlvmCodeGen = struct {
             .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
             .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_release_excess_capacity)), GuardedList.at(arg_locals, 0), unique_args),
             .str_to_utf8 => try self.emitStrToUtf8(target, GuardedList.at(arg_locals, 0)),
-            .str_from_utf8_lossy => try self.emitStrFromUtf8Lossy(target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf8_lossy => try self.emitStrFromByteList(.str_from_utf8_lossy, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf8_validated => try self.emitStrFromByteList(.str_from_utf8_validated, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf16_le_short => try self.emitStrFromByteList(.str_from_utf16_le_short, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf16_be_short => try self.emitStrFromByteList(.str_from_utf16_be_short, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf32_le_short => try self.emitStrFromByteList(.str_from_utf32_le_short, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf32_be_short => try self.emitStrFromByteList(.str_from_utf32_be_short, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8 => try self.emitStrFromUtf8(target, GuardedList.at(arg_locals, 0)),
             .str_inspect => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_inspect)), GuardedList.at(arg_locals, 0), null),
             .dict_pseudo_seed,
@@ -6127,11 +6099,14 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitSimdLoad(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const vector = self.simdVectorForLayout(self.localLayout(target)) orelse return error.CompilationFailed;
         const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
         const index = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1));
-        const source = wip.gep(.inbounds, .i8, bytes, &.{index}, "") catch return error.OutOfMemory;
+        const abi = self.layout_store.?.builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        const offset = wip.bin(.mul, index, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const source = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
         const value = wip.load(.normal, try self.simdType(vector), source, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
         try self.storeSimdLocal(target, value);
     }
@@ -9699,11 +9674,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_to_utf8)), call_args.types.items, call_args.values.items);
     }
 
-    fn emitStrFromUtf8Lossy(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+    fn emitStrFromByteList(self: *MonoLlvmCodeGen, comptime op: lir.LowLevel, target: LocalId, arg: LocalId) Error!void {
         var call_args = try self.rocListArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_from_utf8_lossy)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(op)), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrFromUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
