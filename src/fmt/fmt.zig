@@ -9123,3 +9123,16 @@ test "issue 12040: inter-token comments case 38" {
         }
     }
 }
+
+test "module formatting reports ParsingFailed when the tokenizer rejects the source" {
+    // The formatter refuses to rewrite sources the tokenizer rejected. Fuzz
+    // harnesses must treat this like any other unparseable input.
+    const inputs = [_][]const u8{
+        "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\x14",
+        "\xEF\xBB\xBF\nmain! = |_args| {\n    echo!(\"ok\")\n    Ok({})\n}\n",
+        "app[]{f:platform\"\",r:\"\n}\n",
+    };
+    for (inputs) |input| {
+        try std.testing.expectError(error.ParsingFailed, moduleFmtsStable(std.testing.allocator, input, false));
+    }
+}
