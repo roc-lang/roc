@@ -174,7 +174,6 @@ const jobs = [_]Job{
     .{ .name = "run-check-unused-suppression", .placement = .source },
     .{ .name = "run-check-semantic-audit", .placement = .source },
     .{ .name = "run-check-postcheck-architecture", .placement = .source },
-    .{ .name = "run-check-wasm-builtin-routing", .placement = .source },
     .{ .name = "run-check-panic", .placement = .source },
     .{ .name = "run-check-cli-global-stdio", .placement = .source },
     .{ .name = "run-check-test-wiring" },

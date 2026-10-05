@@ -1316,47 +1316,6 @@ const CheckPostcheckArchitectureStep = struct {
     }
 };
 
-const CheckWasmBuiltinRoutingStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *CheckWasmBuiltinRoutingStep {
-        const self = b.allocator.create(CheckWasmBuiltinRoutingStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "check-wasm-builtin-routing",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping WASM builtin routing check on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        const io = b.graph.io;
-        var child = try std.process.spawn(io, .{
-            .argv = &.{ "perl", "ci/check_wasm_builtin_routing.pl" },
-            .environ_map = &b.graph.environ_map,
-        });
-        const term = try child.wait(io);
-        switch (term) {
-            .exited => |code| if (code != 0) {
-                return step.fail(
-                    "WASM builtin routing check failed. Run 'perl ci/check_wasm_builtin_routing.pl' to see details.",
-                    .{},
-                );
-            },
-            .signal, .stopped, .unknown => return step.fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
-        }
-    }
-};
-
 /// Build step that fails when tracked snapshots differ from the freshly regenerated
 /// output. Detects whether the build root is backed by Git or JJ and invokes the
 /// matching diff command directly. This deliberately avoids shelling out through
@@ -3115,7 +3074,6 @@ pub fn build(b: *std.Build) void {
     const run_check_unused_suppression_step = b.step("run-check-unused-suppression", "Check unused-variable suppression patterns");
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
-    const run_check_wasm_builtin_routing_step = b.step("run-check-wasm-builtin-routing", "Check that WASM builtin calls use explicit host/relocation routing");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
@@ -6184,9 +6142,6 @@ pub fn build(b: *std.Build) void {
     // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
-
-    const check_wasm_builtin_routing = CheckWasmBuiltinRoutingStep.create(b);
-    run_check_wasm_builtin_routing_step.dependOn(&check_wasm_builtin_routing.step);
 
     // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = ci_steps.SemanticAuditStep.create(b);
