@@ -184,6 +184,9 @@ const ResolvedWorkerBody = union(enum) {
     /// The declaration behind this worker has a type annotation and no
     /// implementation, so reaching the worker crashes.
     unimplemented: checked.UnimplementedDeclaration,
+    /// A callable binding whose compile-time value is this crash or checked
+    /// error constant, so reaching the worker crashes with its message.
+    const_crash: checked.ConstNodeId,
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
 };
@@ -194,6 +197,7 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
         .intrinsic,
         .hosted,
         .unimplemented,
+        .const_crash,
         .generated_codec,
         .generated_field_iterator,
         => return false,
@@ -535,7 +539,16 @@ fn resolveCallableEvalTemplate(
     return switch (root.payload) {
         .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
         .pending => boxyLowerInvariant("pending callable eval root reached runtime boxy worker resolution before compile-time finalization"),
-        .const_node,
+        .const_node => |node| switch (module.const_store.get(node)) {
+            .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
+            .crash, .checked_error => .{
+                .worker = worker,
+                .module_key = module.key,
+                .module = module,
+                .body = .{ .const_crash = node },
+            },
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal => boxyLowerInvariant("callable eval binding constant was not a callable value"),
+        },
         .discarded,
         .expect,
         .runtime,
@@ -1485,7 +1498,7 @@ const ProcedureBuilder = struct {
                     .kind = .scaffold,
                 };
             },
-            .hosted, .unimplemented => constructlessOrigin(.scaffold),
+            .hosted, .unimplemented, .const_crash => constructlessOrigin(.scaffold),
             .intrinsic,
             .generated_codec,
             .generated_field_iterator,
@@ -8289,6 +8302,7 @@ const ProcedureBuilder = struct {
         checked_expr: checked.CheckedExprId,
         hosted,
         unimplemented,
+        const_crash: checked.ConstNodeId,
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
         generated_evidence_intrinsic: checked.IntrinsicId,
@@ -8320,6 +8334,10 @@ const ProcedureBuilder = struct {
             .intrinsic => |intrinsic| try self.bodySourceForIntrinsic(resolved, proc, intrinsic),
             .hosted => try self.bodySourceForHosted(proc),
             .unimplemented => try self.bodySourceForUnimplemented(proc),
+            .const_crash => |node| blk: {
+                _ = try self.bodySourceForUnimplemented(proc);
+                break :blk .{ .const_crash = node };
+            },
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
         };
@@ -8475,6 +8493,16 @@ const ProcedureBuilder = struct {
             .unimplemented => try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.result.store.insertString(Common.unimplemented_declaration_crash) },
             } }, proc.origin),
+            .const_crash => |node| switch (resolved.module.const_store.get(node)) {
+                .crash => |str| try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.strBytes(str)) },
+                } }, proc.origin),
+                .checked_error => |str| try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.strBytes(str)) },
+                    .checked_error = true,
+                } }, proc.origin),
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => boxyLowerInvariant("boxy constant crash worker's constant was not a crash"),
+            },
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
             .generated_evidence_intrinsic => |intrinsic| try self.lowerGeneratedEvidenceIntrinsicInto(proc, intrinsic, ret_local, ret_stmt),
@@ -46068,7 +46096,7 @@ fn expectResolvedWorkerCheckedExpr(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     const body = switch (worker.body) {
         .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator => return error.TestUnexpectedResult,
+        .intrinsic, .hosted, .unimplemented, .const_crash, .generated_codec, .generated_field_iterator => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(expected_body, body.body_id);
     try std.testing.expectEqual(expected_root, body.root_expr);
