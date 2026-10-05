@@ -18,7 +18,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
-const format = @import("unbundle").format;
+const unbundle = @import("unbundle");
+const format = unbundle.format;
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -28,7 +29,6 @@ const c = @cImport({
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
 /// Alignment for zstd custom allocations. Must match SIZE_STORAGE_BYTES (16 bytes).
 const ZSTD_ALLOC_ALIGNMENT: std.mem.Alignment = .@"16";
-const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
 /// Size of the buffer used for streaming operations (in bytes)
 pub const STREAM_BUFFER_SIZE = format.STREAM_BUFFER_SIZE;
 const TAR_EXTENSION = format.TAR_EXTENSION;
@@ -69,7 +69,6 @@ pub fn freeForZstd(context_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.c) 
 
 /// Errors that can occur during the bundle operation.
 pub const BundleError = error{
-    FilePathTooLong,
     FileNotFound,
     AccessDenied,
     IsDir,
@@ -85,11 +84,8 @@ pub const BundleError = error{
     InvalidPath,
 } || std.mem.Allocator.Error;
 
-/// Context for error reporting during bundle operations
-pub const ErrorContext = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
+/// Where `bundle` reports the archive path that failed validation.
+pub const ErrorContext = unbundle.ErrorContext;
 
 /// A file to read from `base_dir` and the distinct portable path to store in
 /// the archive.
@@ -107,10 +103,10 @@ pub const Result = struct {
 /// Bundle files into a compressed tar archive.
 ///
 /// The entry iterator supplies a source path for `Dir.openFile` and a separate
-/// archive path. Archive paths must be relative, must not contain `..`
-/// components, and are limited to 255 bytes for tar compatibility. On Windows,
-/// archive paths are converted to forward slashes. Paths must be encoded as
-/// WTF-8 on Windows and UTF-8 elsewhere.
+/// archive path. Archive paths must satisfy `unbundle.pathHasUnbundleErr`, the
+/// rules extraction enforces. On Windows, archive paths are converted to
+/// forward slashes. Paths must be encoded as WTF-8 on Windows and UTF-8
+/// elsewhere.
 ///
 /// Compression level should be between 1 (fastest) and 22 (best compression).
 /// Level 3 is a good default for speed/size tradeoff.
@@ -145,36 +141,26 @@ pub fn bundle(
 
     // Process files one at a time
     while (try entry_iter.next()) |entry| {
-        // Standardize archive names on forward slashes. Valid Unix source
-        // paths can contain backslashes, but archive names remain portable.
+        // Archive names use forward slashes only. Where a backslash is a path
+        // separator (Windows) it is rewritten to one; elsewhere the validator
+        // below refuses it.
         var normalized_tar_path: ?[]u8 = null;
         defer if (normalized_tar_path) |path| allocator.free(path);
-        const has_backslash = std.mem.find(u8, entry.archive_path, "\\") != null;
-        const tar_path = if (builtin.target.os.tag == .windows and has_backslash) blk: {
+        const tar_path = if (builtin.target.os.tag == .windows and std.mem.findScalar(u8, entry.archive_path, '\\') != null) blk: {
             const path = try allocator.dupe(u8, entry.archive_path);
             std.mem.replaceScalar(u8, path, '\\', '/');
             normalized_tar_path = path;
             break :blk path;
-        } else if (!has_backslash) entry.archive_path else {
-            if (error_context) |ctx| {
-                ctx.path = entry.archive_path;
-                ctx.reason = .contained_backslash_on_unix;
-            }
-            return error.InvalidPath;
-        };
+        } else entry.archive_path;
 
-        if (pathHasBundleErr(tar_path)) |validation_error| {
-            if (error_context) |ctx| {
-                // Keep the caller-owned path rather than the temporary
-                // forward-slash copy used on Windows.
-                ctx.path = entry.archive_path;
-                ctx.reason = validation_error.reason;
-            }
+        // The writer's path rules are the reader's validator itself, with
+        // nothing stricter layered on top: a path is written exactly when
+        // extraction accepts it.
+        if (unbundle.pathHasUnbundleErr(tar_path)) |validation_error| {
+            // Report the caller-owned path rather than the temporary
+            // forward-slash copy used on Windows.
+            if (error_context) |ctx| ctx.* = .{ .path = entry.archive_path, .reason = validation_error.reason };
             return error.InvalidPath;
-        }
-
-        if (tar_path.len > TAR_PATH_MAX_LENGTH) {
-            return error.FilePathTooLong;
         }
 
         const file = base_dir.openFile(io, entry.source_path, .{}) catch |err| switch (err) {
@@ -255,201 +241,4 @@ pub fn bundle(
     // Create filename with .tar.zst extension
     const filename = try std.fmt.allocPrint(allocator.*, "{s}{s}", .{ base58_hash, TAR_EXTENSION });
     return .{ .filename = filename, .uncompressed_size = uncompressed_size };
-}
-
-/// Characters that are reserved/illegal in file paths on various operating systems.
-/// We disallow all of these to ensure cross-platform compatibility and security.
-const RESERVED_PATH_CHARS = [_]u8{
-    0, // NUL (disallowed on all systems)
-    ':', // Drive separator on Windows, used in Mac OS classic
-    '*', // Wildcard on Windows
-    '?', // Wildcard on Windows
-    '"', // Quote character on Windows
-    '<', // Redirection on Windows
-    '>', // Redirection on Windows
-    '|', // Pipe on Windows
-};
-
-/// Windows reserved filenames (case-insensitive)
-const WINDOWS_RESERVED_NAMES = [_][]const u8{
-    "CON",  "PRN",  "AUX",  "NUL",
-    "COM1", "COM2", "COM3", "COM4",
-    "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3",
-    "LPT4", "LPT5", "LPT6", "LPT7",
-    "LPT8", "LPT9",
-};
-
-/// Specific reason why a path validation failed
-pub const PathValidationReason = union(enum) {
-    empty_path,
-    path_too_long,
-    windows_reserved_char: u8,
-    absolute_path,
-    path_traversal,
-    current_directory_reference,
-    windows_reserved_name,
-    contained_backslash_on_unix,
-    component_ends_with_space,
-    component_ends_with_period,
-};
-
-/// Error type for path validation failures
-pub const PathValidationError = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
-
-/// Validates a path for bundling, checking for cross-platform compatibility issues
-///
-/// We only do these validations on bundle, not on unbundle.
-/// Note that the path ALREADY should have all backslashes converted
-/// to forward slashes.
-///
-/// The reason we do this validation is to prevent Windows users
-/// from encountering unpleasant surprises when they try to
-/// unbundle paths that bundled just fine on a non-Windows OS but.
-/// which are invalid on Windows.
-///
-/// We don't do the validation on unbundle because it's costly and
-/// there's no security concern; if the OS doesn't accept the path,
-/// it will give an error.
-pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
-    std.debug.assert(std.mem.find(u8, path, "\\") == null);
-
-    // Start by doing the validation checks we'd do on unbundle.
-    // If unbundling would fail, then bundling should too!
-    if (pathHasUnbundleErr(path)) |err| {
-        return err;
-    }
-
-    // Check for reserved characters
-    for (path) |byte| {
-        inline for (RESERVED_PATH_CHARS) |reserved| {
-            if (byte == reserved) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .{ .windows_reserved_char = reserved },
-                };
-            }
-        }
-    }
-
-    // Check each path component for Windows reserved names and trailing spaces/periods
-    var component_iter = std.mem.tokenizeScalar(u8, path, '/');
-
-    while (component_iter.next()) |component| {
-        // Check for Windows reserved names (case-insensitive)
-        for (WINDOWS_RESERVED_NAMES) |reserved| {
-            // Check base name without extension
-            const dot_pos = std.mem.findScalar(u8, component, '.');
-            const base_name = if (dot_pos) |pos| component[0..pos] else component;
-
-            if (base_name.len == reserved.len) {
-                var matches = true;
-                for (base_name, reserved) |a, b| {
-                    if (std.ascii.toUpper(a) != b) {
-                        matches = false;
-                        break;
-                    }
-                }
-                if (matches) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .windows_reserved_name,
-                    };
-                }
-            }
-        }
-
-        // Reject components ending with space or period (Windows restriction)
-        if (component.len > 0) {
-            const last_char = component[component.len - 1];
-            if (last_char == ' ') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_space,
-                };
-            } else if (last_char == '.') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_period,
-                };
-            }
-        }
-    }
-
-    return null;
-}
-
-/// Validate a file path to prevent directory traversal attacks and other security issues.
-/// Returns null if the path is valid, or a PathValidationError describing the problem.
-pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
-    // Reject empty paths
-    if (path.len == 0) {
-        return PathValidationError{
-            .path = path,
-            .reason = .empty_path,
-        };
-    }
-
-    // Reject paths that are too long for tar format
-    if (path.len > TAR_PATH_MAX_LENGTH) {
-        return PathValidationError{
-            .path = path,
-            .reason = .path_too_long,
-        };
-    }
-
-    // Reject paths considered absolute on any OS we support
-    if (std.fs.path.isAbsolutePosix(path) or std.fs.path.isAbsoluteWindows(path)) {
-        return PathValidationError{
-            .path = path,
-            .reason = .absolute_path,
-        };
-    }
-
-    // Check for ".." and "." path components
-    var idx: usize = 0;
-    var component_start: usize = 0;
-
-    while (idx <= path.len) {
-        // Check if we're at a separator or the end
-        const at_separator = idx < path.len and (path[idx] == '/' or path[idx] == '\\');
-        const at_end = idx == path.len;
-
-        if (at_separator or at_end) {
-            if (idx > component_start) {
-                const component = path[component_start..idx];
-
-                // Check for "." component
-                if (std.mem.eql(u8, component, ".")) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .current_directory_reference,
-                    };
-                }
-
-                // Check for ".." component
-                if (std.mem.eql(u8, component, "..")) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .path_traversal,
-                    };
-                }
-            }
-
-            if (at_separator) {
-                component_start = idx + 1;
-            }
-        }
-
-        if (!at_end) {
-            idx += 1;
-        } else {
-            break;
-        }
-    }
-
-    return null;
 }

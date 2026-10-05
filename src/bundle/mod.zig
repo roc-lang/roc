@@ -15,12 +15,9 @@ pub const streaming_writer = @import("streaming_writer.zig");
 
 // Re-export commonly used functions and types
 pub const bundleFiles = bundle.bundle;
-pub const pathHasBundleErr = bundle.pathHasBundleErr;
 
 // Re-export error types
 pub const BundleError = bundle.BundleError;
-pub const PathValidationError = bundle.PathValidationError;
-pub const PathValidationReason = bundle.PathValidationReason;
 pub const ErrorContext = bundle.ErrorContext;
 pub const Entry = bundle.Entry;
 pub const Result = bundle.Result;

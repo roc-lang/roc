@@ -5,6 +5,7 @@
 //! - Bundle extraction with hash verification
 //! - Base58 encoding/decoding
 
+const builtin = @import("builtin");
 const std = @import("std");
 const collections = @import("collections");
 const bundle = @import("bundle.zig");
@@ -19,179 +20,123 @@ const EntryIterator = test_util.EntryIterator;
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;
 
-test "path validation for unbundle prevents security issues" {
+const PathReason = std.meta.Tag(unbundle_mod.PathValidationReason);
+
+/// The reason a path whose only fault is a backslash is refused: a backslash
+/// is a path separator on Windows and not portable anywhere else.
+const backslash_reason: ?PathReason = if (builtin.os.tag == .windows) null else .contained_backslash_on_unix;
+
+/// Archive path shapes, each with the reason the path rules refuse it (null
+/// when the path is accepted).
+const path_corpus = [_]struct { path: []const u8, reason: ?PathReason }{
+    .{ .path = "foo/bar.txt", .reason = null },
+    .{ .path = "src/main.zig", .reason = null },
+    .{ .path = "a-b_c.123", .reason = null },
+    .{ .path = "test-folder/tests.zig", .reason = null },
+    .{ .path = "nested/folder/structure.txt", .reason = null },
+    .{ .path = "control\x01char.txt", .reason = null },
+    .{ .path = "a" ** 255, .reason = null },
+    .{ .path = "console/printer.txt", .reason = null },
+
+    .{ .path = "", .reason = .empty_path },
+    .{ .path = "a" ** 256, .reason = .path_too_long },
+
+    .{ .path = "/etc/passwd", .reason = .absolute_path },
+    .{ .path = "C:/Windows/System32", .reason = .absolute_path },
+    .{ .path = "Z:file.txt", .reason = .absolute_path },
+    .{ .path = "D:\\file.txt", .reason = .absolute_path },
+    .{ .path = "\\\\server\\share", .reason = .absolute_path },
+
+    .{ .path = "../etc/passwd", .reason = .path_traversal },
+    .{ .path = "../../../etc/passwd", .reason = .path_traversal },
+    .{ .path = "foo/../../../etc/passwd", .reason = .path_traversal },
+    .{ .path = "foo/bar/..", .reason = .path_traversal },
+
+    .{ .path = ".", .reason = .current_directory_reference },
+    .{ .path = "./foo", .reason = .current_directory_reference },
+    .{ .path = "foo/./bar", .reason = .current_directory_reference },
+    .{ .path = "./foo/../../bar", .reason = .current_directory_reference },
+
+    .{ .path = "foo:bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo*bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo?bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo\"bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo<bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo>bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo|bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo\x00bar", .reason = .windows_reserved_char },
+
+    .{ .path = "CON", .reason = .windows_reserved_name },
+    .{ .path = "con", .reason = .windows_reserved_name },
+    .{ .path = "CON.txt", .reason = .windows_reserved_name },
+    .{ .path = "PRN.txt", .reason = .windows_reserved_name },
+    .{ .path = "com1.txt", .reason = .windows_reserved_name },
+    .{ .path = "AUX", .reason = .windows_reserved_name },
+    .{ .path = "NUL", .reason = .windows_reserved_name },
+    .{ .path = "LPT9", .reason = .windows_reserved_name },
+    .{ .path = "folder/CON/file.txt", .reason = .windows_reserved_name },
+
+    .{ .path = "foo ", .reason = .component_ends_with_space },
+    .{ .path = "foo /bar.txt", .reason = .component_ends_with_space },
+    .{ .path = "folder/file.txt ", .reason = .component_ends_with_space },
+    .{ .path = "foo.", .reason = .component_ends_with_period },
+    .{ .path = "foo./bar.txt", .reason = .component_ends_with_period },
+    .{ .path = "folder/file.txt.", .reason = .component_ends_with_period },
+
+    .{ .path = "foo\\bar.txt", .reason = backslash_reason },
+    .{ .path = "path\\with\\backslash", .reason = backslash_reason },
+};
+
+test "bundle writes a path exactly when unbundle accepts it" {
     const testing = std.testing;
+    var allocator = testing.allocator;
 
-    const test_cases = [_]struct {
-        path: []const u8,
-        should_fail: bool,
-        description: []const u8,
-    }{
-        // Directory traversal
-        .{ .path = "../../../etc/passwd", .should_fail = true, .description = "Directory traversal" },
-        .{ .path = "foo/../../../etc/passwd", .should_fail = true, .description = "Directory traversal in middle" },
-        .{ .path = "./foo/../../bar", .should_fail = true, .description = "Directory traversal with current dir" },
-        .{ .path = "foo/bar/..", .should_fail = true, .description = "Trailing directory traversal" },
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "source.txt", .data = "content" });
 
-        // Absolute paths
-        .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path Unix" },
-        .{ .path = "C:/Windows/System32", .should_fail = true, .description = "Absolute path Windows" },
+    for (path_corpus) |case| {
+        errdefer std.debug.print("archive path: '{s}'\n", .{case.path});
 
-        // Current directory references
-        .{ .path = "foo/./bar", .should_fail = true, .description = "Current directory reference" },
-        .{ .path = ".", .should_fail = true, .description = "Single dot" },
-        .{ .path = "./foo", .should_fail = true, .description = "Current directory prefix" },
+        const reader_reason: ?PathReason = if (unbundle_mod.pathHasUnbundleErr(case.path)) |err| err.reason else null;
+        try testing.expectEqual(case.reason, reader_reason);
 
-        // Edge cases
-        .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long (> 255 chars)" },
+        var archive: std.Io.Writer.Allocating = .init(allocator);
+        defer archive.deinit();
+        const entries = [_]bundle.Entry{.{ .source_path = "source.txt", .archive_path = case.path }};
+        var iter = EntryIterator{ .entries = &entries };
+        var bundle_ctx: bundle.ErrorContext = undefined;
+        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, testing.io, &archive.writer, tmp.dir, &bundle_ctx) catch |err| {
+            try testing.expectEqual(error.InvalidPath, err);
+            try testing.expectEqualStrings(case.path, bundle_ctx.path);
+            try testing.expectEqual(case.reason, @as(?PathReason, bundle_ctx.reason));
+            continue;
+        };
+        defer allocator.free(result.filename);
+        try testing.expectEqual(@as(?PathReason, null), case.reason);
 
-        // Valid paths (these should work with pathHasUnbundleErr)
-        .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
-        .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
-        .{ .path = "a-b_c.123", .should_fail = false, .description = "Valid filename with special chars" },
-        .{ .path = "foo:bar.txt", .should_fail = false, .description = "Path with colon (allowed in unbundle)" },
-        .{ .path = "foo\\bar.txt", .should_fail = false, .description = "Path with backslash (allowed in unbundle)" },
-        .{ .path = "CON.txt", .should_fail = false, .description = "Windows reserved name (allowed in unbundle)" },
-        .{ .path = "file.txt ", .should_fail = false, .description = "Trailing space (allowed in unbundle)" },
-    };
+        // Every archive the writer produces extracts, with the file stored
+        // under the forward-slash form of the path it was given.
+        const hash = (try unbundle_mod.validateBase58Hash(result.filename[0 .. result.filename.len - ".tar.zst".len])).?;
+        var archive_reader = std.Io.Reader.fixed(archive.written());
+        var extracted = BufferExtractWriter.init(allocator);
+        defer extracted.deinit();
+        _ = try unbundle_mod.unbundleStream(allocator, &archive_reader, extracted.extractWriter(), &hash, null, .{});
 
-    for (test_cases) |tc| {
-        const validation_result = bundle.pathHasUnbundleErr(tc.path);
-        const is_valid = validation_result == null;
-
-        if (tc.should_fail) {
-            try testing.expect(!is_valid);
-        } else {
-            if (validation_result) |err| {
-                std.debug.print("Unexpected validation failure for '{s}': {any}\n", .{ tc.path, err.reason });
-            }
-            try testing.expect(is_valid);
-        }
+        const stored_path = try allocator.dupe(u8, case.path);
+        defer allocator.free(stored_path);
+        if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, stored_path, '\\', '/');
+        try testing.expectEqual(@as(usize, 1), extracted.files.count());
+        try testing.expect(extracted.files.contains(stored_path));
     }
 }
 
-test "path validation for bundle prevents Windows issues" {
-    const testing = std.testing;
-
-    // Test cases for pathHasBundleErr - security + Windows compatibility
-    const test_cases = [_]struct {
-        path: []const u8,
-        should_fail: bool,
-        description: []const u8,
-    }{
-        // All the security checks from pathHasUnbundleErr should still fail
-        .{ .path = "../../../etc/passwd", .should_fail = true, .description = "Directory traversal" },
-        .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path" },
-        .{ .path = "./foo", .should_fail = true, .description = "Current directory reference" },
-        .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long" },
-
-        // Windows-specific checks (these fail in bundle but not unbundle)
-        .{ .path = "foo:bar.txt", .should_fail = true, .description = "Colon character" },
-        .{ .path = "foo*bar.txt", .should_fail = true, .description = "Asterisk character" },
-        .{ .path = "foo?bar.txt", .should_fail = true, .description = "Question mark" },
-        .{ .path = "foo\"bar.txt", .should_fail = true, .description = "Quote character" },
-        .{ .path = "foo<bar.txt", .should_fail = true, .description = "Less than character" },
-        .{ .path = "foo>bar.txt", .should_fail = true, .description = "Greater than character" },
-        .{ .path = "foo|bar.txt", .should_fail = true, .description = "Pipe character" },
-
-        // Windows reserved names
-        .{ .path = "CON", .should_fail = true, .description = "Windows reserved name CON" },
-        .{ .path = "con", .should_fail = true, .description = "Windows reserved name con (lowercase)" },
-        .{ .path = "PRN.txt", .should_fail = true, .description = "Windows reserved name PRN with extension" },
-        .{ .path = "AUX", .should_fail = true, .description = "Windows reserved name AUX" },
-        .{ .path = "NUL", .should_fail = true, .description = "Windows reserved name NUL" },
-        .{ .path = "COM1", .should_fail = true, .description = "Windows reserved name COM1" },
-        .{ .path = "LPT1", .should_fail = true, .description = "Windows reserved name LPT1" },
-        .{ .path = "folder/CON/file.txt", .should_fail = true, .description = "Windows reserved name in path" },
-
-        // Components ending with space or period
-        .{ .path = "foo /bar.txt", .should_fail = true, .description = "Component ending with space" },
-        .{ .path = "foo./bar.txt", .should_fail = true, .description = "Component ending with period" },
-        .{ .path = "folder/file.txt ", .should_fail = true, .description = "Filename ending with space" },
-        .{ .path = "folder/file.txt.", .should_fail = true, .description = "Filename ending with period" },
-
-        // Valid paths
-        .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
-        .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
-        .{ .path = "a-b_c.123", .should_fail = false, .description = "Valid filename with special chars" },
-        .{ .path = "test-folder/tests.zig", .should_fail = false, .description = "Path with dash" },
-        .{ .path = "nested/folder/structure.txt", .should_fail = false, .description = "Nested path" },
-    };
-
-    for (test_cases) |tc| {
-        const validation_result = bundle.pathHasBundleErr(tc.path);
-        const is_valid = validation_result == null;
-
-        if (tc.should_fail) {
-            try testing.expect(!is_valid);
-        } else {
-            if (validation_result) |err| {
-                std.debug.print("Unexpected validation failure for '{s}': {any}\n", .{ tc.path, err.reason });
-            }
-            try testing.expect(is_valid);
-        }
-    }
-
-    // Test path with NUL byte separately since we can't put it in a string literal easily
-    const nul_path = [_]u8{ 'f', 'o', 'o', 0, 'b', 'a', 'r' };
-    const nul_result = bundle.pathHasBundleErr(&nul_path);
-    try testing.expect(nul_result != null);
-    if (nul_result) |err| {
-        try testing.expectEqual(bundle.PathValidationReason{ .windows_reserved_char = 0 }, err.reason);
-    }
-}
-
-test "path validation returns correct error reasons" {
-    const testing = std.testing;
-
-    // Test specific error reasons for unbundle (pathHasUnbundleErr)
-    const unbundle_test_cases = [_]struct {
-        path: []const u8,
-        expected_reason: bundle.PathValidationReason,
-    }{
-        .{ .path = "", .expected_reason = .empty_path },
-        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
-        .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
-        .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
-        .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
-    };
-
-    for (unbundle_test_cases) |tc| {
-        const result = bundle.pathHasUnbundleErr(tc.path);
-        try testing.expect(result != null);
-        if (result) |err| {
-            try testing.expectEqual(tc.expected_reason, err.reason);
-        }
-    }
-
-    // Test specific error reasons for bundle (pathHasBundleErr)
-    const bundle_test_cases = [_]struct {
-        path: []const u8,
-        expected_reason: bundle.PathValidationReason,
-    }{
-        .{ .path = "", .expected_reason = .empty_path },
-        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
-        .{ .path = "foo:bar", .expected_reason = .{ .windows_reserved_char = ':' } },
-        .{ .path = "foo*bar", .expected_reason = .{ .windows_reserved_char = '*' } },
-        .{ .path = "foo?bar", .expected_reason = .{ .windows_reserved_char = '?' } },
-        .{ .path = "foo<bar", .expected_reason = .{ .windows_reserved_char = '<' } },
-        .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
-        .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
-        .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
-        .{ .path = "CON", .expected_reason = .windows_reserved_name },
-        .{ .path = "com1.txt", .expected_reason = .windows_reserved_name },
-        .{ .path = "foo ", .expected_reason = .component_ends_with_space },
-        .{ .path = "foo.", .expected_reason = .component_ends_with_period },
-    };
-
-    for (bundle_test_cases) |tc| {
-        const result = bundle.pathHasBundleErr(tc.path);
-        try testing.expect(result != null);
-        if (result) |err| {
-            try testing.expectEqual(tc.expected_reason, err.reason);
-        }
+test "the archive path corpus covers every validation reason" {
+    inline for (comptime std.meta.tags(PathReason)) |reason| {
+        const covered = for (path_corpus) |case| {
+            if (case.reason == reason) break true;
+        } else false;
+        try std.testing.expect(covered or (reason == .contained_backslash_on_unix and backslash_reason == null));
     }
 }
 
@@ -220,7 +165,7 @@ test "bundle validates paths correctly" {
         const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, &error_ctx);
 
         try testing.expectError(error.InvalidPath, result);
-        try testing.expectEqual(bundle.PathValidationReason.windows_reserved_name, error_ctx.reason);
+        try testing.expectEqual(PathReason.windows_reserved_name, @as(PathReason, error_ctx.reason));
     }
 
     // Test case 2: Normal files should bundle successfully

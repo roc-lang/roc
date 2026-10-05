@@ -41,12 +41,6 @@ pub const UnbundleError = error{
     EndOfStream,
 } || std.mem.Allocator.Error;
 
-/// Context for error reporting during unbundle operations
-pub const ErrorContext = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
-
 /// Specific reason why a path validation failed
 pub const PathValidationReason = union(enum) {
     empty_path,
@@ -281,11 +275,15 @@ pub const BufferExtractWriter = struct {
     }
 };
 
-/// Result of path validation when an error is found
+/// An archive entry path the path rules refuse, with the reason.
 pub const PathValidationError = struct {
     path: []const u8,
     reason: PathValidationReason,
 };
+
+/// Where `bundle` and `unbundle` report the path that failed validation when
+/// they return `error.InvalidPath`.
+pub const ErrorContext = PathValidationError;
 
 /// File and directory base names Windows reserves for devices; creating them
 /// misbehaves on Windows, so portable name validation rejects them everywhere.
@@ -298,103 +296,44 @@ pub const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "LPT8", "LPT9",
 };
 
-/// Check if a path has security or compatibility issues for unbundling
+/// The archive path rules: returns why `path` is unsafe or unportable to
+/// extract, or null when it is acceptable. `bundle` applies this same function
+/// to every path it writes, so it never produces an archive that extraction
+/// refuses.
 pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
-    if (path.len == 0) {
-        return PathValidationError{
-            .path = path,
-            .reason = .empty_path,
-        };
-    }
+    const reason = pathInvalidReason(path) orelse return null;
+    return .{ .path = path, .reason = reason };
+}
 
-    if (path.len > 255) {
-        return PathValidationError{
-            .path = path,
-            .reason = .path_too_long,
-        };
-    }
-
-    if (path[0] == '/' or path[0] == '\\') {
-        return PathValidationError{
-            .path = path,
-            .reason = .absolute_path,
-        };
-    }
-
-    if (path.len >= 2 and path[1] == ':') {
-        return PathValidationError{
-            .path = path,
-            .reason = .absolute_path,
-        };
-    }
+fn pathInvalidReason(path: []const u8) ?PathValidationReason {
+    if (path.len == 0) return .empty_path;
+    if (path.len > format.TAR_PATH_MAX_LENGTH) return .path_too_long;
+    if (path[0] == '/' or path[0] == '\\') return .absolute_path;
+    if (path.len >= 2 and path[1] == ':') return .absolute_path;
 
     var iter = std.mem.tokenizeScalar(u8, path, '/');
     while (iter.next()) |component| {
-        if (std.mem.eql(u8, component, "..")) {
-            return PathValidationError{
-                .path = path,
-                .reason = .path_traversal,
-            };
-        }
+        if (std.mem.eql(u8, component, "..")) return .path_traversal;
+        if (std.mem.eql(u8, component, ".")) return .current_directory_reference;
 
-        if (std.mem.eql(u8, component, ".")) {
-            return PathValidationError{
-                .path = path,
-                .reason = .current_directory_reference,
-            };
-        }
-
-        // The Windows reserved-name check is case-insensitive on the base name
-        // (the part before the first '.'). Compare without allocating so this
-        // validator cannot fail on OOM.
-        const base_name = if (std.mem.findScalar(u8, component, '.')) |dot_pos|
-            component[0..dot_pos]
-        else
-            component;
-
+        // Windows reserves a device name whatever its case and extension, so
+        // the comparison is on the part before the first '.'.
+        const base_name = component[0 .. std.mem.findScalar(u8, component, '.') orelse component.len];
         for (WINDOWS_RESERVED_NAMES) |reserved| {
-            if (std.ascii.eqlIgnoreCase(base_name, reserved)) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .windows_reserved_name,
-                };
-            }
+            if (std.ascii.eqlIgnoreCase(base_name, reserved)) return .windows_reserved_name;
         }
 
-        if (component.len > 0) {
-            if (component[component.len - 1] == ' ') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_space,
-                };
-            }
-            if (component[component.len - 1] == '.') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_period,
-                };
-            }
+        switch (component[component.len - 1]) {
+            ' ' => return .component_ends_with_space,
+            '.' => return .component_ends_with_period,
+            else => {},
         }
     }
 
     for (path) |char| {
         switch (char) {
-            0 => return PathValidationError{
-                .path = path,
-                .reason = .{ .windows_reserved_char = char },
-            },
-            '<', '>', ':', '"', '|', '?', '*' => return PathValidationError{
-                .path = path,
-                .reason = .{ .windows_reserved_char = char },
-            },
-            '\\' => {
-                if (builtin.os.tag != .windows) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .contained_backslash_on_unix,
-                    };
-                }
-            },
+            0, '<', '>', ':', '"', '|', '?', '*' => return .{ .windows_reserved_char = char },
+            '\\' => if (builtin.os.tag != .windows) return .contained_backslash_on_unix,
             else => {},
         }
     }
@@ -705,10 +644,7 @@ pub fn unbundleStream(
         const file_path = entry.name;
 
         if (pathHasUnbundleErr(file_path)) |validation_error| {
-            if (error_context) |ctx| {
-                ctx.path = validation_error.path;
-                ctx.reason = validation_error.reason;
-            }
+            if (error_context) |ctx| ctx.* = validation_error;
             return error.InvalidPath;
         }
 

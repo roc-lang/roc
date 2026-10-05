@@ -7735,10 +7735,10 @@ fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const 
 }
 
 /// Format a bundle or unbundle path validation reason into a user-friendly error message
-fn formatPathValidationReason(reason: anytype) []const u8 {
+fn formatPathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
     return switch (reason) {
         .empty_path => "Path cannot be empty",
-        .path_too_long => "Path exceeds maximum length of 255 characters",
+        .path_too_long => std.fmt.comptimePrint("Path exceeds maximum length of {d} characters", .{unbundle.format.TAR_PATH_MAX_LENGTH}),
         .windows_reserved_char => |char| switch (char) {
             0 => "Path contains NUL byte (\\0)",
             ':' => "Path contains colon (:) which is reserved on Windows",
@@ -8086,7 +8086,6 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
             error.CompressionFailed,
             error.FileNotFound,
             error.FileOpenFailed,
-            error.FilePathTooLong,
             error.FileReadFailed,
             error.FileStatFailed,
             error.FileTooLarge,
