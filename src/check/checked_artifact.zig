@@ -24204,7 +24204,7 @@ const NestedProcSiteBuilder = struct {
         const expr_id = site.checked_expr orelse return &.{};
         return switch (self.checked_bodies.expr(expr_id).data) {
             .closure => |closure| closure.captures,
-            else => &.{},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => &.{},
         };
     }
 
@@ -24240,7 +24240,7 @@ const NestedProcSiteBuilder = struct {
             try site_by_expr.put(allocator, expr_id, @intCast(index));
             switch (self.checked_bodies.expr(expr_id).data) {
                 .closure => |closure| try site_by_expr.put(allocator, closure.lambda, @intCast(index)),
-                else => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
 

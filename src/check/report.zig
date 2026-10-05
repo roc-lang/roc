@@ -1884,7 +1884,7 @@ pub const ReportBuilder = struct {
         // has its own report.
         switch (self.snapshots.?.getContent(err_snapshot)) {
             .flex, .err => return false,
-            else => {},
+            .rigid, .alias, .structure, .recursive => {},
         }
         const err_type = self.getFormattedString(err_snapshot);
 
