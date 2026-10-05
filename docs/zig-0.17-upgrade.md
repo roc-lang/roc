@@ -154,7 +154,8 @@ implement; WASM retains 42 existing case exclusions. Backend results are:
 | WASM | 2,295 | 42 | 0 |
 | LLVM | 2,300 | 37 | 0 |
 
-Another 140 cases have no backend rows and validate compiler diagnostics.
+Another 140 cases have no backend rows and validate compiler diagnostics
+or compile-time floating-point bit patterns.
 
 This gate is separate from the 69-test eval module suite. It runs every
 default case without filters, with LLVM enabled and two workers; opt-in
