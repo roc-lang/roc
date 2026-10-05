@@ -1422,6 +1422,9 @@ test "issue 11128 scheme writer reuses scratch with fresh identity and cycle num
 
 test "issue 11128 scheme writer recovers from every allocation failure" {
     const gpa = std.testing.allocator;
+    // Zig 0.17 SafeAllocator can grow a buffer in place depending on its
+    // neighbors. Disable resize/remap so every sweep has the same allocation
+    // points while retaining SafeAllocator leak and double-free checks.
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     var store = try TypeStore.initCapacity(gpa, 256, 256);
@@ -1431,14 +1434,14 @@ test "issue 11128 scheme writer recovers from every allocation failure" {
     const root = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&args) } } });
     const expected = try schemeFromVar(gpa, &store, &env, root);
     const small_expected = try schemeFromVar(gpa, &store, &env, args[0]);
-    var successful = std.testing.FailingAllocator.init(gpa, .{});
+    var successful = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
     {
         var writer = SchemeWriter.init(successful.allocator(), &store, &env);
         defer writer.deinit();
         _ = try writer.fromVar(root);
     }
     for (0..successful.allocations) |fail_at| {
-        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at, .resize_fail_index = 0 });
         var writer = SchemeWriter.init(failing.allocator(), &store, &env);
         defer writer.deinit();
         try std.testing.expectError(error.OutOfMemory, writer.fromVar(root));
@@ -1508,6 +1511,9 @@ test "row ranks preserve keys across sorting thresholds and extension runs" {
 
 test "type writer reuses maps and resets complete digests after allocation failure" {
     const gpa = std.testing.allocator;
+    // Zig 0.17 SafeAllocator can grow a buffer in place depending on its
+    // neighbors. Disable resize/remap so every sweep has the same allocation
+    // points while retaining SafeAllocator leak and double-free checks.
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     var store = try TypeStore.initCapacity(gpa, 256, 256);
@@ -1521,7 +1527,7 @@ test "type writer reuses maps and resets complete digests after allocation failu
     try std.testing.expect(expected.contains_identity_variables);
     try std.testing.expect(!closed_expected.contains_identity_variables);
 
-    var counter = std.testing.FailingAllocator.init(gpa, .{});
+    var counter = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
     var writer = TypeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     _ = try writer.fromVar(root);
@@ -1536,7 +1542,7 @@ test "type writer reuses maps and resets complete digests after allocation failu
     try std.testing.expectEqual(allocated, counter.allocated_bytes);
 
     for (0..allocations) |fail_at| {
-        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at, .resize_fail_index = 0 });
         var retry = TypeWriter.init(failing.allocator(), &store, &env);
         defer retry.deinit();
         try std.testing.expectError(error.OutOfMemory, retry.fromVar(root));
@@ -1592,6 +1598,9 @@ test "type writer resets checker digest modes between requests" {
 
 test "scheme identity enumeration reuses scratch and recovers from every allocation failure" {
     const gpa = std.testing.allocator;
+    // Zig 0.17 SafeAllocator can grow a buffer in place depending on its
+    // neighbors. Disable resize/remap so every sweep has the same allocation
+    // points while retaining SafeAllocator leak and double-free checks.
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     var store = try TypeStore.initCapacity(gpa, 2048, 256);
@@ -1608,7 +1617,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
     defer gpa.free(expected);
     try std.testing.expectEqualSlices(Var, &identities, expected);
 
-    var counter = std.testing.FailingAllocator.init(gpa, .{});
+    var counter = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
     var writer = TypeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     const warm = try writer.identityVarsFromScheme(root, &relations);
@@ -1626,7 +1635,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
         try std.testing.expectEqualSlices(Var, &.{ identities[127], root }, fresh);
     }
     for (0..allocation_count) |fail_at| {
-        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at, .resize_fail_index = 0 });
         var retry = TypeWriter.init(failing.allocator(), &store, &env);
         defer retry.deinit();
         try std.testing.expectError(error.OutOfMemory, retry.identityVarsFromScheme(root, &relations));

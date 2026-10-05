@@ -40384,7 +40384,11 @@ test "publishing a module releases each resource exactly once under allocation f
             artifact.deinitRetainingModuleEnv(failing);
         }
     };
-    try std.testing.checkAllAllocationFailures(gpa, Attempt.run, .{ &modules, env.module_env, &imports, &available, finalizer });
+    // SafeAllocator's in-place growth depends on neighboring allocations.
+    // Keep its ownership checks, but force deterministic allocation points
+    // when sweeping publication failures.
+    var no_resize = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ &modules, env.module_env, &imports, &available, finalizer });
 }
 
 test "issue 11128 source scheme publication hashes each source root once" {

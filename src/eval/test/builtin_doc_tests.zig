@@ -7,7 +7,7 @@
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
-//! `test/echo/` and the `roc` binary (at `./zig-out/bin/roc`) is invoked to
+//! `test/echo/` and the declared `roc` compiler artifact is invoked to
 //! confirm the same failure reproduces, so the test never reports phantom
 //! in-memory errors. If the binary disagrees, the test escalates the issue.
 
@@ -105,7 +105,7 @@ const builtin_roc_path = "src/build/roc/Builtin.roc";
 /// Where to write debug files when a block fails.
 const debug_dir = "test/echo";
 /// Path to the compiled roc binary used for reproducing failures.
-const roc_binary = "./zig-out/bin/roc";
+const roc_binary = @import("fixture_options").roc_binary_path;
 
 test "numeric arithmetic API uses method-aligned names" {
     const allocator = base.defaultGpa();
@@ -502,7 +502,7 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
             // std.c.read does not retry on EINTR like std.posix.read did; do
             // it ourselves so a signal during readout doesn't truncate the
             // child's error message.
-            if (@as(std.c.E, @enumFromInt(std.c._errno().*)) == .INTR) continue;
+            if (@as(std.c.E, @fromBackingInt(@intCast(std.c._errno().*))) == .INTR) continue;
             break;
         }
         buf.appendSlice(allocator, read_buf[0..@intCast(bytes)]) catch break;
@@ -517,7 +517,7 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
     while (true) {
         const rc = std.c.waitpid(fork_result, &status, 0);
         if (rc >= 0) break;
-        if (@as(std.c.E, @enumFromInt(std.c._errno().*)) == .INTR) continue;
+        if (@as(std.c.E, @fromBackingInt(@intCast(std.c._errno().*))) == .INTR) continue;
         return .fork_unavailable;
     }
     const sig: u8 = @truncate(@as(u32, @bitCast(status)) & 0x7f);

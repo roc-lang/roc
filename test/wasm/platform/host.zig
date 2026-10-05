@@ -134,17 +134,12 @@ var json_input_storage: [@sizeOf(usize) + json_input.len]u8 align(@alignOf(usize
     (@as([@sizeOf(usize)]u8, @splat(0))) ++ json_input.*;
 
 export fn roc_json_input() callconv(.c) RocStr {
-    const HostRocStr = extern struct {
-        bytes: ?[*]u8,
-        capacity_or_alloc_ptr: usize,
-        length: usize,
-    };
     const bytes = json_input_storage[@sizeOf(usize)..].ptr;
-    return @bitCast(HostRocStr{
+    return .{
         .bytes = bytes,
         .capacity_or_alloc_ptr = RocStr.encodeCapacity(json_input.len),
         .length = json_input.len,
-    });
+    };
 }
 
 fn canaryBlob(comptime marker: []const u8) [4096]u8 {

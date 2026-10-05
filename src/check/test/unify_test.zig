@@ -80,14 +80,15 @@ const TestEnv = struct {
 
     /// Deinit the test env, including deallocing the module_env from the heap
     fn deinit(self: *Self) void {
-        self.nominal_decl_statements.deinit(self.module_env.gpa);
-        self.module_env.deinit();
-        self.module_env.gpa.destroy(self.module_env);
+        const gpa = self.module_env.gpa;
+        self.nominal_decl_statements.deinit(gpa);
         self.snapshots.deinit();
-        self.problems.deinit(self.module_env.gpa);
+        self.problems.deinit(gpa);
         self.type_writer.deinit();
         self.scratch.deinit();
         self.occurs_scratch.deinit();
+        self.module_env.deinit();
+        gpa.destroy(self.module_env);
     }
 
     /// Helper function to call unify with args from TestEnv
