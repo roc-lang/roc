@@ -17,6 +17,7 @@ const MAX_TEMP_FILE_RETRIES: usize = 10;
 
 // Length of random suffix for temp filenames
 const RANDOM_SUFFIX_LEN: usize = 16;
+/// Maximum redirect responses followed during one package download.
 pub const MAX_REDIRECTS: usize = 3;
 
 /// Resolve and validate a redirect before the next connection is opened.
