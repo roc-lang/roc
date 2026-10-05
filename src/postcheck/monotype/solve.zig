@@ -822,14 +822,14 @@ pub const InterfaceConstraints = struct {
             if (T == names.RecordFieldNameId) return self.text(ns.recordFieldLabelText(value));
             if (T == names.TagNameId) return self.text(ns.tagLabelText(value));
             switch (@typeInfo(T)) {
-                .@"struct" => |info| inline for (info.fields) |field| {
-                    try self.write(field.type, @field(value, field.name));
+                .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
+                    try self.write(field_type, @field(value, field_name));
                 },
                 .@"union" => |info| {
                     try self.write(info.tag_type.?, std.meta.activeTag(value));
-                    inline for (info.fields) |field| {
-                        if (std.meta.activeTag(value) == @field(info.tag_type.?, field.name)) {
-                            try self.write(field.type, @field(value, field.name));
+                    inline for (info.field_names, info.field_types) |field_name, field_type| {
+                        if (std.meta.activeTag(value) == @field(info.tag_type.?, field_name)) {
+                            try self.write(field_type, @field(value, field_name));
                             return;
                         }
                     }
@@ -1138,9 +1138,9 @@ pub const InterfaceConstraints = struct {
                 return;
             }
             switch (@typeInfo(T)) {
-                .@"struct" => |info| inline for (info.fields) |field| try collectCaptureRefs(allocator, field.type, @field(value, field.name), out),
-                .@"union" => |info| inline for (info.fields) |field| {
-                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field.name)) try collectCaptureRefs(allocator, field.type, @field(value, field.name), out);
+                .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| try collectCaptureRefs(allocator, field_type, @field(value, field_name), out),
+                .@"union" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
+                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field_name)) try collectCaptureRefs(allocator, field_type, @field(value, field_name), out);
                 },
                 .optional => |info| if (value) |actual| try collectCaptureRefs(allocator, info.child, actual, out),
                 .pointer => |info| switch (info.size) {
@@ -1274,9 +1274,9 @@ pub const InterfaceConstraints = struct {
                 .sealed_only => if (value != .sealed) try items.add(.{ .decided = false }),
             };
             switch (@typeInfo(T)) {
-                .@"struct" => |info| inline for (info.fields) |field| try addScanLeaves(items, field.type, @field(value, field.name), kinds),
-                .@"union" => |info| inline for (info.fields) |field| {
-                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field.name)) try addScanLeaves(items, field.type, @field(value, field.name), kinds);
+                .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| try addScanLeaves(items, field_type, @field(value, field_name), kinds),
+                .@"union" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
+                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field_name)) try addScanLeaves(items, field_type, @field(value, field_name), kinds);
                 },
                 .optional => |info| if (value) |actual| try addScanLeaves(items, info.child, actual, kinds),
                 .pointer => |info| switch (info.size) {
@@ -1439,13 +1439,13 @@ pub const InterfaceConstraints = struct {
         return switch (@typeInfo(T)) {
             .@"struct" => |info| blk: {
                 var result: T = undefined;
-                inline for (info.fields) |field| @field(result, field.name) = try mapValue(context, field.type, @field(value, field.name));
+                inline for (info.field_names, info.field_types) |field_name, field_type| @field(result, field_name) = try mapValue(context, field_type, @field(value, field_name));
                 break :blk result;
             },
             .@"union" => |info| blk: {
-                inline for (info.fields) |field| {
-                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field.name)) {
-                        break :blk @unionInit(T, field.name, try mapValue(context, field.type, @field(value, field.name)));
+                inline for (info.field_names, info.field_types) |field_name, field_type| {
+                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field_name)) {
+                        break :blk @unionInit(T, field_name, try mapValue(context, field_type, @field(value, field_name)));
                     }
                 }
                 unreachable;
@@ -9564,12 +9564,12 @@ fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
             .one, .many, .c => {},
         }
     } else if (info == .@"struct") {
-        inline for (info.@"struct".fields) |field| {
-            assertNoNodeId(field.type, path ++ "." ++ field.name);
+        inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
+            assertNoNodeId(field_type, path ++ "." ++ field_name);
         }
     } else if (info == .@"union") {
-        inline for (info.@"union".fields) |field| {
-            assertNoNodeId(field.type, path ++ "." ++ field.name);
+        inline for (info.@"union".field_names, info.@"union".field_types) |field_name, field_type| {
+            assertNoNodeId(field_type, path ++ "." ++ field_name);
         }
     }
 }

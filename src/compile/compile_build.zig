@@ -197,7 +197,7 @@ pub const BuildEnv = struct {
     mode: Mode,
     max_threads: usize,
     target: roc_target.RocTarget,
-    compiler_version: []const u8 = build_options.compiler_version,
+    compiler_version: []const u8 = build_options.compiler_compatibility_id,
 
     // Workspace roots for sandboxing (absolute, canonical)
     workspace_roots: std.array_list.Managed([]const u8),

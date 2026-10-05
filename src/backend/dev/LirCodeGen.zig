@@ -864,6 +864,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 x86_64.WindowsFastcall.STACK_ALIGNMENT
             else
                 x86_64.SystemV.STACK_ALIGNMENT,
+            .ez80,
+            .m88k,
+            .spork8,
             .alpha,
             .amdgcn,
             .arc,

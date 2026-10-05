@@ -2226,6 +2226,7 @@ fn printHelp() void {
         \\OPTIONS:
         \\  -h, --help            Show this help message and exit.
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
+        \\  --test-filter        Alias for --filter; accepts a value or =value.
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.

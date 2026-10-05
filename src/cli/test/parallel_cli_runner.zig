@@ -13727,6 +13727,7 @@ fn printUsage() void {
         \\Options:
         \\  --suite <name>      Run suite: platforms, subcommands, echo, glue, or all (repeatable)
         \\  --filter <pattern>   Run tests matching pattern (repeatable)
+        \\  --test-filter        Alias for --filter; accepts a value or =value.
         \\  --threads <N>        Max concurrent workers (default: CPU count)
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs

@@ -337,6 +337,12 @@ fn classifyMemoryOs(os: std.Target.Os.Tag) MemoryOs {
     return switch (os) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => .posix,
         .windows => .windows,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,

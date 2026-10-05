@@ -154,9 +154,9 @@ const Relocation = struct {
         if (comptime std.meta.activeTag(info) == .@"union") {
             const Tag = info.@"union".tag_type orelse return item;
             const active = std.meta.activeTag(item);
-            inline for (info.@"union".fields) |field| {
-                if (active == @field(Tag, field.name)) {
-                    return @unionInit(T, field.name, self.member(T, field.name, @field(item, field.name)));
+            inline for (info.@"union".field_names) |field_name| {
+                if (active == @field(Tag, field_name)) {
+                    return @unionInit(T, field_name, self.member(T, field_name, @field(item, field_name)));
                 }
             }
             unreachable;

@@ -210,7 +210,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.host_cpu.nativeTarget(), cwd, ctx.io.std_io);
     errdefer build_env.deinit();
 
-    build_env.compiler_version = build_options.compiler_version;
+    build_env.compiler_version = build_options.compiler_compatibility_id;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
@@ -2530,7 +2530,7 @@ const ShimHostExeCacheInputs = struct {
 fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
     var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
-    updateHashBytes(&hasher, build_options.compiler_version);
+    updateHashBytes(&hasher, build_options.compiler_compatibility_id);
     updateHashBytes(&hasher, @tagName(inputs.shim_kind));
     updateHashBytes(&hasher, @tagName(inputs.target));
     updateHashBool(&hasher, inputs.debug);
@@ -12011,7 +12011,7 @@ fn cliTestCacheKey(
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
-    hasher.update(build_options.compiler_version);
+    hasher.update(build_options.compiler_compatibility_id);
     hasher.update(@tagName(specialization_strategy));
     hasher.update(&artifact_key.bytes);
     var out: [32]u8 = undefined;

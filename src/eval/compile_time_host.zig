@@ -259,7 +259,7 @@ pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const demand = self.slot_demand orelse return;
     const started = self.startDemandTiming();
-    const result = demand.ensure(demand.context, @enumFromInt(slot));
+    const result = demand.ensure(demand.context, @fromBackingInt(@intCast(slot)));
     self.finishDemandTiming(started);
     result catch |err| switch (err) {
         error.CompileTimeDependencyCycle => {
@@ -277,7 +277,7 @@ pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
 pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) void {
     const self = enteredHost();
     self.comptime_branch_hits.append(self.host_arena.allocator(), .{
-        .site = @enumFromInt(site_raw),
+        .site = @fromBackingInt(@intCast(site_raw)),
         .branch_index = branch_index,
     }) catch {
         self.jump(.host_oom);
@@ -287,7 +287,7 @@ pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) voi
 /// Dev-backend hook called when empirical exhaustiveness fails.
 pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
     const self = enteredHost();
-    self.comptime_failed_site = @enumFromInt(site_raw);
+    self.comptime_failed_site = @fromBackingInt(@intCast(site_raw));
     self.jump(.comptime_exhaustiveness);
 }
 
@@ -296,7 +296,7 @@ pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
 /// names the declaring module).
 pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self = enteredHost();
-    self.failed_stmt = @enumFromInt(stmt);
+    self.failed_stmt = @fromBackingInt(@intCast(stmt));
     if (stmt < self.failure_origins.len) {
         if (self.failure_origins[stmt]) |origin| {
             self.failed_region = origin.region;
@@ -480,6 +480,12 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
 fn hostBytesAllocator(allocator: Allocator) Allocator {
     return switch (@import("builtin").target.os.tag) {
         .freestanding => std.heap.wasm_allocator,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .other,
         .contiki,
         .fuchsia,

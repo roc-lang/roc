@@ -197,14 +197,14 @@ const ProcRewrite = struct {
         if (comptime std.meta.activeTag(info) == .optional) {
             if (value) |payload| try self.prepareValue(source, allocator, info.optional.child, payload);
         } else if (comptime std.meta.activeTag(info) == .@"struct") {
-            inline for (info.@"struct".fields) |field| {
-                try self.prepareValue(source, allocator, field.type, @field(value, field.name));
+            inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
+                try self.prepareValue(source, allocator, field_type, @field(value, field_name));
             }
         } else if (comptime std.meta.activeTag(info) == .@"union") {
             const Tag = info.@"union".tag_type orelse return;
-            inline for (info.@"union".fields) |field| {
-                if (std.meta.activeTag(value) == @field(Tag, field.name)) {
-                    try self.prepareValue(source, allocator, field.type, @field(value, field.name));
+            inline for (info.@"union".field_names, info.@"union".field_types) |field_name, field_type| {
+                if (std.meta.activeTag(value) == @field(Tag, field_name)) {
+                    try self.prepareValue(source, allocator, field_type, @field(value, field_name));
                     return;
                 }
             }
@@ -578,8 +578,8 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     }
     if (comptime std.meta.activeTag(type_info) == .@"struct") {
         var result = value;
-        inline for (type_info.@"struct".fields) |field| {
-            @field(result, field.name) = relocateBodyValue(field.type, @field(value, field.name), prefix, bases);
+        inline for (type_info.@"struct".field_names, type_info.@"struct".field_types) |field_name, field_type| {
+            @field(result, field_name) = relocateBodyValue(field_type, @field(value, field_name), prefix, bases);
         }
         if (T == @FieldType(CFStmt, "assign_call_erased")) {
             if (result.arg_layouts.len != 0) result.arg_layouts.start += bases.erased_arg_layout_base;
@@ -589,10 +589,10 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (comptime std.meta.activeTag(type_info) == .@"union") {
         const tag_type = type_info.@"union".tag_type orelse return value;
         const active_tag = std.meta.activeTag(value);
-        inline for (type_info.@"union".fields) |field| {
-            if (active_tag == @field(tag_type, field.name)) {
-                const payload = @field(value, field.name);
-                return @unionInit(T, field.name, relocateBodyValue(field.type, payload, prefix, bases));
+        inline for (type_info.@"union".field_names, type_info.@"union".field_types) |field_name, field_type| {
+            if (active_tag == @field(tag_type, field_name)) {
+                const payload = @field(value, field_name);
+                return @unionInit(T, field_name, relocateBodyValue(field_type, payload, prefix, bases));
             }
         }
         unreachable;

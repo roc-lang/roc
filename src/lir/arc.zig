@@ -1587,7 +1587,7 @@ const SolveTask = union(enum) {
 fn settleGrownList(comptime T: type, allocator: Allocator, growth_allocator: Allocator, grown: *std.ArrayList(T)) Allocator.Error!std.ArrayList(T) {
     const exact = try allocator.dupe(T, grown.items);
     grown.deinit(growth_allocator);
-    return .{ .items = exact, .capacity = exact.len };
+    return std.ArrayList(T).fromOwnedSlice(exact);
 }
 
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {

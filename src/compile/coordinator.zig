@@ -1387,7 +1387,7 @@ pub const Coordinator = struct {
     /// different compiler versions (or different consumer wrappers) stay
     /// segregated. Embedders should pass a stable string that changes
     /// whenever their consumer's compile semantics could change, e.g.
-    /// `"my-embedder@1.2.3+roc@" ++ build_options.compiler_version`.
+    /// `"my-embedder@1.2.3+roc@" ++ build_options.compiler_compatibility_id`.
     /// Mismatching across runs causes cache misses, not corruption.
     pub fn init(
         gpa: Allocator,
