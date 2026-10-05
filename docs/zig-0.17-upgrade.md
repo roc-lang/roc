@@ -321,11 +321,46 @@ the small static-library fixture, not the full echo or REPL WASM suites.
   Zig 0.17 getauxval probe still returns zero. Historical Zig 0.16 source
   and ABI provenance comments retain their original version references.
 
-Remaining validation includes broader platform, full echo/REPL WASM, and
-multi-language glue runtime suites, plus cold/warm compiler and application
-cache measurements with the complete LLVM 22 musl/libc++ bundle.
-Performance runs must use an unstripped ReleaseFast Roc compiler; no native
-Roc timing improvement is claimed by the graph or Debug execution checks.
+## ReleaseFast measurements and application-cache preservation
+
+The successful native performance snapshot is
+`06d8403a4f72d20e4340dc3deb07444e0e24099b`; the pre-upgrade baseline is
+`ce7b298cacaee79e7dbcaba3b6cde6d8f3d73bf9`. Both use `ReleaseFast`,
+`-Dstrip=false`, four jobs, and separate initially empty Zig caches on the
+same x86_64 Linux host. ELF debug sections are verified. Cold compiler
+builds follow cold configure; all 221 baseline and 152 upgrade steps pass.
+
+| Measurement | Zig 0.16 baseline | Zig 0.17 upgrade |
+| --- | ---: | ---: |
+| Cold configure | 64.93 s | 45.05 s |
+| First compiler build after configure | 758.68 s | 772.02 s |
+| Unchanged warm compiler build | 0.21 s | 0.25 s |
+| First-build maximum RSS | 19,652,156 KiB | 21,531,612 KiB |
+
+These single samples do not demonstrate a substantial build-time speedup.
+Source, LLVM versions, and dependency setup differ; 0.17 uses the complete
+previously built local Nix dependency bundle. Exact inputs, commands, hashes,
+cache paths, logs, and resource usage are retained at
+`/tmp/roc-zig-017-validation/roc-017-performance-clean-inputs.json`.
+
+The concrete cache improvement is preservation. Using the same populated
+application cache for CLI work and its unchanged compiler rebuild, the
+baseline's cache-clearing step deletes 14 real artifacts despite cached
+compilation. The upgraded compiler rebuild retains all 13 of its artifacts,
+including bytes, timestamps, and inodes. Both versions build the tiny
+platformless HelloWorld dev fixture in about 13 ms for the median of five
+warm runs. First-fill timings have different OS page-cache states and do
+not establish a general application speedup. Exact application and
+preservation evidence is retained under
+`/tmp/roc-zig-017-validation/application-cache-measurement/`.
+
+Renaming the installed 0.17 Roc executable and rebuilding restores
+byte-identical output while the native compiler remains cached. Evidence:
+`/tmp/roc-zig-017-validation/upgrade-roc-missing-installed-control.json`.
+
+Remaining validation includes broader native platforms, full echo/REPL WASM,
+and multi-language glue runtime suites. The parallel backend eval harness
+is a separate gate from the already-passing eval module suite.
 
 ```sh
 zig build roc -Doptimize=ReleaseFast -Dstrip=false \
