@@ -1412,6 +1412,67 @@ pub const tests = [_]TestCase{
         .returned,
         0,
     ),
+    // repro for https://github.com/roc-lang/roc/issues/12026
+    moduleTestWithLiveAllocations(
+        "Stream: next! on a stream captured by a returned closure",
+        \\make : U64 -> ({} => U64)
+        \\make = |value| {
+        \\    stream = [value].iter().stream()
+        \\    |{}| match stream.next!() {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    f! = make(42)
+        \\    actual = f!({})
+        \\    expect actual == 42
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: next! on returned, captured custom, and local streams",
+        \\first! : Stream(U64) => U64
+        \\first! = |stream| match stream.next!() {
+        \\    One({ item, .. }) => item
+        \\    _ => 0
+        \\}
+        \\
+        \\make_stream : U64 -> Stream(U64)
+        \\make_stream = |value| [value].iter().stream()
+        \\
+        \\make_custom : U64 -> ({} => U64)
+        \\make_custom = |value| {
+        \\    stream = Stream.custom(value, Unknown, |s| if s > 50 { Err(NoMore) } else { Ok((s, s + 100)) })
+        \\    |{}| first!(stream)
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    returned = first!(make_stream(1))
+        \\    expect returned == 1
+        \\    custom! = make_custom(2)
+        \\    captured = custom!({})
+        \\    expect captured == 2
+        \\    local = [3.U64].iter().stream()
+        \\    direct = match local.next!() {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\    expect direct == 3
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
     moduleTestWithLiveAllocations(
         "Stream: keep_if, drop_if, with_index, take_first, and drop_first",
         \\main : () => {}

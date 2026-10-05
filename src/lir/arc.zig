@@ -16415,6 +16415,75 @@ test "RC specialization: owned-only field take demands an owned variant" {
     try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
 }
 
+test "RC specialization: owned-only field takes from different parameters into one join parameter" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12042: both aggregate
+    // parameters solve borrowed, and each switch arm writes a field of a
+    // different parameter into the same join parameter, which the join body
+    // consumes. Each field read is an owned-only take of its own parameter,
+    // so the join parameter, solved owned, receives a taken field from
+    // whichever parameter its arm read.
+    const left = try f.local(f.pair_list);
+    const right = try f.local(f.pair_list);
+    const cond = try f.local(.bool);
+    const picked = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const callee_ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ picked, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const join_body = try f.assignI64(elem, 5, append);
+    const left_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const take_left = try f.assignRefField(picked, left, 0, left_jump);
+    const right_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const take_right = try f.assignRefField(picked, right, 0, right_jump);
+    const choose = try f.switchStmt(cond, take_left, take_right, null);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{picked}),
+        .body = join_body,
+        .remainder = choose,
+    } }, .test_fixture);
+    const callee = try f.addProc(&.{ left, right, cond }, join, f.list_i64);
+
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const c = try f.local(f.list_i64);
+    const d = try f.local(f.list_i64);
+    const first_pair = try f.local(f.pair_list);
+    const second_pair = try f.local(f.pair_list);
+    const flag = try f.local(.bool);
+    const caller_result = try f.local(f.list_i64);
+    const caller_ret = try f.ret(caller_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = callee,
+        .args = try f.span(&.{ first_pair, second_pair, flag }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const flag_assign = try f.assignTag(flag, 1, null, call);
+    const second_pair_assign = try f.assignStruct(second_pair, &.{ c, d }, flag_assign);
+    const first_pair_assign = try f.assignStruct(first_pair, &.{ a, b }, second_pair_assign);
+    const d_assign = try f.assignList(d, &.{}, first_pair_assign);
+    const c_assign = try f.assignList(c, &.{}, d_assign);
+    const b_assign = try f.assignList(b, &.{}, c_assign);
+    const caller_body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // The caller moves both dying pairs into one owned variant. The base proc
+    // retains the borrowed field in each arm; the variant takes it in each
+    // arm without a retain. The debug ownership certifier run by `insert`
+    // verifies that every other field is released exactly once.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 2), f.countRc(picked, .incref));
+}
+
 test "RC field takes through repeated dominating complete projections" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

@@ -54,6 +54,7 @@ pub const Problem = union(enum) {
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
     derived_method_value_use: DerivedMethodValueUse,
+    capturing_local_type_escape: CapturingLocalTypeEscape,
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -179,6 +180,14 @@ pub const AnnotationOnlyValueUse = struct {
 /// called. A derived method is a dispatch on its owner type, and only a call
 /// dispatches.
 pub const DerivedMethodValueUse = struct {
+    method_name: Ident.Idx,
+    region: base.Region,
+};
+
+/// A type declared in a block, with a method that captures values of the
+/// enclosing function body, reaches a type outside that block.
+pub const CapturingLocalTypeEscape = struct {
+    type_name: Ident.Idx,
     method_name: Ident.Idx,
     region: base.Region,
 };
