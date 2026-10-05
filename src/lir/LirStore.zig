@@ -49,78 +49,106 @@ pub const ProcDebugName = extern struct {
 
 const Self = @This();
 
-/// Sparse, prepared copies retain global identities without allocating a
-/// global-sized index. Sorting before borrowing preserves overlapping spans.
-fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
+/// Hashes a row id by one multiplication. Row ids are distinct small
+/// integers, so spreading their bits is all a probe sequence needs.
+const RowIdContext = struct {
+    pub fn hash(_: RowIdContext, id: u32) u64 {
+        return @as(u64, id) *% 0x9E3779B97F4A7C15;
+    }
+
+    pub fn eql(_: RowIdContext, lhs: u32, rhs: u32) bool {
+        return lhs == rhs;
+    }
+};
+
+/// The global ids a procedure rewrite has prepared in one column, and each
+/// id's position among them. Sparse, prepared copies retain global
+/// identities without allocating a global-sized index. Sorting before
+/// borrowing preserves overlapping spans.
+const RewriteKeys = struct {
+    indices: std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage),
+    ids: std.ArrayList(u32) = .empty,
+
+    fn init(allocator: Allocator) RewriteKeys {
+        return .{ .indices = std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}) };
+    }
+
+    fn deinit(self: *RewriteKeys, allocator: Allocator) void {
+        self.indices.deinit();
+        self.ids.deinit(allocator);
+    }
+
+    fn prepare(self: *RewriteKeys, allocator: Allocator, id: u32) Allocator.Error!bool {
+        const entry = try self.indices.getOrPut(id);
+        if (entry.found_existing) return false;
+        entry.value_ptr.* = 0;
+        try self.ids.append(allocator, id);
+        return true;
+    }
+
+    fn finish(self: *RewriteKeys) void {
+        std.mem.sort(u32, self.ids.items, {}, std.sort.asc(u32));
+        for (self.ids.items, 0..) |id, dense_index| {
+            self.indices.getPtr(id).?.* = @intCast(dense_index);
+        }
+    }
+
+    fn index(self: *const RewriteKeys, start: u32, len: u32) ?u32 {
+        const first = self.indices.get(start) orelse return null;
+        if (len > 1) {
+            // Sorted unique IDs make endpoint equality sufficient to prove
+            // every row of this span was prepared, without scanning it.
+            const last = first + len - 1;
+            if (last >= self.ids.items.len or self.ids.items[last] != start + len - 1)
+                base.invariant("{s}", .{"LirStore invariant violated: unprepared rewrite span"});
+        }
+        return first;
+    }
+};
+
+/// Private copies of one column's prepared rows, positioned by a
+/// `RewriteKeys`.
+fn RewriteRows(comptime T: type, comptime field: []const u8) type {
     return struct {
-        indices: collections.DenseMap(u32, u32),
-        ids: std.ArrayList(u32) = .empty,
         rows: GuardedList.List(T, "LirStore." ++ field) = .empty,
         dirty: std.ArrayList(bool) = .empty,
         materialized: bool = false,
 
-        const Column = @This();
+        const Rows = @This();
 
-        fn init(allocator: Allocator) Column {
-            return .{ .indices = collections.DenseMap(u32, u32).init(allocator) };
-        }
-
-        fn deinit(self: *Column, allocator: Allocator) void {
-            self.indices.deinit();
-            self.ids.deinit(allocator);
+        fn deinit(self: *Rows, allocator: Allocator) void {
             self.rows.deinit(allocator);
             self.dirty.deinit(allocator);
-        }
-
-        fn prepare(self: *Column, allocator: Allocator, id: u32) Allocator.Error!bool {
-            const entry = try self.indices.getOrPut(id);
-            if (entry.found_existing) return false;
-            entry.value_ptr.* = 0;
-            try self.ids.append(allocator, id);
-            return true;
         }
 
         /// Rows are copied from the coordinator only when first borrowed
         /// mutably (see `mark`), so a pass that leaves a procedure untouched
         /// never copies its body. Until then a prepared row reads through to
         /// the frozen coordinator.
-        fn finish(self: *Column, allocator: Allocator, _: *const Self) Allocator.Error!void {
-            std.mem.sort(u32, self.ids.items, {}, std.sort.asc(u32));
-            try self.rows.ensureTotalCapacity(allocator, self.ids.items.len);
-            try self.dirty.ensureTotalCapacity(allocator, self.ids.items.len);
-            for (self.ids.items, 0..) |id, dense_index| {
-                self.indices.getPtr(id).?.* = @intCast(dense_index);
+        fn finish(self: *Rows, allocator: Allocator, keys: *const RewriteKeys) Allocator.Error!void {
+            try self.rows.ensureTotalCapacity(allocator, keys.ids.items.len);
+            try self.dirty.ensureTotalCapacity(allocator, keys.ids.items.len);
+            for (keys.ids.items) |_| {
                 try self.rows.append(allocator, undefined);
                 try self.dirty.append(allocator, false);
             }
         }
+
         /// Whether this column's prepared rows hold private copies. Spans may
         /// overlap and a read may cover more rows than an earlier write, so
         /// the first mutable borrow copies the whole column: every read of
         /// the column then sees one owner.
-        fn owned(self: *const Column, _: u32) bool {
+        fn owned(self: *const Rows, _: u32) bool {
             return self.materialized;
-        }
-
-        fn index(self: *const Column, start: u32, len: u32) ?u32 {
-            const first = self.indices.get(start) orelse return null;
-            if (len > 1) {
-                // Sorted unique IDs make endpoint equality sufficient to prove
-                // every row of this span was prepared, without scanning it.
-                const last = first + len - 1;
-                if (last >= self.ids.items.len or self.ids.items[last] != start + len - 1)
-                    base.invariant("{s}", .{"LirStore invariant violated: unprepared rewrite span"});
-            }
-            return first;
         }
 
         /// Materialize the column from the coordinator on its first mutable
         /// borrow, then record the span as written.
-        fn mark(self: *Column, source: *const Self, start: u32, len: u32) u32 {
-            const first = self.index(start, len) orelse
+        fn mark(self: *Rows, keys: *const RewriteKeys, source: *const Self, start: u32, len: u32) u32 {
+            const first = keys.index(start, len) orelse
                 base.invariant("{s}", .{"LirStore invariant violated: unprepared prefix mutation"});
             if (!self.materialized) {
-                for (self.ids.items, 0..) |id, dense_index| {
+                for (keys.ids.items, 0..) |id, dense_index| {
                     self.rows.getPtrImmediate(dense_index).* = @field(source, field).get(id);
                 }
                 self.materialized = true;
@@ -129,15 +157,15 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
             return first;
         }
 
-        fn commit(self: *const Column, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
-            for (self.ids.items, self.dirty.items, 0..) |id, dirty, index_| {
+        fn commit(self: *const Rows, keys: *const RewriteKeys, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
+            for (keys.ids.items, self.dirty.items, 0..) |id, dirty, index_| {
                 if (dirty) @field(destination, field).getPtrImmediate(id).* =
                     relocateBodyValue(T, self.rows.get(index_), prefix, relocation);
             }
         }
 
-        fn changed(self: *const Column, source: *const Self) bool {
-            for (self.ids.items, self.dirty.items, 0..) |id, dirty, dense_index| {
+        fn changed(self: *const Rows, keys: *const RewriteKeys, source: *const Self) bool {
+            for (keys.ids.items, self.dirty.items, 0..) |id, dirty, dense_index| {
                 if (dirty and !std.meta.eql(self.rows.get(dense_index), @field(source, field).get(id)))
                     return true;
             }
@@ -146,12 +174,61 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
     };
 }
 
-const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "join_points" } ++ origin_columns;
+/// One rewritten column with its own keys.
+fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
+    return struct {
+        keys: RewriteKeys,
+        data: RewriteRows(T, field) = .{},
+
+        const Column = @This();
+
+        fn init(allocator: Allocator) Column {
+            return .{ .keys = RewriteKeys.init(allocator) };
+        }
+
+        fn deinit(self: *Column, allocator: Allocator) void {
+            self.keys.deinit(allocator);
+            self.data.deinit(allocator);
+        }
+
+        fn prepare(self: *Column, allocator: Allocator, id: u32) Allocator.Error!bool {
+            return try self.keys.prepare(allocator, id);
+        }
+
+        fn finish(self: *Column, allocator: Allocator, _: *const Self) Allocator.Error!void {
+            self.keys.finish();
+            try self.data.finish(allocator, &self.keys);
+        }
+
+        fn owned(self: *const Column, dense_index: u32) bool {
+            return self.data.owned(dense_index);
+        }
+
+        fn index(self: *const Column, start: u32, len: u32) ?u32 {
+            return self.keys.index(start, len);
+        }
+
+        fn mark(self: *Column, source: *const Self, start: u32, len: u32) u32 {
+            return self.data.mark(&self.keys, source, start, len);
+        }
+
+        fn commit(self: *const Column, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
+            self.data.commit(&self.keys, destination, prefix, relocation);
+        }
+
+        fn changed(self: *const Column, source: *const Self) bool {
+            return self.data.changed(&self.keys, source);
+        }
+    };
+}
+
+const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "join_points" };
 
 /// Statement provenance columns, parallel to `cf_stmts`. A procedure rewrite
-/// prepares them for exactly the statements it prepares, so replacing a
-/// prefix statement records the replacement's stated origin privately and
-/// publishes it with the statement on commit.
+/// keeps their rows for exactly the statements it prepares, positioned by
+/// the statement column's keys, so replacing a prefix statement records the
+/// replacement's stated origin privately and publishes it with the
+/// statement on commit.
 const origin_columns = .{ "cf_stmt_locs", "cf_stmt_regions", "cf_stmt_inline_scopes", "cf_stmt_origin_kinds" };
 
 /// Exists only for opt-in procedure rewrites; ordinary lowering shards do not
@@ -160,16 +237,18 @@ const ProcRewrite = struct {
     proc_id: LirProcSpecId,
     proc: LirProcSpec,
     cf_stmts: RewriteColumn(CFStmt, "cf_stmts"),
-    cf_stmt_locs: RewriteColumn(base.SourceLoc, "cf_stmt_locs"),
-    cf_stmt_regions: RewriteColumn(base.Region, "cf_stmt_regions"),
-    cf_stmt_inline_scopes: RewriteColumn(InlineScopeId, "cf_stmt_inline_scopes"),
-    cf_stmt_origin_kinds: RewriteColumn(OriginKind, "cf_stmt_origin_kinds"),
+    /// Statement provenance rows, keyed by `cf_stmts.keys`.
+    cf_stmt_locs: RewriteRows(base.SourceLoc, "cf_stmt_locs") = .{},
+    cf_stmt_regions: RewriteRows(base.Region, "cf_stmt_regions") = .{},
+    cf_stmt_inline_scopes: RewriteRows(InlineScopeId, "cf_stmt_inline_scopes") = .{},
+    cf_stmt_origin_kinds: RewriteRows(OriginKind, "cf_stmt_origin_kinds") = .{},
     cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches"),
     str_match_arms: RewriteColumn(StrMatchArm, "str_match_arms"),
     join_points: RewriteColumn(JoinPoint, "join_points"),
 
     fn deinit(self: *ProcRewrite, allocator: Allocator) void {
         inline for (rewrite_columns) |field| @field(self, field).deinit(allocator);
+        inline for (origin_columns) |field| @field(self, field).deinit(allocator);
     }
 
     /// Typed traversal deliberately stops at unrelated identities and immutable
@@ -223,10 +302,6 @@ pub fn cloneForProcRewrite(self: *const Self, allocator: Allocator, proc_id: Lir
         .proc_id = proc_id,
         .proc = self.getProcSpec(proc_id),
         .cf_stmts = .init(allocator),
-        .cf_stmt_locs = .init(allocator),
-        .cf_stmt_regions = .init(allocator),
-        .cf_stmt_inline_scopes = .init(allocator),
-        .cf_stmt_origin_kinds = .init(allocator),
         .cf_switch_branches = .init(allocator),
         .str_match_arms = .init(allocator),
         .join_points = .init(allocator),
@@ -234,21 +309,19 @@ pub fn cloneForProcRewrite(self: *const Self, allocator: Allocator, proc_id: Lir
     const rewrite = &result.proc_rewrite.?;
     try rewrite.prepareValue(self, allocator, LirProcSpec, rewrite.proc);
     var cursor: usize = 0;
-    while (cursor < rewrite.cf_stmts.ids.items.len) : (cursor += 1) {
-        const id = rewrite.cf_stmts.ids.items[cursor];
+    while (cursor < rewrite.cf_stmts.keys.ids.items.len) : (cursor += 1) {
+        const id = rewrite.cf_stmts.keys.ids.items[cursor];
         try rewrite.prepareValue(self, allocator, CFStmt, self.getCFStmt(@enumFromInt(id)));
     }
-    inline for (origin_columns) |field| {
-        for (rewrite.cf_stmts.ids.items) |id| _ = try @field(rewrite, field).prepare(allocator, id);
-    }
     inline for (rewrite_columns) |field| try @field(rewrite, field).finish(allocator, self);
+    inline for (origin_columns) |field| try @field(rewrite, field).finish(allocator, &rewrite.cf_stmts.keys);
     return result;
 }
 
 /// Sorted global statement indices privately prepared by this worker. The
 /// coordinator can validate disjoint ownership before publishing a phase.
 pub fn procRewriteStatementIds(self: *const Self) []const u32 {
-    return self.proc_rewrite.?.cf_stmts.ids.items;
+    return self.proc_rewrite.?.cf_stmts.keys.ids.items;
 }
 
 /// Call while the phase's coordinator prefix is still frozen. Mutable access
@@ -258,6 +331,9 @@ pub fn procRewriteChanged(self: *const Self) bool {
     const source = self.body_coordinator.?;
     inline for (rewrite_columns) |field| {
         if (@field(rewrite, field).changed(source)) return true;
+    }
+    inline for (origin_columns) |field| {
+        if (@field(rewrite, field).changed(&rewrite.cf_stmts.keys, source)) return true;
     }
     if (!std.meta.eql(rewrite.proc, source.getProcSpec(rewrite.proc_id))) return true;
     inline for (.{
@@ -287,6 +363,8 @@ pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, rel
     const appended = try self.appendBodyShardWithJoinRelocation(shard, null, .empty(), relocation);
     inline for (rewrite_columns) |field|
         @field(rewrite, field).commit(self, worker.body_prefix, appended.relocation);
+    inline for (origin_columns) |field|
+        @field(rewrite, field).commit(&rewrite.cf_stmts.keys, self, worker.body_prefix, appended.relocation);
     const spec = self.getProcSpecPtr(rewrite.proc_id);
     spec.* = relocateBodyValue(LirProcSpec, rewrite.proc, worker.body_prefix, appended.relocation);
     spec.shapes = spec.shapes.merged(worker.shapes);
@@ -1091,7 +1169,7 @@ pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmt_locs.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
             if (rewrite.cf_stmt_locs.owned(private)) return rewrite.cf_stmt_locs.rows.get(private);
         }
     }
@@ -1106,7 +1184,7 @@ pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
 pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmt_inline_scopes.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
             if (rewrite.cf_stmt_inline_scopes.owned(private)) return rewrite.cf_stmt_inline_scopes.rows.get(private);
         }
     }
@@ -1150,7 +1228,7 @@ pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineSco
 pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmt_regions.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
             if (rewrite.cf_stmt_regions.owned(private)) return rewrite.cf_stmt_regions.rows.get(private);
         }
     }
@@ -1165,7 +1243,7 @@ pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
 pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmt_origin_kinds.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
             if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
         }
     }
@@ -1579,10 +1657,10 @@ pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
             const coordinator = self.body_coordinator.?;
-            rewrite.cf_stmt_locs.rows.getPtrImmediate(rewrite.cf_stmt_locs.mark(coordinator, index, 1)).* = origin.loc;
-            rewrite.cf_stmt_regions.rows.getPtrImmediate(rewrite.cf_stmt_regions.mark(coordinator, index, 1)).* = origin.region;
-            rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(coordinator, index, 1)).* = origin.inline_scope;
-            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(coordinator, index, 1)).* = origin.kind;
+            rewrite.cf_stmt_locs.rows.getPtrImmediate(rewrite.cf_stmt_locs.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.loc;
+            rewrite.cf_stmt_regions.rows.getPtrImmediate(rewrite.cf_stmt_regions.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.region;
+            rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.inline_scope;
+            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind;
         } else if (!std.meta.eql(self.stmtOrigin(id), origin)) self.assertBodyMetadataImmutable();
     } else {
         const own = index - if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
@@ -1629,8 +1707,8 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.indices.get(index)) |private| {
-            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.rows.get(private);
+        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.get(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1646,7 +1724,7 @@ pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
     const index = @intFromEnum(id);
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
-            return rewrite.cf_stmts.rows.getPtrImmediate(rewrite.cf_stmts.mark(self.body_coordinator.?, index, 1));
+            return rewrite.cf_stmts.data.rows.getPtrImmediate(rewrite.cf_stmts.mark(self.body_coordinator.?, index, 1));
         }
         self.assertBodyMetadataImmutable();
     }
@@ -1678,7 +1756,7 @@ pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Alloca
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) StoreSpanBorrow(CFSwitchBranch, "cf_switch_branches") {
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.cf_switch_branches.index(span.start, span.len)) |private| {
-            if (rewrite.cf_switch_branches.owned(private)) return rewrite.cf_switch_branches.rows.borrowSpan(private, span.len);
+            if (rewrite.cf_switch_branches.owned(private)) return rewrite.cf_switch_branches.data.rows.borrowSpan(private, span.len);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1694,7 +1772,7 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) StoreSpanBo
     if (self.body_coordinator != null and span.start < self.body_prefix.cf_switch_branches) {
         if (self.proc_rewrite) |*rewrite| {
             const private = rewrite.cf_switch_branches.mark(self.body_coordinator.?, span.start, span.len);
-            return rewrite.cf_switch_branches.rows.borrowSpanMut(private, span.len);
+            return rewrite.cf_switch_branches.data.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
     }
@@ -1732,7 +1810,7 @@ pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!S
 pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) StoreSpanBorrow(StrMatchArm, "str_match_arms") {
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.str_match_arms.index(span.start, span.len)) |private| {
-            if (rewrite.str_match_arms.owned(private)) return rewrite.str_match_arms.rows.borrowSpan(private, span.len);
+            if (rewrite.str_match_arms.owned(private)) return rewrite.str_match_arms.data.rows.borrowSpan(private, span.len);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1748,7 +1826,7 @@ pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) StoreSpanBorrowMut
     if (self.body_coordinator != null and span.start < self.body_prefix.str_match_arms) {
         if (self.proc_rewrite) |*rewrite| {
             const private = rewrite.str_match_arms.mark(self.body_coordinator.?, span.start, span.len);
-            return rewrite.str_match_arms.rows.borrowSpanMut(private, span.len);
+            return rewrite.str_match_arms.data.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
     }
@@ -1768,7 +1846,7 @@ pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.E
 pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) StoreSpanBorrow(JoinPoint, "join_points") {
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.join_points.index(span.start, span.len)) |private| {
-            if (rewrite.join_points.owned(private)) return rewrite.join_points.rows.borrowSpan(private, span.len);
+            if (rewrite.join_points.owned(private)) return rewrite.join_points.data.rows.borrowSpan(private, span.len);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1784,7 +1862,7 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
     if (self.body_coordinator != null and span.start < self.body_prefix.join_points) {
         if (self.proc_rewrite) |*rewrite| {
             const private = rewrite.join_points.mark(self.body_coordinator.?, span.start, span.len);
-            return rewrite.join_points.rows.borrowSpanMut(private, span.len);
+            return rewrite.join_points.data.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
     }
@@ -2000,8 +2078,8 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     defer a.deinit();
     var b = try coordinator.cloneForProcRewrite(allocator, second);
     defer b.deinit();
-    try std.testing.expectEqual(@as(usize, 2), a.proc_rewrite.?.cf_stmts.rows.len());
-    try std.testing.expectEqual(@as(usize, 1), b.proc_rewrite.?.cf_stmts.rows.len());
+    try std.testing.expectEqual(@as(usize, 2), a.proc_rewrite.?.cf_stmts.data.rows.len());
+    try std.testing.expectEqual(@as(usize, 1), b.proc_rewrite.?.cf_stmts.data.rows.len());
     try std.testing.expectEqual(@as(usize, 0), a.cf_stmts.len());
     try std.testing.expect(!a.procRewriteChanged());
     _ = a.getCFStmtPtr(ret);
@@ -2188,7 +2266,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     try std.testing.expectEqualSlices(u32, &.{
         @intFromEnum(ret), @intFromEnum(tail), @intFromEnum(head), @intFromEnum(nested), @intFromEnum(root),
     }, worker.procRewriteStatementIds());
-    try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.rows.len());
+    try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.data.rows.len());
     const appended = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     GuardedList.atPtr(worker.getStrMatchArmsMut(subset), 0).on_match = appended;
     worker.getCFStmtPtr(tail).assign_call.tail_call.?.next = appended;

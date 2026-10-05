@@ -318,7 +318,11 @@ pub const Store = struct {
     /// Cached immutable answer for whether a finished type contains an Iter or
     /// Stream interface at any structural depth.
     iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
-    /// Reusable exact walk state. Type ids are dense, so epochs provide cycle
+    /// Cached immutable answer for whether a finished type contains a named
+    /// type whose backing is generated-private representation evidence at
+    /// any structural depth.
+    generated_private_cache: StoreList(?bool, "generated_private_cache"),
+    /// Reusable exact walk state, shared by both containment caches. Type ids are dense, so epochs provide cycle
     /// detection without allocating a dense map sized to the largest type id
     /// on every closed direct call.
     iterator_interface_pending: std.ArrayList(TypeId),
@@ -354,6 +358,11 @@ pub const Store = struct {
     /// borrowed store never computes a digest, so it never touches these.
     digest_storage: DigestEngine.Storage = .{},
     read_sharing_prepared: bool = false,
+    /// The lowest type count a rollback has truncated to since
+    /// `takeRollbackFloor` last ran. A rollback frees the ids at and above
+    /// that count for reuse, so a cache kept outside the store and keyed by
+    /// type id drops its entries there.
+    rollback_floor: ?usize = null,
     read_sharing_coverage: ReadSharingQueries = .{},
 
     /// Workers declare their query needs so unrelated caches stay cold.
@@ -381,6 +390,7 @@ pub const Store = struct {
             .active_transaction = null,
             .transaction_epoch = 0,
             .iterator_interface_cache = .empty,
+            .generated_private_cache = .empty,
             .iterator_interface_pending = .empty,
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
@@ -402,7 +412,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -501,6 +511,7 @@ pub const Store = struct {
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
+        self.generated_private_cache.deinit(self.allocator);
         self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
         self.equality_digests.deinit(self.allocator);
@@ -508,6 +519,15 @@ pub const Store = struct {
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
+    }
+
+    /// The lowest type count a rollback has truncated to since the last
+    /// call, if any rollback ran. The builder's function-mention column is
+    /// the one cache that reads this.
+    pub fn takeRollbackFloor(self: *Store) ?usize {
+        const floor = self.rollback_floor;
+        self.rollback_floor = null;
+        return floor;
     }
 
     pub fn freeze(self: *Store) void {
@@ -599,6 +619,8 @@ pub const Store = struct {
         errdefer _ = self.constructing.pop();
         try self.iterator_interface_cache.append(self.allocator, null);
         errdefer _ = self.iterator_interface_cache.pop();
+        try self.generated_private_cache.append(self.allocator, null);
+        errdefer _ = self.generated_private_cache.pop();
         try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
@@ -665,6 +687,7 @@ pub const Store = struct {
         }
         self.unfinished_type_count -= 1;
         self.iterator_interface_cache.set(index, null);
+        self.generated_private_cache.set(index, null);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
@@ -692,10 +715,36 @@ pub const Store = struct {
     /// test "iterator-interface containment agrees between Monotype and graph"
     /// in `solve.zig` pins the two together position by position.
     pub fn containsIteratorInterface(self: *Store, root: TypeId) std.mem.Allocator.Error!bool {
+        return try self.containsAt(root, .iterator_interface);
+    }
+
+    /// Whether an immutable Monotype contains a named type whose backing is
+    /// generated-private representation evidence at any structural depth. A
+    /// graph leaf answers `InstGraph.containsGeneratedPrivate` with this, and
+    /// the two must agree for every pair of corresponding types for the same
+    /// reason the iterator walks must.
+    pub fn containsGeneratedPrivateBacking(self: *Store, root: TypeId) std.mem.Allocator.Error!bool {
+        return try self.containsAt(root, .generated_private);
+    }
+
+    const ContainmentQuery = enum { iterator_interface, generated_private };
+
+    fn containmentCache(self: *Store, comptime query: ContainmentQuery) *StoreList(?bool, switch (query) {
+        .iterator_interface => "iterator_interface_cache",
+        .generated_private => "generated_private_cache",
+    }) {
+        return switch (query) {
+            .iterator_interface => &self.iterator_interface_cache,
+            .generated_private => &self.generated_private_cache,
+        };
+    }
+
+    fn containsAt(self: *Store, root: TypeId, comptime query: ContainmentQuery) std.mem.Allocator.Error!bool {
+        const cache = self.containmentCache(query);
         self.requireConstructed(root);
         const root_index = @intFromEnum(root);
-        if (self.iterator_interface_cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
-        if (self.borrowed_read_only) Common.invariant("borrowed Monotype iterator cache miss");
+        if (cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
+        if (self.borrowed_read_only) Common.invariant("borrowed Monotype containment cache miss");
 
         self.iterator_interface_pending.clearRetainingCapacity();
         self.iterator_interface_visited.clearRetainingCapacity();
@@ -716,9 +765,9 @@ pub const Store = struct {
             try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
             if (ty != root) {
-                if (self.iterator_interface_cache.unsafeRawItemsForView()[ty_index]) |cached| {
+                if (cache.unsafeRawItemsForView()[ty_index]) |cached| {
                     if (cached) {
-                        self.iterator_interface_cache.set(root_index, true);
+                        cache.set(root_index, true);
                         return true;
                     }
                     continue;
@@ -761,12 +810,14 @@ pub const Store = struct {
                     }
                 },
                 .named => |named| {
-                    if (named.builtin_owner) |owner| {
-                        if (static_dispatch.isIteratorOwner(owner)) {
-                            self.iterator_interface_cache.set(ty_index, true);
-                            self.iterator_interface_cache.set(root_index, true);
-                            return true;
-                        }
+                    const found = switch (query) {
+                        .iterator_interface => if (named.builtin_owner) |owner| static_dispatch.isIteratorOwner(owner) else false,
+                        .generated_private => if (named.backing) |backing| backing.authority == .generated_private else false,
+                    };
+                    if (found) {
+                        cache.set(ty_index, true);
+                        cache.set(root_index, true);
+                        return true;
                     }
                     const args = self.span(named.args);
                     for (0..GuardedList.borrowLen(args)) |index| {
@@ -784,7 +835,7 @@ pub const Store = struct {
             }
         }
         for (self.iterator_interface_visited.items) |visited| {
-            self.iterator_interface_cache.set(@intFromEnum(visited), false);
+            cache.set(@intFromEnum(visited), false);
         }
         return false;
     }
@@ -944,6 +995,10 @@ pub const Store = struct {
                 destination.allocator,
                 self.end.types,
             );
+            try destination.generated_private_cache.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
             try destination.iterator_interface_visit_epochs.ensureTotalCapacity(
                 destination.allocator,
                 self.end.types,
@@ -1098,6 +1153,7 @@ pub const Store = struct {
         constructing_len: usize,
         unfinished_type_count: usize,
         iterator_interface_cache_len: usize,
+        generated_private_cache_len: usize,
         iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
@@ -1115,6 +1171,7 @@ pub const Store = struct {
             .constructing_len = self.constructing.len(),
             .unfinished_type_count = self.unfinished_type_count,
             .iterator_interface_cache_len = self.iterator_interface_cache.len(),
+            .generated_private_cache_len = self.generated_private_cache.len(),
             .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
@@ -1125,6 +1182,10 @@ pub const Store = struct {
 
     fn restore(self: *Store, mark_: Mark) void {
         self.assertMutable();
+        // A reserved slot that survives may have been refilled (see below),
+        // so a rollback inside a construction invalidates every id.
+        const floor = if (mark_.unfinished_type_count != 0) 0 else mark_.types_len;
+        self.rollback_floor = @min(self.rollback_floor orelse floor, floor);
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
@@ -1133,6 +1194,7 @@ pub const Store = struct {
         self.constructing.restoreLen(mark_.constructing_len);
         self.unfinished_type_count = mark_.unfinished_type_count;
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
+        self.generated_private_cache.restoreLen(mark_.generated_private_cache_len);
         // A reserved slot that survives this restore may have been filled
         // after the mark with children that are now truncated and whose ids
         // can be reused, so clear every retained containment answer to force
@@ -1149,6 +1211,7 @@ pub const Store = struct {
         // would defeat that, and no caller does.
         if (mark_.unfinished_type_count != 0) {
             @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
+            @memset(self.generated_private_cache.unsafeRawItemsMutForStore(), null);
         }
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
@@ -4762,6 +4825,7 @@ test "monotype cross-store import is atomic under allocation failure" {
             representation_digests: usize,
             constructing: usize,
             iterator_interface_cache: usize,
+            generated_private_cache: usize,
             iterator_interface_visit_epochs: usize,
             spans: usize,
             fields: usize,
@@ -4777,6 +4841,7 @@ test "monotype cross-store import is atomic under allocation failure" {
                     .representation_digests = store.representation_digests.len(),
                     .constructing = store.constructing.len(),
                     .iterator_interface_cache = store.iterator_interface_cache.len(),
+                    .generated_private_cache = store.generated_private_cache.len(),
                     .iterator_interface_visit_epochs = store.iterator_interface_visit_epochs.len(),
                     .spans = store.spans.len(),
                     .fields = store.fields.len(),

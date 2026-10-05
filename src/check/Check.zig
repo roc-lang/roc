@@ -206,6 +206,14 @@ ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) 
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
 polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, []Instantiator.SharedSubtree) = .empty,
+/// Variable-free types reached by generated-codec derivation snapshots or by
+/// derivation row closing, each with the copy a snapshot made of it, if one
+/// has. Every copy of a variable-free type is the same, so later snapshots
+/// share it instead of copying the type again, and later row closing stops
+/// at it. Valid while the type store's ground epoch equals
+/// `snapshot_ground_epoch`. See `recordGeneratedCodecDerivationSnapshot`.
+snapshot_ground_copies: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+snapshot_ground_epoch: u64 = 0,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: collections.DenseMap(Var, void),
 /// Reusable visited set for validating the concrete content of values passed
@@ -3723,6 +3731,7 @@ pub fn deinit(self: *Self) void {
     var subtree_entries = self.polarized_instance_subtrees.valueIterator();
     while (subtree_entries.next()) |entry| self.gpa.free(entry.*);
     self.polarized_instance_subtrees.deinit(self.gpa);
+    self.snapshot_ground_copies.deinit(self.gpa);
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
     self.return_value_exprs.deinit(self.gpa);
@@ -9184,6 +9193,26 @@ const GroundMarks = struct {
 };
 
 fn computeGroundMarks(self: *Self, roots: []const Var) Allocator.Error!GroundMarks {
+    return try self.computeGroundMarksKnowing(roots, null, .any);
+}
+
+/// Which entries of a known-ground map a ground walk stops at.
+const KnownGroundStop = enum {
+    /// Every entry.
+    any,
+    /// Only entries with a copy, so the walk reaches every ground var below
+    /// that has no copy yet.
+    copied,
+};
+
+/// `computeGroundMarks`, treating the resolved vars in `known_ground` that
+/// `stop` selects as ground leaves without walking below them.
+fn computeGroundMarksKnowing(
+    self: *Self,
+    roots: []const Var,
+    known_ground: ?*const std.AutoHashMapUnmanaged(Var, ?Var),
+    stop: KnownGroundStop,
+) Allocator.Error!GroundMarks {
     var marks: GroundMarks = .{};
     errdefer marks.deinit(self.gpa);
     const Pending = struct { var_: Var, parent: ?u32 };
@@ -9202,6 +9231,10 @@ fn computeGroundMarks(self: *Self, roots: []const Var) Allocator.Error!GroundMar
         const index = entry.value_ptr.*;
         if (item.parent) |parent| try marks.parents.items[index].append(self.gpa, parent);
         if (entry.found_existing) continue;
+        if (known_ground) |known| if (known.get(resolved.var_)) |copy| switch (stop) {
+            .any => continue,
+            .copied => if (copy != null) continue,
+        };
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
             .alias => |alias| {
@@ -44980,6 +45013,37 @@ fn deferCodecWithInferredTagRows(
 
 const DerivationRowClosure = enum { annotation_rows, all_tag_rows };
 
+/// Whether the solver already found this resolved var variable-free and
+/// nothing has since been written that could change that.
+fn knownGround(self: *const Self, resolved_var: Var) bool {
+    return self.snapshot_ground_epoch == self.types.groundEpoch() and
+        self.snapshot_ground_copies.contains(resolved_var);
+}
+
+/// Forget `snapshot_ground_copies` if a write since it was filled could have
+/// made one of its types non-ground.
+fn syncSnapshotGroundEpoch(self: *Self) void {
+    if (self.snapshot_ground_epoch == self.types.groundEpoch()) return;
+    self.snapshot_ground_copies.clearRetainingCapacity();
+    self.snapshot_ground_epoch = self.types.groundEpoch();
+}
+
+/// Remember every variable-free type reachable from `roots`, so a later
+/// walk over a type that contains one stops there. A type found ground
+/// inside a probe can become non-ground again when the probe rolls back, so
+/// a probe remembers nothing.
+fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
+    if (self.types.savepointActive()) return;
+    self.syncSnapshotGroundEpoch();
+    var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any);
+    defer marks.deinit(self.gpa);
+    for (marks.order.items, marks.ground.items) |resolved_var, is_ground| {
+        if (!is_ground) continue;
+        const slot = try self.snapshot_ground_copies.getOrPut(self.gpa, resolved_var);
+        if (!slot.found_existing) slot.value_ptr.* = null;
+    }
+}
+
 /// Close annotation-owned tag tails, or all settled inferred tag tails at
 /// the codec boundary. Derived map retains its exact-row selection rule.
 /// Returns whether an inferred flexible tail remains, so its codec can wait
@@ -44988,6 +45052,7 @@ fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env, mode: Derivation
     self.var_set.clearRetainingCapacity();
     var inferred_open = false;
     try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set, mode, &inferred_open);
+    try self.rememberGroundTypes(&.{var_});
     return inferred_open;
 }
 
@@ -45053,6 +45118,8 @@ fn closeTagRowsForDerivationHelp(
                 const resolved = self.types.resolveVar(var_);
                 if (visited.contains(resolved.var_)) continue;
                 try visited.put(resolved.var_, {});
+                // A variable-free type has no row left to close.
+                if (self.knownGround(resolved.var_)) continue;
 
                 switch (resolved.desc.content) {
                     .flex, .rigid, .err, .field_presence => {},
@@ -48289,6 +48356,20 @@ fn recordGeneratedCodecDerivationSnapshot(
         region,
     );
     self.var_map.clearRetainingCapacity();
+    // A variable-free type reached by an earlier snapshot shares that
+    // snapshot's copy; every other variable-free type this snapshot copies is
+    // remembered for later ones. Copies made inside a probe are rolled back
+    // with it, so a probe remembers nothing.
+    self.syncSnapshotGroundEpoch();
+    var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied);
+    defer ground_marks.deinit(self.gpa);
+    var shared_copies = std.AutoHashMapUnmanaged(Var, void).empty;
+    defer shared_copies.deinit(self.gpa);
+    for (ground_marks.order.items) |source| {
+        const copy = (self.snapshot_ground_copies.get(source) orelse continue) orelse continue;
+        try self.var_map.put(source, copy);
+        try shared_copies.put(self.gpa, copy, {});
+    }
     var instantiator = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -48303,8 +48384,17 @@ fn recordGeneratedCodecDerivationSnapshot(
     const copied_root = try instantiator.instantiateVar(snapshot_root);
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
+        if (shared_copies.contains(copied.*)) continue;
         try self.fillInRegionsThrough(copied.*);
         self.setRegionAt(copied.*, region);
+    }
+    if (!self.types.savepointActive()) {
+        for (ground_marks.order.items, ground_marks.ground.items) |source, is_ground| {
+            if (!is_ground) continue;
+            const slot = try self.snapshot_ground_copies.getOrPut(self.gpa, source);
+            if (slot.found_existing and slot.value_ptr.* != null) continue;
+            slot.value_ptr.* = self.var_map.get(source);
+        }
     }
 
     const copied_fn = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse

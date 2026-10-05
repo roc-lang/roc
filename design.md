@@ -5885,7 +5885,10 @@ for specialization reuse. Type-role keys and call metadata select candidates; eq
 compares all source and frozen roles, every method selection, and nested
 evidence and substitutions. One alpha-equivalence bijection
 covers all type roots, including cross-root sharing. Cycles are compared as
-finite proof graphs. Source contracts remain intact for replay; specialization
+finite proof graphs. Contracts intern in table order, and a nested contract
+that already holds its identity is compared by that identity rather than by
+walking its proof graph again, so interning a chain of nested contracts costs
+one comparison per contract rather than one per contract below it. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
 
 The checker's derived-codec walk records each nominal application whose
@@ -5901,6 +5904,15 @@ equality, with types compared modulo transparent aliases like the role itself;
 each occurrence's evidence nodes are distinct allocations with equal content.
 
 Monotype instantiates a generated-codec contract once at the codec boundary.
+A contract (or structural-evidence) instantiation context instantiates each
+closed checked type as an unread leaf of the Monotype it denotes. The graph
+remembers, per lane, the Monotype each closed checked type denotes, measuring
+one it does not know by instantiating it once with every known closed
+component as a leaf. Within the context, equal closed types share one leaf
+through the context's leaf scope, which a bound role names its boundary cell
+in, so a leaf read later reaches that cell exactly as the eager
+instantiation's memo would have. A contract relating a nested shape to its
+boundary therefore reads only the levels that differ, not the whole shape.
 Queued specialization contexts retain both the constructor and the explicit
 public value shape. Both participate in specialization identity. A constructor
 may use the structural generated-body representation, so restoring the contract
@@ -8656,6 +8668,15 @@ Before generalizing a binding, checking must either produce its codec's type
 constraints or retain the unresolved relation in its scheme. An error row is
 part of that relation even when the parsed shape does not escape: mapping a
 parsed record to a string must not discard the record parser's error demands.
+
+A frozen contract snapshot copies its relation, but every copy of a
+variable-free type is the same: a snapshot shares the copy an earlier snapshot
+made of a variable-free type instead of copying it again. The type store's
+ground epoch advances on every write that could make a variable-free type
+reach a variable or an error, or change a flag a copy carries; remembered
+copies are kept only while it is unchanged, and a probe remembers none, since
+its copies roll back with it. Nested contracts whose shapes nest therefore
+share all the structure below their own level.
 
 A codec whose shape, encoding, and state are settled and local to the closing
 boundary is validated once at that boundary. None of their refinable components
@@ -12786,6 +12807,22 @@ leaf the same way. An equal structural value elsewhere in the scope is a
 different occurrence, and relating it to a nominal lifts its class into that
 nominal; a backing sharing that class would come to name the nominal it backs,
 and joining the two nominal instances would make a nominal its own backing.
+
+An import enters the graph as a leaf: a node standing for the finished type
+whose structure nothing has read yet. Reading a leaf's content expands one
+level, and each component becomes another leaf connected exactly as an eager
+import of the whole type would have connected it: a nominal's backing is a
+fresh cell it owns, a component of an independent root's own type is that
+root, and every other component reconnects through the ownership-scope memo.
+The class denotes the same type before and after, so expansion changes no
+snapshot or resolvedness stamp, and it may happen after relations freeze.
+Two unread leaves of one type join without being read; a leaf joined to a
+variable stays unread. Sealing an unread leaf yields its type, and
+containment, resolvedness and uninhabitedness questions about one are
+answered from per-type answers that outlive graph resets, because store types
+are immutable. A specialization therefore pays only for the parts of its
+imported types that it reads, not for their whole depth.
+
 Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
 owned only by an unresolved callee body are present in the checked interface

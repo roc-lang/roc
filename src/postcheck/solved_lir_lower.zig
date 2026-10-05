@@ -603,6 +603,28 @@ const NamedRepresentationKey = struct {
     backing_authority: ?MonoType.BackingAuthority,
 };
 
+/// A named layout bucket: the shallow key plus the type's
+/// `RepresentationShape`, which every representation-equivalent type shares.
+/// Splitting buckets by shape keeps instantiations of one named type at many
+/// different arguments from all scanning each other.
+const NamedLayoutBucket = struct {
+    named: NamedRepresentationKey,
+    shape: Lowerer.RepresentationShape,
+};
+
+const NamedLayoutBucketContext = struct {
+    pub fn hash(_: NamedLayoutBucketContext, key: NamedLayoutBucket) u64 {
+        var hasher = std.hash.Wyhash.init(NamedRepresentationKeyContext.hash(.{}, key.named));
+        std.hash.autoHash(&hasher, key.shape);
+        return hasher.final();
+    }
+
+    pub fn eql(_: NamedLayoutBucketContext, lhs: NamedLayoutBucket, rhs: NamedLayoutBucket) bool {
+        return NamedRepresentationKeyContext.eql(.{}, lhs.named, rhs.named) and
+            std.meta.eql(lhs.shape, rhs.shape);
+    }
+};
+
 const NamedRepresentationKeyContext = struct {
     // Bucket selector only: the bucket holds a candidate list and
     // `representationTypesEquivalent` decides reuse, so a collision on these
@@ -796,7 +818,7 @@ const Lowerer = struct {
     /// node was local to its graph. A layout graph reuses a cached child only
     /// through this digest, so the child stays visible to recursion analysis.
     type_layout_digests: collections.DenseMap(Type.TypeId, layout.GraphDigest),
-    named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
+    named_layout_index: std.HashMap(NamedLayoutBucket, std.ArrayList(Type.TypeId), NamedLayoutBucketContext, std.hash_map.default_max_load_percentage),
     /// Each laid-out type's `RepresentationShape`, so a named layout lookup
     /// compares only candidates whose shapes can be equivalent.
     representation_shapes: collections.DenseMap(Type.TypeId, RepresentationShape),
@@ -818,9 +840,6 @@ const Lowerer = struct {
     /// Each access-path expression's `lowerExprContextTy`, so a chain of
     /// accesses walks each link once. A body worker keeps its own.
     expr_context_tys: collections.DenseMap(Lifted.ExprId, Type.TypeId),
-    /// Each classified type's `erasedResultDemand`. A body worker keeps its
-    /// own.
-    erased_result_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
     packed_literals: std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
@@ -850,10 +869,22 @@ const Lowerer = struct {
     /// selected erased-callable result slot. A later lexical producer uses
     /// this explicit provenance to inherit the return destination.
     return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
-    /// Erased-result demands already classified, valid while the type
-    /// store has had `erased_demands_sets` contents replaced.
+    /// Each classified type's `erasedResultDemand`. A demand is read only
+    /// between type lowerings, when every type it reaches is complete and
+    /// immutable, so an answer never goes stale. A body worker's lane keeps
+    /// its own across the bodies it lowers.
     erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
-    erased_demands_sets: u32 = 0,
+    /// How many type lowerings are running; see `erased_demands`.
+    type_lowering_depth: u32 = 0,
+    /// Reused visited sets and layout node maps. A fresh map spanning old and
+    /// new type ids would allocate and clear a chunk table for that whole
+    /// span on every use.
+    type_set_pool: collections.DenseMapPool(Type.TypeId, void),
+    layout_node_pool: collections.DenseMapPool(Type.TypeId, layout.GraphNodeId),
+    prep_expr_pool: collections.DenseMapPool(Lifted.ExprId, void),
+    prep_pattern_pool: collections.DenseMapPool(Lifted.PatId, void),
+    prep_statement_pool: collections.DenseMapPool(Lifted.StmtId, void),
+    prep_local_pool: collections.DenseMapPool(Lifted.LocalId, void),
     tail_call_scratch: lir_core.TailCallBuilder,
     /// Multiple distinct eager producers can feed one later runtime choice,
     /// but the hidden reuse owner is affine and cannot be offered to all of
@@ -898,10 +929,8 @@ const Lowerer = struct {
         loop_stack: std.ArrayList(LoopContext),
         join_stack: std.ArrayList(JoinContext),
         return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
-        /// Erased-result demands already classified, valid while the type
-        /// store has had `erased_demands_sets` contents replaced.
+        /// Erased-result demands already classified; see the lowerer's.
         erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
-        erased_demands_sets: u32 = 0,
         tail_call_scratch: lir_core.TailCallBuilder,
         erased_owner_states: std.ArrayList(ErasedOwnerState),
         erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
@@ -1076,7 +1105,7 @@ const Lowerer = struct {
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
             .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
-            .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
+            .named_layout_index = std.HashMap(NamedLayoutBucket, std.ArrayList(Type.TypeId), NamedLayoutBucketContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .representation_shapes = collections.DenseMap(Type.TypeId, RepresentationShape).init(allocator),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
@@ -1089,7 +1118,6 @@ const Lowerer = struct {
             .static_initializer_queue = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
             .expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator),
-            .erased_result_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
@@ -1102,6 +1130,12 @@ const Lowerer = struct {
             .join_stack = .empty,
             .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
             .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
+            .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
+            .layout_node_pool = collections.DenseMapPool(Type.TypeId, layout.GraphNodeId).init(allocator),
+            .prep_expr_pool = collections.DenseMapPool(Lifted.ExprId, void).init(allocator),
+            .prep_pattern_pool = collections.DenseMapPool(Lifted.PatId, void).init(allocator),
+            .prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(allocator),
+            .prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(allocator),
             .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
             .erased_owner_state_prefix = &.{},
             .erased_owner_states = .empty,
@@ -1186,6 +1220,12 @@ const Lowerer = struct {
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
         self.erased_demands.deinit();
+        self.type_set_pool.deinit();
+        self.layout_node_pool.deinit();
+        self.prep_expr_pool.deinit();
+        self.prep_pattern_pool.deinit();
+        self.prep_statement_pool.deinit();
+        self.prep_local_pool.deinit();
         self.tail_call_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
@@ -1211,7 +1251,6 @@ const Lowerer = struct {
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
         self.expr_context_tys.deinit();
-        self.erased_result_demands.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1273,6 +1312,12 @@ const Lowerer = struct {
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
         self.erased_demands.deinit();
+        self.type_set_pool.deinit();
+        self.layout_node_pool.deinit();
+        self.prep_expr_pool.deinit();
+        self.prep_pattern_pool.deinit();
+        self.prep_statement_pool.deinit();
+        self.prep_local_pool.deinit();
         self.tail_call_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
@@ -1298,7 +1343,6 @@ const Lowerer = struct {
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
         self.expr_context_tys.deinit();
-        self.erased_result_demands.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1352,7 +1396,13 @@ const Lowerer = struct {
         self.join_stack = .empty;
         self.return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(self.allocator);
         self.erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(self.allocator);
-        self.erased_demands_sets = 0;
+        self.type_lowering_depth = 0;
+        self.type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(self.allocator);
+        self.layout_node_pool = collections.DenseMapPool(Type.TypeId, layout.GraphNodeId).init(self.allocator);
+        self.prep_expr_pool = collections.DenseMapPool(Lifted.ExprId, void).init(self.allocator);
+        self.prep_pattern_pool = collections.DenseMapPool(Lifted.PatId, void).init(self.allocator);
+        self.prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(self.allocator);
+        self.prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(self.allocator);
         self.tail_call_scratch = lir_core.TailCallBuilder.initScratch(self.allocator);
         self.return_forwarding_ambiguous = false;
         self.return_forwarding_repeatable_depth = 0;
@@ -1668,7 +1718,15 @@ const Lowerer = struct {
         worker.current_return_target = null;
         worker.return_forwarding_locals = workspace.return_forwarding_locals;
         worker.erased_demands = workspace.erased_demands;
-        worker.erased_demands_sets = workspace.erased_demands_sets;
+        worker.type_lowering_depth = 0;
+        // Workers never lay out a type or classify a representation: both
+        // read only what coordinator preparation finished.
+        worker.type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(workspace.allocator);
+        worker.layout_node_pool = collections.DenseMapPool(Type.TypeId, layout.GraphNodeId).init(workspace.allocator);
+        worker.prep_expr_pool = collections.DenseMapPool(Lifted.ExprId, void).init(workspace.allocator);
+        worker.prep_pattern_pool = collections.DenseMapPool(Lifted.PatId, void).init(workspace.allocator);
+        worker.prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(workspace.allocator);
+        worker.prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(workspace.allocator);
         worker.tail_call_scratch = workspace.tail_call_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
@@ -1677,7 +1735,6 @@ const Lowerer = struct {
         // and never reads or grows the coordinator's cache.
         worker.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator);
         worker.expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator);
-        worker.erased_result_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator);
         worker.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator);
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
@@ -1692,7 +1749,6 @@ const Lowerer = struct {
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.deinitPackedPlans();
         self.expr_context_tys.deinit();
-        self.erased_result_demands.deinit();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
@@ -1717,7 +1773,6 @@ const Lowerer = struct {
         workspace.join_stack = self.join_stack;
         workspace.return_forwarding_locals = self.return_forwarding_locals;
         workspace.erased_demands = self.erased_demands;
-        workspace.erased_demands_sets = self.erased_demands_sets;
         workspace.tail_call_scratch = self.tail_call_scratch;
         workspace.erased_owner_states = self.erased_owner_states;
         workspace.erased_call_owner_uses = self.erased_call_owner_uses;
@@ -2051,19 +2106,19 @@ const Lowerer = struct {
                     else
                         .none,
                 },
-                .exprs = collections.DenseMap(Lifted.ExprId, void).init(lowerer.allocator),
-                .patterns = collections.DenseMap(Lifted.PatId, void).init(lowerer.allocator),
-                .statements = collections.DenseMap(Lifted.StmtId, void).init(lowerer.allocator),
-                .locals = collections.DenseMap(Lifted.LocalId, void).init(lowerer.allocator),
+                .exprs = lowerer.prep_expr_pool.acquire(),
+                .patterns = lowerer.prep_pattern_pool.acquire(),
+                .statements = lowerer.prep_statement_pool.acquire(),
+                .locals = lowerer.prep_local_pool.acquire(),
             };
         }
 
         fn deinit(self: *WorkerPreparation) void {
             self.work.deinit(self.lowerer.allocator);
-            self.exprs.deinit();
-            self.patterns.deinit();
-            self.statements.deinit();
-            self.locals.deinit();
+            self.lowerer.prep_expr_pool.release(&self.exprs);
+            self.lowerer.prep_pattern_pool.release(&self.patterns);
+            self.lowerer.prep_statement_pool.release(&self.statements);
+            self.lowerer.prep_local_pool.release(&self.locals);
         }
 
         fn add(self: *WorkerPreparation, item: Item) Common.LowerError!void {
@@ -3856,6 +3911,8 @@ const Lowerer = struct {
     };
 
     fn runTypeTasks(self: *Lowerer, root: TypeTask) Common.LowerError!TypeResult {
+        self.type_lowering_depth += 1;
+        defer self.type_lowering_depth -= 1;
         var frames: std.ArrayList(TypeFrame) = .empty;
         defer frames.deinit(self.allocator);
         errdefer for (frames.items) |*frame| self.releaseTypeFrame(frame);
@@ -9481,9 +9538,8 @@ const Lowerer = struct {
     /// demand is memoized when its walk never exhausted the budget, so it did
     /// not depend on the path that reached the type.
     fn erasedResultDemand(self: *Lowerer, ty: Type.TypeId) Common.LowerError!ErasedResultDemand {
-        if (self.erased_demands_sets != self.types.sets) {
-            self.erased_demands.clearRetainingCapacity();
-            self.erased_demands_sets = self.types.sets;
+        if (self.type_lowering_depth != 0) {
+            Common.invariant("erased result demand read a type that is still being lowered");
         }
         if (self.erased_demands.get(ty)) |known| return known;
         const demand = try self.classifyErasedResultDemand(ty);
@@ -9516,7 +9572,7 @@ const Lowerer = struct {
         // How many paths have exhausted the budget so far.
         var exhaustions: usize = 0;
         outer: while (true) {
-            var result: ErasedResultDemand = if (self.erased_result_demands.get(child_ty)) |known| known else if (child_remaining == 0) blk: {
+            var result: ErasedResultDemand = if (self.erased_demands.get(child_ty)) |known| known else if (child_remaining == 0) blk: {
                 exhaustions += 1;
                 break :blk .ambiguous;
             } else switch (self.types.get(child_ty)) {
@@ -9570,7 +9626,7 @@ const Lowerer = struct {
                     },
                     .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst => unreachable,
                 }
-                if (exhaustions == top.exhaustions_before) try self.erased_result_demands.put(top.ty, result);
+                if (exhaustions == top.exhaustions_before) try self.erased_demands.put(top.ty, result);
                 _ = frames.pop();
             }
             return result;
@@ -13387,6 +13443,14 @@ const Lowerer = struct {
         };
     }
 
+    /// The named layout bucket `ty` belongs to, for tests.
+    fn namedLayoutCandidatesForTest(self: *Lowerer, ty: Type.TypeId) Common.LowerError!?std.ArrayList(Type.TypeId) {
+        return self.named_layout_index.get(.{
+            .named = namedRepresentationKey(self.types.get(ty).named),
+            .shape = try self.representationShape(ty),
+        });
+    }
+
     fn rememberLayoutForType(self: *Lowerer, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!void {
         const existing_layout = self.type_layouts.get(ty);
         if (existing_layout) |existing| std.debug.assert(existing == layout_idx);
@@ -13397,7 +13461,10 @@ const Lowerer = struct {
             .named => |named| named,
             .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return,
         };
-        const gop = try self.named_layout_index.getOrPut(namedRepresentationKey(named));
+        const gop = try self.named_layout_index.getOrPut(.{
+            .named = namedRepresentationKey(named),
+            .shape = try self.representationShape(ty),
+        });
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(self.allocator, ty);
     }
@@ -13489,13 +13556,14 @@ const Lowerer = struct {
             .named => |named| named,
             .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return null,
         };
-        const candidates = self.named_layout_index.get(namedRepresentationKey(named)) orelse return null;
-        const shape = try self.representationShape(ty);
+        const candidates = self.named_layout_index.get(.{
+            .named = namedRepresentationKey(named),
+            .shape = try self.representationShape(ty),
+        }) orelse return null;
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
         for (candidates.items) |other_ty| {
             if (other_ty == ty) continue;
-            if (!std.meta.eql(try self.representationShape(other_ty), shape)) continue;
             visited.clearRetainingCapacity();
             if (try self.representationTypesEquivalent(ty, other_ty, &visited)) {
                 const layout_idx = self.type_layouts.get(other_ty) orelse
@@ -13528,10 +13596,10 @@ const Lowerer = struct {
         defer children.deinit(self.allocator);
         var frames: std.ArrayList(RepresentationShapeFrame) = .empty;
         defer frames.deinit(self.allocator);
-        var on_stack = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer on_stack.deinit();
-        var reaches_cycle = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer reaches_cycle.deinit();
+        var on_stack = self.type_set_pool.acquire();
+        defer self.type_set_pool.release(&on_stack);
+        var reaches_cycle = self.type_set_pool.acquire();
+        defer self.type_set_pool.release(&reaches_cycle);
 
         try self.pushRepresentationShapeFrame(&frames, &children, &on_stack, root);
         while (frames.items.len > 0) {
@@ -13991,8 +14059,8 @@ const Lowerer = struct {
         var graph = layout.Graph{};
         defer graph.deinit(self.allocator);
 
-        var local_nodes = collections.DenseMap(Type.TypeId, layout.GraphNodeId).init(self.allocator);
-        defer local_nodes.deinit();
+        var local_nodes = self.layout_node_pool.acquire();
+        defer self.layout_node_pool.release(&local_nodes);
         var builder = LayoutGraphBuilder{
             .lowerer = self,
             .graph = &graph,
@@ -15115,6 +15183,7 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     cloned.equality_digests = @TypeOf(source.equality_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.equality_digests.unsafeRawItemsForView()));
     cloned.constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView()));
     cloned.iterator_interface_cache = @TypeOf(source.iterator_interface_cache).fromArrayList(try cloneSlice(?bool, allocator, source.iterator_interface_cache.unsafeRawItemsForView()));
+    cloned.generated_private_cache = @TypeOf(source.generated_private_cache).fromArrayList(try cloneSlice(?bool, allocator, source.generated_private_cache.unsafeRawItemsForView()));
     var iterator_interface_visit_epochs: std.ArrayList(u32) = .empty;
     errdefer iterator_interface_visit_epochs.deinit(allocator);
     try iterator_interface_visit_epochs.resize(allocator, view.types.len);
@@ -15124,10 +15193,15 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     // The unfolding index must travel with the cloned digest caches: a clone
     // holding cached recursive digests but no unfoldings would digest a new
     // rolled-out prefix differently from the knot it unrolls.
+    // Each copy reserves the source's whole capacity first: inserting a hash
+    // table's entries in its own slot order into a smaller, growing table
+    // with the same hash function packs them into long probe runs.
+    try cloned.recursive_digest_unfoldings.ensureTotalCapacity(source.recursive_digest_unfoldings.count());
     var unfoldings = source.recursive_digest_unfoldings.iterator();
     while (unfoldings.next()) |entry| {
         try cloned.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+    try cloned.full_digest_interned.ensureTotalCapacity(source.full_digest_interned.count());
     var buckets = source.full_digest_interned.iterator();
     while (buckets.next()) |entry| {
         var copied = try cloneSlice(MonoType.TypeId, allocator, entry.value_ptr.items);
@@ -15858,8 +15932,7 @@ test "sparse local layout nodes commit in type id order" {
     const root_ty = try lowerer.types.add(.{ .tuple = root_items });
     _ = try lowerer.layoutOfType(root_ty);
 
-    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
-    const candidates = lowerer.named_layout_index.get(key).?;
+    const candidates = (try lowerer.namedLayoutCandidatesForTest(first_ty)).?;
     try std.testing.expectEqualSlices(Type.TypeId, &.{ first_ty, second_ty }, candidates.items);
     const first_layout = lowerer.type_layouts.get(first_ty).?;
     try std.testing.expectEqual(first_layout, lowerer.type_layouts.get(second_ty).?);
@@ -15938,10 +16011,10 @@ test "named layout index reuses only representation-equivalent instantiations" {
     try std.testing.expect(first_layout != different_layout);
     try std.testing.expect(lowerer.layout_owner_types.get(different_ty) == null);
 
-    // All three types share the shallow key. The distinct U64 representation is
-    // rejected by the deep comparison rather than incorrectly reusing U8.
-    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
-    try std.testing.expectEqual(@as(usize, 3), lowerer.named_layout_index.get(key).?.items.len);
+    // All three types share the shallow key, but the distinct U64
+    // representation has its own shape and so its own bucket.
+    try std.testing.expectEqual(@as(usize, 2), (try lowerer.namedLayoutCandidatesForTest(first_ty)).?.items.len);
+    try std.testing.expectEqual(@as(usize, 1), (try lowerer.namedLayoutCandidatesForTest(different_ty)).?.items.len);
 }
 
 test "named layout index reuses structurally equivalent recursive types" {
@@ -15995,8 +16068,7 @@ test "named layout index reuses structurally equivalent recursive types" {
     try std.testing.expectEqual(first_layout, equivalent_layout);
     try std.testing.expectEqual(first_ty, lowerer.layout_owner_types.get(equivalent_ty).?);
 
-    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
-    try std.testing.expectEqual(@as(usize, 2), lowerer.named_layout_index.get(key).?.items.len);
+    try std.testing.expectEqual(@as(usize, 2), (try lowerer.namedLayoutCandidatesForTest(first_ty)).?.items.len);
 }
 
 test "named layout index applies backing metadata by named type policy" {
