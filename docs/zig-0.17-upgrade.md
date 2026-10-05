@@ -11,14 +11,14 @@ and their source checkpoint are recorded below.
 
 ## Full local validation in progress
 
-The complete ReleaseSafe unit aggregate at `52f60bd7ca` completed 332 of
+The earlier ReleaseSafe unit aggregate at `52f60bd7ca` completed 332 of
 352 build steps, with 6,555 passed tests and 10 skips. Nine compilation
 groups failed. Repairs cover duplicate OS switch cases, the standalone
 LSP root's explicit version-module import, HTTP error sets, immutable test
 array slices, scalar PPC NaN construction, and Snapshot field/error APIs.
 The repaired bundle leaf passes all 26 tests, and focused PPC NaN and real
-local HTTP probes pass. Full repaired producers and the aggregate still
-need validation on the consolidated source.
+local HTTP probes pass. The later consolidated-source results below retain
+this failed attempt as evidence rather than treating it as a passing run.
 
 Unit reports now use an actual temporary directory owned by each summary.
 After a test writer succeeds, an explicitly dependent cached copy retains
@@ -59,6 +59,71 @@ Executed results retain their actual source revisions; earlier counts
 below do not establish completion of these final gates. Compatible bundle
 publication and supported-platform CI remain pending.
 
+### Consolidated full Safe results and remaining glue blocker
+
+At clean source `73cb8898f2d7a5d438b0f18d95840a2410556b8c`, the corrected
+complete dependency bundle is
+`/nix/store/0ap8v7rr97ik9zi3m3819rz9lg5xx882-roc-deps-x86_64-linux-musl-0.17.0`.
+Full local ReleaseSafe gates use one build job, two evaluator/CLI workers,
+and their ordinary full-suite timeouts, with no case filters:
+
+```sh
+zig build run-test-zig -Doptimize=ReleaseSafe -j1 -Droc-deps-path="$BUNDLE"
+zig build run-test-eval -Doptimize=ReleaseSafe -j1 -Droc-deps-path="$BUNDLE" \
+    -- --llvm --threads 2 --verbose --stats-json /private/fresh-eval-stats.json
+zig build run-test-cli -Doptimize=ReleaseSafe -j1 -Droc-deps-path="$BUNDLE" \
+    -- --include-llvm --threads 2 --verbose --stats-json /private/fresh-cli-stats.json
+```
+
+| Gate | Result on this source |
+| --- | --- |
+| Full Safe unit aggregate | 409/409 steps; 7,118 passed, 12 skipped of 7,130; separate LSP runtime 110/110 |
+| Full four-backend evaluator | 42/42 steps; 2,540 passed, 42 skipped of 2,582 cases; no failures, crashes, or timeouts |
+| Full CLI including LLVM size/speed and glue | 2,857 passed, 10 failed, 13 skipped of 2,880; no crashes or timeouts |
+| Safe integer host, x86_64 musl | static ELF build and native `ALL TESTS PASSED` execution |
+| Safe integer host, aarch64 musl | static AArch64 ELF build and inspection; foreign runtime not executed |
+| Sandboxed Nix package | Debug/musl package and declared-output native CLI smoke pass |
+| Instrumented tokenize campaign | 300 seconds, 9,779,364 executions, varying coverage, no saved crashes or hangs |
+
+Evaluator backend events record 2,442 interpreter passes, 2,442 dev passes,
+2,400 WASM passes plus 42 skips, and 2,376 LLVM passes plus 66 skips.
+These backend events are separate from root-case totals. Explicit WASM skips
+cover declared deep-nesting, sharing, and Boxy limitations; LLVM allocation
+statistics are not implemented and account for its 66 backend skips. The
+dedicated SIMD and Lambda Mono differential gates remain separate requirements.
+
+Eight CLI failures come from external string imports omitted by the prepared
+fixture tree: `README.md` and
+`CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc`. Checkpoint
+`04940721c5` declares both inputs at their original relative paths. Its
+concurrent fixture regression checks their copied bytes and edit/revert cache
+invalidation; the original graph fails that regression. The existing `73cb`
+Safe runner and compiler pass all eight failing cases against an independently
+copied retained fixture tree with those two inputs restored. This targeted
+runtime control does not claim a full CLI pass on the fixed graph.
+
+The two remaining CLI failures are generated ZigGlue layout-probe hosts,
+native and WASM. Zig 0.17 rejects `@Vector` fields in `extern struct` and
+`extern union`. An identical tiny vector-containing extern struct compiles
+with Zig 0.16 and fails with 0.17. Replacing the field with an aligned array
+compiles but changes the SysV argument/result carrier from SSE to two integer
+pieces, contradicting the committed host ABI in `design.md`. No array
+substitution or skip has been applied. The earlier seven static-template ABI
+locks do not establish dynamic SIMD aggregate support; this is an unresolved
+upgrade blocker.
+
+Exact commands, source and artifact identities, fresh statistics, and logs are
+retained under
+`/home/lbw/Documents/Github/roc-validation/zig-0.17-full-local-aj5xdooz/`:
+`executions/zig-units-safe-attempt-3/`,
+`executions/parallel-eval-all-backends-attempt-final-1/`,
+`executions/cli-all-suites-all-backends-attempt-final-1/`, and
+`cli-failure-probes/`. These correctness runs do not update the earlier
+ReleaseFast performance measurements. Debug/Fast aggregates, remaining
+source/codegen and snapshot gates, full echo/REPL WASM, five remaining
+instrumented campaigns, Tracy, Valgrind, and final application-cache controls
+are still pending.
+
 ## Earlier upstream integration
 
 The integration of upstream `1665a944c27f1be90dc8928d37d64cd4be8ae977`
@@ -91,12 +156,11 @@ toolchain, compatible bundle, cache paths, and selected test filters.
 Bytebox runner is the previously validated ReleaseSafe binary, whose
 runner, VM, and shim sources are unchanged by this integration.
 
-The full module, parallel evaluator, and performance measurements below
-retain their earlier source checkpoints. This latest-main integration has
-targeted validation and a Debug compiler build; its full parallel evaluator
-and broader platform CI remain pending. The next evaluator run will use the
-complete bootstrap bundle with the corrected host triples. No performance
-comparison was repeated for this merge.
+The full module and performance measurements below retain their earlier
+source checkpoints. This integration has targeted validation and a Debug
+compiler build; the later consolidation's full unit and evaluator results are
+recorded above. Broader platform CI remains pending. No performance comparison
+was repeated for this merge.
 
 ## External source dependencies
 
