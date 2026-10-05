@@ -1854,7 +1854,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 /// Send the forked child's stderr to `<dir>/child_<index>.log`.
 fn redirectChildStderr(dir: []const u8, test_idx: usize) void {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }) catch return;
+    const path = std.mem.printSentinel(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }, 0) catch return;
     const fd = std.c.open(path.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
     _ = std.c.dup2(fd, posix.STDERR_FILENO);
