@@ -16696,11 +16696,18 @@ test "call-pattern scans direct call and function reference capture operands" {
         .id = check.CheckedModule.CaptureId.generatedLift(0),
         .value = return_expr,
     }});
+    const callee = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(1)),
+        .args = .empty(),
+        .captures = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }}),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
     const fn_ref = try program.addExpr(.{
         .ty = unit_ty,
         .data = .{
             .fn_ref = .{
-                .fn_id = @fromBackingInt(@intCast(0)), // scanners only inspect the captures
+                .fn_id = callee,
                 .captures = captures,
             },
         },
@@ -16710,7 +16717,7 @@ test "call-pattern scans direct call and function reference capture operands" {
         .data = .{
             .call_proc = .{
                 // addExpr also records call shapes, which reads the callee tag.
-                .callee = .{ .lifted = @fromBackingInt(@intCast(0)) },
+                .callee = .{ .lifted = callee },
                 .args = Ast.Span(Ast.ExprId).empty(),
                 .captures = captures,
             },
