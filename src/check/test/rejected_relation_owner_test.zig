@@ -22,7 +22,7 @@ fn liveRecordDestructureStatements(test_env: *TestEnv) usize {
     return count;
 }
 
-fn lambdaBody(test_env: *TestEnv, name: []const u8) !CIR.Expr {
+fn lambdaBody(test_env: *TestEnv, name: []const u8) TestEnv.TestEnvError!CIR.Expr {
     const store = &test_env.module_env.store;
     const def_expr = store.getExpr(try test_env.defExpr(name));
     const lambda_expr = if (def_expr == .e_closure) store.getExpr(def_expr.e_closure.lambda_idx) else def_expr;
