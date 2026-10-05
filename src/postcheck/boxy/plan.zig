@@ -13823,11 +13823,17 @@ const Builder = struct {
                 // variable its sealed type.
                 if (walk.actualFor(rep_id)) |actual| return try actions.append(self.allocator, .{ .visit = actual });
                 if (rep.sealed_default) |sealed| return try actions.append(self.allocator, .{ .visit = sealed });
-                if (self.derivedSchemeRequirement(rep_id, walk.root.method)) |requirement| {
-                    return try self.recordDerivedDecision(walk, rep_id, .{ .scheme_dictionary = requirement });
+                // Only a frame that quantifies the variable binds its scheme
+                // dictionary; any other frame sees the variable at its closed
+                // default.
+                const quantified = self.frameLexicallyQuantifies(walk.root.frame, self.sharedVariableIdentity(rep_id));
+                if (quantified) {
+                    if (self.derivedSchemeRequirement(rep_id, walk.root.method)) |requirement| {
+                        return try self.recordDerivedDecision(walk, rep_id, .{ .scheme_dictionary = requirement });
+                    }
                 }
                 if (rep.tag_variants.len == 0) {
-                    if (!self.frameLexicallyQuantifies(walk.root.frame, self.sharedVariableIdentity(rep_id))) {
+                    if (!quantified) {
                         const closed = try self.sharedVariableClosedRep(rep_id, .frame);
                         try self.recordDerivedDecision(walk, rep_id, .{ .shared_closed = closed });
                         return try actions.append(self.allocator, .{ .visit = closed });
@@ -14437,8 +14443,15 @@ const Builder = struct {
             const child = self.plan.children.items[checked_rep.children.start + index];
             if (self.plan.childIsSharedBackingTemplate(checked_rep_id, child)) continue;
             const stored_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(stored_rep_id)].children);
-            const stored_child = self.namedQuery().findMatchingChildByRole(stored_children, child) orelse
-                boxyPlanInvariant("stored capture representation had no child matching its checked binder representation");
+            const stored_child = self.namedQuery().findMatchingChildByRole(stored_children, child) orelse switch (child.role) {
+                // The stored row is the whole row: what a checked row's
+                // extension stands for is part of it.
+                .record_ext, .tag_ext => {
+                    try self.collectStoredRepSubstitutions(child.rep, stored_rep_id, out, seen);
+                    continue;
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .list_elem, .box_payload => boxyPlanInvariant("stored capture representation had no child matching its checked binder representation"),
+            };
             try self.collectStoredRepSubstitutions(child.rep, stored_child.rep, out, seen);
         }
     }
@@ -14574,6 +14587,14 @@ const Builder = struct {
     /// callable its worker runs. Its checked evidence and scheme substitution
     /// instantiate the worker exactly as at that site.
     fn staticFnSite(self: *Builder, static_fn: StaticFnPlan) CheckedExprIdentity {
+        return self.staticFnNestedSite(static_fn) orelse
+            boxyPlanInvariant("stored function value with hidden inputs had no nested construction site");
+    }
+
+    /// `staticFnSite` for a nested callable, or null for a stored top-level
+    /// or generated procedure, whose stored representation is its whole
+    /// instantiation.
+    fn staticFnNestedSite(self: *Builder, static_fn: StaticFnPlan) ?CheckedExprIdentity {
         return switch (self.plan.workers.items[@intFromEnum(static_fn.worker)].source) {
             .nested_expr => |expr_ref| expr_ref,
             .procedure_template,
@@ -14581,7 +14602,7 @@ const Builder = struct {
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
-            => boxyPlanInvariant("stored function value with hidden inputs had no nested construction site"),
+            => null,
         };
     }
 
@@ -14612,13 +14633,13 @@ const Builder = struct {
 
     /// A stored function value is restored at its stored representation, so
     /// that concrete representation supplies its worker's hidden descriptors,
-    /// with its construction site's evidence and scheme substitution.
+    /// with a nested callable's construction-site evidence and scheme
+    /// substitution.
     fn materializeStaticFnHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.static_fns.items) |*static_fn| {
             const worker = self.plan.workers.items[@intFromEnum(static_fn.worker)];
             if (worker.hidden_descs.len == 0) continue;
-            const site = self.staticFnSite(static_fn.*);
-            const evidence = self.checkedEvidenceForProcedureUse(site);
+            const evidence: ?CheckedCallEvidence = if (self.staticFnNestedSite(static_fn.*)) |site| self.checkedEvidenceForProcedureUse(site) else null;
             const function = (self.repQuery().functionChildren(static_fn.rep)) orelse
                 boxyPlanInvariant("stored function value had a non-callable stored representation");
             const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
@@ -14642,8 +14663,8 @@ const Builder = struct {
                 function.ret,
                 arg_types,
                 self.plan.representations.items[@intFromEnum(function.ret)].source_type,
-                evidence.view,
-                evidence.entries,
+                if (evidence) |known| known.view else null,
+                if (evidence) |known| known.entries else null,
                 null,
                 try self.storedUseSchemeRepSubstitutions(worker.rep, static_fn.rep),
                 stored_capture_substitutions.items,

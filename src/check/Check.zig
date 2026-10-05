@@ -15399,12 +15399,13 @@ const UnresolvedInspectScan = struct {
         visit.value_ptr.* |= position_bit;
 
         // Checked-type publication attaches an explicit close-to-empty default to
-        // each unconstrained row-tail occurrence. Ordinary value occurrences have
-        // no such default, and constrained variables cannot receive a row default.
+        // each unconstrained row-tail occurrence, and to a flexible one whose
+        // constraints the empty row discharges. Ordinary value occurrences have
+        // no such default.
         switch (resolved.desc.content) {
             .flex => |flex| return .{ .value = switch (leaf.position) {
                 .value => true,
-                .record_row, .tag_row => flex.constraints.len() > 0,
+                .record_row, .tag_row => !self.rowDefaultDischargesConstraints(flex.constraints),
             } },
             .rigid => |rigid| return .{ .value = switch (leaf.position) {
                 .value => true,
