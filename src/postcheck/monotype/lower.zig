@@ -12779,6 +12779,7 @@ const Builder = struct {
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
+            errdefer fn_ctx.restoreBinder(binder, previous);
             const previous_typed = try fn_ctx.putTypedBinder(binder, lowered_ty, local);
             out.appendAssumeCapacity(.{
                 .binder = binder,
@@ -12808,17 +12809,7 @@ const Builder = struct {
         fn_ctx: *BodyContext,
         captures: *std.ArrayList(RestoredConstSourceCapture),
     ) void {
-        var index = captures.items.len;
-        while (index > 0) {
-            index -= 1;
-            const capture = captures.items[index];
-            fn_ctx.restoreTypedBinder(capture.binder, capture.ty, capture.previous_typed);
-            if (capture.previous) |previous| {
-                fn_ctx.binders.restore(capture.binder, previous);
-            } else {
-                _ = fn_ctx.binders.remove(capture.binder);
-            }
-        }
+        fn_ctx.unbindConstCaptures(captures.items);
         captures.deinit(self.allocator);
     }
 
@@ -12988,21 +12979,9 @@ const Builder = struct {
             ty: Type.TypeId,
             value: DraftExprId,
         }, fn_value.captures.len);
-        var initialized: usize = 0;
-        errdefer {
-            while (initialized > 0) {
-                initialized -= 1;
-                if (captures[initialized].previous) |previous| {
-                    fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
-                    fn_ctx.binders.restore(captures[initialized].binder, previous);
-                } else {
-                    fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
-                    _ = fn_ctx.binders.remove(captures[initialized].binder);
-                }
-            }
-            self.allocator.free(captures);
-        }
         defer self.allocator.free(captures);
+        var initialized: usize = 0;
+        defer fn_ctx.unbindConstCaptures(captures[0..initialized]);
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
@@ -13012,6 +12991,7 @@ const Builder = struct {
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
+            errdefer fn_ctx.restoreBinder(binder, previous);
             const previous_typed = try fn_ctx.putTypedBinder(binder, lowered_ty, local);
             captures[index] = .{
                 .binder = binder,
@@ -13036,20 +13016,9 @@ const Builder = struct {
         };
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
-        defer {
-            var index = initialized;
-            while (index > 0) {
-                index -= 1;
-                fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
-                if (captures[index].previous) |previous| {
-                    fn_ctx.binders.restore(captures[index].binder, previous);
-                } else {
-                    _ = fn_ctx.binders.remove(captures[index].binder);
-                }
-            }
-        }
 
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
+        defer self.allocator.free(capture_values);
         const request_fn_node = try fn_ctx.activeNodeFromType(ty);
         const capture_entry_guards = try self.allocator.alloc(NodeId, captures.len);
         defer self.allocator.free(capture_entry_guards);
@@ -13072,7 +13041,6 @@ const Builder = struct {
             .inherit,
         );
 
-        defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
             capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
@@ -20110,6 +20078,29 @@ const BodyContext = struct {
         const previous = self.typed_binders.get(key);
         try self.typed_binders.put(key, local);
         return previous;
+    }
+
+    /// Put `binder` back to the local it named before a scoped rebinding, or
+    /// unbind it when it named none.
+    fn restoreBinder(self: *BodyContext, binder: checked.PatternBinderId, previous: ?DraftLocalId) void {
+        if (previous) |local| {
+            self.binders.restore(binder, local);
+        } else {
+            _ = self.binders.remove(binder);
+        }
+    }
+
+    /// Undo the binder and typed-binder bindings of restored constant
+    /// captures, most recent first. Each capture carries the `binder` it
+    /// bound, the `ty` it was bound at, and what both bindings named before
+    /// (`previous`, `previous_typed`).
+    fn unbindConstCaptures(self: *BodyContext, captures: anytype) void {
+        var index = captures.len;
+        while (index > 0) {
+            index -= 1;
+            self.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
+            self.restoreBinder(captures[index].binder, captures[index].previous);
+        }
     }
 
     fn restoreTypedBinder(
@@ -44123,24 +44114,9 @@ const BodyContext = struct {
             node: NodeId,
             value: DraftExprId,
         }, fn_value.captures.len);
-        var initialized: usize = 0;
-        errdefer {
-            while (initialized > 0) {
-                initialized -= 1;
-                fn_ctx.restoreTypedBinder(
-                    captures[initialized].binder,
-                    captures[initialized].ty,
-                    captures[initialized].previous_typed,
-                );
-                if (captures[initialized].previous) |previous| {
-                    fn_ctx.binders.restore(captures[initialized].binder, previous);
-                } else {
-                    _ = fn_ctx.binders.remove(captures[initialized].binder);
-                }
-            }
-            self.allocator.free(captures);
-        }
         defer self.allocator.free(captures);
+        var initialized: usize = 0;
+        defer fn_ctx.unbindConstCaptures(captures[0..initialized]);
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
@@ -44151,6 +44127,7 @@ const BodyContext = struct {
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
+            errdefer fn_ctx.restoreBinder(binder, previous);
             const previous_typed = try fn_ctx.putTypedBinder(binder, lowered_ty, local);
             captures[index] = .{
                 .binder = binder,
@@ -44189,19 +44166,6 @@ const BodyContext = struct {
         };
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
-
-        defer {
-            var index = initialized;
-            while (index > 0) {
-                index -= 1;
-                fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
-                if (captures[index].previous) |previous| {
-                    fn_ctx.binders.restore(captures[index].binder, previous);
-                } else {
-                    _ = fn_ctx.binders.remove(captures[index].binder);
-                }
-            }
-        }
 
         const capture_entry_guards = try self.allocator.alloc(NodeId, captures.len);
         defer self.allocator.free(capture_entry_guards);
@@ -44319,21 +44283,9 @@ const BodyContext = struct {
             ty: Type.TypeId,
             value: DraftExprId,
         }, fn_value.captures.len);
-        var initialized: usize = 0;
-        errdefer {
-            while (initialized > 0) {
-                initialized -= 1;
-                if (captures[initialized].previous) |previous| {
-                    fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
-                    fn_ctx.binders.restore(captures[initialized].binder, previous);
-                } else {
-                    fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
-                    _ = fn_ctx.binders.remove(captures[initialized].binder);
-                }
-            }
-            self.allocator.free(captures);
-        }
         defer self.allocator.free(captures);
+        var initialized: usize = 0;
+        defer fn_ctx.unbindConstCaptures(captures[0..initialized]);
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
@@ -44343,6 +44295,7 @@ const BodyContext = struct {
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
+            errdefer fn_ctx.restoreBinder(binder, previous);
             const previous_typed = try fn_ctx.putTypedBinder(binder, lowered_ty, local);
             captures[index] = .{
                 .binder = binder,
@@ -44367,19 +44320,6 @@ const BodyContext = struct {
         };
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
-
-        defer {
-            var index = initialized;
-            while (index > 0) {
-                index -= 1;
-                fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
-                if (captures[index].previous) |previous| {
-                    fn_ctx.binders.restore(captures[index].binder, previous);
-                } else {
-                    _ = fn_ctx.binders.remove(captures[index].binder);
-                }
-            }
-        }
 
         const request_fn_node = try fn_ctx.activeNodeFromType(ty);
         const capture_entry_guards = try self.allocator.alloc(NodeId, captures.len);
