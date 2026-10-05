@@ -5171,7 +5171,7 @@ const Builder = struct {
             },
             .nominal => |nominal| {
                 if (nominal.builtin) |builtin| {
-                    if (generatedParserScalarMethod(builtin)) |method_text| {
+                    if (generatedCodecScalarMethod(builtin, "parse_")) |method_text| {
                         try actions.append(self.allocator, codecCallAction(worker, encoding_type, method_text, shape));
                         return;
                     }
@@ -5192,7 +5192,7 @@ const Builder = struct {
                             try actions.append(self.allocator, codecCallAction(worker, encoding_type, "parse_dict_next", shape));
                             try actions.append(self.allocator, codecCallAction(worker, encoding_type, "parse_dict_after_key", shape));
                             try actions.append(self.allocator, codecCallAction(worker, encoding_type, "parse_dict_after_entry", shape));
-                            if (generatedParserKeyMethod(view, nominal.args[0])) |method_text| {
+                            if (generatedCodecKeyMethod(view, nominal.args[0], "parse_key_")) |method_text| {
                                 try actions.append(self.allocator, codecCallAction(worker, encoding_type, method_text, key_type));
                                 try actions.append(self.allocator, .{ .parser_dict_key_method = .{ .worker = worker, .key_type = key_type } });
                             } else if (checkedParserUnitTagKey(view, nominal.args[0])) {
@@ -5440,7 +5440,7 @@ const Builder = struct {
             .tag_union => try actions.append(self.allocator, .{ .encoder_tag_union = request }),
             .nominal => |nominal| {
                 if (nominal.builtin) |builtin| {
-                    if (generatedEncoderScalarMethod(builtin)) |method_text| {
+                    if (generatedCodecScalarMethod(builtin, "encode_")) |method_text| {
                         try actions.append(self.allocator, codecCallAction(worker, encoding_type, method_text, subject_type));
                         return;
                     }
@@ -5676,7 +5676,7 @@ const Builder = struct {
         const encoding_type = dict.encoding_type;
         const start = beginPlanSequence(actions);
         defer finishPlanSequence(actions, start);
-        if (generatedEncoderKeyMethod(self.moduleForId(key_type.module), key_type.ty)) |method_text| {
+        if (generatedCodecKeyMethod(self.moduleForId(key_type.module), key_type.ty, "encode_key_")) |method_text| {
             try actions.append(self.allocator, codecCallAction(key_thunk_worker, encoding_type, method_text, key_type));
         } else if (self.generatedCodecContractRecordsCall(key_thunk_worker, encoding_type, "encode_key_start", key_type)) {
             try actions.append(self.allocator, codecCallAction(key_thunk_worker, encoding_type, "encode_key_start", key_type));
@@ -19959,23 +19959,25 @@ fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) c
     }
 }
 
-fn generatedParserScalarMethod(builtin: checked.CheckedBuiltinNominal) ?[]const u8 {
+/// The format method (`prefix` plus the scalar's name) that reads or writes a
+/// builtin scalar, or null when the builtin is not a scalar.
+pub fn generatedCodecScalarMethod(builtin: checked.CheckedBuiltinNominal, comptime prefix: []const u8) ?[]const u8 {
     return switch (builtin) {
-        .bool => "parse_bool",
-        .str => "parse_str",
-        .u8 => "parse_u8",
-        .i8 => "parse_i8",
-        .u16 => "parse_u16",
-        .i16 => "parse_i16",
-        .u32 => "parse_u32",
-        .i32 => "parse_i32",
-        .u64 => "parse_u64",
-        .i64 => "parse_i64",
-        .u128 => "parse_u128",
-        .i128 => "parse_i128",
-        .dec => "parse_dec",
-        .f32 => "parse_f32",
-        .f64 => "parse_f64",
+        .bool => prefix ++ "bool",
+        .str => prefix ++ "str",
+        .u8 => prefix ++ "u8",
+        .i8 => prefix ++ "i8",
+        .u16 => prefix ++ "u16",
+        .i16 => prefix ++ "i16",
+        .u32 => prefix ++ "u32",
+        .i32 => prefix ++ "i32",
+        .u64 => prefix ++ "u64",
+        .i64 => prefix ++ "i64",
+        .u128 => prefix ++ "u128",
+        .i128 => prefix ++ "i128",
+        .dec => prefix ++ "dec",
+        .f32 => prefix ++ "f32",
+        .f64 => prefix ++ "f64",
         .try_,
         .u8x16,
         .i8x16,
@@ -20002,53 +20004,16 @@ fn generatedParserScalarMethod(builtin: checked.CheckedBuiltinNominal) ?[]const 
     };
 }
 
-fn generatedParserKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]const u8 {
+/// The format method (`prefix` plus the scalar's name) for a builtin scalar
+/// checked type, looking through aliases.
+fn generatedCodecKeyMethod(view: ModuleView, ty: checked.CheckedTypeId, comptime prefix: []const u8) ?[]const u8 {
     var current = ty;
     while (true) return switch (view.checked_types.payload(current)) {
         .alias => |alias| {
             current = alias.backing;
             continue;
         },
-        .nominal => |nominal| switch (nominal.builtin orelse return null) {
-            .bool => "parse_key_bool",
-            .str => "parse_key_str",
-            .u8 => "parse_key_u8",
-            .i8 => "parse_key_i8",
-            .u16 => "parse_key_u16",
-            .i16 => "parse_key_i16",
-            .u32 => "parse_key_u32",
-            .i32 => "parse_key_i32",
-            .u64 => "parse_key_u64",
-            .i64 => "parse_key_i64",
-            .u128 => "parse_key_u128",
-            .i128 => "parse_key_i128",
-            .dec => "parse_key_dec",
-            .f32 => "parse_key_f32",
-            .f64 => "parse_key_f64",
-            .try_,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            .list,
-            .box,
-            .dict,
-            .set,
-            .iter,
-            .stream,
-            .parse_tag_union_spec,
-            .fields,
-            .field,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            => null,
-        },
+        .nominal => |nominal| generatedCodecScalarMethod(nominal.builtin orelse return null, prefix),
         .pending,
         .err,
         .flex,
@@ -20087,110 +20052,6 @@ fn checkedParserUnitTagKey(view: ModuleView, ty: checked.CheckedTypeId) bool {
         }
     }
     boxyPlanInvariant("checked Dict key tag row was cyclic");
-}
-
-fn generatedEncoderScalarMethod(builtin: checked.CheckedBuiltinNominal) ?[]const u8 {
-    return switch (builtin) {
-        .bool => "encode_bool",
-        .str => "encode_str",
-        .u8 => "encode_u8",
-        .i8 => "encode_i8",
-        .u16 => "encode_u16",
-        .i16 => "encode_i16",
-        .u32 => "encode_u32",
-        .i32 => "encode_i32",
-        .u64 => "encode_u64",
-        .i64 => "encode_i64",
-        .u128 => "encode_u128",
-        .i128 => "encode_i128",
-        .dec => "encode_dec",
-        .f32 => "encode_f32",
-        .f64 => "encode_f64",
-        .try_,
-        .u8x16,
-        .i8x16,
-        .u16x8,
-        .i16x8,
-        .u32x4,
-        .i32x4,
-        .u64x2,
-        .i64x2,
-        .list,
-        .box,
-        .dict,
-        .set,
-        .iter,
-        .stream,
-        .parse_tag_union_spec,
-        .fields,
-        .field,
-        .crypto_sha256_digest,
-        .crypto_sha256_hasher,
-        .crypto_blake3_digest,
-        .crypto_blake3_hasher,
-        => null,
-    };
-}
-
-fn generatedEncoderKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]const u8 {
-    var current = ty;
-    while (true) return switch (view.checked_types.payload(current)) {
-        .alias => |alias| {
-            current = alias.backing;
-            continue;
-        },
-        .nominal => |nominal| switch (nominal.builtin orelse return null) {
-            .bool => "encode_key_bool",
-            .str => "encode_key_str",
-            .u8 => "encode_key_u8",
-            .i8 => "encode_key_i8",
-            .u16 => "encode_key_u16",
-            .i16 => "encode_key_i16",
-            .u32 => "encode_key_u32",
-            .i32 => "encode_key_i32",
-            .u64 => "encode_key_u64",
-            .i64 => "encode_key_i64",
-            .u128 => "encode_key_u128",
-            .i128 => "encode_key_i128",
-            .dec => "encode_key_dec",
-            .f32 => "encode_key_f32",
-            .f64 => "encode_key_f64",
-            .try_,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            .list,
-            .box,
-            .dict,
-            .set,
-            .iter,
-            .stream,
-            .parse_tag_union_spec,
-            .fields,
-            .field,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            => null,
-        },
-        .pending,
-        .err,
-        .flex,
-        .rigid,
-        .record,
-        .tuple,
-        .function,
-        .empty_record,
-        .tag_union,
-        .empty_tag_union,
-        => null,
-    };
 }
 
 fn storedPrimitiveMatchesBuiltin(

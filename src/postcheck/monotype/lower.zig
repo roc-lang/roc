@@ -19967,13 +19967,13 @@ const BodyContext = struct {
                 if (self.optionalFieldSlot(shape_ty)) |slot| {
                     return try pending.append(self.allocator, slot.payload_ty);
                 }
-                if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null or self.parseScalarMethodName(shape_ty) != null) return;
+                if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null or self.scalarCodecMethodName(shape_ty, "parse_") != null) return;
             },
             .encoder => {
                 if (self.tryNullInfo(shape_ty)) |info| {
                     return try pending.append(self.allocator, info.ok_payload_ty);
                 }
-                if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null or self.encodeScalarMethodName(shape_ty) != null) return;
+                if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null or self.scalarCodecMethodName(shape_ty, "encode_") != null) return;
             },
         }
         if (self.setPayloadType(shape_ty)) |payload_ty| {
@@ -36467,7 +36467,7 @@ const BodyContext = struct {
                 continue;
             }
             if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null) continue;
-            if (self.parseScalarMethodName(shape_ty) != null) continue;
+            if (self.scalarCodecMethodName(shape_ty, "parse_") != null) continue;
             if (self.setPayloadType(shape_ty)) |payload_ty| {
                 try pending.append(self.allocator, .{ .ty = payload_ty });
                 continue;
@@ -36524,7 +36524,7 @@ const BodyContext = struct {
                 continue;
             }
             if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null) continue;
-            if (self.encodeScalarMethodName(shape_ty) != null) continue;
+            if (self.scalarCodecMethodName(shape_ty, "encode_") != null) continue;
             if (self.setPayloadType(shape_ty)) |payload_ty| {
                 try pending.append(self.allocator, .{ .ty = payload_ty });
                 continue;
@@ -36576,7 +36576,7 @@ const BodyContext = struct {
             return try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, info.ok_payload_ty, encoding_ty, str_ty);
         }
         if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null) return;
-        if (self.encodeScalarMethodName(shape_ty) != null) return;
+        if (self.scalarCodecMethodName(shape_ty, "encode_") != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
         }
@@ -36796,7 +36796,7 @@ const BodyContext = struct {
             return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
         }
         if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null) return;
-        if (self.parseScalarMethodName(shape_ty) != null) return;
+        if (self.scalarCodecMethodName(shape_ty, "parse_") != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty);
         }
@@ -36872,7 +36872,7 @@ const BodyContext = struct {
                 continue;
             }
             if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null) continue;
-            if (self.parseScalarMethodName(shape_ty) != null) continue;
+            if (self.scalarCodecMethodName(shape_ty, "parse_") != null) continue;
             if (self.setPayloadType(shape_ty)) |payload_ty| {
                 try pending.append(self.allocator, .{ .ty = payload_ty });
                 continue;
@@ -37091,7 +37091,7 @@ const BodyContext = struct {
         // A nominal opaque with a scalar backing and no custom parser (e.g. `Username := Str`)
         // parses its backing scalar, then rewraps the value in the nominal.
         if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
-            if (self.parseScalarMethodName(backing_ty) != null) {
+            if (self.scalarCodecMethodName(backing_ty, "parse_") != null) {
                 return try self.lowerParseNominalScalarFromState(shape_ty, backing_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
             }
         }
@@ -37574,60 +37574,10 @@ const BodyContext = struct {
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
 
-        const init_counted_name = try self.nameStoreMut().internRecordFieldLabel("counted");
-        const init_cursor_name = try self.nameStoreMut().internRecordFieldLabel("cursor");
-        const init_remaining_name = try self.nameStoreMut().internRecordFieldLabel("remaining");
-        const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
-            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
-            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
-        };
-        const init_ty = try self.recordType(&init_field_tys);
-
-        const counted_tag = self.monoTagByText(start_event_ty, "Counted");
-        const counted_payload_ty = self.singleTagPayloadType(counted_tag, "record parse Counted start event");
-        const counted_payload_local = try self.addLocal(self.builder.symbols.fresh(), counted_payload_ty);
-        const counted_payload_pat = try self.bindPat(counted_payload_local, counted_payload_ty);
-        const counted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
-            .name = counted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{counted_payload_pat}),
-        } } });
-        const counted_init_fields = [_]DraftFieldExpr{
-            .{ .name = init_counted_name, .value = try self.boolLiteral(true, bool_ty) },
-            .{ .name = init_cursor_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "rest") },
-            .{ .name = init_remaining_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "len") },
-        };
-        const counted_init = try self.addExpr(.{
-            .ty = init_ty,
-            .data = .{ .record = try self.addFieldExprSpan(&counted_init_fields) },
-        });
-
-        const uncounted_tag = self.monoTagByText(start_event_ty, "Uncounted");
-        const uncounted_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const uncounted_state_pat = try self.bindPat(uncounted_state_local, state_ty);
-        const uncounted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
-            .name = uncounted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{uncounted_state_pat}),
-        } } });
-        const uncounted_init_fields = [_]DraftFieldExpr{
-            .{ .name = init_counted_name, .value = try self.boolLiteral(false, bool_ty) },
-            .{ .name = init_cursor_name, .value = try self.localExpr(uncounted_state_local, state_ty) },
-            .{ .name = init_remaining_name, .value = try self.intLiteralExpr(0, u64_ty) },
-        };
-        const uncounted_init = try self.addExpr(.{
-            .ty = init_ty,
-            .data = .{ .record = try self.addFieldExprSpan(&uncounted_init_fields) },
-        });
-
-        const init_branches = [_]DraftBranch{
-            .{ .pat = counted_pat, .body = counted_init },
-            .{ .pat = uncounted_pat, .body = uncounted_init },
-        };
-        const init_expr = try self.addExpr(.{ .ty = init_ty, .data = .{ .match_ = .{
-            .scrutinee = try self.localExpr(start_event_local, start_event_ty),
-            .branches = try self.addBranchSpan(&init_branches),
-        } } });
-        const init_local = try self.addLocal(self.builder.symbols.fresh(), init_ty);
+        const start_init = try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "record parse Counted start event");
+        const init_ty = start_init.ty;
+        const init_expr = start_init.expr;
+        const init_local = start_init.local;
 
         const initial_values = try self.allocator.alloc(DraftExprId, record_loop_slot_offset + initial_payload_values.len + initial_presence_values.len);
         defer self.allocator.free(initial_values);
@@ -38758,6 +38708,81 @@ const BodyContext = struct {
         return try self.parseResultOk(ret_ty, tuple_expr, rest_expr, state_ty);
     }
 
+    const ParseCountedStartInit = struct {
+        ty: Type.TypeId,
+        expr: DraftExprId,
+        local: DraftLocalId,
+    };
+
+    /// The `{ counted, cursor, remaining }` record a counted parse loop starts
+    /// from, selected by matching the format's `Counted`/`Uncounted` start
+    /// event, plus a fresh local to bind it to.
+    fn lowerParseCountedStartInit(
+        self: *BodyContext,
+        start_event_local: DraftLocalId,
+        start_event_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        bool_ty: Type.TypeId,
+        u64_ty: Type.TypeId,
+        comptime context: []const u8,
+    ) Allocator.Error!ParseCountedStartInit {
+        const init_counted_name = try self.nameStoreMut().internRecordFieldLabel("counted");
+        const init_cursor_name = try self.nameStoreMut().internRecordFieldLabel("cursor");
+        const init_remaining_name = try self.nameStoreMut().internRecordFieldLabel("remaining");
+        const init_field_tys = [_]Type.Field{
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
+        };
+        const init_ty = try self.recordType(&init_field_tys);
+
+        const counted_tag = self.monoTagByText(start_event_ty, "Counted");
+        const counted_payload_ty = self.singleTagPayloadType(counted_tag, context);
+        const counted_payload_local = try self.addLocal(self.builder.symbols.fresh(), counted_payload_ty);
+        const counted_payload_pat = try self.bindPat(counted_payload_local, counted_payload_ty);
+        const counted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
+            .name = counted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{counted_payload_pat}),
+        } } });
+        const counted_init_fields = [_]DraftFieldExpr{
+            .{ .name = init_counted_name, .value = try self.boolLiteral(true, bool_ty) },
+            .{ .name = init_cursor_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "rest") },
+            .{ .name = init_remaining_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "len") },
+        };
+        const counted_init = try self.addExpr(.{
+            .ty = init_ty,
+            .data = .{ .record = try self.addFieldExprSpan(&counted_init_fields) },
+        });
+
+        const uncounted_tag = self.monoTagByText(start_event_ty, "Uncounted");
+        const uncounted_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const uncounted_state_pat = try self.bindPat(uncounted_state_local, state_ty);
+        const uncounted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
+            .name = uncounted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{uncounted_state_pat}),
+        } } });
+        const uncounted_init_fields = [_]DraftFieldExpr{
+            .{ .name = init_counted_name, .value = try self.boolLiteral(false, bool_ty) },
+            .{ .name = init_cursor_name, .value = try self.localExpr(uncounted_state_local, state_ty) },
+            .{ .name = init_remaining_name, .value = try self.intLiteralExpr(0, u64_ty) },
+        };
+        const uncounted_init = try self.addExpr(.{
+            .ty = init_ty,
+            .data = .{ .record = try self.addFieldExprSpan(&uncounted_init_fields) },
+        });
+
+        const init_branches = [_]DraftBranch{
+            .{ .pat = counted_pat, .body = counted_init },
+            .{ .pat = uncounted_pat, .body = uncounted_init },
+        };
+        const init_expr = try self.addExpr(.{ .ty = init_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.localExpr(start_event_local, start_event_ty),
+            .branches = try self.addBranchSpan(&init_branches),
+        } } });
+        const init_local = try self.addLocal(self.builder.symbols.fresh(), init_ty);
+        return .{ .ty = init_ty, .expr = init_expr, .local = init_local };
+    }
+
     /// A format that knows its element count up front returns `Counted`, and
     /// the driver then reads exactly that many elements with no further format
     /// calls and preallocates the list. Otherwise the element loop asks the
@@ -38814,60 +38839,10 @@ const BodyContext = struct {
             .{ .local = ctl.remaining_local, .ty = u64_ty },
         };
 
-        const init_counted_name = try self.nameStoreMut().internRecordFieldLabel("counted");
-        const init_cursor_name = try self.nameStoreMut().internRecordFieldLabel("cursor");
-        const init_remaining_name = try self.nameStoreMut().internRecordFieldLabel("remaining");
-        const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
-            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
-            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
-        };
-        const init_ty = try self.recordType(&init_field_tys);
-
-        const counted_tag = self.monoTagByText(start_event_ty, "Counted");
-        const counted_payload_ty = self.singleTagPayloadType(counted_tag, "list parse Counted start event");
-        const counted_payload_local = try self.addLocal(self.builder.symbols.fresh(), counted_payload_ty);
-        const counted_payload_pat = try self.bindPat(counted_payload_local, counted_payload_ty);
-        const counted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
-            .name = counted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{counted_payload_pat}),
-        } } });
-        const counted_init_fields = [_]DraftFieldExpr{
-            .{ .name = init_counted_name, .value = try self.boolLiteral(true, bool_ty) },
-            .{ .name = init_cursor_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "rest") },
-            .{ .name = init_remaining_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "len") },
-        };
-        const counted_init = try self.addExpr(.{
-            .ty = init_ty,
-            .data = .{ .record = try self.addFieldExprSpan(&counted_init_fields) },
-        });
-
-        const uncounted_tag = self.monoTagByText(start_event_ty, "Uncounted");
-        const uncounted_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const uncounted_state_pat = try self.bindPat(uncounted_state_local, state_ty);
-        const uncounted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
-            .name = uncounted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{uncounted_state_pat}),
-        } } });
-        const uncounted_init_fields = [_]DraftFieldExpr{
-            .{ .name = init_counted_name, .value = try self.boolLiteral(false, bool_ty) },
-            .{ .name = init_cursor_name, .value = try self.localExpr(uncounted_state_local, state_ty) },
-            .{ .name = init_remaining_name, .value = try self.intLiteralExpr(0, u64_ty) },
-        };
-        const uncounted_init = try self.addExpr(.{
-            .ty = init_ty,
-            .data = .{ .record = try self.addFieldExprSpan(&uncounted_init_fields) },
-        });
-
-        const init_branches = [_]DraftBranch{
-            .{ .pat = counted_pat, .body = counted_init },
-            .{ .pat = uncounted_pat, .body = uncounted_init },
-        };
-        const init_expr = try self.addExpr(.{ .ty = init_ty, .data = .{ .match_ = .{
-            .scrutinee = try self.localExpr(start_event_local, start_event_ty),
-            .branches = try self.addBranchSpan(&init_branches),
-        } } });
-        const init_local = try self.addLocal(self.builder.symbols.fresh(), init_ty);
+        const start_init = try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "list parse Counted start event");
+        const init_ty = start_init.ty;
+        const init_expr = start_init.expr;
+        const init_local = start_init.local;
 
         const remaining_expr = try self.recordPayloadFieldAccess(init_local, init_ty, "remaining");
         const initial_values = [_]DraftExprId{
@@ -38978,60 +38953,10 @@ const BodyContext = struct {
             .{ .local = ctl.remaining_local, .ty = u64_ty },
         };
 
-        const init_counted_name = try self.nameStoreMut().internRecordFieldLabel("counted");
-        const init_cursor_name = try self.nameStoreMut().internRecordFieldLabel("cursor");
-        const init_remaining_name = try self.nameStoreMut().internRecordFieldLabel("remaining");
-        const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
-            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
-            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
-        };
-        const init_ty = try self.recordType(&init_field_tys);
-
-        const counted_tag = self.monoTagByText(start_event_ty, "Counted");
-        const counted_payload_ty = self.singleTagPayloadType(counted_tag, "dict parse Counted start event");
-        const counted_payload_local = try self.addLocal(self.builder.symbols.fresh(), counted_payload_ty);
-        const counted_payload_pat = try self.bindPat(counted_payload_local, counted_payload_ty);
-        const counted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
-            .name = counted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{counted_payload_pat}),
-        } } });
-        const counted_init_fields = [_]DraftFieldExpr{
-            .{ .name = init_counted_name, .value = try self.boolLiteral(true, bool_ty) },
-            .{ .name = init_cursor_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "rest") },
-            .{ .name = init_remaining_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "len") },
-        };
-        const counted_init = try self.addExpr(.{
-            .ty = init_ty,
-            .data = .{ .record = try self.addFieldExprSpan(&counted_init_fields) },
-        });
-
-        const uncounted_tag = self.monoTagByText(start_event_ty, "Uncounted");
-        const uncounted_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const uncounted_state_pat = try self.bindPat(uncounted_state_local, state_ty);
-        const uncounted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
-            .name = uncounted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{uncounted_state_pat}),
-        } } });
-        const uncounted_init_fields = [_]DraftFieldExpr{
-            .{ .name = init_counted_name, .value = try self.boolLiteral(false, bool_ty) },
-            .{ .name = init_cursor_name, .value = try self.localExpr(uncounted_state_local, state_ty) },
-            .{ .name = init_remaining_name, .value = try self.intLiteralExpr(0, u64_ty) },
-        };
-        const uncounted_init = try self.addExpr(.{
-            .ty = init_ty,
-            .data = .{ .record = try self.addFieldExprSpan(&uncounted_init_fields) },
-        });
-
-        const init_branches = [_]DraftBranch{
-            .{ .pat = counted_pat, .body = counted_init },
-            .{ .pat = uncounted_pat, .body = uncounted_init },
-        };
-        const init_expr = try self.addExpr(.{ .ty = init_ty, .data = .{ .match_ = .{
-            .scrutinee = try self.localExpr(start_event_local, start_event_ty),
-            .branches = try self.addBranchSpan(&init_branches),
-        } } });
-        const init_local = try self.addLocal(self.builder.symbols.fresh(), init_ty);
+        const start_init = try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "dict parse Counted start event");
+        const init_ty = start_init.ty;
+        const init_expr = start_init.expr;
+        const init_local = start_init.local;
 
         const initial_values = [_]DraftExprId{
             try self.recordPayloadFieldAccess(init_local, init_ty, "cursor"),
@@ -39342,7 +39267,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        if (self.parseDictKeyMethodName(key_ty)) |method_name| {
+        if (self.scalarCodecMethodName(key_ty, "parse_key_")) |method_name| {
             return try self.lowerParseFormatMethod(
                 method_name,
                 &.{ encoding_expr, state_expr },
@@ -40275,7 +40200,7 @@ const BodyContext = struct {
     };
 
     fn parseShapeSelection(self: *BodyContext, shape_ty: Type.TypeId) ParseShapeSelection {
-        if (self.parseScalarMethodName(shape_ty)) |method_name| return .{ .tag_text = method_name };
+        if (self.scalarCodecMethodName(shape_ty, "parse_")) |method_name| return .{ .tag_text = method_name };
         return switch (self.shapeContent(shape_ty)) {
             .record => .{ .tag_text = "Record" },
             .zst => .{ .tag_text = "Record" },
@@ -44293,14 +44218,16 @@ const BodyContext = struct {
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
         switch (fn_value.fn_def) {
-            .parser_runtime => return try self.restoreConstParserRuntimeFnAtNode(
+            .parser_runtime => return try self.restoreConstCodecRuntimeFnAtNode(
+                .parser,
                 store_view,
                 fn_id,
                 fn_value,
                 request_fn_node,
                 static_data_const_locator,
             ),
-            .encoder_for_runtime => return try self.restoreConstEncoderForRuntimeFnAtNode(
+            .encoder_for_runtime => return try self.restoreConstCodecRuntimeFnAtNode(
+                .encoder,
                 store_view,
                 fn_id,
                 fn_value,
@@ -44594,10 +44521,10 @@ const BodyContext = struct {
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
         if (fn_value.fn_def == .parser_runtime) {
-            return try self.restoreConstParserRuntimeFn(store_view, fn_id, fn_value, ty, static_data_const_locator);
+            return try self.restoreConstCodecRuntimeFn(.parser, store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
         if (fn_value.fn_def == .encoder_for_runtime) {
-            return try self.restoreConstEncoderForRuntimeFn(store_view, fn_id, fn_value, ty, static_data_const_locator);
+            return try self.restoreConstCodecRuntimeFn(.encoder, store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
         const template = try self.builder.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, false);
         if (fn_value.evidence_frames.len == 0 or fn_value.evidence_frame_head == null) {
@@ -45046,17 +44973,33 @@ const BodyContext = struct {
         );
     }
 
-    fn restoreConstParserRuntimeFn(
+    fn restoreConstCodecRuntimeFn(
         self: *BodyContext,
+        comptime kind: CodecKind,
         store_view: ModuleView,
         fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const runtime = switch (fn_value.fn_def) {
-            .parser_runtime => |runtime| runtime,
-            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .encoder_for_runtime => Common.invariant("non-parser function reached parser runtime restore"),
+        const codec_name = switch (kind) {
+            .parser => "parser",
+            .encoder => "encoder_for",
+        };
+        const encoding_capture_id = switch (kind) {
+            .parser => parserEncodingCaptureId(),
+            .encoder => encoderForEncodingCaptureId(),
+        };
+        const wrong_fn_def = "non-" ++ codec_name ++ " function reached " ++ codec_name ++ " runtime restore";
+        const runtime = switch (kind) {
+            .parser => switch (fn_value.fn_def) {
+                .parser_runtime => |runtime| runtime,
+                .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .encoder_for_runtime => Common.invariant(wrong_fn_def),
+            },
+            .encoder => switch (fn_value.fn_def) {
+                .encoder_for_runtime => |runtime| runtime,
+                .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime => Common.invariant(wrong_fn_def),
+            },
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
@@ -45073,13 +45016,13 @@ const BodyContext = struct {
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
+        if (callable.args.len != 1) Common.invariant("stored " ++ codec_name ++ " constructor had an unexpected arity");
         // Mirrors the graph-native restore: the constructor was instantiated
         // against `ty`, so its result cell must be the request's own node.
         // Proving that here is what lets Phase B seal the request instead of
         // carrying a pre-freeze `Type.TypeId` across the boundary.
         if (!self.graph.sameClass(callable.ret, try fn_ctx.activeNodeFromType(ty))) {
-            Common.invariant("stored parser constructor result cell differed from its restored function type");
+            Common.invariant("stored " ++ codec_name ++ " constructor result cell differed from its restored function type");
         }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
@@ -45093,9 +45036,9 @@ const BodyContext = struct {
         );
 
         var encoding_let: ?DraftStoredCodecEncodingLet = null;
-        const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
+        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoding_capture_id)) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
-            fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
+            fn_ctx.setLocalCaptureId(local, encoding_capture_id);
             const let_value = if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
@@ -45123,7 +45066,7 @@ const BodyContext = struct {
             .owner_template = runtime.owner,
             .owner = fn_ctx.draft.current_owner,
             .expr = runtime_boundary,
-            .kind = .parser,
+            .kind = kind,
             .store_view = store_view,
             .fn_value = fn_value,
             .request_fn_node = request_fn_node,
@@ -45145,12 +45088,12 @@ const BodyContext = struct {
             // `requireRelationProduction`, so a frozen graph panics before
             // control reaches here. `emitDraftDeferredStoredCodecRestores` is
             // the only emitter of this body.
-            Common.invariant("stored parser restore ran against a frozen instantiation graph");
+            Common.invariant("stored " ++ codec_name ++ " restore ran against a frozen instantiation graph");
         }
 
         _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
             runtime_boundary,
-            .parser,
+            kind,
             shape_node,
             callable_node,
         );
@@ -45158,17 +45101,33 @@ const BodyContext = struct {
         return runtime_boundary;
     }
 
-    fn restoreConstParserRuntimeFnAtNode(
+    fn restoreConstCodecRuntimeFnAtNode(
         self: *BodyContext,
+        comptime kind: CodecKind,
         store_view: ModuleView,
         fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         request_fn_node: NodeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const runtime = switch (fn_value.fn_def) {
-            .parser_runtime => |runtime| runtime,
-            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .encoder_for_runtime => Common.invariant("non-parser function reached graph-native parser runtime restore"),
+        const codec_name = switch (kind) {
+            .parser => "parser",
+            .encoder => "encoder_for",
+        };
+        const encoding_capture_id = switch (kind) {
+            .parser => parserEncodingCaptureId(),
+            .encoder => encoderForEncodingCaptureId(),
+        };
+        const wrong_fn_def = "non-" ++ codec_name ++ " function reached graph-native " ++ codec_name ++ " runtime restore";
+        const runtime = switch (kind) {
+            .parser => switch (fn_value.fn_def) {
+                .parser_runtime => |runtime| runtime,
+                .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .encoder_for_runtime => Common.invariant(wrong_fn_def),
+            },
+            .encoder => switch (fn_value.fn_def) {
+                .encoder_for_runtime => |runtime| runtime,
+                .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime => Common.invariant(wrong_fn_def),
+            },
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
@@ -45200,15 +45159,19 @@ const BodyContext = struct {
             .expression_lowering,
         );
         const callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
+        if (callable.args.len != 1) Common.invariant("stored " ++ codec_name ++ " constructor had an unexpected arity");
         if (!self.graph.sameClass(callable.ret, request_fn_node)) {
-            Common.invariant("stored parser constructor result cell differed from its graph-native request");
+            Common.invariant("stored " ++ codec_name ++ " constructor result cell differed from its graph-native request");
         }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
 
         const runtime_fn = try self.graph.functionNodes(request_fn_node);
-        if (runtime_fn.args.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
+        const runtime_arity: usize = switch (kind) {
+            .parser => 1,
+            .encoder => 2,
+        };
+        if (runtime_fn.args.len != runtime_arity) Common.invariant("stored " ++ codec_name ++ " runtime function had an unexpected arity");
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
         try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
@@ -45218,9 +45181,9 @@ const BodyContext = struct {
         );
 
         var encoding_let: ?DraftStoredCodecEncodingLet = null;
-        const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
+        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoding_capture_id)) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
-            fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
+            fn_ctx.setLocalCaptureId(local, encoding_capture_id);
             const let_value = if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
@@ -45248,7 +45211,7 @@ const BodyContext = struct {
             .owner_template = runtime.owner,
             .owner = fn_ctx.draft.current_owner,
             .expr = runtime_boundary,
-            .kind = .parser,
+            .kind = kind,
             .store_view = store_view,
             .fn_value = fn_value,
             .request_fn_node = request_fn_node,
@@ -45270,251 +45233,12 @@ const BodyContext = struct {
             // `requireRelationProduction`, so a frozen graph panics before
             // control reaches here. `emitDraftDeferredStoredCodecRestores` is
             // the only emitter of this body.
-            Common.invariant("stored parser restore ran against a frozen instantiation graph");
+            Common.invariant("stored " ++ codec_name ++ " restore ran against a frozen instantiation graph");
         }
 
         _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
             runtime_boundary,
-            .parser,
-            shape_node,
-            callable_node,
-        );
-        boundary.source_captures = try self.allocator.dupe(Builder.RestoredConstSourceCapture, source_captures.items);
-        errdefer self.allocator.free(boundary.source_captures);
-        try fn_ctx.deferStoredCodecRestore(boundary);
-        return runtime_boundary;
-    }
-
-    fn restoreConstEncoderForRuntimeFn(
-        self: *BodyContext,
-        store_view: ModuleView,
-        fn_id: checked.ConstFnId,
-        fn_value: check.ConstStore.ConstFn,
-        ty: Type.TypeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftExprId {
-        const runtime = switch (fn_value.fn_def) {
-            .encoder_for_runtime => |runtime| runtime,
-            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime => Common.invariant("non-encoder_for function reached encoder_for runtime restore"),
-        };
-        const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
-
-        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
-        defer fn_ctx.deinit();
-        fn_ctx.inheritFrozenEmissionContext(self);
-        try fn_ctx.inheritActiveConstBinding(self);
-        fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
-
-        const expr = fn_view.bodies.expr(runtime.expr);
-        const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
-        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
-        const plan_args = callable_plan.operands;
-        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
-        const callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
-        // Mirrors the graph-native restore: the constructor was instantiated
-        // against `ty`, so its result cell must be the request's own node.
-        // Proving that here is what lets Phase B seal the request instead of
-        // carrying a pre-freeze `Type.TypeId` across the boundary.
-        if (!self.graph.sameClass(callable.ret, try fn_ctx.activeNodeFromType(ty))) {
-            Common.invariant("stored encoder_for constructor result cell differed from its restored function type");
-        }
-        const encoding_node = callable.args[0];
-        const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        const request_fn_node = callable.ret;
-
-        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
-        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
-        const runtime_boundary = try fn_ctx.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(request_fn_node),
-            .pending_deferred,
-        );
-
-        var encoding_let: ?DraftStoredCodecEncodingLet = null;
-        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
-            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
-            fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            const let_value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
-                    store_view,
-                    fn_view,
-                    node,
-                    encoding_node,
-                    const_locator,
-                )
-            else
-                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
-            encoding_let = .{ .local = local, .value = let_value };
-            break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
-        } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
-
-        // Mirror of `deferStructuralSerializationAtNode`: the reservation
-        // carries the encoding operand's impossibility proof from deferral
-        // until Phase B replaces it with the emitted body's. Without this the
-        // boundary is proof-less for the whole of Phase A.
-        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
-            fn_ctx.exprImpossibilityProof(encoding_expr);
-
-        const boundary = DraftDeferredStoredCodecRestore{
-            .view = fn_view,
-            .method_scope = fn_ctx.method_scope,
-            .owner_template = runtime.owner,
-            .owner = fn_ctx.draft.current_owner,
-            .expr = runtime_boundary,
-            .kind = .encoder,
-            .store_view = store_view,
-            .fn_value = fn_value,
-            .request_fn_node = request_fn_node,
-            .callable_node = callable_node,
-            .encoding_node = encoding_node,
-            .shape_node = shape_node,
-            .encoding_expr = encoding_expr,
-            .encoding_let = encoding_let,
-            .source_captures = &.{},
-            .active_const_binding = fn_ctx.active_const_binding,
-            .evidence = fn_ctx.evidence,
-            .current_fn_key = fn_ctx.current_fn_key,
-            .lexical = undefined,
-        };
-
-        if (fn_ctx.frozen_sealed_emission) {
-            // Unreachable by construction: the constructor instantiation above
-            // ends in `freshInstNode` -> `InstGraph.newNode` ->
-            // `requireRelationProduction`, so a frozen graph panics before
-            // control reaches here. `emitDraftDeferredStoredCodecRestores` is
-            // the only emitter of this body.
-            Common.invariant("stored encoder_for restore ran against a frozen instantiation graph");
-        }
-
-        _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
-            runtime_boundary,
-            .encoder,
-            shape_node,
-            callable_node,
-        );
-        try fn_ctx.deferStoredCodecRestore(boundary);
-        return runtime_boundary;
-    }
-
-    fn restoreConstEncoderForRuntimeFnAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        fn_id: checked.ConstFnId,
-        fn_value: check.ConstStore.ConstFn,
-        request_fn_node: NodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftExprId {
-        const runtime = switch (fn_value.fn_def) {
-            .encoder_for_runtime => |runtime| runtime,
-            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime => Common.invariant("non-encoder_for function reached graph-native encoder_for runtime restore"),
-        };
-        const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
-
-        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
-        defer fn_ctx.deinit();
-        fn_ctx.inheritFrozenEmissionContext(self);
-        try fn_ctx.inheritActiveConstBinding(self);
-        fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
-
-        var source_captures = try self.builder.bindConstSourceCaptures(
-            &fn_ctx,
-            store_view,
-            fn_view,
-            fn_value,
-            static_data_const_locator,
-        );
-        defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
-
-        const expr = fn_view.bodies.expr(runtime.expr);
-        const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
-        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
-        const plan_args = callable_plan.operands;
-        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
-            callable_plan,
-            &fn_ctx,
-            expr.ty,
-            request_fn_node,
-            .expression_lowering,
-        );
-        const callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
-        if (!self.graph.sameClass(callable.ret, request_fn_node)) {
-            Common.invariant("stored encoder_for constructor result cell differed from its graph-native request");
-        }
-        const encoding_node = callable.args[0];
-        const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-
-        const runtime_fn = try self.graph.functionNodes(request_fn_node);
-        if (runtime_fn.args.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
-
-        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
-        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
-        const runtime_boundary = try fn_ctx.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(request_fn_node),
-            .pending_deferred,
-        );
-
-        var encoding_let: ?DraftStoredCodecEncodingLet = null;
-        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
-            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
-            fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            const let_value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
-                    store_view,
-                    fn_view,
-                    node,
-                    encoding_node,
-                    const_locator,
-                )
-            else
-                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
-            encoding_let = .{ .local = local, .value = let_value };
-            break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
-        } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
-
-        // Mirror of `deferStructuralSerializationAtNode`: the reservation
-        // carries the encoding operand's impossibility proof from deferral
-        // until Phase B replaces it with the emitted body's. Without this the
-        // boundary is proof-less for the whole of Phase A.
-        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
-            fn_ctx.exprImpossibilityProof(encoding_expr);
-
-        var boundary = DraftDeferredStoredCodecRestore{
-            .view = fn_view,
-            .method_scope = fn_ctx.method_scope,
-            .owner_template = runtime.owner,
-            .owner = fn_ctx.draft.current_owner,
-            .expr = runtime_boundary,
-            .kind = .encoder,
-            .store_view = store_view,
-            .fn_value = fn_value,
-            .request_fn_node = request_fn_node,
-            .callable_node = callable_node,
-            .encoding_node = encoding_node,
-            .shape_node = shape_node,
-            .encoding_expr = encoding_expr,
-            .encoding_let = encoding_let,
-            .source_captures = source_captures.items,
-            .active_const_binding = fn_ctx.active_const_binding,
-            .evidence = fn_ctx.evidence,
-            .current_fn_key = fn_ctx.current_fn_key,
-            .lexical = undefined,
-        };
-
-        if (fn_ctx.frozen_sealed_emission) {
-            // Unreachable by construction: the constructor instantiation above
-            // ends in `freshInstNode` -> `InstGraph.newNode` ->
-            // `requireRelationProduction`, so a frozen graph panics before
-            // control reaches here. `emitDraftDeferredStoredCodecRestores` is
-            // the only emitter of this body.
-            Common.invariant("stored encoder_for restore ran against a frozen instantiation graph");
-        }
-
-        _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
-            runtime_boundary,
-            .encoder,
+            kind,
             shape_node,
             callable_node,
         );
@@ -48581,79 +48305,24 @@ const BodyContext = struct {
         });
     }
 
-    fn parseScalarMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
-        if (self.typeHasBuiltinOwner(ty, .bool)) return "parse_bool";
-        if (self.typeHasBuiltinOwner(ty, .str)) return "parse_str";
-        if (self.typeHasBuiltinOwner(ty, .u8)) return "parse_u8";
-        if (self.typeHasBuiltinOwner(ty, .i8)) return "parse_i8";
-        if (self.typeHasBuiltinOwner(ty, .u16)) return "parse_u16";
-        if (self.typeHasBuiltinOwner(ty, .i16)) return "parse_i16";
-        if (self.typeHasBuiltinOwner(ty, .u32)) return "parse_u32";
-        if (self.typeHasBuiltinOwner(ty, .i32)) return "parse_i32";
-        if (self.typeHasBuiltinOwner(ty, .u64)) return "parse_u64";
-        if (self.typeHasBuiltinOwner(ty, .i64)) return "parse_i64";
-        if (self.typeHasBuiltinOwner(ty, .u128)) return "parse_u128";
-        if (self.typeHasBuiltinOwner(ty, .i128)) return "parse_i128";
-        if (self.typeHasBuiltinOwner(ty, .dec)) return "parse_dec";
-        if (self.typeHasBuiltinOwner(ty, .f32)) return "parse_f32";
-        if (self.typeHasBuiltinOwner(ty, .f64)) return "parse_f64";
-        return null;
-    }
-
-    fn encodeScalarMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
-        if (self.typeHasBuiltinOwner(ty, .bool)) return "encode_bool";
-        if (self.typeHasBuiltinOwner(ty, .str)) return "encode_str";
-        if (self.typeHasBuiltinOwner(ty, .u8)) return "encode_u8";
-        if (self.typeHasBuiltinOwner(ty, .i8)) return "encode_i8";
-        if (self.typeHasBuiltinOwner(ty, .u16)) return "encode_u16";
-        if (self.typeHasBuiltinOwner(ty, .i16)) return "encode_i16";
-        if (self.typeHasBuiltinOwner(ty, .u32)) return "encode_u32";
-        if (self.typeHasBuiltinOwner(ty, .i32)) return "encode_i32";
-        if (self.typeHasBuiltinOwner(ty, .u64)) return "encode_u64";
-        if (self.typeHasBuiltinOwner(ty, .i64)) return "encode_i64";
-        if (self.typeHasBuiltinOwner(ty, .u128)) return "encode_u128";
-        if (self.typeHasBuiltinOwner(ty, .i128)) return "encode_i128";
-        if (self.typeHasBuiltinOwner(ty, .dec)) return "encode_dec";
-        if (self.typeHasBuiltinOwner(ty, .f32)) return "encode_f32";
-        if (self.typeHasBuiltinOwner(ty, .f64)) return "encode_f64";
-        return null;
-    }
-
-    fn parseDictKeyMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
-        if (self.typeHasBuiltinOwner(ty, .bool)) return "parse_key_bool";
-        if (self.typeHasBuiltinOwner(ty, .str)) return "parse_key_str";
-        if (self.typeHasBuiltinOwner(ty, .u8)) return "parse_key_u8";
-        if (self.typeHasBuiltinOwner(ty, .i8)) return "parse_key_i8";
-        if (self.typeHasBuiltinOwner(ty, .u16)) return "parse_key_u16";
-        if (self.typeHasBuiltinOwner(ty, .i16)) return "parse_key_i16";
-        if (self.typeHasBuiltinOwner(ty, .u32)) return "parse_key_u32";
-        if (self.typeHasBuiltinOwner(ty, .i32)) return "parse_key_i32";
-        if (self.typeHasBuiltinOwner(ty, .u64)) return "parse_key_u64";
-        if (self.typeHasBuiltinOwner(ty, .i64)) return "parse_key_i64";
-        if (self.typeHasBuiltinOwner(ty, .u128)) return "parse_key_u128";
-        if (self.typeHasBuiltinOwner(ty, .i128)) return "parse_key_i128";
-        if (self.typeHasBuiltinOwner(ty, .dec)) return "parse_key_dec";
-        if (self.typeHasBuiltinOwner(ty, .f32)) return "parse_key_f32";
-        if (self.typeHasBuiltinOwner(ty, .f64)) return "parse_key_f64";
-        return null;
-    }
-
-    fn encodeDictKeyMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
-        if (self.typeHasBuiltinOwner(ty, .bool)) return "encode_key_bool";
-        if (self.typeHasBuiltinOwner(ty, .str)) return "encode_key_str";
-        if (self.typeHasBuiltinOwner(ty, .u8)) return "encode_key_u8";
-        if (self.typeHasBuiltinOwner(ty, .i8)) return "encode_key_i8";
-        if (self.typeHasBuiltinOwner(ty, .u16)) return "encode_key_u16";
-        if (self.typeHasBuiltinOwner(ty, .i16)) return "encode_key_i16";
-        if (self.typeHasBuiltinOwner(ty, .u32)) return "encode_key_u32";
-        if (self.typeHasBuiltinOwner(ty, .i32)) return "encode_key_i32";
-        if (self.typeHasBuiltinOwner(ty, .u64)) return "encode_key_u64";
-        if (self.typeHasBuiltinOwner(ty, .i64)) return "encode_key_i64";
-        if (self.typeHasBuiltinOwner(ty, .u128)) return "encode_key_u128";
-        if (self.typeHasBuiltinOwner(ty, .i128)) return "encode_key_i128";
-        if (self.typeHasBuiltinOwner(ty, .dec)) return "encode_key_dec";
-        if (self.typeHasBuiltinOwner(ty, .f32)) return "encode_key_f32";
-        if (self.typeHasBuiltinOwner(ty, .f64)) return "encode_key_f64";
+    /// The format method (`prefix` plus the scalar's name) that reads or
+    /// writes a builtin scalar type, or null when the type is not one.
+    fn scalarCodecMethodName(self: *BodyContext, ty: Type.TypeId, comptime prefix: []const u8) ?[]const u8 {
+        if (self.typeHasBuiltinOwner(ty, .bool)) return prefix ++ "bool";
+        if (self.typeHasBuiltinOwner(ty, .str)) return prefix ++ "str";
+        if (self.typeHasBuiltinOwner(ty, .u8)) return prefix ++ "u8";
+        if (self.typeHasBuiltinOwner(ty, .i8)) return prefix ++ "i8";
+        if (self.typeHasBuiltinOwner(ty, .u16)) return prefix ++ "u16";
+        if (self.typeHasBuiltinOwner(ty, .i16)) return prefix ++ "i16";
+        if (self.typeHasBuiltinOwner(ty, .u32)) return prefix ++ "u32";
+        if (self.typeHasBuiltinOwner(ty, .i32)) return prefix ++ "i32";
+        if (self.typeHasBuiltinOwner(ty, .u64)) return prefix ++ "u64";
+        if (self.typeHasBuiltinOwner(ty, .i64)) return prefix ++ "i64";
+        if (self.typeHasBuiltinOwner(ty, .u128)) return prefix ++ "u128";
+        if (self.typeHasBuiltinOwner(ty, .i128)) return prefix ++ "i128";
+        if (self.typeHasBuiltinOwner(ty, .dec)) return prefix ++ "dec";
+        if (self.typeHasBuiltinOwner(ty, .f32)) return prefix ++ "f32";
+        if (self.typeHasBuiltinOwner(ty, .f64)) return prefix ++ "f64";
         return null;
     }
 
@@ -48672,7 +48341,7 @@ const BodyContext = struct {
     /// `parse_key_*`/`encode_key_*` methods read and write. Any other key is
     /// read by its own codec behind `parse_key_start`/`encode_key_start`.
     fn dictKeyIsStringRendered(self: *BodyContext, ty: Type.TypeId) bool {
-        return self.parseDictKeyMethodName(ty) != null or self.dictKeyUnitTags(ty) != null;
+        return self.scalarCodecMethodName(ty, "parse_key_") != null or self.dictKeyUnitTags(ty) != null;
     }
 
     fn dictKeyUnitTags(self: *BodyContext, ty: Type.TypeId) ?Type.Span {
@@ -52169,10 +51838,10 @@ const BodyContext = struct {
 
         const top_level_null_try = self.tryNullInfo(shape_ty);
         const nominal_scalar_backing = if (self.nominalExprBackingType(shape_ty)) |backing_ty|
-            self.parseScalarMethodName(backing_ty) != null
+            self.scalarCodecMethodName(backing_ty, "parse_") != null
         else
             false;
-        if (self.parseScalarMethodName(shape_ty) == null and top_level_null_try == null and !nominal_scalar_backing) {
+        if (self.scalarCodecMethodName(shape_ty, "parse_") == null and top_level_null_try == null and !nominal_scalar_backing) {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
                 if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
@@ -52997,7 +52666,7 @@ const BodyContext = struct {
             .key_to_state => |*task| {
                 const value = task.value;
                 if (stage == 0) {
-                    if (self.encodeDictKeyMethodName(value.shape_ty)) |method_name| {
+                    if (self.scalarCodecMethodName(value.shape_ty, "encode_key_")) |method_name| {
                         return encodeExpr(try self.lowerEncodeFormatMethod(
                             method_name,
                             &.{ task.inputs.encoding_expr, value.value_expr, value.state_expr },
@@ -53257,13 +52926,13 @@ const BodyContext = struct {
             },
             .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
         }
-        if (self.encodeScalarMethodName(shape_ty)) |method_name| {
+        if (self.scalarCodecMethodName(shape_ty, "encode_")) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
         }
         // A nominal opaque with a scalar backing and no custom encoder (e.g. `Username := Str`)
         // encodes as its backing: unwrap one nominal layer and encode the scalar.
         if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
-            if (self.encodeScalarMethodName(backing_ty) != null) {
+            if (self.scalarCodecMethodName(backing_ty, "encode_") != null) {
                 task.backing_ty = backing_ty;
                 task.value_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
                 task.backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
@@ -54551,7 +54220,7 @@ const BodyContext = struct {
             _ = self.codec_support_path.remove(ty);
             return err;
         };
-        if (self.parseScalarMethodName(ty) != null) return true;
+        if (self.scalarCodecMethodName(ty, "parse_") != null) return true;
         if (try self.missingTryInfo(ty)) |info| {
             if (!allow_missing) return false;
             try pending.append(self.allocator, .{ .check = .{ .ty = info.ok_ty } });
@@ -54568,7 +54237,7 @@ const BodyContext = struct {
         }
         if (self.frozenCustomCodecCallForShape(.parser, ty) != null) return true;
         if (self.nominalExprBackingType(ty)) |backing_ty| {
-            if (self.parseScalarMethodName(backing_ty) != null) return true;
+            if (self.scalarCodecMethodName(backing_ty, "parse_") != null) return true;
         }
         if (self.setPayloadType(ty)) |payload_ty| {
             try pending.append(self.allocator, .{ .check = .{ .ty = payload_ty } });
@@ -54629,14 +54298,14 @@ const BodyContext = struct {
             _ = self.codec_support_path.remove(ty);
             return err;
         };
-        if (self.encodeScalarMethodName(ty) != null) return true;
+        if (self.scalarCodecMethodName(ty, "encode_") != null) return true;
         if (self.tryNullInfo(ty)) |info| {
             try pending.append(self.allocator, .{ .check = .{ .ty = info.ok_payload_ty } });
             return true;
         }
         if (self.frozenCustomCodecCallForShape(.encoder, ty) != null) return true;
         if (self.nominalExprBackingType(ty)) |backing_ty| {
-            if (self.encodeScalarMethodName(backing_ty) != null) return true;
+            if (self.scalarCodecMethodName(backing_ty, "encode_") != null) return true;
         }
         if (self.setPayloadType(ty)) |payload_ty| {
             try pending.append(self.allocator, .{ .check = .{ .ty = payload_ty } });
@@ -56258,105 +55927,32 @@ const BodyContext = struct {
     }
 
     fn graphNodeHasJsonScalarParser(self: *BodyContext, node: NodeId) bool {
-        return self.graphJsonParseScalarMethodName(node) != null;
+        return self.graphScalarCodecMethodName(node, "parse_") != null;
     }
 
-    fn graphJsonParseScalarMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
+    /// The format method (`prefix` plus the scalar's name) that reads or
+    /// writes a builtin scalar node, or null when the node is not one.
+    fn graphScalarCodecMethodName(self: *BodyContext, node: NodeId, comptime prefix: []const u8) ?[]const u8 {
         const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
             .builtin => |builtin| builtin,
             .nominal => return null,
         };
         return switch (owner) {
-            .bool => "parse_bool",
-            .str => "parse_str",
-            .u8 => "parse_u8",
-            .i8 => "parse_i8",
-            .u16 => "parse_u16",
-            .i16 => "parse_i16",
-            .u32 => "parse_u32",
-            .i32 => "parse_i32",
-            .u64 => "parse_u64",
-            .i64 => "parse_i64",
-            .u128 => "parse_u128",
-            .i128 => "parse_i128",
-            .f32 => "parse_f32",
-            .f64 => "parse_f64",
-            .dec => "parse_dec",
-            .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => null,
-        };
-    }
-
-    fn graphJsonEncodeScalarMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
-        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
-            .builtin => |builtin| builtin,
-            .nominal => return null,
-        };
-        return switch (owner) {
-            .bool => "encode_bool",
-            .str => "encode_str",
-            .u8 => "encode_u8",
-            .i8 => "encode_i8",
-            .u16 => "encode_u16",
-            .i16 => "encode_i16",
-            .u32 => "encode_u32",
-            .i32 => "encode_i32",
-            .u64 => "encode_u64",
-            .i64 => "encode_i64",
-            .u128 => "encode_u128",
-            .i128 => "encode_i128",
-            .f32 => "encode_f32",
-            .f64 => "encode_f64",
-            .dec => "encode_dec",
-            .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => null,
-        };
-    }
-
-    fn graphJsonParseObjectKeyMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
-        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
-            .builtin => |builtin| builtin,
-            .nominal => return null,
-        };
-        return switch (owner) {
-            .bool => "parse_key_bool",
-            .str => "parse_key_str",
-            .u8 => "parse_key_u8",
-            .i8 => "parse_key_i8",
-            .u16 => "parse_key_u16",
-            .i16 => "parse_key_i16",
-            .u32 => "parse_key_u32",
-            .i32 => "parse_key_i32",
-            .u64 => "parse_key_u64",
-            .i64 => "parse_key_i64",
-            .u128 => "parse_key_u128",
-            .i128 => "parse_key_i128",
-            .f32 => "parse_key_f32",
-            .f64 => "parse_key_f64",
-            .dec => "parse_key_dec",
-            .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => null,
-        };
-    }
-
-    fn graphJsonEncodeObjectKeyMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
-        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
-            .builtin => |builtin| builtin,
-            .nominal => return null,
-        };
-        return switch (owner) {
-            .bool => "encode_key_bool",
-            .str => "encode_key_str",
-            .u8 => "encode_key_u8",
-            .i8 => "encode_key_i8",
-            .u16 => "encode_key_u16",
-            .i16 => "encode_key_i16",
-            .u32 => "encode_key_u32",
-            .i32 => "encode_key_i32",
-            .u64 => "encode_key_u64",
-            .i64 => "encode_key_i64",
-            .u128 => "encode_key_u128",
-            .i128 => "encode_key_i128",
-            .f32 => "encode_key_f32",
-            .f64 => "encode_key_f64",
-            .dec => "encode_key_dec",
+            .bool => prefix ++ "bool",
+            .str => prefix ++ "str",
+            .u8 => prefix ++ "u8",
+            .i8 => prefix ++ "i8",
+            .u16 => prefix ++ "u16",
+            .i16 => prefix ++ "i16",
+            .u32 => prefix ++ "u32",
+            .i32 => prefix ++ "i32",
+            .u64 => prefix ++ "u64",
+            .i64 => prefix ++ "i64",
+            .u128 => prefix ++ "u128",
+            .i128 => prefix ++ "i128",
+            .f32 => prefix ++ "f32",
+            .f64 => prefix ++ "f64",
+            .dec => prefix ++ "dec",
             .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => null,
         };
     }
@@ -56546,7 +56142,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         switch (kind) {
             .parser => {
-                if (self.graphJsonParseObjectKeyMethodName(key_node)) |method_name| {
+                if (self.graphScalarCodecMethodName(key_node, "parse_key_")) |method_name| {
                     return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
                 if (self.graphNodeIsStringRenderedDictKey(key_node)) {
@@ -56567,7 +56163,7 @@ const BodyContext = struct {
                 return added;
             },
             .encoder => {
-                if (self.graphJsonEncodeObjectKeyMethodName(key_node)) |method_name| {
+                if (self.graphScalarCodecMethodName(key_node, "encode_key_")) |method_name| {
                     return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
                 if (self.graphNodeIsStringRenderedDictKey(key_node)) {
@@ -57099,7 +56695,7 @@ const BodyContext = struct {
                     if (named.builtin_owner == .set and named.args.len == 1) {
                         try pending.append(self.allocator, .{ .node = named.args[0] });
                     } else if (named.builtin_owner == .dict and named.args.len == 2) {
-                        if (self.graphJsonParseObjectKeyMethodName(named.args[0]) != null) {
+                        if (self.graphScalarCodecMethodName(named.args[0], "parse_key_") != null) {
                             // A builtin scalar key is decoded directly by its
                             // exact `parse_key_*` method.
                             try pending.append(self.allocator, .{ .node = named.args[1] });
@@ -57183,7 +56779,7 @@ const BodyContext = struct {
         }
 
         if (kind == .parser) {
-            if (self.graphJsonParseScalarMethodName(shape_node)) |method_name| {
+            if (self.graphScalarCodecMethodName(shape_node, "parse_")) |method_name| {
                 return try self.prepareParseScalarCodecCall(
                     boundary_expr,
                     shape_node,
@@ -57191,7 +56787,7 @@ const BodyContext = struct {
                     method_name,
                 );
             }
-        } else if (self.graphJsonEncodeScalarMethodName(shape_node)) |method_name| {
+        } else if (self.graphScalarCodecMethodName(shape_node, "encode_")) |method_name| {
             return try self.prepareEncodeScalarCodecCall(
                 boundary_expr,
                 shape_node,
@@ -57205,9 +56801,9 @@ const BodyContext = struct {
         switch (self.graph.content(shape_node)) {
             .named => |named| if (named.backing) |backing| {
                 const backing_is_scalar = if (kind == .parser)
-                    self.graphJsonParseScalarMethodName(backing.node) != null
+                    self.graphScalarCodecMethodName(backing.node, "parse_") != null
                 else
-                    self.graphJsonEncodeScalarMethodName(backing.node) != null;
+                    self.graphScalarCodecMethodName(backing.node, "encode_") != null;
                 if (backing_is_scalar) {
                     return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing.node, boundary_callable_node, seen);
                 }

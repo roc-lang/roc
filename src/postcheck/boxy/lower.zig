@@ -9579,7 +9579,7 @@ const ProcedureBuilder = struct {
             backing_request.schema_type = backing.source_type;
             return .{ .request = backing_request };
         }
-        if (generatedEncoderScalarMethodForRep(self.plan, shape_rep)) |method_text| {
+        if (generatedCodecScalarMethodForRep(self.plan, shape_rep, "encode_")) |method_text| {
             const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, subject_type);
             return .{ .done = try self.lowerGeneratedCodecCallLocalsInto(
                 proc,
@@ -11475,7 +11475,7 @@ const ProcedureBuilder = struct {
         schema_source.shape = schema_type;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated parser runtime had no encoding capture type");
-        if (generatedParserScalarMethodForRep(self.plan, shape_rep)) |method_text| {
+        if (generatedCodecScalarMethodForRep(self.plan, shape_rep, "parse_")) |method_text| {
             return try self.lowerGeneratedScalarParserRuntimeInto(
                 proc,
                 worker_id,
@@ -11959,7 +11959,7 @@ const ProcedureBuilder = struct {
                 shape_type,
             );
             const scalar_call = if (constructor_call == null) blk: {
-                const method = generatedParserScalarMethodForRep(self.plan, shape_rep) orelse break :blk null;
+                const method = generatedCodecScalarMethodForRep(self.plan, shape_rep, "parse_") orelse break :blk null;
                 break :blk proc.generatedCodecCallPlan(context.worker, context.encoding_type, method, shape_type);
             } else null;
             if (constructor_call != null or scalar_call != null) {
@@ -43615,24 +43615,7 @@ fn generatedEncoderKeyMethodForType(
     module: ProcedureModuleView,
     checked_ty: checked.CheckedTypeId,
 ) ?[]const u8 {
-    return switch (checkedBuiltinNominalForType(module, checked_ty) orelse return null) {
-        .bool => "encode_key_bool",
-        .str => "encode_key_str",
-        .u8 => "encode_key_u8",
-        .i8 => "encode_key_i8",
-        .u16 => "encode_key_u16",
-        .i16 => "encode_key_i16",
-        .u32 => "encode_key_u32",
-        .i32 => "encode_key_i32",
-        .u64 => "encode_key_u64",
-        .i64 => "encode_key_i64",
-        .u128 => "encode_key_u128",
-        .i128 => "encode_key_i128",
-        .dec => "encode_key_dec",
-        .f32 => "encode_key_f32",
-        .f64 => "encode_key_f64",
-        .try_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
-    };
+    return Plan.generatedCodecScalarMethod(checkedBuiltinNominalForType(module, checked_ty) orelse return null, "encode_key_");
 }
 
 fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
@@ -44397,7 +44380,9 @@ fn optionalPlanTypeRefEql(a: ?Plan.CheckedTypeIdentity, b: ?Plan.CheckedTypeIden
     return b == null;
 }
 
-fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId) ?[]const u8 {
+/// The format method (`prefix` plus the scalar's name) that reads or writes a
+/// scalar representation, looking through aliases.
+fn generatedCodecScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId, comptime prefix: []const u8) ?[]const u8 {
     var rep_id = root;
     while (true) return switch (plan.representations.items[@intFromEnum(rep_id)].kind) {
         .alias => {
@@ -44405,21 +44390,21 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.T
             continue;
         },
         .primitive => |primitive| switch (primitive) {
-            .str => "parse_str",
-            .u8 => "parse_u8",
-            .i8 => "parse_i8",
-            .u16 => "parse_u16",
-            .i16 => "parse_i16",
-            .u32 => "parse_u32",
-            .i32 => "parse_i32",
-            .u64 => "parse_u64",
-            .i64 => "parse_i64",
-            .u128 => "parse_u128",
-            .i128 => "parse_i128",
-            .dec => "parse_dec",
-            .f32 => "parse_f32",
-            .f64 => "parse_f64",
-            .bool => "parse_bool",
+            .str => prefix ++ "str",
+            .u8 => prefix ++ "u8",
+            .i8 => prefix ++ "i8",
+            .u16 => prefix ++ "u16",
+            .i16 => prefix ++ "i16",
+            .u32 => prefix ++ "u32",
+            .i32 => prefix ++ "i32",
+            .u64 => prefix ++ "u64",
+            .i64 => prefix ++ "i64",
+            .u128 => prefix ++ "u128",
+            .i128 => prefix ++ "i128",
+            .dec => prefix ++ "dec",
+            .f32 => prefix ++ "f32",
+            .f64 => prefix ++ "f64",
+            .bool => prefix ++ "bool",
             .u8x16,
             .i8x16,
             .u16x8,
@@ -44430,45 +44415,7 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.T
             .i64x2,
             => null,
         },
-        .bool_tag_union => "parse_bool",
-        .in_progress, .dynamic, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
-    };
-}
-
-fn generatedEncoderScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId) ?[]const u8 {
-    var rep_id = root;
-    while (true) return switch (plan.representations.items[@intFromEnum(rep_id)].kind) {
-        .alias => {
-            rep_id = requiredPlanChild(plan, rep_id, .alias_backing).rep;
-            continue;
-        },
-        .primitive => |primitive| switch (primitive) {
-            .str => "encode_str",
-            .u8 => "encode_u8",
-            .i8 => "encode_i8",
-            .u16 => "encode_u16",
-            .i16 => "encode_i16",
-            .u32 => "encode_u32",
-            .i32 => "encode_i32",
-            .u64 => "encode_u64",
-            .i64 => "encode_i64",
-            .u128 => "encode_u128",
-            .i128 => "encode_i128",
-            .dec => "encode_dec",
-            .f32 => "encode_f32",
-            .f64 => "encode_f64",
-            .bool => "encode_bool",
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            => null,
-        },
-        .bool_tag_union => "encode_bool",
+        .bool_tag_union => prefix ++ "bool",
         .in_progress, .dynamic, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
     };
 }

@@ -1174,7 +1174,9 @@ const Lowerer = struct {
         self.worker_workspaces = &.{};
     }
 
-    fn deinit(self: *Lowerer) void {
+    /// Release every lowering-time table. The LIR result and the runtime
+    /// schema store are the output and are not touched.
+    fn deinitLoweringState(self: *Lowerer) void {
         self.deinitWorkerWorkspaces();
         self.prepared_worker_types.deinit();
         self.prepared_worker_fns.deinit();
@@ -1236,6 +1238,10 @@ const Lowerer = struct {
         self.padded_backing_owners.deinit();
         self.padded_backing_nominals.deinit();
         self.types.deinit();
+    }
+
+    fn deinit(self: *Lowerer) void {
+        self.deinitLoweringState();
         self.runtime_schemas.deinit();
         self.result.deinit();
     }
@@ -1261,67 +1267,7 @@ const Lowerer = struct {
             .lir_result = self.result,
             .runtime_schemas = self.runtime_schemas,
         };
-        self.deinitWorkerWorkspaces();
-        self.prepared_worker_types.deinit();
-        self.prepared_worker_fns.deinit();
-        self.worker_discovered_fns.deinit(self.allocator);
-        self.inline_scope_rebases.deinit();
-        self.folded_map_matches.deinit(self.allocator);
-        self.return_forwarding_locals.deinit();
-        self.erased_demands.deinit();
-        self.tail_call_scratch.deinit();
-        self.erased_call_owner_uses.deinit(self.allocator);
-        self.erased_owner_states.deinit(self.allocator);
-        self.join_stack.deinit(self.allocator);
-        self.loop_stack.deinit(self.allocator);
-        self.allocator.free(self.comptime_site_map);
-        self.typed_local_map.deinit();
-        self.allocator.free(self.payload_conditions);
-        self.active_loop_params.deinit();
-        self.local_types.deinit();
-        self.local_map.deinit();
-        self.const_plan_map.deinit();
-        self.const_type_map.deinit();
-        self.callable_source_fn_map.deinit();
-        self.deinitPackedPlans();
-        self.static_initializer_queue.deinit(self.allocator);
-        self.static_initializer_map.deinit();
-        self.uniform_constructors.deinit();
-        self.comptime_value_map.deinit();
-        self.comptime_root_slots.deinit();
-        self.layout_owner_types.deinit();
-        self.deinitNamedLayoutIndex();
-        self.representation_shapes.deinit();
-        self.expr_context_tys.deinit();
-        self.erased_result_demands.deinit();
-        self.type_layouts.deinit();
-        self.type_layout_digests.deinit();
-        self.runtime_schema_requests.deinit(self.allocator);
-        self.layout_requests.deinit(self.allocator);
-        self.roots.deinit(self.allocator);
-        self.literal_roots.deinit(self.allocator);
-        self.allocator.free(self.own_capture_spans);
-        self.own_captures.deinit(self.allocator);
-        self.recursive_slot_types.deinit();
-        self.recursive_value_capture_ids.deinit();
-        self.recursive_value_locals.deinit();
-        self.captures.deinit();
-        self.capture_types.deinit();
-        self.source_symbols.deinit();
-        self.identity_memo.deinit();
-        if (self.layout_digests) |*digests| digests.deinit();
-        self.fn_reach_queue.deinit(self.allocator);
-        self.kept_spec_fns.deinit(self.allocator);
-        self.fn_reachable.deinit(self.allocator);
-        self.fn_written.deinit(self.allocator);
-        self.fn_spec_map.deinit();
-        self.procs_by_identity.deinit();
-        self.fn_entries.deinit(self.allocator);
-        self.fn_specs.deinit(self.allocator);
-        self.type_map.deinit();
-        self.padded_backing_owners.deinit();
-        self.padded_backing_nominals.deinit();
-        self.types.deinit();
+        self.deinitLoweringState();
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(self.allocator);
