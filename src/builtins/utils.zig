@@ -400,76 +400,6 @@ pub fn decrefRcPtr(
     );
 }
 
-/// TODO
-pub fn decrefRcPtrC(
-    bytes_or_null: ?[*]isize,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
-}
-
-/// Decrements the refcount pointed to directly by `bytes_or_null`, for
-/// allocations proven confined to a single thread.
-pub fn decrefRcPtrSingleThreadC(
-    bytes_or_null: ?[*]isize,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
-}
-
-/// Safely decrements reference count for a potentially null pointer,
-/// using the given count-update atomicity.
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNull(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    atomicity: RcAtomicity,
-    roc_ops: *RocOps,
-) void {
-    if (bytes_or_null) |bytes| {
-        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
-        return @call(
-            .always_inline,
-            decref_ptr_to_refcount,
-            .{ isizes - 1, alignment, elements_refcounted, atomicity, roc_ops, .decref_check_null },
-        );
-    }
-}
-
-/// Safely decrements reference count for a potentially null pointer
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNullC(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
-}
-
-/// Safely decrements reference count for a potentially null pointer, for
-/// allocations proven confined to a single thread.
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNullSingleThreadC(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
-}
-
 /// Decrements reference count for a data pointer and frees memory if count
 /// reaches zero, using the given count-update atomicity.
 /// Handles tag bits in the pointer and extracts the reference count pointer.
@@ -1192,16 +1122,6 @@ test "increfRcPtrSingleThreadC, static data" {
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
-test "decrefRcPtrSingleThreadC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrSingleThreadC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 16);
-}
-
 test "single-thread incref/decref pair on a real allocation frees on zero" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1224,26 +1144,6 @@ test "single-thread incref/decref pair on a real allocation frees on zero" {
 
     decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "decrefC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 16);
-}
-
-test "decrefC, static data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
 test "TestEnv basic functionality" {

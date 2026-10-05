@@ -343,17 +343,6 @@ pub fn mulWithOverflow_i128(a: i128, b: i128, overflow: *c_int) i128 {
     return result;
 }
 
-/// Signed 128-bit floor division.
-pub fn divFloor_i128(a: i128, b: i128) i128 {
-    const q = divTrunc_i128(a, b);
-    const r = a -% mul_i128(q, b);
-    // If remainder is nonzero and signs of a and b differ, subtract 1
-    if (r != 0 and ((r ^ b) < 0)) {
-        return q - 1;
-    }
-    return q;
-}
-
 // Public API: 128-bit remainder / modulo
 
 /// Signed 128-bit truncating remainder (same sign as dividend).

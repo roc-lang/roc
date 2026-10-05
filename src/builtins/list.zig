@@ -2009,17 +2009,6 @@ inline fn listReplaceInPlaceHelp(
     return list;
 }
 
-/// Check the list's literal runtime uniqueness. This does not imply that a
-/// seamless slice may reuse its backing allocation; use canReuseAllocation (or
-/// the list_map_can_reuse primitive) for allocation-reuse decisions. Empty lists
-/// report unique because they have no allocation to share.
-pub fn listIsUnique(
-    list: RocList,
-    roc_ops: *RocOps,
-) callconv(.c) bool {
-    return list.isEmpty() or list.isUnique(roc_ops);
-}
-
 /// Whether List.map may overwrite this list's elements in place: the list
 /// must uniquely own its allocation and must not be a seamless slice into a
 /// larger allocation (a slice's buffer start and header bookkeeping cover
@@ -2046,21 +2035,6 @@ pub fn listClone(
     return list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
 }
 
-/// Get current allocated capacity for growth planning.
-pub fn listCapacity(
-    list: RocList,
-) callconv(.c) usize {
-    return list.getCapacity();
-}
-
-/// Get raw memory pointer for direct access patterns.
-pub fn listAllocationPtr(
-    list: RocList,
-    roc_ops: *RocOps,
-) callconv(.c) ?[*]u8 {
-    return list.getAllocationDataPtr(roc_ops);
-}
-
 /// No-op reference counting function for non-refcounted types
 pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
@@ -2071,28 +2045,6 @@ fn testBytesEqual(a: RocList, b: RocList) bool {
     const a_bytes = a.bytes orelse return false;
     const b_bytes = b.bytes orelse return false;
     return std.mem.eql(u8, a_bytes[0..a.len()], b_bytes[0..b.len()]);
-}
-
-/// Append UTF-8 string bytes to list for efficient string-to-bytes conversion.
-pub fn listConcatUtf8(
-    list: RocList,
-    string: RocStr,
-    roc_ops: *RocOps,
-) callconv(.c) RocList {
-    if (string.len() == 0) {
-        return list;
-    } else {
-        const combined_length = list.len() + string.len();
-
-        // List U8 has alignment 1 and element_width 1
-        var result = list.reallocate(1, amortizedCapacity(list, combined_length, 1, .Immutable, roc_ops), 1, false, null, &rcNone, null, &rcNone, .Immutable, roc_ops);
-        result.length = combined_length;
-        // We just allocated combined_length, which is > 0 because string.len() > 0
-        var bytes = result.bytes orelse unreachable;
-        @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
-
-        return result;
-    }
 }
 
 /// Specialized copy fn which takes pointers as pointers to u8 and copies from src to dest.
@@ -2266,22 +2218,6 @@ test "listConcat reuses non-slice allocation before cloning seamless slice" {
     try std.testing.expectEqual(@as(u8, 3), elements[1]);
     try std.testing.expectEqual(@as(u8, 9), elements[2]);
     try std.testing.expectEqual(@as(u8, 10), elements[3]);
-}
-
-test "listConcatUtf8" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 }, false, test_env.getOps());
-    // NOTE: list will be consumed by listConcatUtf8, so no defer decref needed
-    const string_bytes = "🐦";
-    const string = RocStr.init(string_bytes.ptr, string_bytes.len, test_env.getOps());
-    defer string.decref(test_env.getOps());
-    const ret = listConcatUtf8(list, string, test_env.getOps());
-    defer ret.decref(1, 1, false, null, &rcNone, test_env.getOps());
-    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 }, false, test_env.getOps());
-    defer expected.decref(1, 1, false, null, &rcNone, test_env.getOps());
-    try std.testing.expect(testBytesEqual(ret, expected));
 }
 
 test "RocList empty list creation" {
@@ -2656,19 +2592,6 @@ test "listReserve keeps zero-spare seamless slice unchanged" {
     try std.testing.expect(reserved.bytes == slice_bytes);
     try std.testing.expect(reserved.getAllocationDataPtr(test_env.getOps()) == slice_alloc);
     try std.testing.expectEqual(@as(usize, 2), reserved.len());
-}
-
-test "listCapacity function" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const data = [_]i16{ 100, 200, 300 };
-    const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(i16), @sizeOf(i16), false, null, rcNone, test_env.getOps());
-
-    const capacity = listCapacity(list);
-    try std.testing.expectEqual(list.getCapacity(), capacity);
-    try std.testing.expect(capacity >= list.len());
 }
 
 test "RocList list_allocate sizes the allocation exactly" {
@@ -3940,27 +3863,6 @@ test "seamless slice: manual creation and detection" {
     try std.testing.expectEqual(@as(usize, std.math.maxInt(usize)), seamless_list.seamlessSliceMask());
 }
 
-test "complex reference counting: listIsUnique consistency" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const data = [_]u16{ 100, 200 };
-    const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-
-    // Test that listIsUnique function matches isUnique method
-    try std.testing.expectEqual(list.isUnique(test_env.getOps()), listIsUnique(list, test_env.getOps()));
-
-    // After incref, both should report not unique
-    list.incref(1, false, test_env.getOps());
-    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
-
-    try std.testing.expectEqual(list.isUnique(test_env.getOps()), listIsUnique(list, test_env.getOps()));
-    try std.testing.expect(!listIsUnique(list, test_env.getOps()));
-
-    // Final cleanup
-    list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
-}
-
 test "complex reference counting: clone behavior" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -4061,39 +3963,6 @@ test "listReplaceInPlace vs listReplace comparison" {
     // Both should produce the same result
     try std.testing.expect(testBytesEqual(result1, result2));
     try std.testing.expectEqual(out_element1, out_element2);
-}
-
-test "listAllocationPtr basic functionality" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    // Test with regular list
-    const data = [_]u8{ 1, 2, 3, 4 };
-    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
-
-    const alloc_ptr = listAllocationPtr(list, test_env.getOps());
-    try std.testing.expect(alloc_ptr != null);
-
-    // The allocation pointer should be valid and accessible
-    if (alloc_ptr) |ptr| {
-        // Should be able to access the data through the allocation pointer
-        try std.testing.expect(@intFromPtr(ptr) != 0);
-    }
-}
-
-test "listAllocationPtr empty list" {
-    var test_env = utils.TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const empty_list = RocList.empty();
-    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
-
-    const alloc_ptr = listAllocationPtr(empty_list, test_env.getOps());
-    // Empty lists may have null allocation pointer
-    if (alloc_ptr) |ptr| {
-        try std.testing.expect(@intFromPtr(ptr) != 0);
-    }
 }
 
 test "listIncref and listDecref public functions" {
@@ -4262,9 +4131,6 @@ test "memory management: capacity boundary conditions" {
     // Verify capacity management functions work correctly
     const initial_capacity = list.getCapacity();
     try std.testing.expect(initial_capacity >= exact_capacity);
-
-    const capacity_via_function = listCapacity(list);
-    try std.testing.expectEqual(initial_capacity, capacity_via_function);
 }
 
 test "memory management: release excess capacity edge cases" {

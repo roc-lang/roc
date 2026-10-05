@@ -816,68 +816,7 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.c) usize {
 }
 
 // Str.fromInt
-/// TODO: Document exportFromInt.
-pub fn exportFromInt(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            int: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) RocStr {
-            return @call(.always_inline, strFromIntHelp, .{ T, int, roc_ops });
-        }
-    }.func;
-
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-fn strFromIntHelp(
-    comptime T: type,
-    int: T,
-    roc_ops: *RocOps,
-) RocStr {
-    const size = compiler_rt_128.int_string_capacity(T);
-    var buf: [size]u8 = undefined;
-    const result = compiler_rt_128.int_to_str(T, &buf, int);
-
-    return RocStr.init(result.ptr, result.len, roc_ops);
-}
-
 // Str.fromFloat
-/// TODO: Document exportFromFloat.
-pub fn exportFromFloat(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            float: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) RocStr {
-            return @call(.always_inline, strFromFloatHelp, .{ T, float, roc_ops });
-        }
-    }.func;
-
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-fn strFromFloatHelp(
-    comptime T: type,
-    float: T,
-    roc_ops: *RocOps,
-) RocStr {
-    var buf: [32]u8 = undefined;
-    const val_bits: u64 = if (T == f32)
-        @as(u64, @as(u32, @bitCast(float)))
-    else
-        @bitCast(float);
-    const result = floatToStrBytes(&buf, val_bits, T == f32);
-
-    return RocStr.init(result.ptr, result.len, roc_ops);
-}
-
 /// Format a Roc float into caller-owned scratch bytes.
 pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
     return if (is_f32) blk: {
@@ -2609,47 +2548,6 @@ pub fn withCapacityC(
     var str = RocStr.allocate(@intCast(capacity), roc_ops);
     str.setLen(0);
     return str;
-}
-
-/// Clones the contents of the given RocStr into the provided pointer, starting at the given offset and extra_offset.
-pub fn strCloneTo(
-    string: RocStr,
-    ptr: [*]u8,
-    offset: usize,
-    extra_offset: usize,
-) callconv(.c) usize {
-    const WIDTH: usize = @sizeOf(RocStr);
-    if (string.isSmallStr()) {
-        const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
-
-        var i: usize = 0;
-        while (i < WIDTH) : (i += 1) {
-            ptr[offset + i] = array[i];
-        }
-
-        return extra_offset;
-    } else {
-        const slice = string.asSlice();
-
-        var relative = string;
-        relative.bytes = @as(?[*]u8, @ptrFromInt(extra_offset)); // i.e. just after the string struct
-
-        // write the string struct
-        const array = relative.asArray();
-        @memcpy(ptr[offset..(offset + WIDTH)], array[0..WIDTH]);
-
-        // write the string bytes just after the struct
-        @memcpy(ptr[extra_offset..(extra_offset + slice.len)], slice);
-
-        return extra_offset + slice.len;
-    }
-}
-
-/// Returns a pointer to the allocation backing the given RocStr
-pub fn strAllocationPtr(
-    string: RocStr,
-) callconv(.c) ?[*]u8 {
-    return string.getAllocationPtr();
 }
 
 /// Release excess capacity
