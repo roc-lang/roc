@@ -229,7 +229,8 @@ const Stream = enum {
 const OutputNeedle = struct {
     stream: Stream,
     text: []const u8,
-    /// Set for prose that the report renderer word-wraps. The wrap point moves
+    /// Set for text with renderer-controlled whitespace, including aligned
+    /// counter columns and word-wrapped prose. The wrap point moves
     /// with the length of the absolute paths a report embeds, so a phrase that
     /// sits on one line locally can straddle a newline on another machine. When
     /// set, each space in `text` matches any run of whitespace in the output.
@@ -11953,7 +11954,7 @@ fn customRocTestCountsCheckingErrorsWithCachedResults(
                 .{ .stream = .stderr, .text = "2 passed" },
                 .{ .stream = .stderr, .text = "0 failed" },
                 .{ .stream = .stderr, .text = "1 compiler errors" },
-                .{ .stream = .stderr, .text = if (run == 0) "Roots cached                        0" else "Roots cached                        3" },
+                .{ .stream = .stderr, .text = if (run == 0) "Roots cached 0" else "Roots cached 3", .wrapped = true },
             },
             .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 1 }},
             .not_contains = &.{
