@@ -891,8 +891,8 @@ fn createBumpFailedReport(allocator: Allocator, info: anytype) Allocator.Error!R
 }
 
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = switch (info.err) {
-        error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)}),
+    const is_invalid_hash = switch (info.err) {
+        error.InvalidHash => true,
         error.AccessDenied,
         error.AmbiguousVersion,
         error.AntivirusInterference,
@@ -1051,198 +1051,41 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
-        => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
+        => false,
     };
+    const headline = if (is_invalid_hash)
+        try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)})
+    else
+        try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Download Failed", headline, .runtime_error);
 
-    switch (info.err) {
-        error.InvalidHash => {
-            try report.document.addText("The url contains an invalid hash.");
-            try report.document.addLineBreaks(2);
+    if (is_invalid_hash) {
+        try report.document.addText("The url contains an invalid hash.");
+        try report.document.addLineBreaks(2);
 
-            try report.document.addText("Platform Url: ");
-            try report.document.addAnnotated(info.url, .emphasized);
-            try report.document.addLineBreaks(2);
+        try report.document.addText("Platform Url: ");
+        try report.document.addAnnotated(info.url, .emphasized);
+        try report.document.addLineBreaks(2);
 
-            try report.document.addText("Possible Reasons: ");
-            try report.document.addLineBreak();
-            try report.document.addText("1. The ");
-            try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
-            try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
-            try report.document.addLineBreak();
-            try report.document.addText("2. The Hash portion of the URL is malformed.");
+        try report.document.addText("Possible Reasons: ");
+        try report.document.addLineBreak();
+        try report.document.addText("1. The ");
+        try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
+        try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
+        try report.document.addLineBreak();
+        try report.document.addText("2. The Hash portion of the URL is malformed.");
 
-            try report.document.addLineBreaks(2);
-            try report.document.addText("Tips:");
-            try report.document.addLineBreak();
-            try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
-            try report.document.addLineBreak();
-            try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
-            try report.document.addLineBreak();
-        },
-        error.AccessDenied,
-        error.AmbiguousVersion,
-        error.AntivirusInterference,
-        error.ApiLevelQueryFailed,
-        error.ArchiveWriteFailed,
-        error.BadPathName,
-        error.BrokenDocLinks,
-        error.BrokenPipe,
-        error.BuiltinsExtractionFailed,
-        error.Canceled,
-        error.CheckFailed,
-        error.ChecksumFailure,
-        error.CliError,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConcurrencyUnavailable,
-        error.ConnectionResetByPeer,
-        error.Crash,
-        error.CrossDevice,
-        error.DecompressionFailed,
-        error.DeviceBusy,
-        error.DictionaryIdFlagUnsupported,
-        error.DirNotEmpty,
-        error.DirectoryCreateFailed,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.DocsFailed,
-        error.DuplicateSymbol,
-        error.EmptyArchive,
-        error.EndOfStream,
-        error.EntrypointNotFound,
-        error.ExpandedSizeLimitExceeded,
-        error.ExpectErr,
-        error.ExpectedAppHeader,
-        error.ExpectedPlatformString,
-        error.ExpectedString,
-        error.FailedToCreateUniqueTempDir,
-        error.FdConfigFailed,
-        error.FileBusy,
-        error.FileCreateFailed,
-        error.FileError,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileSystem,
-        error.FileTooBig,
-        error.FileTooLarge,
-        error.FileWriteFailed,
-        error.FormattingFailed,
-        error.FunctionTypeMismatch,
-        error.HandleInheritanceFailed,
-        error.HardwareFailure,
-        error.HasInternalGlobals,
-        error.HashMismatch,
-        error.HttpError,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidArchiveHeader,
-        error.InvalidArchiveMagic,
-        error.InvalidArchiveName,
-        error.InvalidArchiveSize,
-        error.InvalidArguments,
-        error.InvalidBatchScriptArg,
-        error.InvalidDependency,
-        error.InvalidExe,
-        error.InvalidFileName,
-        error.InvalidFilename,
-        error.InvalidLinkingVersion,
-        error.InvalidLirImage,
-        error.InvalidMagic,
-        error.InvalidName,
-        error.InvalidPackageName,
-        error.InvalidPath,
-        error.InvalidProcessGroupId,
-        error.InvalidProxyUrl,
-        error.InvalidSection,
-        error.InvalidTarHeader,
-        error.InvalidTarget,
-        error.InvalidUrl,
-        error.InvalidUserId,
-        error.InvalidUtf8,
-        error.InvalidVersion,
-        error.InvalidWtf8,
-        error.IsDir,
-        error.LLVMCompilationFailed,
-        error.LLVMNotAvailable,
-        error.LinkFailed,
-        error.LinkQuotaExceeded,
-        error.LocalhostWasNotLoopback,
-        error.LockViolation,
-        error.MalformedBlock,
-        error.MalformedFrame,
-        error.MissingBundleFiles,
-        error.MissingFilesDirectory,
-        error.MissingLinkingSection,
-        error.MissingTargetFile,
-        error.MissingTargetsSection,
-        error.NameTooLong,
-        error.NativeCompilationFailed,
-        error.NetworkError,
-        error.NetworkNotFound,
-        error.NoCacheDir,
-        error.NoDataExtracted,
-        error.NoDevice,
-        error.NoHashInUrl,
-        error.NoHomeDirectory,
-        error.NoPlatformSource,
-        error.NoSpaceLeft,
-        error.NotAnAppHeader,
-        error.SourceTokenizationFailed,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OSVersionDetectionFail,
-        error.OperationUnsupported,
-        error.OutOfMemory,
-        error.Overflow,
-        error.PathAlreadyExists,
-        error.PathOutsideWorkspace,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.PlatformNotSupported,
-        error.ProcessAlreadyExec,
-        error.ProcessCreationFailed,
-        error.ProcessExitCodeFailed,
-        error.ProcessFdQuotaExceeded,
-        error.ProcessWaitFailed,
-        error.ReadFailed,
-        error.ReadOnlyFileSystem,
-        error.ResolutionFailed,
-        error.ResourceLimitReached,
-        error.RuntimeError,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempDirCreation,
-        error.TestsFailed,
-        error.Timeout,
-        error.TypeCheckingFailed,
-        error.UnbundleFailed,
-        error.Unexpected,
-        error.UnexpectedEnd,
-        error.UnexpectedEndOfStream,
-        error.UnexpectedResult,
-        error.UnrecognizedVolume,
-        error.Unseekable,
-        error.UnsupportedCrossCompilation,
-        error.UnsupportedHeader,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLowLevel,
-        error.UnsupportedTarget,
-        error.UnsupportedWatchMode,
-        error.WasmOutputWriteFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => {
-            try report.document.addText("Error: ");
-            try report.document.addText(@errorName(info.err));
-        },
+        try report.document.addLineBreaks(2);
+        try report.document.addText("Tips:");
+        try report.document.addLineBreak();
+        try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
+        try report.document.addLineBreak();
+        try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
+        try report.document.addLineBreak();
+    } else {
+        try report.document.addText("Error: ");
+        try report.document.addText(@errorName(info.err));
     }
 
     return report;

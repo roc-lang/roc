@@ -2941,38 +2941,8 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => {
-            return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-        },
+    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
     };
 
     // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
@@ -3907,36 +3877,8 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
+    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
     };
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
@@ -10916,37 +10858,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
+    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = args.max_threads,
@@ -11366,37 +11278,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
+    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = args.max_threads,
