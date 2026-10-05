@@ -3052,6 +3052,10 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("one static dictionary supplied the same program-wide method slot twice");
             }
             const exact_method: ?Plan.DictionaryMethodEvidence = if (exact_methods.len == 0) null else exact_methods[method_index];
+            // A method needing the building frame's context reaches every
+            // worker receiving this dictionary as a context input instead, so
+            // its slot stays absent.
+            if (exact_method) |method| if (method.context != null) continue;
             const structural_kind: ?static_dispatch.StructuralKind = if (exact_method) |method|
                 if (method.resolution == .structural) method.resolution.structural else null
             else
@@ -3066,6 +3070,10 @@ const ProcedureBuilder = struct {
             else
                 null;
             if (structural_method) |method| {
+                // A derivation reaching local procedures that need the
+                // building frame's values is performed by each worker
+                // receiving this dictionary, so its slot stays absent too.
+                if (structural_kind != null and self.plan.frame_context_procs.contains(.{ .rep = rep_id, .method = method })) continue;
                 frame.slot_index = slot_index;
                 frame.phase = .structural;
                 return .{ .request = .{ .structural_slot = .{
@@ -7486,6 +7494,7 @@ const ProcedureBuilder = struct {
             header.body_source = try self.bodySourceForWorker(resolved, proc);
             try proc.bindHiddenDescriptorArgs();
             try proc.bindHiddenDictionaryArgs();
+            try proc.bindContextArgs();
             try proc.bindWorkerDictionaryDescriptors();
             try proc.bindLambdaArgDescriptors();
             header.ret_local = try proc.addWorkerReturnLocal(true);
@@ -7530,6 +7539,7 @@ const ProcedureBuilder = struct {
         self.result.store.tail_call_builder = &tail_builder;
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var body_stmt = try self.lowerWorkerBodyInto(resolved, proc, header.body_source, ret_local, ret_stmt);
+        body_stmt = try proc.prependOwnCaptureBindings(body_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
@@ -7598,6 +7608,7 @@ const ProcedureBuilder = struct {
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var body_stmt = try self.lowerWorkerBodyInto(resolved, proc, header.body_source, ret_local, ret_stmt);
+        body_stmt = try proc.prependOwnCaptureBindings(body_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
@@ -15540,6 +15551,13 @@ const ProcBodyBuilder = struct {
     erased_capture_arg: ?LIR.LocalId,
     erased_capture_contents_desc: ?LIR.LocalId,
     erased_capture_locals: std.ArrayList(LIR.LocalId),
+    /// The local holding each of this worker's context inputs, in input
+    /// order; null for an input with no value.
+    context_locals: std.ArrayList(?LIR.LocalId) = .empty,
+    /// A local procedure's specialization receiving its own runtime
+    /// captures as context inputs binds each capture's pattern from its
+    /// input at body start.
+    own_capture_bindings: std.ArrayList(OwnCaptureBinding) = .empty,
     worker_argument_desc_initializers: std.ArrayList(DescriptorArgLocal),
     erased_capture_value_desc_initializers: std.ArrayList(DescriptorArgLocal),
     stored_capture_initializers: std.ArrayList(StoredCaptureInitializer),
@@ -15855,6 +15873,11 @@ const ProcBodyBuilder = struct {
     /// resolved against the bindings before it, so one lookup suffices.
     const NominalFormalBinding = Plan.DerivedBinding;
 
+    const OwnCaptureBinding = struct {
+        pattern: checked.CheckedPatternId,
+        local: LIR.LocalId,
+    };
+
     const DerivedContext = struct {
         frame: ?Plan.WorkerPlanId,
         bindings_start: usize,
@@ -16034,6 +16057,8 @@ const ProcBodyBuilder = struct {
         self.erased_capture_value_desc_initializers.deinit(self.parent.allocator);
         self.worker_argument_desc_initializers.deinit(self.parent.allocator);
         self.erased_capture_locals.deinit(self.parent.allocator);
+        self.context_locals.deinit(self.parent.allocator);
+        self.own_capture_bindings.deinit(self.parent.allocator);
         self.parent.allocator.free(self.dictionary_slots);
         self.parent.allocator.free(self.dictionary_bound);
         self.parent.allocator.free(self.dictionary_locals);
@@ -16473,6 +16498,161 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    /// The locals supplying `worker`'s context inputs from `args`, one per
+    /// input (null for an input with no value): this worker's own input
+    /// for a forwarded one, or a fresh local the call constructs it into.
+    fn contextArgLocals(self: *ProcBodyBuilder, worker_id: Plan.WorkerPlanId, args: []const Plan.ContextArg) Allocator.Error![]?LIR.LocalId {
+        const inputs = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(worker_id)].context);
+        if (inputs.len != args.len) {
+            boxyLowerInvariant("boxy call context arguments disagreed with its worker's context inputs");
+        }
+        const locals = try self.parent.allocator.alloc(?LIR.LocalId, args.len);
+        errdefer self.parent.allocator.free(locals);
+        for (inputs, args, locals) |input, arg, *local| {
+            local.* = switch (arg) {
+                .forward => |index| self.contextLocalAt(index) orelse
+                    boxyLowerInvariant("boxy call forwarded a context input its caller did not receive"),
+                .construct => try self.addFrameLocalForRep(input.rep orelse
+                    boxyLowerInvariant("boxy constructed context input had no representation")),
+                .structural => null,
+                .capture => |capture| blk: {
+                    if (!checked_moduleKeyEqual(capture.site.module, self.module.key)) {
+                        boxyLowerInvariant("a local procedure capture was read outside its declaring module");
+                    }
+                    const captures = nestedCallableExprRuntimeCaptures(self.module, capture.site.expr);
+                    break :blk self.sourceCaptureLocal(.{ .nested_expr = capture.site }, null, capture.index, captures[capture.index]);
+                },
+            };
+        }
+        return locals;
+    }
+
+    /// Construct each constructed context argument into its local before
+    /// `next`.
+    fn prependContextArgConstructions(
+        self: *ProcBodyBuilder,
+        args: []const Plan.ContextArg,
+        locals: []const ?LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = args.len;
+        while (index > 0) {
+            index -= 1;
+            switch (args[index]) {
+                .forward, .structural, .capture => {},
+                .construct => |id| continuation = try self.runExprStep(try self.beginContextConstructValue(locals[index].?, id, continuation)),
+            }
+        }
+        return continuation;
+    }
+
+    /// Construct the erased callable one context argument names, in this
+    /// frame: a local procedure reads its captures from this frame, and a
+    /// context-specialized worker captures its own context inputs.
+    fn beginContextConstructValue(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        id: Plan.ContextConstructId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const construct = self.parent.plan.contextConstruct(id);
+        if (construct.caller != self.worker_layout.worker) {
+            boxyLowerInvariant("boxy context callable was constructed outside the frame planned to build it");
+        }
+        const worker = self.parent.plan.workers.items[@intFromEnum(construct.worker)];
+        const maybe_expr: ?checked.CheckedExprId = switch (worker.source) {
+            .nested_expr => |expr_ref| if (checked_moduleKeyEqual(expr_ref.module, self.module.key)) expr_ref.expr else boxyLowerInvariant("boxy context local procedure was constructed outside its declaring module"),
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
+        };
+        return try self.beginContextWorkerValue(
+            target,
+            worker.checked_type,
+            construct.callable_type,
+            worker.source,
+            maybe_expr,
+            self.parent.plan.directCallHiddenDescriptorArgSlice(construct.hidden_desc_args),
+            self.parent.plan.directCallHiddenDictionaryArgSlice(construct.hidden_dict_args),
+            construct.worker,
+            self.parent.plan.contextArgSlice(construct.context_args),
+            next,
+        );
+    }
+
+    /// Bind a context-specialized worker's valued context inputs, passed
+    /// after its hidden dictionaries.
+    fn bindContextArgs(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const inputs = self.parent.plan.contextInputSlice(worker.context);
+        const layouts = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.context);
+        try self.ensureContextLocals();
+        var layout_index: usize = 0;
+        const own_site: ?Plan.CheckedExprIdentity = switch (worker.source) {
+            .nested_expr => |site| site,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
+        };
+        for (inputs, 0..) |input, index| {
+            if (!input.isValue()) continue;
+            if (layout_index >= layouts.len) boxyLowerInvariant("boxy worker context input count disagreed with layout plan");
+            const local = try self.addArgLocal(layouts[layout_index].layoutIdx());
+            self.context_locals.items[index] = local;
+            layout_index += 1;
+            switch (input.key) {
+                .capture => |capture| if (own_site) |site| {
+                    if (std.meta.eql(capture.site, site)) {
+                        const captures = self.workerSourceCaptures();
+                        const pattern = captures[capture.index].pattern;
+                        try self.reservePatternBindings(pattern);
+                        try self.own_capture_bindings.append(self.parent.allocator, .{ .pattern = pattern, .local = local });
+                    }
+                },
+                .requirement, .structural => {},
+            }
+        }
+        if (layout_index != layouts.len) boxyLowerInvariant("boxy worker context input count disagreed with layout plan");
+    }
+
+    /// Bind the patterns of the runtime captures this local procedure's
+    /// specialization receives as context inputs.
+    fn prependOwnCaptureBindings(self: *ProcBodyBuilder, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = self.own_capture_bindings.items.len;
+        while (index > 0) {
+            index -= 1;
+            const binding = self.own_capture_bindings.items[index];
+            continuation = try self.bindPatternFromLocal(binding.pattern, binding.local, continuation);
+        }
+        return continuation;
+    }
+
+    fn ensureContextLocals(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        if (self.context_locals.items.len == worker.context.len) return;
+        try self.context_locals.appendNTimes(self.parent.allocator, null, worker.context.len);
+    }
+
+    fn contextLocalAt(self: *const ProcBodyBuilder, index: u32) ?LIR.LocalId {
+        if (index >= self.context_locals.items.len) return null;
+        return self.context_locals.items[index];
+    }
+
+    fn contextLocalForKey(self: *const ProcBodyBuilder, key: Plan.ContextInput.Key) ?LIR.LocalId {
+        if (self.synthetic_adapter) return null;
+        const index = self.parent.plan.workerContextInput(self.worker_layout.worker, key) orelse return null;
+        return self.contextLocalAt(index);
+    }
+
+    /// The local holding this worker's context input for `requirement`.
+    fn contextLocalForRequirement(self: *const ProcBodyBuilder, requirement: Plan.DictionaryRequirementId) ?LIR.LocalId {
+        return self.contextLocalForKey(.{ .requirement = requirement });
+    }
+
+    /// The structural derivation this worker performs for `requirement`.
+    fn structuralContextFor(self: *const ProcBodyBuilder, requirement: Plan.DictionaryRequirementId) ?Plan.StructuralContext {
+        if (self.synthetic_adapter) return null;
+        return self.parent.plan.workerStructuralContext(self.worker_layout.worker, requirement);
+    }
+
     fn prepareErasedWorkerCaptures(self: *ProcBodyBuilder) Allocator.Error!void {
         if (self.erased_capture_arg != null) {
             boxyLowerInvariant("boxy erased worker capture argument was prepared twice");
@@ -16509,6 +16689,11 @@ const ProcBodyBuilder = struct {
             try self.erased_capture_locals.append(self.parent.allocator, local);
             switch (capture.kind) {
                 .captured_value => {
+                    if (capture.context_input) |input_index| {
+                        try self.ensureContextLocals();
+                        self.context_locals.items[input_index] = local;
+                        continue;
+                    }
                     if (generated_runtime) continue;
                     if (source_capture_index >= source_captures.len) {
                         boxyLowerInvariant("boxy erased capture plan had more value captures than the source closure");
@@ -17032,7 +17217,7 @@ const ProcBodyBuilder = struct {
             index -= 1;
             const capture = captures[index];
             const slot_local = self.erased_capture_locals.items[index];
-            if (capture.kind != .captured_value) continue;
+            if (capture.kind != .captured_value or capture.context_input != null) continue;
             if (generated_runtime) {
                 continuation = try self.prependErasedCaptureSlotRead(slot_local, capture_value, @intCast(index), continuation);
                 continue;
@@ -17072,7 +17257,7 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const capture = captures[index];
-            if (capture.kind == .captured_value) continue;
+            if (capture.kind == .captured_value and capture.context_input == null) continue;
             const slot_local = self.erased_capture_locals.items[index];
             continuation = try self.prependErasedCaptureSlotRead(slot_local, capture_value, @intCast(index), continuation);
         }
@@ -19376,6 +19561,9 @@ const ProcBodyBuilder = struct {
             .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
         };
         if (closure) |closure_ref| {
+            // A worker reached by this procedure's frame through a structural
+            // derivation receives its captures as context inputs.
+            if (self.contextLocalForKey(.{ .capture = .{ .site = closure_ref, .index = @intCast(capture_index) } })) |local| return local;
             if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
                 if (locals[capture_index]) |local| return local;
             }
@@ -20550,7 +20738,7 @@ const ProcBodyBuilder = struct {
         const ret_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = task.checked_ret_ty };
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(direct_plan.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(direct_plan.hidden_dict_args);
-        const call_entry = try self.lowerWorkerCallLocalsInto(
+        const call_entry = try self.lowerContextWorkerCallLocalsInto(
             state.call_result_target,
             ret_type,
             state.operand_types,
@@ -20562,6 +20750,7 @@ const ProcBodyBuilder = struct {
             direct_plan.worker,
             hidden_desc_args,
             hidden_dict_args,
+            self.parent.plan.contextArgSlice(direct_plan.context_args),
             state.continuation,
         );
         try self.parent.result.store.replaceCFStmt(state.call_placeholder, self.parent.result.store.getCFStmt(call_entry), self.parent.result.store.stmtOrigin(call_entry));
@@ -20631,11 +20820,17 @@ const ProcBodyBuilder = struct {
             ty: checked.CheckedTypeId,
             use: checked.CheckedExprId,
         },
+        /// A callable this frame already holds, of checked type `ty`.
+        local: struct {
+            local: LIR.LocalId,
+            ty: Plan.CheckedTypeIdentity,
+        },
 
-        fn ty(self: ErasedCallee, module: ProcedureModuleView) checked.CheckedTypeId {
+        fn ty(self: ErasedCallee, module: ProcedureModuleView) Plan.CheckedTypeIdentity {
             return switch (self) {
-                .expr => |expr| module.checked_bodies.expr(expr).ty,
-                .local_proc => |local| local.ty,
+                .expr => |expr| .{ .module = module.key, .ty = module.checked_bodies.expr(expr).ty },
+                .local_proc => |local| .{ .module = module.key, .ty = local.ty },
+                .local => |local| local.ty,
             };
         }
     };
@@ -20653,8 +20848,11 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const callee_ty = callee.ty(self.module);
-        const callee_local = try self.addFrameLocalForType(callee_ty);
-        const callee_function = self.functionChildrenForRep(self.repForType(callee_ty)) orelse
+        const callee_local = switch (callee) {
+            .local => |local| local.local,
+            .expr, .local_proc => try self.addFrameLocalForRep(self.repForTypeRef(callee_ty)),
+        };
+        const callee_function = self.functionChildrenForRep(self.repForTypeRef(callee_ty)) orelse
             boxyLowerInvariant("erased call callee expression did not have an erased callable representation");
         if (callee_function.arg_count != operands.len) {
             boxyLowerInvariant("erased call argument count disagreed with callee function representation");
@@ -20666,31 +20864,95 @@ const ProcBodyBuilder = struct {
 
         const source_args = try self.parent.allocator.alloc(LIR.LocalId, operands.len);
         defer self.parent.allocator.free(source_args);
-        const call_args = try self.parent.allocator.alloc(LIR.LocalId, operands.len);
-        defer self.parent.allocator.free(call_args);
-        for (operands, source_args, call_args, callee_arg_children) |operand, *source_arg, *call_arg, callee_arg| {
-            const target_rep = callee_arg.rep;
-            const arg_expr_id = switch (operand) {
-                .checked_expr => |expr_id| expr_id,
+        const source_reps = try self.parent.allocator.alloc(Plan.TypeRepId, operands.len);
+        defer self.parent.allocator.free(source_reps);
+        for (operands, source_args, source_reps, callee_arg_children) |operand, *source_arg, *source_rep, callee_arg| {
+            switch (operand) {
+                .checked_expr => |arg_expr_id| {
+                    source_rep.* = self.repForType(self.module.checked_bodies.expr(arg_expr_id).ty);
+                    source_arg.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(source_rep.*).layoutIdx()))
+                        try self.addFrameLocalForRepWithFreshDescriptor(source_rep.*)
+                    else
+                        try self.addFrameLocalForRep(source_rep.*);
+                },
                 .generated_interpolation_iter, .generated_numeral, .generated_quote => {
-                    source_arg.* = try self.addFrameBoundaryTargetLocalForRep(target_rep);
-                    call_arg.* = source_arg.*;
-                    continue;
+                    source_rep.* = callee_arg.rep;
+                    source_arg.* = try self.addFrameBoundaryTargetLocalForRep(callee_arg.rep);
+                },
+            }
+        }
+        var continuation = try self.lowerErasedCallWithLocalsInto(target, self.repForType(ret_ty), callee_local, callee_function, source_args, source_reps, next);
+        switch (callee) {
+            .expr, .local => {},
+            // Constructing the procedure only reads its captures from this
+            // frame, so it runs after the operands, right before the call.
+            .local_proc => |local| continuation = try self.runExprStep(try self.beginLocalProcUseCallable(callee_local, local.site_expr, local.ty, local.use, continuation)),
+        }
+        // Walking backwards: the arguments from the last, then a callee
+        // expression.
+        const callee_items: usize = switch (callee) {
+            .expr => 1,
+            .local_proc, .local => 0,
+        };
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, operands.len + callee_items);
+        for (0..operands.len) |offset| {
+            const arg_index = operands.len - 1 - offset;
+            chain_items[offset] = switch (operands[arg_index]) {
+                .checked_expr => |arg_expr| .{ .lower = .{ .expr = .{ .target = source_args[arg_index], .expr_id = arg_expr, .next = undefined } } },
+                .generated_interpolation_iter, .generated_numeral, .generated_quote => blk: {
+                    // A generated operand is produced at the callee's own
+                    // argument type and representation.
+                    const arg_type = Plan.CheckedTypeIdentity{
+                        .module = callee_ty.module,
+                        .ty = checkedFunctionPayload(procedureModuleById(self.parent.modules, callee_ty.module), callee_ty.ty).args[arg_index],
+                    };
+                    break :blk .{ .call_operand = .{
+                        .operand = operands[arg_index],
+                        .operand_type = arg_type,
+                        .arg_type = arg_type,
+                        .storage_arg_rep = callee_arg_children[arg_index].rep,
+                        .lowered = source_args[arg_index],
+                    } };
                 },
             };
-            const source_rep = self.repForType(self.module.checked_bodies.expr(arg_expr_id).ty);
-            source_arg.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
-                try self.addFrameLocalForRepWithFreshDescriptor(source_rep)
-            else
-                try self.addFrameLocalForRep(source_rep);
-            const source_layout = self.parent.result.store.getLocal(source_arg.*).layout_idx;
-            const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
-            call_arg.* = if (source_layout == target_layout and self.descriptorStorageRep(source_rep) == self.descriptorStorageRep(target_rep))
-                source_arg.*
-            else
-                try self.addFrameBoundaryTargetLocalForRep(target_rep);
         }
-        const target_rep = self.repForType(ret_ty);
+        switch (callee) {
+            .expr => |callee_expr| chain_items[operands.len] = .{ .lower = .{ .expr = .{ .target = callee_local, .expr_id = callee_expr, .next = undefined } } },
+            .local_proc, .local => {},
+        }
+        return exprChain(chain_items, continuation);
+    }
+
+    /// Call the erased callable in `callee_local` with already-lowered
+    /// `source_args`, each crossing from its representation into the
+    /// callee's argument representation, writing `target` at `target_rep`.
+    fn lowerErasedCallWithLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        callee_local: LIR.LocalId,
+        callee_function: FunctionChildren,
+        source_args: []const LIR.LocalId,
+        source_reps: []const Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (callee_function.arg_count != source_args.len or source_reps.len != source_args.len) {
+            boxyLowerInvariant("erased call argument count disagreed with callee function representation");
+        }
+        const callee_rep = self.parent.plan.representations.items[@intFromEnum(callee_function.rep)];
+        const callee_children = self.parent.plan.childSlice(callee_rep.children);
+        const callee_arg_children = callee_children[callee_function.args_start..][0..callee_function.arg_count];
+        const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_args.len);
+        defer self.parent.allocator.free(call_args);
+        for (source_args, source_reps, call_args, callee_arg_children) |source_arg, source_rep, *call_arg, callee_arg| {
+            const arg_rep = callee_arg.rep;
+            const source_layout = self.parent.result.store.getLocal(source_arg).layout_idx;
+            const arg_layout = self.workerRuntimeLayoutForRep(arg_rep).layoutIdx();
+            call_arg.* = if (source_layout == arg_layout and self.descriptorStorageRep(source_rep) == self.descriptorStorageRep(arg_rep))
+                source_arg
+            else
+                try self.addFrameBoundaryTargetLocalForRep(arg_rep);
+        }
         const callee_ret_rep = callee_function.ret;
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const callee_ret_layout = self.workerRuntimeLayoutForRep(callee_ret_rep).layoutIdx();
@@ -20761,59 +21023,20 @@ const ProcBodyBuilder = struct {
             .next = continuation,
         } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(arg_desc_initializers.items, continuation);
-        switch (callee) {
-            .expr => {},
-            // Constructing the procedure only reads its captures from this
-            // frame, so it runs after the operands, right before the call.
-            .local_proc => |local| continuation = try self.runExprStep(try self.beginLocalProcUseCallable(callee_local, local.site_expr, local.ty, local.use, continuation)),
-        }
 
-        var index = operands.len;
+        var index = source_args.len;
         while (index > 0) {
             index -= 1;
             if (call_args[index] == source_args[index]) continue;
-            const arg_expr = self.module.checked_bodies.expr(operands[index].checked_expr);
             continuation = try self.assignRepresentationBoundary(
                 call_args[index],
                 source_args[index],
                 callee_arg_children[index].rep,
-                self.repForType(arg_expr.ty),
+                source_reps[index],
                 continuation,
             );
         }
-        // Walking backwards: the arguments from the last, then a callee
-        // expression.
-        const callee_items: usize = switch (callee) {
-            .expr => 1,
-            .local_proc => 0,
-        };
-        const chain_items = try self.parent.allocator.alloc(ExprChainItem, operands.len + callee_items);
-        for (0..operands.len) |offset| {
-            const arg_index = operands.len - 1 - offset;
-            chain_items[offset] = switch (operands[arg_index]) {
-                .checked_expr => |arg_expr| .{ .lower = .{ .expr = .{ .target = source_args[arg_index], .expr_id = arg_expr, .next = undefined } } },
-                .generated_interpolation_iter, .generated_numeral, .generated_quote => blk: {
-                    // A generated operand is produced at the callee's own
-                    // argument type and representation.
-                    const arg_type = Plan.CheckedTypeIdentity{
-                        .module = self.module.key,
-                        .ty = checkedFunctionPayload(self.module, callee_ty).args[arg_index],
-                    };
-                    break :blk .{ .call_operand = .{
-                        .operand = operands[arg_index],
-                        .operand_type = arg_type,
-                        .arg_type = arg_type,
-                        .storage_arg_rep = callee_arg_children[arg_index].rep,
-                        .lowered = source_args[arg_index],
-                    } };
-                },
-            };
-        }
-        switch (callee) {
-            .expr => |callee_expr| chain_items[operands.len] = .{ .lower = .{ .expr = .{ .target = callee_local, .expr_id = callee_expr, .next = undefined } } },
-            .local_proc => {},
-        }
-        return exprChain(chain_items, continuation);
+        return continuation;
     }
 
     fn beginLowLevel(
@@ -23492,6 +23715,8 @@ const ProcBodyBuilder = struct {
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
             self.staticFnHiddenDescArgs(static_fn),
             null,
+            static_fn.worker,
+            &.{},
             next,
         );
     }
@@ -23628,6 +23853,8 @@ const ProcBodyBuilder = struct {
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
             self.staticFnHiddenDescArgs(static_fn),
             null,
+            static_fn.worker,
+            &.{},
             continuation,
         );
     }
@@ -23705,6 +23932,18 @@ const ProcBodyBuilder = struct {
             self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args)
         else
             null;
+        if (nested_use) |use| return try self.beginContextWorkerValue(
+            target,
+            .{ .module = self.module.key, .ty = expr.ty },
+            checked_type,
+            source,
+            expr_id,
+            hidden_desc_args,
+            hidden_dict_args,
+            use.worker,
+            self.parent.plan.contextArgSlice(use.context_args),
+            next,
+        );
         return try self.beginWorkerValueWithCallDictionaryArgs(
             target,
             .{ .module = self.module.key, .ty = expr.ty },
@@ -23727,7 +23966,7 @@ const ProcBodyBuilder = struct {
 
         var found: ?Plan.CheckedTypeIdentity = null;
         for (self.parent.plan.nested_callable_uses.items) |use| {
-            if (use.worker != worker or
+            if ((self.parent.plan.workers.items[@intFromEnum(use.worker)].context_base orelse use.worker) != worker or
                 use.caller != self.worker_layout.worker or
                 !planExprRefEql(use.use, use_ref))
             {
@@ -23881,15 +24120,17 @@ const ProcBodyBuilder = struct {
         const worker = self.parent.plan.workers.items[@intFromEnum(use.worker)];
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(use.hidden_dict_args);
-        return try self.beginWorkerValueWithCallDictionaryArgs(
+        return try self.beginWorkerValueWithValueRep(
             target,
             worker.checked_type,
-            call_type,
+            self.repForTypeRef(call_type),
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(use.stored_capture_sources),
             hidden_desc_args,
             hidden_dict_args,
+            use.worker,
+            self.parent.plan.contextArgSlice(use.context_args),
             next,
         );
     }
@@ -23975,7 +24216,25 @@ const ProcBodyBuilder = struct {
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, stored_capture_sources, hidden_desc_args, hidden_dict_args, next);
+        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, stored_capture_sources, hidden_desc_args, hidden_dict_args, null, &.{}, next);
+    }
+
+    /// A callable value of the exact planned `worker_id`, which may be a
+    /// context-specialized worker capturing the inputs `context_args` supply.
+    fn beginContextWorkerValue(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        worker_type: Plan.CheckedTypeIdentity,
+        call_type: Plan.CheckedTypeIdentity,
+        source: Plan.WorkerSource,
+        maybe_expr: ?checked.CheckedExprId,
+        hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        worker_id: Plan.WorkerPlanId,
+        context_args: []const Plan.ContextArg,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, &.{}, hidden_desc_args, hidden_dict_args, worker_id, context_args, next);
     }
 
     fn beginWorkerValueWithValueRep(
@@ -23988,9 +24247,11 @@ const ProcBodyBuilder = struct {
         stored_capture_sources: []const Plan.StoredCallableCaptureSource,
         hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        planned_worker: ?Plan.WorkerPlanId,
+        context_args: []const Plan.ContextArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const worker_id = self.parent.plan.workerForSourceType(source, worker_type) orelse
+        const worker_id = planned_worker orelse self.parent.plan.workerForSourceType(source, worker_type) orelse
             boxyLowerInvariant("planned callable value had no worker for its source type");
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const value_function = self.functionChildrenForRep(value_rep) orelse
@@ -24009,6 +24270,7 @@ const ProcBodyBuilder = struct {
                 value_function,
                 hidden_desc_args,
                 hidden_dict_args,
+                context_args,
                 boundary_placeholder,
                 .{
                     .target = target,
@@ -24022,7 +24284,7 @@ const ProcBodyBuilder = struct {
             );
         }
 
-        return try self.beginRawWorkerValue(target, source, maybe_expr, stored_capture_sources, worker_id, value_function, hidden_desc_args, hidden_dict_args, next, null);
+        return try self.beginRawWorkerValue(target, source, maybe_expr, stored_capture_sources, worker_id, value_function, hidden_desc_args, hidden_dict_args, context_args, next, null);
     }
 
     fn beginRawWorkerValue(
@@ -24035,6 +24297,7 @@ const ProcBodyBuilder = struct {
         value_function: FunctionChildren,
         hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        context_args: []const Plan.ContextArg,
         next: LIR.CFStmtId,
         adapter: ?CallableAdapterBoundary,
     ) Allocator.Error!ExprStep {
@@ -24082,9 +24345,20 @@ const ProcBodyBuilder = struct {
         var source_capture_index: usize = 0;
         const source_captures = self.callableValueSourceCaptures(source, maybe_expr);
 
+        const context_inputs = self.parent.plan.contextInputSlice(worker.context);
+        if (context_inputs.len != context_args.len) {
+            boxyLowerInvariant("boxy callable value context arguments disagreed with its worker's context inputs");
+        }
+        const context_arg_locals = try self.contextArgLocals(worker_id, context_args);
+        defer self.parent.allocator.free(context_arg_locals);
         for (captures, field_locals) |capture, *field_local| {
             switch (capture.kind) {
                 .captured_value => {
+                    if (capture.context_input) |input_index| {
+                        field_local.* = context_arg_locals[input_index] orelse
+                            boxyLowerInvariant("boxy erased context capture had no value");
+                        continue;
+                    }
                     if (stored_capture_sources.len != 0) {
                         const capture_id = capture.capture_id orelse
                             boxyLowerInvariant("stored callable value capture had no checked capture id");
@@ -24308,6 +24582,7 @@ const ProcBodyBuilder = struct {
         if (hidden_dict_index != 0) {
             boxyLowerInvariant("boxy callable use planned more dictionaries than its erased worker captures");
         }
+        continuation = try self.prependContextArgConstructions(context_args, context_arg_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
 
         // The stored captures are lowered inside this capture window, last
@@ -25402,6 +25677,12 @@ const ProcBodyBuilder = struct {
             .slot = self.parent.plan.dictionaries.items[@intFromEnum(requirement)].slot,
         } else self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a matching dictionary requirement");
+        if (self.contextLocalForRequirement(match.requirement)) |callable| {
+            return try self.beginContextDispatchCall(target, dispatch, planned, match.requirement, callable, ret_ty, next);
+        }
+        if (self.structuralContextFor(match.requirement)) |structural| {
+            return try self.beginStructuralContextDispatch(target, dispatch, planned, structural, ret_ty, next);
+        }
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");
         if (!self.dictionaryBindingIsBound(match.requirement)) {
@@ -25587,6 +25868,109 @@ const ProcBodyBuilder = struct {
         return .{ .tail = .{ .chain = .{ .items = items, .current = continuation, .snapshot = descriptor_snapshot } } };
     }
 
+    /// A dispatch whose dictionary method this context-specialized worker
+    /// receives as a context input: call that input with the dispatch's
+    /// operands.
+    fn beginContextDispatchCall(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+        planned: Plan.DictionaryDispatchPlan,
+        requirement: Plan.DictionaryRequirementId,
+        callable: LIR.LocalId,
+        ret_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const worker = self.worker_layout.worker;
+        const input_index = self.parent.plan.workerContextInput(worker, .{ .requirement = requirement }) orelse
+            boxyLowerInvariant("boxy context dispatch had no context input in its worker");
+        const input = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(worker)].context)[input_index];
+        const callee = ErasedCallee{ .local = .{ .local = callable, .ty = input.callable_type.? } };
+        const operands = self.parent.plan.callOperandSlice(planned.operands);
+        switch (dispatch.result_mode) {
+            .equality => |eq| if (eq.negated) {
+                const raw = try self.addFrameLocal(.bool);
+                const negate = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = .bool_not,
+                    .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
+                    .next = next,
+                } }, self.origin);
+                return try self.beginErasedOperandCall(raw, ret_ty, callee, operands, negate);
+            },
+            .value,
+            .hash,
+            .parser_for,
+            .encoder_for,
+            .map,
+            .map_effectful,
+            => {},
+        }
+        return try self.beginErasedOperandCall(target, ret_ty, callee, operands, next);
+    }
+
+    /// A dispatch whose method this worker performs as a structural
+    /// derivation over a closed type: the operands cross into that type's
+    /// representation and the comparison or hash runs here, where the local
+    /// procedures it reaches are context inputs.
+    fn beginStructuralContextDispatch(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+        planned: Plan.DictionaryDispatchPlan,
+        structural: Plan.StructuralContext,
+        ret_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        _ = ret_ty;
+        const operands = self.parent.plan.callOperandSlice(planned.operands);
+        if (operands.len != 2) boxyLowerInvariant("structural context dispatch did not take two operands");
+        const first_expr = switch (operands[0]) {
+            .checked_expr => |expr| expr,
+            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural context dispatch operand was not a checked expression"),
+        };
+        const second_expr = switch (operands[1]) {
+            .checked_expr => |expr| expr,
+            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural context dispatch operand was not a checked expression"),
+        };
+        const negated = switch (dispatch.result_mode) {
+            .equality => |eq| eq.negated,
+            .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => false,
+        };
+        switch (structural.method) {
+            .equality => return try self.beginStructuralEq(target, first_expr, second_expr, structural.rep, negated, next),
+            .hash => {
+                const value = try self.addStructuralEqOperandLocalForRep(structural.rep);
+                const hasher = try self.addFrameLocalForType(self.module.checked_bodies.expr(second_expr).ty);
+                const continuation = try self.lowerStructuralContextDerivationInto(target, value, hasher, structural, false, next);
+                const chain_items = try self.parent.allocator.alloc(ExprChainItem, 2);
+                chain_items[0] = .{ .lower = .{ .expr = .{ .target = hasher, .expr_id = second_expr, .next = undefined } } };
+                chain_items[1] = .{ .lower = .{ .into_rep = .{ .target = value, .target_rep = structural.rep, .expr_id = first_expr, .next = undefined } } };
+                return exprChain(chain_items, continuation);
+            },
+        }
+    }
+
+    /// The structural derivation `structural` names, over operands already
+    /// in its closed representation, performed in this worker's frame.
+    fn lowerStructuralContextDerivationInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        first: LIR.LocalId,
+        second: LIR.LocalId,
+        structural: Plan.StructuralContext,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const outer_derived = try self.enterDerivedContext(self.worker_layout.worker, structural.rep);
+        defer self.derived_context = outer_derived;
+        return switch (structural.method) {
+            .equality => try self.lowerEqRepLocalsInto(target, first, second, structural.rep, negated, next),
+            .hash => try self.lowerHashRepLocalsInto(target, first, second, structural.rep, next),
+        };
+    }
+
     /// Every part of an interpolation fills the generated iterator's item
     /// slot, so the item type is the parts' type and the first part's type
     /// describes it.
@@ -25768,6 +26152,27 @@ const ProcBodyBuilder = struct {
         hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerContextWorkerCallLocalsInto(target, ret_type, arg_types, hidden_desc_arg_types, source_args, actual_arg_reps, arg_substitutions, ret_substitution, worker_id, hidden_desc_args, hidden_dict_args, &.{}, next);
+    }
+
+    /// A direct worker call, passing a context-specialized worker's context
+    /// inputs after its hidden dictionaries.
+    fn lowerContextWorkerCallLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        ret_type: Plan.CheckedTypeIdentity,
+        arg_types: []const Plan.CheckedTypeIdentity,
+        hidden_desc_arg_types: []const Plan.CheckedTypeIdentity,
+        source_args: []const LIR.LocalId,
+        actual_arg_reps: ?[]const Plan.TypeRepId,
+        arg_substitutions: ?[]const Plan.CallTypeSubstitution,
+        ret_substitution: ?Plan.CallTypeSubstitution,
+        worker_id: Plan.WorkerPlanId,
+        hidden_desc_args: []const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg,
+        context_args: []const Plan.ContextArg,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const worker_layout = self.parent.layout_plan.workerLayoutFor(worker_id);
         const worker_args = self.parent.layout_plan.workerLayoutSlice(worker_layout.args);
         if (source_args.len != worker_args.len or arg_types.len != worker_args.len or hidden_desc_arg_types.len != worker_args.len) {
@@ -25846,8 +26251,15 @@ const ProcBodyBuilder = struct {
         try self.bindDirectCallHiddenDescriptorLocals(hidden_desc_args, hidden_desc_locals, true);
         const hidden_dict_locals = try self.lowerDirectCallHiddenDictionaryArgs(hidden_dict_args);
         defer self.parent.allocator.free(hidden_dict_locals);
+        const context_arg_locals = try self.contextArgLocals(worker_id, context_args);
+        defer self.parent.allocator.free(context_arg_locals);
+        var context_value_locals = std.ArrayList(LIR.LocalId).empty;
+        defer context_value_locals.deinit(self.parent.allocator);
+        for (context_arg_locals) |maybe_local| {
+            if (maybe_local) |local| try context_value_locals.append(self.parent.allocator, local);
+        }
 
-        const call_locals = try self.parent.allocator.alloc(LIR.LocalId, adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len);
+        const call_locals = try self.parent.allocator.alloc(LIR.LocalId, adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len + context_value_locals.items.len);
         defer self.parent.allocator.free(call_locals);
         @memcpy(call_locals[0..adapted_args.len], adapted_args);
         for (hidden_desc_locals, 0..) |hidden, index| {
@@ -25855,6 +26267,9 @@ const ProcBodyBuilder = struct {
         }
         for (hidden_dict_locals, 0..) |hidden, index| {
             call_locals[adapted_args.len + hidden_desc_locals.len + index] = hidden.local;
+        }
+        for (context_value_locals.items, 0..) |local, index| {
+            call_locals[adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len + index] = local;
         }
 
         var continuation = next;
@@ -25981,6 +26396,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy direct call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
+        continuation = try self.prependContextArgConstructions(context_args, context_arg_locals, continuation);
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
         // Hidden descriptors read only the original operands and the caller
         // frame, so they are initialized before the operands are adapted and
@@ -36301,7 +36717,11 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const call = self.parent.plan.derived_component_calls.items[index];
-        return try self.lowerWorkerCallLocalsInto(
+        const worker = self.parent.plan.workers.items[@intFromEnum(call.worker)];
+        if (worker.context.len != 0 and self.synthetic_adapter) {
+            boxyLowerInvariant("a derived method procedure reached a component needing its frame's context");
+        }
+        return try self.lowerContextWorkerCallLocalsInto(
             target,
             call.ret_type,
             &call.arg_types,
@@ -36313,6 +36733,7 @@ const ProcBodyBuilder = struct {
             call.worker,
             self.parent.plan.directCallHiddenDescriptorArgSlice(call.hidden_desc_args),
             self.parent.plan.directCallHiddenDictionaryArgSlice(call.hidden_dict_args),
+            self.parent.plan.contextArgSlice(call.context_args),
             next,
         );
     }
@@ -36327,6 +36748,35 @@ const ProcBodyBuilder = struct {
         requirement_id: Plan.DictionaryRequirementId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.structuralContextFor(requirement_id)) |structural| {
+            if (args.len != 2) boxyLowerInvariant("structural context component did not take two arguments");
+            const converted = try self.addFrameBoundaryTargetLocalForRep(structural.rep);
+            const derivation = try self.lowerStructuralContextDerivationInto(target, converted, args[1], structural, false, next);
+            return try self.assignRepresentationBoundary(converted, args[0], structural.rep, component_rep, derivation);
+        }
+        if (self.contextLocalForRequirement(requirement_id)) |callable| {
+            const worker = self.worker_layout.worker;
+            const input_index = self.parent.plan.workerContextInput(worker, .{ .requirement = requirement_id }) orelse
+                boxyLowerInvariant("boxy derived context component had no context input in its worker");
+            const input = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(worker)].context)[input_index];
+            const callable_function = self.functionChildrenForRep(input.rep.?) orelse
+                boxyLowerInvariant("boxy context input was not callable");
+            const callable_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(callable_function.rep)].children);
+            const arg_reps = try self.parent.allocator.alloc(Plan.TypeRepId, args.len);
+            defer self.parent.allocator.free(arg_reps);
+            for (arg_reps, args, 0..) |*arg_rep, arg, index| {
+                // The dispatcher is this component, described by the frame;
+                // each other argument already has the callable's own type.
+                arg_rep.* = if (index == 0) component_rep else callable_children[callable_function.args_start + index].rep;
+                _ = arg;
+            }
+            const requirement_function = self.functionChildrenForRep(self.repForTypeRef(self.parent.plan.dictionaries.items[@intFromEnum(requirement_id)].fn_ty)) orelse
+                boxyLowerInvariant("derived method scheme requirement was not a function");
+            return try self.lowerErasedCallWithLocalsInto(target, requirement_function.ret, callable, callable_function, args, arg_reps, next);
+        }
+        if (self.synthetic_adapter and self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)].context.len != 0) {
+            boxyLowerInvariant("a derived method procedure reached a context input of its frame");
+        }
         const dict_local = self.dictionaryLocalForRequirementOrNull(requirement_id) orelse
             boxyLowerInvariant("derived method reached a scheme requirement without a bound dictionary local");
         if (!self.dictionaryBindingIsBound(requirement_id)) {

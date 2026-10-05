@@ -10749,11 +10749,41 @@ evidence edge selected and with the edge's nested evidence supplying its hidden
 descriptors and dictionaries, and calls it with the dispatch operands. The
 escape rule for capturing local types guarantees the dispatch runs in a frame
 that holds those binders. A local procedure with no runtime captures is called
-directly as its nested worker. A method dictionary slot, a derived method, or a
-generated codec calls its worker from no frame of the declaring body, so it
-cannot supply runtime captures; Boxy planning rejects method evidence that
-selects a capturing local procedure there as an invariant failure rather than
-calling the worker without its values.
+directly as its nested worker.
+
+A method dictionary is an immortal table called from no frame of the declaring
+body, so a capturing local procedure never sits in one of its slots. Boxy
+specializes by local evidence instead, the counterpart of Monotype lowering a
+local procedure with its declaration context as an explicit input. A worker
+receiving such evidence gets a context-specialized copy (`WorkerPlan.context`,
+`context_base` naming the generic worker) whose `ContextInput`s carry what the
+evidence needs, and every edge reaching it (`DirectCallPlan`,
+`CallableUsePlan`, `NestedCallableUsePlan`, `DerivedComponentCallPlan`, and a
+dictionary method's own nested call) carries the `ContextArg`s supplying them:
+
+- A dictionary requirement whose checked method evidence selects a capturing
+  local procedure, or a worker specialized this way, is a `requirement` input:
+  the frame whose evidence selected the method constructs its erased callable
+  at the edge's instantiation (`ContextConstruct`) and the dictionary's slot for
+  it stays absent. The specialized worker's dispatches on that requirement call
+  the input, and its own calls forward it wherever they pass that dictionary
+  on, so forwarding through further generic procedures, closures inside them,
+  and closures that escape the block all reach the same callable.
+- A structural `is_eq` or `to_hash` of a closed representation whose derivation
+  reaches capturing local procedures (`ProgramPlan.frame_context_procs`,
+  recorded for each derived root) is a `structural` input with no value: the
+  dictionary slot stays absent, the specialized worker performs the derivation
+  itself, and the procedures it reaches arrive as `capture` inputs, one per
+  runtime capture, read from the declaring frame's own bindings.
+- A derived component call that reaches a capturing local procedure calls that
+  procedure's specialization receiving its own runtime captures as `capture`
+  inputs, so a derivation runs in whichever frame holds those values.
+
+Specialization is keyed by the generic worker and its exact inputs, so
+programs whose evidence selects no capturing local procedure plan exactly the
+workers and dictionaries they would otherwise. A generated codec or derived
+procedure never receives context inputs, and an iterator protocol dispatch
+that selects a capturing local procedure is an invariant failure.
 
 A closure's captures are the values its captured binders hold at the closure's
 declaration. Constructing the callable at a later use reads the same values only
