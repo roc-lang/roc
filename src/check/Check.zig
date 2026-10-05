@@ -39316,7 +39316,7 @@ fn encodeDispatchReplayShape(
     stack.clearRetainingCapacity();
     const binding = dispatchReplayBinding(method_lookup);
     try appendReplayWord(out, self.gpa, @truncate(binding.env));
-    try appendReplayWord(out, self.gpa, @truncate(binding.env >> 32));
+    try appendReplayWord(out, self.gpa, @truncate(@as(u64, binding.env) >> 32));
     try appendReplayWord(out, self.gpa, binding.type_node);
     try appendReplayWord(out, self.gpa, binding.def);
     try appendReplayWord(out, self.gpa, @bitCast(constraint.fn_name));
