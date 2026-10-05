@@ -407,7 +407,6 @@ const CustomCase = enum {
     native_build_pack_objects,
     native_build_pack_hits,
     early_ctfe_cache,
-    finalized_literal_cache,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
@@ -1892,7 +1891,6 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build finalized literal cache reuses portable values without lowering or reconversion", .timeout_ms = 600_000, .body = .{ .custom = .finalized_literal_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -3576,7 +3574,6 @@ fn runCustomCase(
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
-        .finalized_literal_cache => customFinalizedLiteralCache(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
@@ -6545,8 +6542,8 @@ fn customEarlyCtfeCache(
     if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "early_ctfe", .{
         .edit_between_builds = true,
         .evaluator_artifacts = true,
-        .monotype_body_reduction = base.CompilerFeatures.early_ctfe_cache,
-        .pack_hit_proc = if (base.CompilerFeatures.early_ctfe_cache) "Shapes.sides_of" else null,
+        .monotype_body_reduction = true,
+        .pack_hit_proc = "Shapes.sides_of",
         .compile_debug = "[dbg] \"early ctfe replay\"",
         .stdout = "triangle:3 square:4 pentagon:5 hexagon:6 28 5 4.5\n",
     })) |failure| return failure;
@@ -6597,76 +6594,6 @@ fn customEarlyCtfeCache(
             return failureFromRun(allocator, timer, reports[1], "warm CTFE diagnostics or source regions differ from the uncached report");
         }
     }
-    return null;
-}
-
-/// A named object hit must remove both body construction and actual conversion,
-/// not merely preserve output or serve unrelated platform procedures.
-fn customFinalizedLiteralCache(
-    io: std.Io,
-    allocator: Allocator,
-    env: *const CaseEnv,
-    timer: *harness.Timer,
-    timeout_ms: u64,
-) ?TestResult {
-    var app: []const u8 = undefined;
-    if (stageEditableApp(io, allocator, env, timer, .{
-        .dir_name = "finalized_literal_cache",
-        .platform = "test/fx/platform/main.roc",
-        .platform_spelling = "../../fx/platform/main.roc",
-        .sources = &.{
-            "test/cli/finalized_literal_cache/PlainValues.roc",
-            "test/cli/finalized_literal_cache/PlainFinalizedLiteralCache.roc",
-            "test/cli/finalized_literal_cache/ReversedPlainFinalizedLiteralCache.roc",
-        },
-        .app_name = "PlainFinalizedLiteralCache.roc",
-    }, &app)) |failure| return failure;
-    const reuse = base.CompilerFeatures.finalized_literal_cache and base.CompilerFeatures.early_ctfe_cache;
-    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "finalized_literals", .{
-        .jobs = 2,
-        .uncached_baseline = true,
-        .edit_between_builds = true,
-        .monotype_body_reduction = reuse,
-        .literal_evaluation_elimination = reuse,
-        .pack_hit_proc = if (reuse) "PlainValues.pair" else null,
-        .stdout = "left!right!\nleft!right!\n12\n",
-    })) |failure| return failure;
-    const dir = std.fs.path.dirname(app) orelse
-        return customInfraFailure(allocator, timer, "staged literal app has no directory", .{});
-    const reversed_path = std.fs.path.join(allocator, &.{ dir, "ReversedPlainFinalizedLiteralCache.roc" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate reversed literal app path: {}", .{err});
-    const reversed = std.Io.Dir.cwd().readFileAlloc(io, reversed_path, allocator, .limited(1024 * 1024)) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read reversed literal app: {}", .{err});
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = reversed }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to change literal caller order: {}", .{err});
-    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "finalized_literals_reversed", .{
-        .jobs = 2,
-        .uncached_baseline = true,
-        .edit_between_builds = true,
-        .monotype_body_reduction = reuse,
-        .literal_evaluation_elimination = reuse,
-        .pack_hit_proc = if (reuse) "PlainValues.pair" else null,
-        .stdout = "left!right!\nleft!right!\n12\n",
-    })) |failure| return failure;
-    const converter_path = std.fs.path.join(allocator, &.{ dir, "PlainValues.roc" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate converter path: {}", .{err});
-    const converter = std.Io.Dir.cwd().readFileAlloc(io, converter_path, allocator, .limited(1024 * 1024)) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read converter: {}", .{err});
-    const changed = std.mem.replaceOwned(u8, allocator, converter, "Str.concat(raw, \"!\")", "Str.concat(raw, \"?\")") catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate converter edit: {}", .{err});
-    if (std.mem.eql(u8, converter, changed))
-        return customInfraFailure(allocator, timer, "converter edit matched no implementation", .{});
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = converter_path, .data = changed }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to edit converter dependency: {}", .{err});
-    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "finalized_literals_converter", .{
-        .jobs = 2,
-        .uncached_baseline = true,
-        .edit_between_builds = true,
-        .monotype_body_reduction = reuse,
-        .literal_evaluation_elimination = reuse,
-        .pack_hit_proc = if (reuse) "PlainValues.pair" else null,
-        .stdout = "left?right?\nleft?right?\n12\n",
-    })) |failure| return failure;
     return null;
 }
 
@@ -6949,9 +6876,6 @@ const StoreExpectations = struct {
     monotype_body_reduction: bool = false,
     /// Root debug output must appear once on every build, including cache reuse.
     compile_debug: ?[]const u8 = null,
-    /// Require a real cold evaluation and zero evaluations on the warm build.
-    literal_evaluation_elimination: bool = false,
-    jobs: ?u32 = null,
     /// Run an uncached build before populating the store.
     uncached_baseline: bool = false,
     /// Which cached build must consume an object pack. Later checked-cache
@@ -7016,22 +6940,7 @@ fn storeBuildsBehaveIdentically(
         const build_args: []const []const u8 = if (expect.monotype_body_reduction)
             if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", "--timings", out_arg } else &.{ "build", "--opt=dev", "--timings", out_arg }
         else if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
-        var limited_args = std.ArrayList([]const u8).empty;
-        defer limited_args.deinit(allocator);
-        const jobs_arg = if (expect.jobs) |jobs|
-            std.fmt.allocPrint(allocator, "--jobs={d}", .{jobs}) catch |err|
-                return customInfraFailure(allocator, timer, "failed to allocate job limit: {}", .{err})
-        else
-            null;
-        defer if (jobs_arg) |arg| allocator.free(arg);
-        if (jobs_arg) |arg| {
-            limited_args.appendSlice(allocator, build_args) catch |err|
-                return customInfraFailure(allocator, timer, "failed to allocate limited build arguments: {}", .{err});
-            limited_args.append(allocator, arg) catch |err|
-                return customInfraFailure(allocator, timer, "failed to append job limit: {}", .{err});
-        }
-        const actual_args = if (jobs_arg != null) limited_args.items else build_args;
-        const built = runRocInEnv(io, allocator, &stats_env, actual_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const built = runRocInEnv(io, allocator, &stats_env, build_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
@@ -7040,14 +6949,6 @@ fn storeBuildsBehaveIdentically(
             if (std.mem.count(u8, built.stderr, message) != 1) {
                 return failureFromRun(allocator, timer, built, "compile-time debug output was not preserved exactly once");
             }
-        }
-        if (expect.literal_evaluation_elimination) {
-            const evaluated = timingCounter(built.stderr, "Finalized literal work", "Literal roots evaluated") orelse
-                return failureFromRun(allocator, timer, built, "build did not report actual literal-root evaluations");
-            if (index == 0 and evaluated == 0)
-                return failureFromRun(allocator, timer, built, "uncached baseline evaluated no specialized literal roots");
-            if (last and evaluated != 0)
-                return failureFromRun(allocator, timer, built, "warm finalized object hit reexecuted literal conversions");
         }
         if (expect.monotype_body_reduction) {
             const contexts = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Body contexts created") orelse
@@ -7082,8 +6983,6 @@ fn storeBuildsBehaveIdentically(
             if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
             if (expect.pack_hit_proc) |procedure| {
                 if (!hasNamedPackHit(built.stderr, procedure)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
-                if (expect.literal_evaluation_elimination and !hasNamedFinalizedLiteralHit(built.stderr, procedure))
-                    return failureFromRun(allocator, timer, built, "literal-owning procedure hit had no validated finalization certificate");
             }
             if (expect.evaluator_artifacts) {
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
@@ -7135,14 +7034,6 @@ test "Monotype work counter requires the exact group and counter" {
 /// Join the producer's named specialization key to the cache lookup trace.
 /// A hit for an unrelated procedure or an identity mismatch cannot satisfy it.
 fn hasNamedPackHit(stderr: []const u8, procedure: []const u8) bool {
-    return hasNamedCacheTrace(stderr, procedure, &.{ "lookup monotype key=", "lookup direct-lir key=" }, " hit");
-}
-
-fn hasNamedFinalizedLiteralHit(stderr: []const u8, procedure: []const u8) bool {
-    return hasNamedCacheTrace(stderr, procedure, &.{"lookup finalized-literal key="}, " certified");
-}
-
-fn hasNamedCacheTrace(stderr: []const u8, procedure: []const u8, prefixes: []const []const u8, suffix: []const u8) bool {
     var census_lines = std.mem.splitScalar(u8, stderr, '\n');
     while (census_lines.next()) |line| {
         var fields = std.mem.splitScalar(u8, line, '\t');
@@ -7151,10 +7042,10 @@ fn hasNamedCacheTrace(stderr: []const u8, procedure: []const u8, prefixes: []con
         const key = fields.next() orelse continue;
         var trace_lines = std.mem.splitScalar(u8, stderr, '\n');
         while (trace_lines.next()) |trace| {
-            for (prefixes) |prefix| {
+            for ([_][]const u8{ "lookup monotype key=", "lookup direct-lir key=" }) |prefix| {
                 if (!std.mem.startsWith(u8, trace, prefix)) continue;
                 const lookup = trace[prefix.len..];
-                if (std.mem.startsWith(u8, lookup, key) and std.mem.eql(u8, lookup[key.len..], suffix)) return true;
+                if (std.mem.startsWith(u8, lookup, key) and std.mem.eql(u8, lookup[key.len..], " hit")) return true;
             }
         }
     }
@@ -7169,15 +7060,6 @@ test "named pack hit requires the selected procedure's key and a successful look
     try std.testing.expect(!hasNamedPackHit(census ++ "lookup direct-lir key=1234 identity-mismatch\n", "Eq.same"));
     try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=12345 hit\n", "Eq.same"));
     try std.testing.expect(!hasNamedPackHit("lookup monotype key=1234 hit\n", "Eq.same"));
-}
-
-test "finalized literal named hit requires the selected key and a validated certificate" {
-    const census = "CENSUS_KEY\tPlainValues.make_i32\t1234\tev=abcd\nCENSUS_KEY\tOther.same\t5678\tev=abcd\n";
-    try std.testing.expect(hasNamedFinalizedLiteralHit(census ++ "lookup finalized-literal key=1234 certified\n", "PlainValues.make_i32"));
-    try std.testing.expect(!hasNamedFinalizedLiteralHit(census ++ "lookup monotype key=1234 hit\n", "PlainValues.make_i32"));
-    try std.testing.expect(!hasNamedFinalizedLiteralHit(census ++ "lookup finalized-literal key=5678 certified\n", "PlainValues.make_i32"));
-    try std.testing.expect(!hasNamedFinalizedLiteralHit(census ++ "lookup finalized-literal key=12345 certified\n", "PlainValues.make_i32"));
-    try std.testing.expect(!hasNamedFinalizedLiteralHit("lookup finalized-literal key=1234 certified\n", "PlainValues.make_i32"));
 }
 
 /// The decimal number at the start of `text`, or zero when it starts with none.

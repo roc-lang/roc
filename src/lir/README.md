@@ -16,9 +16,4 @@ its store-indexed topology and reuses scratch across procedure queries, resettin
 only touched entries. Neither client reconstructs ownership decisions from the
 other.
 
-`finalized_literal_outcomes.zig` is the neutral completion-certificate boundary
-shared by specialization, finalization, and portable artifacts. An evaluated
-root's identity is not proof of its owning specialization, and neither replaces
-the existing typed value and relocation contract.
-
 See `design.md` for the transformation, ownership, and serialization contracts.

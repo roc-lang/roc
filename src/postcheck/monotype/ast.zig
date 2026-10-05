@@ -220,10 +220,6 @@ pub const FnTemplate = struct {
     /// before the body exists. Null for functions that are not template
     /// specializations.
     spec_key: ?names.TypeDigest = null,
-    /// Reservation identity for a function-containing request. This is not
-    /// an object lookup key: Direct LIR must combine it with the completed
-    /// callable/capture procedure identity before lookup or publication.
-    late_spec_seed: ?names.TypeDigest = null,
     /// Set when the object cache served this specialization: the body is
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
@@ -1397,13 +1393,6 @@ pub const LiteralRoot = struct {
     site: Common.LiteralRejectionSite,
 };
 
-/// A retained function registration can share an already-published literal root.
-/// Null explicitly names a non-function root, not an inferred cache owner.
-pub const LiteralRootOwner = struct {
-    root: Common.LiteralRootId,
-    owner_fn: ?FnId,
-};
-
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
@@ -1478,7 +1467,6 @@ pub const ProgramView = struct {
     proc_debug_names: []const ProcDebugName,
     roots: []const Root,
     literal_roots: []const LiteralRoot,
-    literal_root_owners: []const LiteralRootOwner = &.{},
     layout_requests: []const LayoutRequest,
     /// Evaluated roots this program reads a completed value of, recorded once
     /// each. Whoever materializes those values consumes this instead of
@@ -1668,7 +1656,6 @@ pub const ProgramBuilder = struct {
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     literal_roots: ProgramList(LiteralRoot, "literal_roots"),
-    literal_root_owners: ProgramList(LiteralRootOwner, "literal_root_owners") = .empty,
     /// Each literal root by its definition's content identity: one literal
     /// converted at one type.
     literal_root_by_identity: std.AutoHashMapUnmanaged(names.TypeDigest, Common.LiteralRootId) = .empty,
@@ -1764,7 +1751,7 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "literal_root_owners", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
@@ -1836,7 +1823,6 @@ pub const ProgramBuilder = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
-        self.literal_root_owners.deinit(self.allocator);
         self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
@@ -2020,7 +2006,6 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = self.proc_debug_names.view(),
             .roots = self.roots.unsafeRawItemsForView(),
             .literal_roots = self.literal_roots.unsafeRawItemsForView(),
-            .literal_root_owners = self.literal_root_owners.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),

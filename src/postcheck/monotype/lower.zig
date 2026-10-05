@@ -301,8 +301,6 @@ pub const Options = struct {
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
     literal_roots: bool = false,
-    /// Cache context is copied separately from lookup into private workers.
-    publish_literal_owners: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     /// Optional executor for isolated procedure roots and ordinary
     /// specialization batches.
@@ -3375,7 +3373,6 @@ const SpecJobWorkerInputs = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
-    publish_literal_owners: bool,
     declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
@@ -3736,7 +3733,6 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
-    publish_literal_owners: bool,
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     post_check_executor: ?base.post_check_task_executor.Executor,
@@ -3953,7 +3949,6 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
-            .publish_literal_owners = base.CompilerFeatures.finalized_literal_cache and options.publish_literal_owners,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
@@ -4098,7 +4093,6 @@ const Builder = struct {
             .static_data_literals = inputs.static_data_literals,
             .comptime_value_reads = inputs.comptime_value_reads,
             .literal_roots = inputs.literal_roots,
-            .publish_literal_owners = inputs.publish_literal_owners,
             .post_check_executor = null,
             .timing = null,
         });
@@ -4838,7 +4832,6 @@ const Builder = struct {
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
-            .publish_literal_owners = self.publish_literal_owners,
             .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
@@ -5863,26 +5856,12 @@ const Builder = struct {
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             if (self.spec_cache) |cache| {
-                const offer = cache.lookup(key.bytes);
-                const accepted: ?Common.SpecCacheHit = if (offer) |hit|
-                    if (self.literalCacheHitAllowed(key.bytes, hit)) hit else null
-                else
-                    null;
-                if (accepted) |hit| {
+                if (cache.lookup(key.bytes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
-                    if (pack_trace_available and packTraceEnabled()) {
-                        std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
-                        if (base.CompilerFeatures.finalized_literal_cache and hit.finalized_literals != null) {
-                            std.debug.print("lookup finalized-literal key={x} certified\n", .{key.bytes[0..8]});
-                        }
-                    }
+                    if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
                 } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             }
-        } else if (base.CompilerFeatures.late_callable_cache and template.target != .hosted) {
-            // Publish the reservation's evidence and codec identity, not an
-            // early lookup key. Callable topology is only complete later.
-            fn_template.late_spec_seed = Ast.specIdentityKey(spec_identity);
         }
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
@@ -6563,7 +6542,6 @@ const Builder = struct {
                             .static_data_literals = self.static_data_literals,
                             .comptime_value_reads = self.comptime_value_reads,
                             .literal_roots = self.literal_roots,
-                            .publish_literal_owners = self.publish_literal_owners,
                             .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
                             .hosted_catalog = self.hosted_catalog,
                             .current_loc = self.current_loc,
@@ -8744,25 +8722,6 @@ const Builder = struct {
             out[i] = try self.lowerType(view, ty);
         }
         return out;
-    }
-
-    /// Validate stable source authority before a cached body can disappear.
-    /// Null certificates retain the unchanged non-literal admission contract.
-    inline fn literalCacheHitAllowed(self: *Builder, key: [32]u8, hit: Common.SpecCacheHit) bool {
-        if (!base.CompilerFeatures.finalized_literal_cache) return true;
-        const certificate = hit.finalized_literals orelse return true;
-        if (!self.publish_literal_owners or
-            !std.mem.eql(u8, &certificate.specialization_key, &key) or
-            !std.mem.eql(u8, &certificate.artifact_identity, &hit.identity)) return false;
-        for (certificate.roots) |root| {
-            const view = self.moduleForKeyBytes(root.root.source.module.bytes) orelse return false;
-            if (@intFromEnum(root.root.source.expr) >= view.bodies.stored_exprs.len) return false;
-            switch (view.bodies.expr(root.root.source.expr).data) {
-                .numeral, .str_from_quote => {},
-                else => return false,
-            }
-        }
-        return certificate.roots.len != 0;
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
@@ -13905,7 +13864,6 @@ const DraftLiteralRoot = struct {
     module: checked.ModuleId,
     site: Common.LiteralRejectionSite,
     read: DraftComptimeValueRootId,
-    owner: ?DraftOwner = null,
 };
 
 fn DraftSpan(comptime _: type) type {
@@ -16517,17 +16475,10 @@ const BodyDraftStore = struct {
         def: DraftDefId,
         module: checked.ModuleId,
         site: Common.LiteralRejectionSite,
-        owner: ?DraftOwner,
     ) Allocator.Error!DraftComptimeValueRootId {
         const position: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(self.literal_roots.items.len)));
         const read = try self.addComptimeValueRoot(.{ .module = module, .root = .{ .literal = position }, .const_locator = null });
-        try self.literal_roots.append(self.allocator, .{
-            .def = def,
-            .module = module,
-            .site = site,
-            .read = read,
-            .owner = owner,
-        });
+        try self.literal_roots.append(self.allocator, .{ .def = def, .module = module, .site = site, .read = read });
         return read;
     }
 
@@ -17410,18 +17361,6 @@ const BodyDraftStore = struct {
                 entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
             }
             var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
-            if (base.CompilerFeatures.finalized_literal_cache) if (root.owner) |draft_owner| {
-                const owner_fn: ?Ast.FnId = switch (draft_owner) {
-                    .root => null,
-                    .draft_fn => |owner| ids.fn_(owner),
-                    .reserved_fn => |owner| owner,
-                };
-                descriptor.literal_owner = @enumFromInt(program.literal_root_owners.len());
-                try program.literal_root_owners.append(program.allocator, .{
-                    .root = entry.value_ptr.*,
-                    .owner_fn = owner_fn,
-                });
-            };
             descriptor.root = .{ .literal = entry.value_ptr.* };
             try comptime_roots.put(root.read, try program.addComptimeValueRoot(descriptor));
         }
@@ -24011,10 +23950,7 @@ const BodyContext = struct {
     /// dense-map deletion repairs its index instead, without memoizing the
     /// provisional answers used to cut recursive cycles.
     const RequestCompletionPath = struct {
-        const Map = if (base.CompilerFeatures.const_completion)
-            std.array_hash_map.Auto(RequestCompletionPair, void)
-        else
-            std.AutoHashMapUnmanaged(RequestCompletionPair, void);
+        const Map = std.array_hash_map.Auto(RequestCompletionPair, void);
 
         map: Map = .empty,
         allocator: Allocator,
@@ -24032,10 +23968,7 @@ const BodyContext = struct {
         }
 
         fn leave(self: *RequestCompletionPath, pair: RequestCompletionPair) void {
-            const removed = if (base.CompilerFeatures.const_completion)
-                self.map.swapRemove(pair)
-            else
-                self.map.remove(pair);
+            const removed = self.map.swapRemove(pair);
             std.debug.assert(removed);
         }
     };
@@ -42600,7 +42533,6 @@ const BodyContext = struct {
         value_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
-        const owner: ?DraftOwner = if (self.builder.publish_literal_owners) self.draft.current_owner else null;
         const def_id = try self.draft.reserveDef(self.draft.current_owner);
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
@@ -42611,7 +42543,7 @@ const BodyContext = struct {
             .body = .{ .roc = value },
             .ret = value_cell,
         });
-        const read = try self.draft.addLiteralRoot(def_id, self.view.key, site, owner);
+        const read = try self.draft.addLiteralRoot(def_id, self.view.key, site);
         // The call is representation evidence for the read; the read never
         // runs it.
         const callee = try self.addExprWithTypeCell(

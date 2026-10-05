@@ -197,11 +197,6 @@ const Pass = struct {
     }
 
     fn run(self: *Pass) Allocator.Error!void {
-        if (base.CompilerFeatures.finalized_literal_cache) {
-            for (self.result.spec_procs.items) |spec| {
-                if (spec.literal_publication_root) try self.markProc(spec.proc);
-            }
-        }
         for (self.result.root_procs.items) |proc| {
             try self.markProc(proc);
         }
@@ -660,9 +655,7 @@ const Pass = struct {
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const new_proc = self.old_to_new[@intFromEnum(spec_proc.proc)] orelse continue;
-            var retained = spec_proc;
-            retained.proc = new_proc;
-            self.result.spec_procs.items[kept] = retained;
+            self.result.spec_procs.items[kept] = .{ .key = spec_proc.key, .proc = new_proc };
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
@@ -1123,38 +1116,6 @@ fn reachableProcInvariant(msg: []const u8) noreturn {
         std.debug.panic("reachable procs invariant violated: {s}", .{msg});
     }
     unreachable;
-}
-
-test "finalized literal publication roots preserve demand and early provenance through compaction" {
-    if (!base.CompilerFeatures.finalized_literal_cache) return;
-    const allocator = std.testing.allocator;
-    var result = try LirProgram.Result.init(allocator, .native);
-    defer result.deinit();
-    const value = try result.store.addLocal(.{ .layout_idx = .zst });
-    const body = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    for (0..4) |index| {
-        _ = try result.store.addProcSpec(.{
-            .name = result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.forTest(@intCast(index)),
-            .args = .empty(),
-            .body = body,
-            .ret_layout = .zst,
-        }, .none);
-    }
-    try result.root_procs.append(allocator, @enumFromInt(3));
-    try result.spec_procs.appendSlice(allocator, &.{
-        .{ .key = [_]u8{1} ** 32, .proc = @enumFromInt(1), .literal_publication_root = true },
-        .{ .key = [_]u8{2} ** 32, .proc = @enumFromInt(3), .literal_early = false },
-        .{ .key = [_]u8{3} ** 32, .proc = @enumFromInt(2), .literal_early = false },
-    });
-    try run(&result);
-    try std.testing.expectEqual(@as(usize, 1), result.root_procs.items.len);
-    try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
-    try std.testing.expectEqual(@as(usize, 2), result.spec_procs.items.len);
-    try std.testing.expect(result.spec_procs.items[0].literal_publication_root);
-    try std.testing.expect(result.spec_procs.items[0].literal_early);
-    try std.testing.expect(!result.spec_procs.items[1].literal_publication_root);
-    try std.testing.expect(!result.spec_procs.items[1].literal_early);
 }
 
 test "reachable proc pass compacts proc specs and remaps root ids" {

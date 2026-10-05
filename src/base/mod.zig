@@ -5,7 +5,6 @@ const builtin = @import("builtin");
 /// Shared declaration polarity equations for AST and CIR producers.
 pub const annotation_positions = @import("annotation_positions.zig");
 
-pub const CompilerFeatures = @import("compiler_features.zig");
 pub const SExprTree = @import("SExprTree.zig");
 pub const TextRankCache = @import("TextRankCache.zig");
 pub const Ident = @import("Ident.zig");
@@ -101,7 +100,6 @@ test {
     std.testing.refAllDecls(@import("sha256.zig"));
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
-    std.testing.refAllDecls(@import("compiler_feature_specs.zig"));
 }
 
 /// Whether a function calls itself.

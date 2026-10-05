@@ -11,19 +11,15 @@
 //! consumer must bind that domain explicitly or omit lines from debug emission.
 
 const std = @import("std");
-const base = @import("base");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
 const RelocationMod = @import("Relocation.zig");
 
 const Allocator = std.mem.Allocator;
-const LiteralFacts = lir.LIR.FinalizedLiteralOutcomes;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-/// The experiment leaves the measured gate-off encoding unchanged.
-/// Version 5 did not prove converted results noncallable and is not reusable.
-pub const format_version: u32 = if (base.CompilerFeatures.finalized_literal_cache) 6 else 4;
+pub const format_version: u32 = 4;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature ARC solved
@@ -34,7 +30,6 @@ pub const SpecEntry = struct {
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
-    finalized_literals: ?*const LiteralFacts.Certificate = null,
 };
 
 /// A pack read back from its bytes.
@@ -184,22 +179,6 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.wide(spec.rc_borrowed_params);
         try writer.byte(@intFromBool(spec.rc_ret_borrowed));
         try writer.wide(spec.rc_ret_lenders);
-        if (base.CompilerFeatures.finalized_literal_cache) {
-            if (spec.finalized_literals) |certificate| {
-                std.debug.assert(std.mem.eql(u8, &certificate.specialization_key, &spec.key));
-                const identity = switch (set.artifacts[spec.artifact].kind) {
-                    .proc => |identity| identity,
-                    else => unreachable,
-                };
-                std.debug.assert(std.mem.eql(u8, &certificate.artifact_identity, &identity.bytes));
-                try writer.byte(1);
-                try writeLiteralCertificate(&writer, certificate.*);
-            } else {
-                try writer.byte(0);
-            }
-        } else {
-            std.debug.assert(spec.finalized_literals == null);
-        }
     }
 
     return try bytes.toOwnedSlice(allocator);
@@ -376,21 +355,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 else => return error.MalformedPack,
             },
             .rc_ret_lenders = try reader.wide(),
-            .finalized_literals = if (base.CompilerFeatures.finalized_literal_cache) switch (try reader.byte()) {
-                0 => null,
-                1 => try readLiteralCertificate(&reader, arena_allocator),
-                else => return error.MalformedPack,
-            } else null,
         };
         if (spec.artifact >= artifact_count) return error.MalformedPack;
-        if (spec.finalized_literals) |certificate| {
-            if (!std.mem.eql(u8, &certificate.specialization_key, &spec.key)) return error.MalformedPack;
-            const identity = switch (artifacts[spec.artifact].kind) {
-                .proc => |identity| identity,
-                else => return error.MalformedPack,
-            };
-            if (!std.mem.eql(u8, &certificate.artifact_identity, &identity.bytes)) return error.MalformedPack;
-        }
     }
     if (reader.offset != bytes.len) return error.MalformedPack;
 
@@ -398,44 +364,6 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         .set = .{ .arena = arena, .artifacts = artifacts },
         .specs = specs,
     };
-}
-
-fn writeLiteralCertificate(writer: *Writer, certificate: LiteralFacts.Certificate) Allocator.Error!void {
-    std.debug.assert(certificate.roots.len != 0);
-    try writer.raw(&certificate.specialization_key);
-    try writer.raw(&certificate.artifact_identity);
-    try writer.word(@intCast(certificate.roots.len));
-    for (certificate.roots) |root| {
-        try writer.raw(&root.root.source.module.bytes);
-        try writer.word(@intFromEnum(root.root.source.expr));
-        try writer.raw(&root.root.procedure);
-        try writer.raw(&root.owner_specialization_key);
-    }
-}
-
-fn readLiteralCertificate(reader: *Reader, allocator: Allocator) ReadError!*const LiteralFacts.Certificate {
-    const key = (try reader.raw(32))[0..32].*;
-    const artifact = (try reader.raw(32))[0..32].*;
-    const count = try reader.word();
-    // Reject impossible counts before allocating. Each success fact consists
-    // of three digests and one checked expression id, with no borrowed bytes.
-    if (count == 0 or count > (reader.bytes.len - reader.offset) / 100) return error.MalformedPack;
-    const roots = try allocator.alloc(LiteralFacts.PortableSuccess, count);
-    for (roots) |*root| {
-        root.* = .{
-            .root = .{
-                .source = .{
-                    .module = .{ .bytes = (try reader.raw(32))[0..32].* },
-                    .expr = @enumFromInt(try reader.word()),
-                },
-                .procedure = (try reader.raw(32))[0..32].*,
-            },
-            .owner_specialization_key = (try reader.raw(32))[0..32].*,
-        };
-    }
-    const certificate = try allocator.create(LiteralFacts.Certificate);
-    certificate.* = .{ .specialization_key = key, .artifact_identity = artifact, .roots = roots };
-    return certificate;
 }
 
 const Writer = struct {
@@ -496,119 +424,6 @@ const Reader = struct {
         return try allocator.dupe(u8, try self.raw(len));
     }
 };
-
-test "finalized literal pack formats remain gate isolated" {
-    const allocator = std.testing.allocator;
-    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &.{} };
-    const bytes = try write(allocator, &set, &.{});
-    defer allocator.free(bytes);
-    if (!base.CompilerFeatures.finalized_literal_cache) {
-        try std.testing.expectEqualSlices(u8, "RPCK\x04\x00\x00\x00" ++ "\x00" ** 8, bytes);
-    }
-    std.mem.writeInt(u32, bytes[4..8], if (base.CompilerFeatures.finalized_literal_cache) 4 else 6, .little);
-    try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, bytes));
-}
-
-test "finalized literal pack certificates own facts across input destruction and allocation failure" {
-    if (!base.CompilerFeatures.finalized_literal_cache) return;
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedLiteralCertificate, .{});
-}
-
-const test_literal_proc_identity: lir.ProcIdentity = .{ .bytes = [_]u8{0x41} ** 32 };
-
-fn testLiteralCertificateSet(allocator: Allocator) ProcArtifact.Set {
-    return .{
-        .arena = std.heap.ArenaAllocator.init(allocator),
-        .artifacts = &.{.{
-            .kind = .{ .proc = test_literal_proc_identity },
-            .code = "\xc3",
-            .entry = 0,
-            .frame = null,
-            .refs = &.{},
-            .relocations = &.{},
-            .data = &.{},
-        }},
-    };
-}
-
-fn testLiteralCertificateSpec() SpecEntry {
-    const key = [_]u8{0x61} ** 32;
-    return comptime .{
-        .key = key,
-        .artifact = 0,
-        .rc_borrowed_params = 1,
-        .rc_ret_borrowed = false,
-        .rc_ret_lenders = 2,
-        .finalized_literals = &.{
-            .specialization_key = key,
-            .artifact_identity = test_literal_proc_identity.bytes,
-            .roots = &.{
-                .{
-                    .root = .{
-                        .source = .{ .module = .{ .bytes = [_]u8{0x62} ** 32 }, .expr = @enumFromInt(7) },
-                        .procedure = [_]u8{0x63} ** 32,
-                    },
-                    .owner_specialization_key = key,
-                },
-                .{
-                    .root = .{
-                        .source = .{ .module = .{ .bytes = [_]u8{0x62} ** 32 }, .expr = @enumFromInt(8) },
-                        .procedure = [_]u8{0x64} ** 32,
-                    },
-                    .owner_specialization_key = [_]u8{0x65} ** 32,
-                },
-            },
-        },
-    };
-}
-
-fn testOwnedLiteralCertificate(allocator: Allocator) !void {
-    const set = testLiteralCertificateSet(allocator);
-    const specs = [_]SpecEntry{testLiteralCertificateSpec()};
-    const bytes = try write(allocator, &set, &specs);
-    var bytes_live = true;
-    defer if (bytes_live) allocator.free(bytes);
-    var pack = try read(allocator, bytes);
-    defer pack.deinit();
-    allocator.free(bytes);
-    bytes_live = false;
-    try std.testing.expectEqualDeep(@as([]const SpecEntry, &specs), pack.specs);
-}
-
-test "finalized literal pack rejects old unproven version five success certificates" {
-    if (!base.CompilerFeatures.finalized_literal_cache) return;
-    const allocator = std.testing.allocator;
-    const set = testLiteralCertificateSet(allocator);
-    const specs = [_]SpecEntry{testLiteralCertificateSpec()};
-    const bytes = try write(allocator, &set, &specs);
-    defer allocator.free(bytes);
-    // The byte shape is unchanged: its older marker alone must not confer
-    // the stronger result-class authority required by the current consumer.
-    std.mem.writeInt(u32, bytes[4..8], 5, .little);
-    try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, bytes));
-}
-
-test "finalized literal pack rejects truncation and mismatched certificate bindings" {
-    if (!base.CompilerFeatures.finalized_literal_cache) return;
-    const allocator = std.testing.allocator;
-    const set = testLiteralCertificateSet(allocator);
-    const bytes = try write(allocator, &set, &.{testLiteralCertificateSpec()});
-    defer allocator.free(bytes);
-    for (0..bytes.len) |len| {
-        try std.testing.expectError(error.MalformedPack, read(allocator, bytes[0..len]));
-    }
-    const certificate = bytes.len - (64 + 4 + 2 * 100);
-    bytes[certificate] ^= 1;
-    try std.testing.expectError(error.MalformedPack, read(allocator, bytes));
-    bytes[certificate] ^= 1;
-    bytes[certificate + 32] ^= 1;
-    try std.testing.expectError(error.MalformedPack, read(allocator, bytes));
-    bytes[certificate + 32] ^= 1;
-    std.mem.writeInt(u32, bytes[certificate + 64 ..][0..4], 0, .little);
-    try std.testing.expectError(error.MalformedPack, read(allocator, bytes));
-    std.mem.writeInt(u32, bytes[certificate + 64 ..][0..4], std.math.maxInt(u32), .little);
-    try std.testing.expectError(error.MalformedPack, read(allocator, bytes));
-}
 
 test "pack ownership survives input destruction and allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});

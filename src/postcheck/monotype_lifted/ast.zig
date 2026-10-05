@@ -250,7 +250,6 @@ pub const ProgramView = struct {
     proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
     literal_roots: []const LiteralRoot,
-    literal_root_owners: []const Common.LiteralRootOwner = &.{},
     layout_requests: []const LayoutRequest,
     /// Evaluated roots this program reads a completed value of, recorded once
     /// each by Monotype lowering and carried unchanged.
@@ -517,7 +516,6 @@ pub const Program = struct {
     shapes_owner: ?FnId = null,
     roots: ProgramList(Root, "roots"),
     literal_roots: ProgramList(LiteralRoot, "literal_roots"),
-    literal_root_owners: ProgramList(Common.LiteralRootOwner, "literal_root_owners") = .empty,
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     /// See `ProgramView.comptime_value_reads`.
     comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
@@ -775,7 +773,6 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
-        self.literal_root_owners.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -831,7 +828,6 @@ pub const Program = struct {
             .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
             .literal_roots = self.literal_roots.unsafeRawItemsForView(),
-            .literal_root_owners = self.literalRootOwnersView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
@@ -1245,22 +1241,6 @@ pub const Program = struct {
     pub fn literalRootsView(self: *const Program) []const LiteralRoot {
         if (self.body_prefix) |prefix| return prefix.source.literalRootsView();
         return self.literal_roots.unsafeRawItemsForView();
-    }
-
-    pub fn literalRootOwnersView(self: *const Program) []const Common.LiteralRootOwner {
-        if (self.body_prefix) |prefix| return prefix.source.literalRootOwnersView();
-        return self.literal_root_owners.unsafeRawItemsForView();
-    }
-
-    /// Transient scope of function IDs after preparation freezes the table.
-    /// Moving the Program value preserves it; rebuilt/debug-cloned tables do
-    /// not share it. Borrowed body shards retain their immutable source scope.
-    /// Borrowed identity only: the prepared table must remain alive through
-    /// host fact collection and final runtime demand consumption. A token may
-    /// never be used after that table is destroyed or rebuilt.
-    pub fn immutableFunctionScope(self: *const Program) *const anyopaque {
-        if (self.body_prefix) |prefix| return prefix.source.immutableFunctionScope();
-        return @ptrCast(self.fns.unsafeRawItemsForView().ptr);
     }
 
     pub fn fnCount(self: *const Program) usize {

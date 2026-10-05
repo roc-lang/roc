@@ -73,7 +73,6 @@ fn builtinIdents(f: *Fixture, cache: *exhaustive.NominalOpenCache) !exhaustive.B
 }
 
 test "nominal views exhaustive boundary returns actual blockers only and permits later closure" {
-    if (comptime !base.CompilerFeatures.nominal_views) return;
     var f = try Fixture.init();
     defer f.deinit();
     const a = try f.rigid("a");
@@ -130,7 +129,6 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
 }
 
 test "nominal views private unknown assumptions remain application scoped" {
-    if (comptime !base.CompilerFeatures.nominal_views) return;
     var f = try Fixture.init();
     defer f.deinit();
     const a = try f.rigid("a");
@@ -158,7 +156,6 @@ test "nominal views private unknown assumptions remain application scoped" {
 }
 
 test "nominal views ignored open rows keep scoped known-empty assumptions" {
-    if (comptime !base.CompilerFeatures.nominal_views) return;
     var f = try Fixture.init();
     defer f.deinit();
     const a = try f.rigid("a");
@@ -192,7 +189,6 @@ test "nominal views ignored open rows keep scoped known-empty assumptions" {
 }
 
 test "nominal views shared uninhabited payloads are not recursive cycles" {
-    if (comptime !base.CompilerFeatures.nominal_views) return;
     var f = try Fixture.init();
     defer f.deinit();
     const empty = try f.store.freshFromContent(.{ .structure = .empty_tag_union });
@@ -213,7 +209,6 @@ test "nominal views shared uninhabited payloads are not recursive cycles" {
 }
 
 test "nominal views nested SCC answers are independent of alternative order" {
-    if (comptime !base.CompilerFeatures.nominal_views) return;
     var f = try Fixture.init();
     defer f.deinit();
     const empty = try f.store.freshFromContent(.{ .structure = .empty_tag_union });

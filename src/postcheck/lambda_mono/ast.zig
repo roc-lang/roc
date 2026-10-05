@@ -530,7 +530,6 @@ pub const Program = struct {
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     literal_roots: ProgramList(LiteralRoot, "literal_roots"),
-    literal_root_owners: ProgramList(Common.LiteralRootOwner, "literal_root_owners") = .empty,
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
@@ -630,7 +629,6 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
-        self.literal_root_owners.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);

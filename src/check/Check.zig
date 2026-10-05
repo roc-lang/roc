@@ -5993,9 +5993,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     // clear a module-sized hash table. Reuse it across seeds, then release it.
     var settled_visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer settled_visited.deinit();
-    const visited = if (base.CompilerFeatures.settled_scratch) &settled_visited else &self.var_set;
-    visited.clearRetainingCapacity();
-    defer visited.clearRetainingCapacity();
+    const visited = &settled_visited;
 
     // Each row root maps to the first published root that reached it, which a
     // conflict report shows as the value whose type holds the row.
@@ -21978,26 +21976,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // grounds and discharges the expected type's constraints.
                 if (arg_expr_idx_slice.len == 0) break :projected null;
                 _ = nested_expected.aggregateType() orelse break :projected null;
-                if (base.CompilerFeatures.tag_projection) {
-                    break :projected try self.projectExpectedTagPayload(nested_expected, e.name, arg_expr_idx_slice.len, env);
-                }
-                const projected_top = self.scratch_vars.top();
-                defer self.scratch_vars.clearFrom(projected_top);
-                for (arg_expr_idx_slice) |_| {
-                    try self.scratch_vars.append(try self.fresh(env, expr_region));
-                }
-                const projected_args = try self.types.appendVars(self.scratch_vars.sliceFromStart(projected_top));
-                const projected_ext = try self.fresh(env, expr_region);
-                const projected_tag = try self.types.mkTag(e.name, self.scratch_vars.sliceFromStart(projected_top));
-                const projected_union = try self.freshFromContent(
-                    try self.types.mkTagUnion(&[_]types_mod.Tag{projected_tag}, projected_ext),
-                    env,
-                    expr_region,
-                );
-                if (!try self.projectExpectedAggregateShape(nested_expected, projected_union, env)) {
-                    break :projected null;
-                }
-                break :projected projected_args;
+                break :projected try self.projectExpectedTagPayload(nested_expected, e.name, arg_expr_idx_slice.len, env);
             };
 
             // Process each tag arg, preserving the stored-value instantiation
@@ -28322,7 +28301,7 @@ test "constructor projection retains nominal identity and sparse owned children"
     try test_env.assertNoErrors();
     try test_env.assertDefType("number", "Tree(U32)");
     try test_env.assertDefType("text", "Tree(Str)");
-    if (base.CompilerFeatures.constructor_projection) {
+    {
         var constructors: usize = 0;
         var checked_growth = false;
         var index: u32 = 0;
@@ -28397,7 +28376,6 @@ fn relateOwnedTagToExpectedNominal(
     env: *Env,
     region: Region,
 ) Allocator.Error!bool {
-    if (!base.CompilerFeatures.constructor_projection) return false;
     const expectation = expected.expected_type orelse return false;
     if (expectation.record_field != null) return false;
     var current = expectation.var_;
@@ -28429,7 +28407,6 @@ fn relateOwnedTagToExpectedNominal(
 /// Only direct syntax owns the construction's fresh row extension. A lookup,
 /// call, or arbitrary solved structural union cannot provide this authority.
 fn ownedExprConstructorTag(self: *Self, expr_idx: CIR.Expr.Idx) ?ConstructorTag {
-    if (!base.CompilerFeatures.constructor_projection) return null;
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.sliceExpr(tag.args).len },
         .e_zero_argument_tag => |tag| .{ .name = tag.name, .arity = 0 },
@@ -28438,7 +28415,7 @@ fn ownedExprConstructorTag(self: *Self, expr_idx: CIR.Expr.Idx) ?ConstructorTag 
 }
 
 fn ownedPatternConstructorTag(self: *Self, pattern_idx: CIR.Pattern.Idx, ctx: PatternCtx) ?ConstructorTag {
-    if (!base.CompilerFeatures.constructor_projection or ctx.row_openness != .open) return null;
+    if (ctx.row_openness != .open) return null;
     return switch (self.cir.store.getPattern(pattern_idx)) {
         .applied_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.slicePatterns(tag.args).len },
         else => null,

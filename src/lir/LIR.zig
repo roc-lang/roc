@@ -18,11 +18,6 @@ const hosted = @import("hosted.zig");
 const StringLiteral = base.StringLiteral;
 const names = check.CheckedNames;
 
-pub const FinalizedLiteralOutcomes = @import("finalized_literal_outcomes.zig");
-comptime {
-    if (@import("builtin").is_test) @import("std").testing.refAllDecls(FinalizedLiteralOutcomes);
-}
-
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
     id: u64,

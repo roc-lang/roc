@@ -25,7 +25,6 @@ const CompileTimeHost = @import("compile_time_host.zig");
 const boxy_abi = @import("boxy_abi.zig");
 const interpreter_mod = @import("interpreter.zig");
 const static_data_exports = @import("static_data");
-pub const FinalizedLiteralOutcomes = @import("finalized_literal_outcomes.zig");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 const FinalizeError = checked.CompileTimeFinalizer.Error;
@@ -80,10 +79,6 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
-    /// Session-owned facts; populated only by the normal runtime finalizer.
-    literal_outcomes: ?*FinalizedLiteralOutcomes.Store = null,
-    /// Count actual normal-pipeline evaluations, also with object caching off.
-    count_literal_evaluations: bool = false,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
@@ -103,10 +98,6 @@ pub const Options = struct {
     /// reached through a specialization this program makes.
     unfinalized_reports: ?UnfinalizedReports = null,
 };
-
-inline fn literalOutcomeSink(options: Options) ?*FinalizedLiteralOutcomes.Store {
-    return if (base.CompilerFeatures.finalized_literal_cache) options.literal_outcomes else null;
-}
 
 /// The report destination of a checked module this finalization does not
 /// complete: one whose finalization completed in an earlier compilation, or
@@ -292,14 +283,10 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
-    /// Completion facts remain alongside the host's typed frozen results.
-    /// They do not by themselves admit an object-cache specialization.
-    literal_outcomes: ?FinalizedLiteralOutcomes.Store = null,
 
     pub fn deinit(self: *ProgramSession) void {
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
-        if (self.literal_outcomes) |*outcomes| outcomes.deinit(self.allocator);
         self.allocator.free(self.runtime_positions);
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
@@ -391,11 +378,6 @@ pub const ProgramSession = struct {
         // generation and before reachability compacts the target tables.
         var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
         defer scalar_values.deinit(allocator);
-        const publication_requests: []const lir.LIR.FinalizedLiteralOutcomes.PublicationRequest = if (base.CompilerFeatures.finalized_literal_cache and target.finalized_literal_cache_context)
-            if (self.literal_outcomes) |*outcomes| try outcomes.publicationRequests(allocator, owned.program.lifted.immutableFunctionScope()) else &.{}
-        else
-            &.{};
-        defer allocator.free(publication_requests);
         var frozen_context = RuntimeFrozenMaterializer{ .source = source };
         owned_live = false;
         var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
@@ -403,7 +385,6 @@ pub const ProgramSession = struct {
             .target_usize = target.target_usize,
             .inline_expects = target.inline_expects,
             .completed_scalar_values = &scalar_values,
-            .literal_publications = publication_requests,
             .frozen_materializer = .{
                 .context = &frozen_context,
                 .materialize = RuntimeFrozenMaterializer.materialize,
@@ -634,10 +615,6 @@ pub fn finalizeProgram(
     }
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const retain_literal_outcomes = base.CompilerFeatures.finalized_literal_cache and
-        lss_runtime and runtime_target.?.finalized_literal_cache_context;
-    var literal_outcomes = FinalizedLiteralOutcomes.Store{};
-    errdefer literal_outcomes.deinit(allocator);
     const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, compile_time_root_count, lss_runtime);
     var positions_owned = true;
     errdefer if (positions_owned) allocator.free(runtime_positions);
@@ -665,7 +642,6 @@ pub fn finalizeProgram(
         // made under the runtime's Solved policy.
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
         var host_target = compileTimeTarget(options, solved_policy);
-        host_target.finalized_literal_cache_context = retain_literal_outcomes;
         // Counting work observes the evaluation without shaping it.
         if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
@@ -720,8 +696,6 @@ pub fn finalizeProgram(
                 finalizationInvariant("compile-time consumer lowering changed the requested root count");
             var evaluation_options = options;
             evaluation_options.debug_events = &debug_events;
-            evaluation_options.literal_outcomes = if (retain_literal_outcomes) &literal_outcomes else null;
-            evaluation_options.count_literal_evaluations = base.CompilerFeatures.finalized_literal_cache and lss_runtime;
             try evaluateLoweredRoots(allocator, modules, lowering_modules, &host.?, compile_time_root_count, evaluation_options);
         } else {
             for (modules) |entry| {
@@ -757,7 +731,6 @@ pub fn finalizeProgram(
         .host = host,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
-        .literal_outcomes = if (retain_literal_outcomes) literal_outcomes else null,
     };
 }
 
@@ -1141,85 +1114,6 @@ fn finalizeLoweredProgram(
         if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
         try entry.module.const_store.verifyComplete();
     }
-    if (literalOutcomeSink(options)) |outcomes| {
-        try retainFinalizedLiteralOutcomes(allocator, outcomes, lowered, &literal_failures);
-    }
-}
-
-fn finalizedLiteralIdentity(
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-    plan: LirProgram.LiteralRootPlan,
-) FinalizedLiteralOutcomes.RootIdentity {
-    return .{
-        .source = .{ .module = plan.module, .expr = @enumFromInt(plan.site.checked_expr) },
-        .procedure = lowered.lir_result.store.getProcSpec(plan.proc).identity.bytes,
-    };
-}
-
-/// Finalization is the sole completion producer. This records its facts before
-/// the temporary failures disappear; it does not infer an owning specialization.
-fn retainFinalizedLiteralOutcomes(
-    allocator: Allocator,
-    outcomes: *FinalizedLiteralOutcomes.Store,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-    failures: *const LiteralRootFailures,
-) Allocator.Error!void {
-    const plans = lowered.lir_result.literal_roots.items;
-    if (plans.len == 0) return;
-    const callable_plans = try FinalizedLiteralOutcomes.callableResultPlans(allocator, lowered.lir_result.const_plans.items);
-    defer allocator.free(callable_plans);
-    const owned = try allocator.alloc(bool, plans.len);
-    defer allocator.free(owned);
-    @memset(owned, false);
-    for (lowered.lir_result.literal_root_owners.items, 0..) |owner, ordinal| {
-        const index = @intFromEnum(owner.root);
-        if (index >= plans.len) finalizationInvariant("literal completion owner named an unpublished root");
-        owned[index] = true;
-        try appendFinalizedLiteralOutcome(allocator, outcomes, lowered, failures, plans[index], owner.owner_spec_key, @enumFromInt(ordinal), callable_plans, owner.owner_fn, owner.owner_scope);
-    }
-    for (plans, owned) |plan, has_owner| {
-        if (!has_owner) try appendFinalizedLiteralOutcome(allocator, outcomes, lowered, failures, plan, null, null, callable_plans, null, null);
-    }
-}
-
-fn appendFinalizedLiteralOutcome(
-    allocator: Allocator,
-    outcomes: *FinalizedLiteralOutcomes.Store,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-    failures: *const LiteralRootFailures,
-    plan: LirProgram.LiteralRootPlan,
-    owner_key: ?[32]u8,
-    owner: ?lir.LIR.FinalizedLiteralOutcomes.OwnerId,
-    callable_plans: []const ?bool,
-    owner_fn: ?lir.LIR.FinalizedLiteralOutcomes.OwnerFunctionId,
-    owner_scope: ?*const anyopaque,
-) Allocator.Error!void {
-    const index = @intFromEnum(plan.id);
-    const outcome: FinalizedLiteralOutcomes.Outcome = if (failures.records[index]) |failure| switch (failure) {
-        .own => |own| if (own.kind) |kind| rejected: {
-            const site = failedLiteralRejection(&lowered.lir_result, own.stmt) orelse
-                finalizationInvariant("recorded literal rejection lost its explicit rejection site");
-            break :rejected .{ .rejected = .{
-                .source = .{
-                    .module = lowered.lir_result.loweringModuleKey(site.owner),
-                    .expr = @enumFromInt(site.checked_expr),
-                },
-                .kind = kind,
-                .message = failures.messages.items[own.message_start..][0..own.message_len],
-                .producer_report_authority = if (failures.embedded[index]) .checked_root else .specialization,
-            } };
-        } else .unsupported_failure,
-        .literal => |id| .{ .literal_failure = finalizedLiteralIdentity(lowered, lowered.lir_result.literal_roots.items[@intFromEnum(id)]) },
-        .checked => .checked_failure,
-    } else .success;
-    try outcomes.appendForRoot(allocator, plan.id, owner, .{
-        .root = finalizedLiteralIdentity(lowered, plan),
-        .specialization_key = owner_key,
-        .owner_fn = owner_fn,
-        .owner_scope = owner_scope,
-        .outcome = outcome,
-        .has_callable_result = if (@intFromEnum(plan.plan) < callable_plans.len) callable_plans[@intFromEnum(plan.plan)] else null,
-    });
 }
 
 /// Thread-safe timing totals accumulated across compile-time root batches.
@@ -1231,7 +1125,6 @@ pub const Timing = struct {
     code_generation_ns: TimingCounter = .{},
     execution_ns: TimingCounter = .{},
     store_results_ns: TimingCounter = .{},
-    literal_root_evaluations: TimingCounter = .{},
     /// Process footprint range observed at burst boundaries. Compile-time
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
@@ -1259,7 +1152,6 @@ pub const Timing = struct {
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
             .store_results_ns = self.store_results_ns.load(),
-            .literal_root_evaluations = if (base.CompilerFeatures.finalized_literal_cache) self.literal_root_evaluations.load() else 0,
             .mem_min = self.mem_min.load(),
             .mem_max = self.mem_max.load(),
             .native_emission = self.native_emission,
@@ -1280,8 +1172,6 @@ pub const Timing = struct {
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
-        if (base.CompilerFeatures.finalized_literal_cache)
-            self.literal_root_evaluations.add(snapshot_value.literal_root_evaluations);
         if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
         self.mem_max.max(snapshot_value.mem_max);
     }
@@ -1329,7 +1219,6 @@ pub const TimingSnapshot = struct {
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
     store_results_ns: u64 = 0,
-    literal_root_evaluations: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
     native_emission: NativeProcCompiler.Metrics = .{},
@@ -1354,7 +1243,6 @@ test "shared lowering timing preserves full snapshots through aggregation" {
         .code_generation_ns = 107,
         .execution_ns = 109,
         .store_results_ns = 113,
-        .literal_root_evaluations = if (base.CompilerFeatures.finalized_literal_cache) 17 else 0,
         .mem_min = 127,
         .mem_max = 131,
         .native_emission = .{ .tasks_submitted = 3, .procedures_emitted = 5, .procedures_reused = 7, .peak_inflight_fragments = 2 },
@@ -1372,7 +1260,6 @@ test "shared lowering timing preserves full snapshots through aggregation" {
     const result = second.snapshot();
     try std.testing.expectEqualDeep(expected_lowering.snapshot(), result.lowering);
     try std.testing.expectEqual(@as(u64, 202), result.total_ns);
-    try std.testing.expectEqual(@as(u64, if (base.CompilerFeatures.finalized_literal_cache) 34 else 0), result.literal_root_evaluations);
     try std.testing.expectEqual(@as(u64, 127), result.mem_min);
     try std.testing.expectEqual(@as(u64, 131), result.mem_max);
     try std.testing.expectEqual(@as(u64, 6), result.native_emission.tasks_submitted);
@@ -1380,14 +1267,6 @@ test "shared lowering timing preserves full snapshots through aggregation" {
     try std.testing.expectEqual(@as(u64, 14), result.native_emission.procedures_reused);
     try std.testing.expectEqual(@as(u64, 2), result.native_emission.peak_inflight_fragments);
     try std.testing.expectEqualDeep(TimingSnapshot{}, Timing.init(std.testing.io).snapshot());
-}
-
-test "finalized literal evaluation counters are gated and survive aggregation" {
-    var timing = Timing.init(std.testing.io);
-    try std.testing.expectEqual(@as(u64, 0), timing.snapshot().literal_root_evaluations);
-    timing.addSnapshot(.{ .literal_root_evaluations = 2 });
-    timing.addSnapshot(.{ .literal_root_evaluations = 3 });
-    try std.testing.expectEqual(@as(u64, if (base.CompilerFeatures.finalized_literal_cache) 5 else 0), timing.snapshot().literal_root_evaluations);
 }
 
 const TimingPhase = enum {
@@ -2374,9 +2253,6 @@ fn evalLiteralRoot(
     plan: LirProgram.LiteralRootPlan,
     program: anytype,
 ) FinalizeError!void {
-    if (base.CompilerFeatures.finalized_literal_cache and options.count_literal_evaluations) {
-        if (options.timing) |timing| timing.literal_root_evaluations.add(1);
-    }
     if (@TypeOf(program) == *DevProgram) return evalDevLiteralRoot(allocator, owners, options, lowered, plan, program);
     if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterLiteralRoot(allocator, owners, options, lowered, plan, program);
     @compileError("compile-time evaluation owner must be explicit native or interpreter program");
@@ -2419,16 +2295,8 @@ fn evalInterpreterLiteralRoot(
         if (options.publish_shared_slots) try program.publishRoot(lowered, plan.site.owner, producer, plan.shape(), result.value);
         break :evaluated null;
     };
-    for (program.host.debugMessages()) |message| {
-        if (literalOutcomeSink(options)) |outcomes| {
-            try outcomes.appendDebug(allocator, finalizedLiteralIdentity(lowered, plan), message);
-        }
-        try emitDebugMessage(allocator, options, false, message);
-    }
+    for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
     for (interpreter.getExpectFailures()) |expect_failure| {
-        if (literalOutcomeSink(options)) |outcomes| {
-            try outcomes.recordExpect(allocator, finalizedLiteralIdentity(lowered, plan));
-        }
         try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
     }
     const failed = failure orelse return;
@@ -2492,18 +2360,8 @@ fn evalDevLiteralRoot(
         .host_oom => return error.OutOfMemory,
     };
     for (host.events.items) |event| switch (event) {
-        .dbg => |message| {
-            if (literalOutcomeSink(options)) |outcomes| {
-                try outcomes.appendDebug(allocator, finalizedLiteralIdentity(lowered, plan), message);
-            }
-            try emitDebugMessage(allocator, options, false, message);
-        },
-        .expect_failed => |expect_failure| {
-            if (literalOutcomeSink(options)) |outcomes| {
-                try outcomes.recordExpect(allocator, finalizedLiteralIdentity(lowered, plan));
-            }
-            try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
-        },
+        .dbg => |message| try emitDebugMessage(allocator, options, false, message),
+        .expect_failed => |expect_failure| try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc),
         .crashed => {},
     };
     const failed = failure orelse {
@@ -4250,41 +4108,23 @@ fn reportLiteralRejection(
     if (!owners.report_sites) return;
     var targets = try owners.reportTargets(site.owner);
     while (targets.nextTarget()) |owner| {
-        try reportFinalizedLiteralRejection(allocator, owner, .{
-            .module = owner.module.key,
-            .expr = @enumFromInt(site.checked_expr),
-        }, site.kind, message);
-    }
-}
-
-/// The cold reporter and certified replay use the same current-source rule.
-/// Callers establish current checked-root authority before calling this;
-/// producer-program embedding status is deliberately not an input.
-pub fn reportFinalizedLiteralRejection(
-    allocator: Allocator,
-    destination: ReportDestination,
-    source: FinalizedLiteralOutcomes.SourceExprId,
-    kind: lir.LIR.LiteralRejectionKind,
-    message: []const u8,
-) FinalizeError!void {
-    if (!destination.module.key.eql(source.module))
-        finalizationInvariant("literal rejection destination did not match its checked source identity");
-    const store = destination.problem_store orelse return;
-    const region = destination.module.checked_bodies.expr(source.expr).source_region;
-    if (literalRejectionReported(store, kind, region)) return;
-    const failure_site = comptimeFailureSiteFrom(destination.module, region, null, null, null);
-    const message_idx = try store.putExtraString(message);
-    switch (kind) {
-        .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
-            .message = message_idx,
-            .region = failure_site.region,
-            .origin = try comptimeFailureOrigin(store, failure_site),
-        } }),
-        .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
-            .message = message_idx,
-            .region = failure_site.region,
-            .origin = try comptimeFailureOrigin(store, failure_site),
-        } }),
+        const store = owner.problem_store orelse continue;
+        const region = owner.module.checked_bodies.expr(@enumFromInt(site.checked_expr)).source_region;
+        if (literalRejectionReported(store, site.kind, region)) continue;
+        const failure_site = comptimeFailureSiteFrom(owner.module, region, null, null, null);
+        const message_idx = try store.putExtraString(message);
+        switch (site.kind) {
+            .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+                .message = message_idx,
+                .region = failure_site.region,
+                .origin = try comptimeFailureOrigin(store, failure_site),
+            } }),
+            .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
+                .message = message_idx,
+                .region = failure_site.region,
+                .origin = try comptimeFailureOrigin(store, failure_site),
+            } }),
+        }
     }
 }
 
@@ -4298,43 +4138,6 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
         if (regionsEqual(reported_region, region)) return true;
     }
     return false;
-}
-
-test "literal rejection replay primitive resolves current checked source and deduplicates" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLiteralRejectionReplaySource, .{});
-}
-
-fn testLiteralRejectionReplaySource(allocator: Allocator) !void {
-    // This reporting primitive reads only the artifact key and checked source
-    // regions. No evaluator, old source table, or compiled body is involved.
-    var artifact: checked.CheckedModuleArtifact = undefined;
-    artifact.key = .{ .bytes = [_]u8{9} ** 32 };
-    artifact.checked_bodies = .{};
-    defer artifact.checked_bodies.deinit(allocator);
-    const first_region: base.Region = .{ .start = .{ .offset = 20 }, .end = .{ .offset = 27 } };
-    const second_region: base.Region = .{ .start = .{ .offset = 40 }, .end = .{ .offset = 47 } };
-    for ([_]base.Region{ first_region, second_region }, 0..) |region, index| {
-        try artifact.checked_bodies.stored_exprs.append(allocator, .{
-            .id = @enumFromInt(index),
-            .ty = @enumFromInt(0),
-            .source_region = region,
-            .data = .empty_record,
-        });
-    }
-    var problems = check.problem.Store.initEmpty(allocator);
-    defer problems.deinit(allocator);
-    const destination: ReportDestination = .{ .module = &artifact, .problem_store = &problems };
-    const source: FinalizedLiteralOutcomes.SourceExprId = .{ .module = artifact.key, .expr = @enumFromInt(0) };
-    try reportFinalizedLiteralRejection(allocator, destination, source, .quote, "rejected");
-    try reportFinalizedLiteralRejection(allocator, destination, source, .quote, "rejected");
-    try std.testing.expectEqual(@as(usize, 1), problems.problems.items.len);
-    try std.testing.expectEqualDeep(first_region, problems.problems.items[0].comptime_invalid_quote.region);
-    try reportFinalizedLiteralRejection(allocator, destination, .{
-        .module = artifact.key,
-        .expr = @enumFromInt(1),
-    }, .quote, "another rejected literal");
-    try std.testing.expectEqual(@as(usize, 2), problems.problems.items.len);
-    try std.testing.expectEqualDeep(second_region, problems.problems.items[1].comptime_invalid_quote.region);
 }
 
 fn appendCrashConst(

@@ -9,7 +9,6 @@ const collections = @import("collections");
 const types = @import("types.zig");
 const debug = @import("debug.zig");
 const instantiate = @import("instantiate.zig");
-const nominal_rows = @import("nominal_rows.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -175,10 +174,6 @@ pub const Store = struct {
     /// keep the default.
     invalid_nominal_decl_written: bool = true,
 
-    /// Persistent declaration schemas and application-owned row fragments.
-    /// Empty tables allocate nothing when delayed-row admission is disabled.
-    nominal_rows: nominal_rows.Tables = .{},
-
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations against this store.
@@ -278,7 +273,6 @@ pub const Store = struct {
         // nominal declaration table
         self.nominal_decls.deinit(self.gpa);
         self.nominal_decl_index.deinit(self.gpa);
-        self.nominal_rows.deinit(self.gpa);
 
         // instantiation worklist scratch
         self.instantiate_scratch.deinit(self.gpa);
@@ -290,44 +284,23 @@ pub const Store = struct {
         self.union_rank_trail.deinit(self.gpa);
     }
 
-    /// Empty owned storage lets fallible copy construction release every
-    /// component already acquired when a later allocation fails.
-    fn initEmptyOwned(gpa: Allocator) Self {
-        return .{
-            .gpa = gpa,
-            .slots = .{ .backing = .{} },
-            .descs = .{ .backing = .{} },
-            .root_metas = .{},
-            .union_ranks = .{},
-            .vars = .{},
-            .record_fields = .{},
-            .tags = .{},
-            .interpolation_parts = .{},
-            .static_dispatch_constraints = .{},
-            .nominal_decls = .{},
-            .nominal_decl_index = .{},
-        };
-    }
-
     /// Clone this store into fresh owned memory.
     pub fn clone(self: *const Self, gpa: Allocator) Allocator.Error!Self {
-        var copied = Self.initEmptyOwned(gpa);
-        errdefer copied.deinit();
-        copied.slots.backing = try self.slots.backing.clone(gpa);
-        copied.descs.backing = try self.descs.backing.clone(gpa);
-        copied.descs.err_written = self.descs.err_written;
-        copied.root_metas = try self.root_metas.clone(gpa);
-        copied.union_ranks = try self.union_ranks.clone(gpa);
-        copied.vars = try self.vars.clone(gpa);
-        copied.record_fields = try self.record_fields.clone(gpa);
-        copied.tags = try self.tags.clone(gpa);
-        copied.interpolation_parts = try self.interpolation_parts.clone(gpa);
-        copied.static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa);
-        copied.nominal_decls = try self.nominal_decls.clone(gpa);
-        copied.nominal_decl_index = try self.nominal_decl_index.clone(gpa);
-        copied.invalid_nominal_decl_written = self.invalid_nominal_decl_written;
-        copied.nominal_rows = try self.nominal_rows.clone(gpa);
-        return copied;
+        return .{
+            .gpa = gpa,
+            .slots = .{ .backing = try self.slots.backing.clone(gpa) },
+            .descs = .{ .backing = try self.descs.backing.clone(gpa), .err_written = self.descs.err_written },
+            .root_metas = try self.root_metas.clone(gpa),
+            .union_ranks = try self.union_ranks.clone(gpa),
+            .vars = try self.vars.clone(gpa),
+            .record_fields = try self.record_fields.clone(gpa),
+            .tags = try self.tags.clone(gpa),
+            .interpolation_parts = try self.interpolation_parts.clone(gpa),
+            .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
+            .nominal_decls = try self.nominal_decls.clone(gpa),
+            .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
+            .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
+        };
     }
 
     /// False only when no variable in this store can reach the error state:
@@ -381,7 +354,6 @@ pub const Store = struct {
         tags_len: usize,
         interpolation_parts_len: usize,
         static_dispatch_constraints_len: usize,
-        nominal_rows: nominal_rows.Tables.Savepoint,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
 
@@ -392,13 +364,11 @@ pub const Store = struct {
         descs: std.MultiArrayList(Desc),
         root_metas: std.MultiArrayList(RootMeta),
         union_ranks: []u8,
-        nominal_rows: nominal_rows.Tables,
         fn deinit(self: *VerifyClone, gpa: Allocator) void {
             gpa.free(self.slots);
             self.descs.deinit(gpa);
             self.root_metas.deinit(gpa);
             gpa.free(self.union_ranks);
-            self.nominal_rows.deinit(gpa);
         }
     };
 
@@ -419,14 +389,11 @@ pub const Store = struct {
         errdefer root_metas.deinit(self.gpa);
 
         const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items.items);
-        errdefer self.gpa.free(union_ranks);
-        const row_tables = try self.nominal_rows.clone(self.gpa);
         return .{
             .slots = slots,
             .descs = descs,
             .root_metas = root_metas,
             .union_ranks = union_ranks,
-            .nominal_rows = row_tables,
         };
     }
 
@@ -464,7 +431,6 @@ pub const Store = struct {
             .tags_len = self.tags.items.len,
             .interpolation_parts_len = self.interpolation_parts.items.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
-            .nominal_rows = self.nominal_rows.createSavepoint(),
             .verify_clone = verify_clone,
         };
 
@@ -489,7 +455,6 @@ pub const Store = struct {
         self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
         self.root_meta_trail.shrinkRetainingCapacity(savepoint.root_meta_trail_len);
         self.union_rank_trail.shrinkRetainingCapacity(savepoint.union_rank_trail_len);
-        self.nominal_rows.commitSavepoint(savepoint.nominal_rows);
         self.savepoint_active = false;
 
         if (savepoint_verification == .clone_crosscheck) {
@@ -561,7 +526,6 @@ pub const Store = struct {
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
         self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
-        self.nominal_rows.rollbackToSavepoint(savepoint.nominal_rows);
 
         // Back to not speculating; savepoint_baseline_* are dead until the next create.
         self.savepoint_active = false;
@@ -595,7 +559,6 @@ pub const Store = struct {
         }
 
         std.debug.assert(std.mem.eql(u8, self.union_ranks.items.items, vclone.union_ranks));
-        std.debug.assert(self.nominal_rows.eql(&vclone.nominal_rows));
     }
 
     /// In-place slot write. While a probe is active, journals the slot's previous
@@ -1794,180 +1757,6 @@ pub const Store = struct {
         return @enumFromInt(@intFromEnum(slot_idx));
     }
 
-    // persistent nominal rows //
-
-    /// Register an already established closed declaration row. The schema's
-    /// flattened occurrences retain original payload references; no application
-    /// payload graph is copied here.
-    pub fn registerNominalRowSchema(
-        self: *Self,
-        declaration: NominalDecl.Idx,
-        tags: TagSafeMultiList.Range,
-        closed_tail: Var,
-    ) Allocator.Error!nominal_rows.Schema.Idx {
-        const decl = self.getNominalDecl(declaration);
-        std.debug.assert(decl.isValid());
-        const tail = self.resolveVar(closed_tail).desc.content;
-        std.debug.assert(tail == .structure and tail.structure == .empty_tag_union);
-        for (self.nominal_rows.schemas.items.items, 0..) |schema, index| {
-            if (schema.declaration == declaration and schema.backing == decl.backing) return @enumFromInt(index);
-        }
-        return self.nominal_rows.appendSchema(self.gpa, .{
-            .declaration = declaration,
-            .backing = decl.backing,
-            .formals_start = @intFromEnum(decl.formals.start),
-            .formals_count = decl.formals.count,
-            .tags_start = @intFromEnum(tags.start),
-            .tags_count = tags.count,
-            .closed_tail = closed_tail,
-        });
-    }
-
-    /// Capture an application's explicit substitutions and creation provenance.
-    /// The actual range is immutable Store storage, not a borrowed slice.
-    pub fn createNominalOpening(
-        self: *Self,
-        schema: nominal_rows.Schema.Idx,
-        actuals: VarSafeList.Range,
-        rank: Rank,
-        creation_origin: base.ModuleIdentity.Idx,
-        region: base.Region,
-    ) Allocator.Error!nominal_rows.Opening.Idx {
-        const stored_schema = self.nominal_rows.getSchema(schema);
-        const decl = self.getNominalDecl(stored_schema.declaration);
-        const formals = self.sliceVars(.{ .start = @enumFromInt(stored_schema.formals_start), .count = stored_schema.formals_count });
-        const args = self.sliceVars(actuals);
-        std.debug.assert(decl.isValid() and formals.len == args.len);
-        const baseline_openings = self.nominal_rows.openings.items.items.len;
-        const baseline_bindings = self.nominal_rows.bindings.items.items.len;
-        const baseline_names = self.nominal_rows.names.items.items.len;
-        errdefer {
-            self.nominal_rows.openings.items.shrinkRetainingCapacity(baseline_openings);
-            self.nominal_rows.bindings.items.shrinkRetainingCapacity(baseline_bindings);
-            self.nominal_rows.names.items.shrinkRetainingCapacity(baseline_names);
-        }
-        const owner = try self.nominal_rows.appendOpening(self.gpa, .{
-            .schema = schema,
-            .actuals_start = @intFromEnum(actuals.start),
-            .actuals_count = actuals.count,
-            .initial_rank = @intFromEnum(rank),
-            .creation_origin = creation_origin,
-            .region_start = region.start.offset,
-            .region_end = region.end.offset,
-        });
-        for (formals, args) |formal, arg| {
-            const resolved = self.resolveVar(formal);
-            try self.nominal_rows.putBinding(self.gpa, owner, resolved.var_, arg);
-            if (resolved.desc.content == .rigid) {
-                try self.nominal_rows.putNameBinding(self.gpa, owner, resolved.desc.content.rigid.name, arg);
-            }
-        }
-        return owner;
-    }
-
-    /// Allocator-free observation of an opening-scoped logical edge. Mutable
-    /// consumers must demand a template reference rather than use its Var as a
-    /// solver cell. Children preserve the returned reference's namespace.
-    pub fn readNominalReference(self: *const Self, reference: nominal_rows.Reference) nominal_rows.View {
-        const scope = switch (reference) {
-            .owned => |owned| {
-                const resolved = self.resolveVar(owned);
-                return .{ .reference = .{ .owned = resolved.var_ }, .desc = resolved.desc };
-            },
-            .template => |scope| scope,
-        };
-        std.debug.assert(self.nominal_rows.getOpening(scope.opening).status == .ready);
-        const resolved = self.resolveVar(scope.var_);
-        if (resolved.desc.rank != .generalized) {
-            return .{ .reference = .{ .owned = resolved.var_ }, .desc = resolved.desc };
-        }
-        if (self.nominal_rows.binding(scope.opening, resolved.var_)) |owned| {
-            return self.readNominalReference(.{ .owned = owned });
-        }
-        if (resolved.desc.content == .rigid) {
-            if (self.nominal_rows.nameBinding(scope.opening, resolved.desc.content.rigid.name)) |owned| {
-                return self.readNominalReference(.{ .owned = owned });
-            }
-        }
-        var desc = resolved.desc;
-        desc.rank = self.nominal_rows.effectiveRank(scope.opening, resolved.var_);
-        // The same flags as ordinary declaration instantiation.
-        desc.flags = .{ .empty_tag_union_is_default = desc.flags.empty_tag_union_is_default };
-        return .{
-            .reference = .{ .template = .{ .opening = scope.opening, .var_ = resolved.var_ } },
-            .desc = desc,
-        };
-    }
-
-    /// One rank-write rule for logical and already demanded nodes. Once a
-    /// template has an owned cell, that cell's ordinary descriptor is authority;
-    /// stale latent history must never overwrite subsequent generalization.
-    pub fn setNominalReferenceRank(self: *Self, reference: nominal_rows.Reference, rank: Rank) Allocator.Error!void {
-        const view = self.readNominalReference(reference);
-        switch (view.reference) {
-            .owned => |owned| try self.setDescRank(self.resolveVar(owned).desc_idx, rank),
-            .template => |scope| try self.nominal_rows.recordRank(self.gpa, scope.opening, scope.var_, rank),
-        }
-    }
-
-    /// Demand through the stored map, preserving previously owned cells,
-    /// associated-name substitutions and exact latent rank history. Runtime
-    /// scratch is reconstructed from explicit data, never persisted by pointer.
-    /// Any failure invalidates the opening until paired Store rollback.
-    pub fn demandNominalTemplate(
-        self: *Self,
-        idents: *const base.Ident.Store,
-        owner: nominal_rows.Opening.Idx,
-        template: Var,
-    ) Allocator.Error!Var {
-        const saved = self.nominal_rows.getOpening(owner);
-        const guard = try self.nominal_rows.beginDemand(self.gpa, owner);
-        const schema = self.nominal_rows.getSchema(saved.schema);
-        var declaration = self.getNominalDecl(schema.declaration);
-        declaration.backing = schema.backing;
-        declaration.formals = .{ .start = @enumFromInt(schema.formals_start), .count = schema.formals_count };
-        var changes: std.ArrayListUnmanaged(instantiate.NominalOpening.BindingChange) = .empty;
-        defer changes.deinit(self.gpa);
-        var session = instantiate.NominalOpening{
-            .store = self,
-            .idents = idents,
-            .declaration = declaration,
-            .opening_rank = @enumFromInt(saved.initial_rank),
-            .var_map = collections.DenseMap(Var, Var).init(self.gpa),
-            .rank_history = collections.DenseMap(Var, Rank).init(self.gpa),
-            .binding_changes = &changes,
-        };
-        defer session.deinit();
-        var index = saved.binding_head;
-        while (index != std.math.maxInt(u32)) {
-            const entry = self.nominal_rows.bindings.get(@enumFromInt(index)).*;
-            if (session.var_map.get(entry.template) == null) try session.var_map.put(entry.template, entry.owned);
-            index = entry.next;
-        }
-        index = saved.name_head;
-        while (index != std.math.maxInt(u32)) {
-            const entry = self.nominal_rows.names.get(@enumFromInt(index)).*;
-            if (!session.rigid_subs.contains(entry.name)) try session.rigid_subs.put(self.gpa, entry.name, entry.owned);
-            index = entry.next;
-        }
-        index = saved.rank_head;
-        while (index != std.math.maxInt(u32)) {
-            const entry = self.nominal_rows.ranks.get(@enumFromInt(index)).*;
-            if (session.rank_history.get(entry.template) == null) try session.rank_history.put(entry.template, @enumFromInt(entry.rank));
-            index = entry.next;
-        }
-        const result = try session.demand(template);
-        for (changes.items) |change| {
-            if (change.inserted) {
-                try self.nominal_rows.appendNewBinding(self.gpa, owner, change.template, change.owned);
-            } else {
-                try self.nominal_rows.putBinding(self.gpa, owner, change.template, change.owned);
-            }
-        }
-        self.nominal_rows.completeDemand(guard);
-        return result;
-    }
-
     // serialization //
 
     /// Serialized representation of types store
@@ -1985,7 +1774,6 @@ pub const Store = struct {
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
-        nominal_rows: nominal_rows.Tables.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2006,7 +1794,6 @@ pub const Store = struct {
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
-            try self.nominal_rows.serialize(&store.nominal_rows, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -2031,27 +1818,26 @@ pub const Store = struct {
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
-                .nominal_rows = self.nominal_rows.deserializeInto(base_addr),
             };
         }
 
         /// Deserialize into a Store value with fresh memory allocation.
         /// The returned Store owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
-            var store = Store.initEmptyOwned(gpa);
-            errdefer store.deinit();
-            store.slots = try self.slots.deserializeWithCopy(base_addr, gpa);
-            store.descs = try self.descs.deserializeWithCopy(base_addr, gpa);
-            store.root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa);
-            store.union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa);
-            store.vars = try self.vars.deserializeWithCopy(base_addr, gpa);
-            store.record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa);
-            store.tags = try self.tags.deserializeWithCopy(base_addr, gpa);
-            store.interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa);
-            store.static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa);
-            store.nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa);
-            store.nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa);
-            store.nominal_rows = try self.nominal_rows.deserializeWithCopy(base_addr, gpa);
+            var store = Store{
+                .gpa = gpa,
+                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
+                .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
+                .root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa),
+                .union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa),
+                .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
+                .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
+                .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
+                .interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa),
+                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+                .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
+                .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
+            };
             store.invalid_nominal_decl_written = false;
             for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
             return store;
@@ -2082,7 +1868,6 @@ pub const Store = struct {
             .nominal_decls = (try self.nominal_decls.serialize(allocator, writer)).*,
             .nominal_decl_index = (try self.nominal_decl_index.serialize(allocator, writer)).*,
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
-            .nominal_rows = try self.nominal_rows.serialize(allocator, writer),
         };
 
         return @constCast(offset_self);
@@ -2101,7 +1886,6 @@ pub const Store = struct {
         self.static_dispatch_constraints.relocate(offset);
         self.nominal_decls.relocate(offset);
         self.nominal_decl_index.relocate(offset);
-        self.nominal_rows.relocate(offset);
     }
 };
 

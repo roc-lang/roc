@@ -2,7 +2,6 @@
 //! Monotype reservation and the artifacts the object writer splices in.
 
 const std = @import("std");
-const base = @import("base");
 const backend = @import("backend");
 const check = @import("check");
 const compile = @import("compile");
@@ -103,88 +102,13 @@ pub const Store = struct {
     }
 };
 
-test "finalized literal contract changes derived specialization keys and pack filenames" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const Features = base.CompilerFeatures;
-    const Key = check.CheckedArtifact.CheckedModuleArtifactKey;
-    const Ast = postcheck.Monotype.Ast;
-    const identity: check.CheckedArtifact.ModuleIdentity = .{
-        .stable_hash = [_]u8{23} ** 32,
-        .module_idx = 0,
-        .module_name = @enumFromInt(0),
-        .display_module_name = @enumFromInt(0),
-        .qualified_module_name = @enumFromInt(0),
-        .kind = .module,
-    };
-    var source_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    source_hasher.update("Fixture :: [].{ value = 42 }");
-    const source_hash = source_hasher.finalResult();
-    const contracts = [_][3]u8{ .{ 2, 0, 1 }, Features.cacheIdentity(Features.Feature.finalized_literal_cache.mask()) };
-    var keys: [2]Key = undefined;
-    var specs: [2][32]u8 = undefined;
-    var paths: [2][]u8 = undefined;
-    const root_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
-    defer allocator.free(root_path);
-    var store = Store{
-        .allocator = allocator,
-        .roc_ctx = CoreCtx.default(allocator, allocator, std.testing.io),
-        .root = try allocator.dupe(u8, root_path),
-        .verbose = false,
-    };
-    defer store.deinit();
-    var count: usize = 0;
-    defer for (paths[0..count]) |path| allocator.free(path);
-    for (contracts, 0..) |contract, index| {
-        const compiler_hash = Features.compilerArtifactHash("fixture-version", contract, "fixture-builtins");
-        keys[index] = Key.computeFromSourceHashWithCompilerHash(source_hash, compiler_hash, identity, .{}, &.{});
-        specs[index] = Ast.specIdentityKey(.{
-            .callable = .{ .proc_template = .{ .module = .{ .bytes = keys[index].bytes }, .proc_base = 0, .template = 0 } },
-            .method_scope = .{ .bytes = keys[index].bytes },
-            .evidence_digest = .{},
-            .codec_contract_digest = .{},
-            .codec_contract = null,
-            .request_fn_ty_digest = .{ .bytes = [_]u8{29} ** 32 },
-            .request_fn_ty = @enumFromInt(0),
-        }).bytes;
-        paths[index] = try store.packPath(.local, identity.stable_hash, keys[index].bytes);
-        count += 1;
-    }
-    try std.testing.expect(!Key.eql(keys[0], keys[1]));
-    try std.testing.expect(!std.mem.eql(u8, &specs[0], &specs[1]));
-    try std.testing.expect(!std.mem.eql(u8, paths[0], paths[1]));
-    try std.testing.expectEqualStrings(std.fs.path.dirname(paths[0]).?, std.fs.path.dirname(paths[1]).?);
-    const legacy_bytes = "RPCK\x05\x00\x00\x00" ++ "\x00" ** 8;
-    try store.write(.local, identity.stable_hash, keys[0].bytes, legacy_bytes);
-    try std.testing.expect(try store.has(.local, identity.stable_hash, keys[0].bytes));
-    try std.testing.expect(!try store.has(.local, identity.stable_hash, keys[1].bytes));
-    const set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &.{} };
-    const current_bytes = try PackFile.write(allocator, &set, &.{});
-    defer allocator.free(current_bytes);
-    try store.write(.local, identity.stable_hash, keys[1].bytes, current_bytes);
-    try std.testing.expect(try store.has(.local, identity.stable_hash, keys[1].bytes));
-}
-
-test "finalized literal file offers decline incompatible peers and keep explicit input strict with allocation failures" {
+test "object cache loading owns decoded packs and commits both indexes atomically" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const identity = lir.ProcIdentity.forTest(43);
     const key = [_]u8{41} ** 32;
-    const root: lir.LIR.FinalizedLiteralOutcomes.PortableSuccess = .{
-        .root = .{
-            .source = .{ .module = .{ .bytes = [_]u8{42} ** 32 }, .expr = @enumFromInt(7) },
-            .procedure = [_]u8{44} ** 32,
-        },
-        .owner_specialization_key = key,
-    };
-    const certificate: lir.LIR.FinalizedLiteralOutcomes.Certificate = .{
-        .specialization_key = key,
-        .artifact_identity = identity.bytes,
-        .roots = &.{root},
-    };
     const set = backend.dev.ProcArtifact.Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .artifacts = &.{.{
@@ -203,59 +127,39 @@ test "finalized literal file offers decline incompatible peers and keep explicit
         .rc_borrowed_params = 1,
         .rc_ret_borrowed = false,
         .rc_ret_lenders = 0,
-        .finalized_literals = if (base.CompilerFeatures.finalized_literal_cache) &certificate else null,
     }});
     defer allocator.free(bytes);
     const incompatible = try allocator.dupe(u8, bytes);
     defer allocator.free(incompatible);
-    std.mem.writeInt(u32, incompatible[4..8], if (base.CompilerFeatures.finalized_literal_cache) 5 else 6, .little);
+    std.mem.writeInt(u32, incompatible[4..8], PackFile.format_version + 1, .little);
     const Attempt = struct {
-        fn lazy(failing: Allocator, dir_path: []const u8, expected_key: [32]u8, expected_identity: lir.ProcIdentity, saw_partial: *bool, artifact_first: bool) !void {
-            var packs = LoadedPacks.init(failing);
-            defer packs.deinit();
-            packs.pending = .{ .directory = .{ .io = std.testing.io, .path = dir_path } };
-            const splice = packs.spliceSource();
-            const first_artifact = if (artifact_first) splice.find(splice.context, expected_identity) else null;
-            const hit = packs.specCacheLookup().lookup(expected_key);
-            if (packs.state == .unavailable) {
-                try std.testing.expectEqual(error.OutOfMemory, packs.failure.?);
-                if (packs.artifacts.count() != 0 or packs.specs.count() != 0) saw_partial.* = true;
-                const count = packs.packs.items.len;
-                try std.testing.expect(first_artifact == null);
-                try std.testing.expect(hit == null);
-                try std.testing.expect(packs.specCacheLookup().lookup(expected_key) == null);
-                try std.testing.expect(splice.find(splice.context, expected_identity) == null);
-                try std.testing.expectEqual(count, packs.packs.items.len);
-                try std.testing.expectEqual(@as(u64, 0), packs.hits);
-                try std.testing.expectEqual(@as(u64, 0), packs.artifacts_served);
-                return error.OutOfMemory;
-            }
-            try std.testing.expect(packs.state == .ready);
-            try std.testing.expect(hit != null);
-            if (artifact_first) try std.testing.expect(first_artifact != null);
-            try std.testing.expect(splice.find(splice.context, expected_identity) != null);
-            try std.testing.expectEqual(@as(u64, 1), packs.hits);
-            try std.testing.expectEqual(@as(u64, if (artifact_first) 2 else 1), packs.artifacts_served);
-        }
-
         fn run(failing: Allocator, dir_path: []const u8, expected_key: [32]u8, expected_identity: lir.ProcIdentity) !void {
             var packs = LoadedPacks.init(failing);
             defer packs.deinit();
-            try packs.loadDirInto(std.testing.io, dir_path, .cache_offers);
+            packs.loadDirInto(std.testing.io, dir_path, .cache_offers) catch |err|
+                return rejected(&packs, expected_key, expected_identity, err);
             try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
-            try packs.indexPacks();
+            packs.indexPacks() catch |err|
+                return rejected(&packs, expected_key, expected_identity, err);
             const hit = packs.specCacheLookup().lookup(expected_key) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
-            if (base.CompilerFeatures.finalized_literal_cache) {
-                const proof = hit.finalized_literals orelse return error.TestUnexpectedResult;
-                try std.testing.expectEqual(@as(usize, 1), proof.roots.len);
-                try std.testing.expectEqualSlices(u8, &expected_key, &proof.roots[0].owner_specialization_key);
-            }
             try std.testing.expect(packs.spliceSource().find(packs.spliceSource().context, expected_identity) != null);
         }
+
+        fn rejected(packs: *LoadedPacks, key_to_find: [32]u8, identity_to_find: lir.ProcIdentity, err: LoadedPacks.LoadError) !void {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(err, packs.failure.?);
+            try std.testing.expect(packs.state == .unavailable);
+            try std.testing.expectError(err, packs.indexPacks());
+            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find) == null);
+            const splice = packs.spliceSource();
+            try std.testing.expect(splice.find(splice.context, identity_to_find) == null);
+            try std.testing.expectEqual(@as(u64, 0), packs.hits);
+            try std.testing.expectEqual(@as(u64, 0), packs.artifacts_served);
+            return err;
+        }
     };
-    var saw_partial = false;
     for ([_][]const u8{ "old-first", "old-last" }, 0..) |dir_name, order| {
         try tmp.dir.createDirPath(io, dir_name);
         const current_path = try std.fs.path.join(allocator, &.{ dir_name, if (order == 0) "z-current.rpk" else "a-current.rpk" });
@@ -267,46 +171,8 @@ test "finalized literal file offers decline incompatible peers and keep explicit
         const dir_path = try tmp.dir.realPathFileAlloc(io, dir_name, allocator);
         defer allocator.free(dir_path);
         try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ dir_path, key, identity });
-        for ([_]bool{ false, true }) |artifact_first| {
-            try std.testing.checkAllAllocationFailures(allocator, Attempt.lazy, .{ dir_path, key, identity, &saw_partial, artifact_first });
-        }
         try std.testing.expectError(error.UnsupportedPackVersion, LoadedPacks.loadDir(allocator, io, dir_path));
     }
-    try std.testing.expect(saw_partial);
-    for ([_][]const u8{ "bad-first", "bad-last" }, 0..) |dir_name, order| {
-        try tmp.dir.createDirPath(io, dir_name);
-        const valid_path = try std.fs.path.join(allocator, &.{ dir_name, if (order == 0) "z-current.rpk" else "a-current.rpk" });
-        defer allocator.free(valid_path);
-        const bad_path = try std.fs.path.join(allocator, &.{ dir_name, if (order == 0) "a-bad.rpk" else "z-bad.rpk" });
-        defer allocator.free(bad_path);
-        try tmp.dir.writeFile(io, .{ .sub_path = valid_path, .data = bytes });
-        try tmp.dir.writeFile(io, .{ .sub_path = bad_path, .data = "not a pack" });
-        const dir_path = try tmp.dir.realPathFileAlloc(io, dir_name, allocator);
-        defer allocator.free(dir_path);
-        var packs = LoadedPacks.init(allocator);
-        defer packs.deinit();
-        packs.pending = .{ .directory = .{ .io = io, .path = dir_path } };
-        try std.testing.expect(packs.specCacheLookup().lookup(key) == null);
-        try std.testing.expectEqual(error.MalformedPack, packs.failure.?);
-        const count = packs.packs.items.len;
-        try std.testing.expectEqual(@as(usize, order), count);
-        // Repairing a source cannot retry a failed or partial collection.
-        try tmp.dir.writeFile(io, .{ .sub_path = bad_path, .data = bytes });
-        try std.testing.expect(packs.specCacheLookup().lookup(key) == null);
-        const splice = packs.spliceSource();
-        try std.testing.expect(splice.find(splice.context, identity) == null);
-        try std.testing.expectEqual(count, packs.packs.items.len);
-        try std.testing.expectEqual(error.MalformedPack, packs.failure.?);
-    }
-    const not_directory = try tmp.dir.realPathFileAlloc(io, "bad-first/a-bad.rpk", allocator);
-    defer allocator.free(not_directory);
-    var unreadable = LoadedPacks.init(allocator);
-    defer unreadable.deinit();
-    unreadable.pending = .{ .directory = .{ .io = io, .path = not_directory } };
-    try std.testing.expect(unreadable.specCacheLookup().lookup(key) == null);
-    try std.testing.expectEqual(error.PackDirectoryUnreadable, unreadable.failure.?);
-    const unreadable_splice = unreadable.spliceSource();
-    try std.testing.expect(unreadable_splice.find(unreadable_splice.context, identity) == null);
     try tmp.dir.createDirPath(io, "malformed");
     try tmp.dir.writeFile(io, .{ .sub_path = "malformed/broken.rpk", .data = "not a pack" });
     const malformed_path = try tmp.dir.realPathFileAlloc(io, "malformed", allocator);
@@ -314,6 +180,9 @@ test "finalized literal file offers decline incompatible peers and keep explicit
     var malformed = LoadedPacks.init(allocator);
     defer malformed.deinit();
     try std.testing.expectError(error.MalformedPack, malformed.loadDirInto(io, malformed_path, .cache_offers));
+    try std.testing.expectEqual(error.MalformedPack, malformed.failure.?);
+    try std.testing.expect(malformed.specCacheLookup().lookup(key) == null);
+    try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, identity) == null);
 }
 
 test "object cache write failures preserve quiet behavior and report verbose causes" {
@@ -384,15 +253,10 @@ test "object cache write failures preserve quiet behavior and report verbose cau
 
 /// What a lazily loaded store needs once checking has produced the module
 /// set: the store and the modules in view.
-pub const Pending = union(enum) {
-    modules: Modules,
-    directory: struct { io: std.Io, path: []const u8 },
-
-    pub const Modules = struct {
-        store: *const Store,
-        io: std.Io,
-        build_env: *compile.BuildEnv,
-    };
+pub const Pending = struct {
+    store: *const Store,
+    io: std.Io,
+    build_env: *compile.BuildEnv,
 };
 
 /// Every pack in a directory, indexed by specialization key and by procedure
@@ -410,6 +274,7 @@ pub const LoadedPacks = struct {
     /// Set until `indexPacks` runs; lookups before that load the pending
     /// store's packs for the modules in view first.
     pending: ?Pending = null,
+    /// Neither lookup may expose a partial index or retry a failed collection.
     state: enum { pending, ready, unavailable } = .pending,
     failure: ?LoadError = null,
 
@@ -442,6 +307,10 @@ pub const LoadedPacks = struct {
     /// Read every `.rpk` file in `dir_path`, in name order, without indexing.
     pub fn loadDirInto(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         std.debug.assert(self.state == .pending);
+        errdefer |err| {
+            self.state = .unavailable;
+            self.failure = err;
+        }
         const allocator = self.allocator;
         var names = std.ArrayList([]u8).empty;
         defer {
@@ -519,7 +388,6 @@ pub const LoadedPacks = struct {
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
-                    .finalized_literals = if (base.CompilerFeatures.finalized_literal_cache) spec.finalized_literals else {},
                 };
             }
         }
@@ -536,20 +404,12 @@ pub const LoadedPacks = struct {
         // The first lookups come from the compile-time evaluator's program,
         // which lowers inside checking, after the root module's artifact
         // exists and before the build has declared its artifacts final.
-        switch (pending) {
-            .modules => |modules| {
-                const root_semantic = modules.build_env.getExecutableRootSemanticData() orelse return;
-                const root_artifact = root_semantic.checked_artifact orelse return;
-                self.loadPending(modules, root_artifact) catch |err| {
-                    self.unavailable(err);
-                    return;
-                };
-            },
-            .directory => |directory| self.loadDirInto(directory.io, directory.path, .cache_offers) catch |err| {
-                self.unavailable(err);
-                return;
-            },
-        }
+        const root_semantic = pending.build_env.getExecutableRootSemanticData() orelse return;
+        const root_artifact = root_semantic.checked_artifact orelse return;
+        self.loadPending(pending, root_artifact) catch |err| {
+            self.unavailable(err);
+            return;
+        };
         self.indexPacks() catch |err| {
             self.unavailable(err);
         };
@@ -561,7 +421,7 @@ pub const LoadedPacks = struct {
         std.log.warn("object cache unavailable for this build: {}", .{err});
     }
 
-    fn loadPending(self: *LoadedPacks, pending: Pending.Modules, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+    fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
         }

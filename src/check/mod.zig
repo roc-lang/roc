@@ -129,7 +129,6 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11464_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
-    std.testing.refAllDecls(@import("test/late_nominal_rows_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

@@ -109,212 +109,6 @@ pub fn instantiateNominalBacking(
     return try instantiator.instantiateVar(decl.backing);
 }
 
-/// An owned, resumable declaration opening, not a solver type descriptor.
-///
-/// All demands share one substitution map and the opening-time rank. Latent
-/// roots must not be disguised as ordinary flex cells or published in checked
-/// artifacts. The solver must explicitly include them in semantic traversals.
-/// A failed demand may leave incomplete recursive shells in the map: discard
-/// the session or restore its checkpoint together with the paired store
-/// savepoint before another demand.
-pub const NominalOpening = struct {
-    store: *TypesStore,
-    idents: *const base.Ident.Store,
-    declaration: types_mod.NominalDecl,
-    opening_rank: Rank,
-    var_map: @import("collections").DenseMap(Var, Var),
-    rigid_subs: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
-    /// Final effective ranks supplied by a semantic traversal for roots not
-    /// yet demanded. Demanded cells subsequently own their ordinary rank.
-    rank_history: @import("collections").DenseMap(Var, Rank),
-    failed: bool = false,
-    /// Caller-owned producer delta; seeded substitutions are not republished.
-    binding_changes: ?*std.ArrayListUnmanaged(BindingChange) = null,
-
-    pub const BindingChange = struct {
-        template: Var,
-        owned: Var,
-        inserted: bool,
-    };
-
-    /// References have meaning within one opening. Template roots are not
-    /// mutable solver cells, even though both namespaces use stored Var IDs.
-    pub const Reference = union(enum) {
-        owned: Var,
-        template: Var,
-    };
-
-    pub const View = struct {
-        reference: Reference,
-        content: Content,
-    };
-
-    /// A complete demand-map snapshot for a speculative operation on a
-    /// retained session. Restore it together with the store's savepoint.
-    pub const Checkpoint = struct {
-        var_map: ?@import("collections").DenseMap(Var, Var),
-        rank_history: ?@import("collections").DenseMap(Var, Rank),
-        failed: bool,
-
-        pub fn deinit(self: *Checkpoint) void {
-            if (self.var_map) |*map| map.deinit();
-            if (self.rank_history) |*map| map.deinit();
-            self.var_map = null;
-            self.rank_history = null;
-        }
-    };
-
-    /// Capture substitutions without copying the declaration backing.
-    /// The caller enforces validity, opacity, and arity before opening.
-    pub fn init(
-        store: *TypesStore,
-        idents: *const base.Ident.Store,
-        decl: types_mod.NominalDecl,
-        args: []const Var,
-        opening_rank: Rank,
-    ) std.mem.Allocator.Error!NominalOpening {
-        std.debug.assert(decl.isValid());
-        const formals = store.sliceVars(decl.formals);
-        std.debug.assert(formals.len == args.len);
-        var self = NominalOpening{
-            .store = store,
-            .idents = idents,
-            .declaration = decl,
-            .opening_rank = opening_rank,
-            .var_map = @import("collections").DenseMap(Var, Var).init(store.gpa),
-            .rank_history = @import("collections").DenseMap(Var, Rank).init(store.gpa),
-        };
-        errdefer self.deinit();
-        for (formals, args) |formal, arg| {
-            const resolved = store.resolveVar(formal);
-            try self.var_map.put(resolved.var_, arg);
-            switch (resolved.desc.content) {
-                .rigid => |rigid| try self.rigid_subs.put(store.gpa, rigid.name, arg),
-                .flex, .alias, .field_presence, .structure, .err => {},
-            }
-        }
-        return self;
-    }
-
-    pub fn deinit(self: *NominalOpening) void {
-        self.var_map.deinit();
-        self.rigid_subs.deinit(self.store.gpa);
-        self.rank_history.deinit();
-    }
-
-    /// Observe a latent schema edge without demanding or mutating anything.
-    /// The order of sharing/map/substitution checks matches the instantiator.
-    /// Children of owned content are already substituted and must stay owned;
-    /// children of template content must be read through this same opening.
-    pub fn read(self: *const NominalOpening, reference: Reference) View {
-        std.debug.assert(!self.failed);
-        const template = switch (reference) {
-            .owned => |owned| {
-                const resolved = self.store.resolveVar(owned);
-                return .{ .reference = .{ .owned = resolved.var_ }, .content = resolved.desc.content };
-            },
-            .template => |template| template,
-        };
-        const resolved = self.store.resolveVar(template);
-        if (resolved.desc.rank != .generalized) {
-            return .{ .reference = .{ .owned = resolved.var_ }, .content = resolved.desc.content };
-        }
-        if (self.var_map.get(resolved.var_)) |owned| return self.read(.{ .owned = owned });
-        if (resolved.desc.content == .rigid) {
-            if (self.rigid_subs.get(resolved.desc.content.rigid.name)) |owned| return self.read(.{ .owned = owned });
-        }
-        return .{ .reference = .{ .template = resolved.var_ }, .content = resolved.desc.content };
-    }
-
-    pub fn child(_: *const NominalOpening, parent: Reference, var_: Var) Reference {
-        return switch (parent) {
-            .owned => .{ .owned = var_ },
-            .template => .{ .template = var_ },
-        };
-    }
-
-    /// Record a semantic traversal's exact result for an undemanded root.
-    /// Rank propagation/generalization must compute that result from all
-    /// latent edges; this API does not infer it from the visible payload.
-    pub fn recordRankHistory(self: *NominalOpening, template: Var, rank: Rank) std.mem.Allocator.Error!void {
-        const view = self.read(.{ .template = template });
-        std.debug.assert(view.reference == .template);
-        try self.rank_history.put(view.reference.template, rank);
-    }
-
-    pub fn effectiveRank(self: *const NominalOpening, reference: Reference) Rank {
-        const view = self.read(reference);
-        return switch (view.reference) {
-            .owned => |owned| self.store.resolveVar(owned).desc.rank,
-            .template => |template| self.rank_history.get(template) orelse self.opening_rank,
-        };
-    }
-
-    pub fn checkpoint(self: *NominalOpening) std.mem.Allocator.Error!Checkpoint {
-        var map = @import("collections").DenseMap(Var, Var).init(self.store.gpa);
-        errdefer map.deinit();
-        var iterator = self.var_map.iterator();
-        while (iterator.next()) |entry| try map.put(entry.key_ptr.*, entry.value_ptr.*);
-        var ranks = @import("collections").DenseMap(Var, Rank).init(self.store.gpa);
-        errdefer ranks.deinit();
-        var rank_iterator = self.rank_history.iterator();
-        while (rank_iterator.next()) |entry| try ranks.put(entry.key_ptr.*, entry.value_ptr.*);
-        return .{ .var_map = map, .rank_history = ranks, .failed = self.failed };
-    }
-
-    /// The checkpoint belongs to this session and is consumed by restore.
-    /// The caller must first roll back store cells/descriptors to the paired
-    /// savepoint; neither operation alone restores a speculative demand.
-    pub fn restore(self: *NominalOpening, saved: *Checkpoint) void {
-        self.var_map.deinit();
-        self.var_map = saved.var_map.?;
-        self.rank_history.deinit();
-        self.rank_history = saved.rank_history.?;
-        self.failed = saved.failed;
-        saved.var_map = null;
-        saved.rank_history = null;
-    }
-
-    /// Expose a root from the immutable declaration schema using this
-    /// opening's map. It must not be a synthetic analysis ID or another
-    /// opening's cell. Region/rank-pool registration belongs to the caller.
-    pub fn demand(self: *NominalOpening, template: Var) std.mem.Allocator.Error!Var {
-        if (self.failed) return error.OutOfMemory;
-        errdefer self.failed = true;
-        const changes_start = if (self.binding_changes) |changes| changes.items.len else 0;
-        errdefer if (self.binding_changes) |changes| changes.shrinkRetainingCapacity(changes_start);
-        const baseline = self.store.len();
-        var instantiator = Instantiator{
-            .store = self.store,
-            .idents = self.idents,
-            .var_map = &self.var_map,
-            .current_rank = self.opening_rank,
-            .purpose = .instantiation,
-            .rigid_behavior = .{ .substitute_rigids_fresh = &self.rigid_subs },
-            .binding_changes = self.binding_changes,
-        };
-        const result = try instantiator.instantiateVar(template);
-        // Only newly minted cells receive latent history. Reapplying a stale
-        // history entry to an earlier demanded cell would undo later ordinary
-        // rank propagation/generalization on that cell.
-        var iterator = self.rank_history.iterator();
-        while (iterator.next()) |entry| {
-            if (self.var_map.get(entry.key_ptr.*)) |owned| {
-                if (@intFromEnum(owned) >= baseline) {
-                    const resolved = self.store.resolveVar(owned);
-                    try self.store.setDescRank(resolved.desc_idx, entry.value_ptr.*);
-                }
-            }
-        }
-        return result;
-    }
-
-    /// Complete every payload and obligation through the same map.
-    pub fn materialize(self: *NominalOpening) std.mem.Allocator.Error!Var {
-        return self.demand(self.declaration.backing);
-    }
-};
-
 /// Reusable heap buffers backing `Instantiator`'s explicit worklist. Owned by
 /// the `TypesStore` so every instantiation against a store reuses the same
 /// capacity. Between top-level instantiation calls every list is back at its
@@ -508,7 +302,6 @@ pub const Instantiator = struct {
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
     purpose: Purpose = .instantiation,
-    binding_changes: ?*std.ArrayListUnmanaged(NominalOpening.BindingChange) = null,
     /// Faithful definition copies retain annotation closure authority; fresh
     /// scheme uses start with ordinary inferred openness.
     preserve_annotation_tag_ext: bool = false,
@@ -702,21 +495,6 @@ pub const Instantiator = struct {
 
     const Self = @This();
 
-    /// Record insertion versus replacement at the operation that knows it.
-    /// Reserving the delta before updating the map prevents an unreported
-    /// successful mutation if delta allocation fails.
-    fn putVarMapping(self: *Self, template: Var, owned: Var) std.mem.Allocator.Error!void {
-        if (self.binding_changes) |changes| {
-            const previous = self.var_map.get(template);
-            if (previous == owned) return;
-            try changes.ensureUnusedCapacity(self.store.gpa, 1);
-            try self.var_map.put(template, owned);
-            changes.appendAssumeCapacity(.{ .template = template, .owned = owned, .inserted = previous == null });
-        } else {
-            try self.var_map.put(template, owned);
-        }
-    }
-
     fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
         return self.idents.getText(idx);
     }
@@ -759,18 +537,6 @@ pub const Instantiator = struct {
         self.copy_scheme_structure = true;
         defer self.copy_scheme_structure = previous;
         return self.instantiateVarHelp(initial_var, true);
-    }
-
-    /// Initial immutable nominal-schema certificate. This uses the existing
-    /// copy-edge prewalk, not a consumer's approximation of shared boundaries.
-    /// No solver descriptors or ranks are changed while producing this fact.
-    pub fn nominalCaptureHasSharedBoundary(self: *Self, root: Var) std.mem.Allocator.Error!bool {
-        try self.computeGeneralizedReachability(root);
-        var roots = self.scratch().reach_state.iterator();
-        while (roots.next()) |entry| {
-            if (self.store.resolveVar(entry.key_ptr.*).desc.rank != .generalized) return true;
-        }
-        return false;
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
@@ -1031,7 +797,7 @@ pub const Instantiator = struct {
             .resolve_by_polarity, .preserve_output, .defer_open => {
                 if (!try self.collectMarkerChoices(initial_var, &marker_choices)) {
                     const rejected = try self.store.freshFromContentWithRank(.err, self.current_rank);
-                    try self.putVarMapping(self.store.resolveVar(initial_var).var_, rejected);
+                    try self.var_map.put(self.store.resolveVar(initial_var).var_, rejected);
                     return rejected;
                 }
             },
@@ -1182,7 +948,7 @@ pub const Instantiator = struct {
                         if (opened) {
                             if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{ .ext = marker_var });
                         }
-                        try self.putVarMapping(resolved_var, marker_var);
+                        try self.var_map.put(resolved_var, marker_var);
                         try machine.value_stack.append(self.store.gpa, marker_var);
                         return true;
                     }
@@ -1223,14 +989,14 @@ pub const Instantiator = struct {
                             };
 
                             // Remember this substitution for recursive references
-                            try self.putVarMapping(resolved_var, existing_var);
+                            try self.var_map.put(resolved_var, existing_var);
 
                             try machine.value_stack.append(self.store.gpa, existing_var);
                             return true;
                         },
                         .substitute_rigids_fresh => |rigid_subs| {
                             if (rigid_subs.get(rigid.name)) |existing_var| {
-                                try self.putVarMapping(resolved_var, existing_var);
+                                try self.var_map.put(resolved_var, existing_var);
                                 try machine.value_stack.append(self.store.gpa, existing_var);
                                 return true;
                             }
@@ -1238,7 +1004,7 @@ pub const Instantiator = struct {
                         },
                         .substitute_rigids_flex => |rigid_subs| {
                             if (rigid_subs.get(rigid.name)) |existing_var| {
-                                try self.putVarMapping(resolved_var, existing_var);
+                                try self.var_map.put(resolved_var, existing_var);
                                 try machine.value_stack.append(self.store.gpa, existing_var);
                                 return true;
                             }
@@ -1250,7 +1016,7 @@ pub const Instantiator = struct {
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
                 const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
-                try self.putVarMapping(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
 
                 if (self.purpose == .expected_shape or rigid.constraints.len() == 0) {
                     const fresh_content = switch (fresh_type) {
@@ -1282,7 +1048,7 @@ pub const Instantiator = struct {
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
                 const fresh_var = try self.store.fresh();
-                try self.putVarMapping(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
 
                 if (self.purpose == .expected_shape or flex.constraints.len() == 0) {
                     const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
@@ -1306,7 +1072,7 @@ pub const Instantiator = struct {
             },
             .alias => |alias| {
                 const fresh_var = try self.store.fresh();
-                try self.putVarMapping(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
 
                 var arg_span = alias.vars.nonempty;
                 arg_span.dropFirstElem();
@@ -1328,14 +1094,14 @@ pub const Instantiator = struct {
                 // still copied to a fresh var so an instantiated field-kind
                 // axis has the same identity semantics as every other axis.
                 const fresh_var = try self.store.fresh();
-                try self.putVarMapping(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
                 try self.fillPlaceholder(fresh_var, .{ .field_presence = field_presence }, flags);
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             },
             .structure => |flat_type| {
                 const fresh_var = try self.store.fresh();
-                try self.putVarMapping(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
 
                 switch (flat_type) {
                     .empty_record => {
@@ -1454,7 +1220,7 @@ pub const Instantiator = struct {
             },
             .err => {
                 const fresh_var = try self.store.fresh();
-                try self.putVarMapping(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
                 try self.fillPlaceholder(fresh_var, Content.err, flags);
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
@@ -1924,35 +1690,3 @@ pub const Instantiator = struct {
         };
     }
 };
-
-test "nominal opening - binding delta records insertions replacements and idempotence" {
-    const gpa = std.testing.allocator;
-    var store = try TypesStore.init(gpa);
-    defer store.deinit();
-    var idents = try Ident.Store.initCapacity(gpa, 4);
-    defer idents.deinit(gpa);
-    var mapping = @import("collections").DenseMap(Var, Var).init(gpa);
-    defer mapping.deinit();
-    var changes: std.ArrayListUnmanaged(NominalOpening.BindingChange) = .empty;
-    defer changes.deinit(gpa);
-    var instantiator = Instantiator{
-        .store = &store,
-        .idents = &idents,
-        .var_map = &mapping,
-        .current_rank = .outermost,
-        .rigid_behavior = .fresh_flex,
-        .binding_changes = &changes,
-    };
-    const template = try store.fresh();
-    const first = try store.fresh();
-    const second = try store.fresh();
-    try instantiator.putVarMapping(template, first);
-    try instantiator.putVarMapping(template, first);
-    try instantiator.putVarMapping(template, second);
-    try std.testing.expectEqual(@as(usize, 2), changes.items.len);
-    try std.testing.expect(changes.items[0].inserted);
-    try std.testing.expectEqual(first, changes.items[0].owned);
-    try std.testing.expect(!changes.items[1].inserted);
-    try std.testing.expectEqual(second, changes.items[1].owned);
-    try std.testing.expectEqual(second, mapping.get(template).?);
-}
