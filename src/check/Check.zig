@@ -20110,7 +20110,14 @@ fn stepDeclGen(self: *Self, frame: *DeclGenFrame, input: ?TypeGenResult, env: *E
     switch (frame.stage) {
         .start => {
             switch (decl) {
-                .s_alias_decl, .s_nominal_decl => _ = try self.registerTypeDecl(decl_idx),
+                .s_alias_decl, .s_nominal_decl => {
+                    _ = try self.registerTypeDecl(decl_idx);
+                    // The declaration var is the template every use
+                    // instantiates, so it takes the rank of declaration
+                    // generation (generalized, before value checking) whether
+                    // or not it was predeclared.
+                    try self.setVarRank(decl_var, env);
+                },
                 .s_decl,
                 .s_var,
                 .s_var_uninitialized,
@@ -25502,11 +25509,36 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
             } });
         }
 
-        try self.setVarRank(stmt_var, env);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            // A local type declaration's or standalone annotation's var is the
+            // generalized template generated before value checking. Its uses
+            // instantiate that template, so it must keep generalized rank
+            // rather than join this block's rank.
+            .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno => {},
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => try self.setVarRank(stmt_var, env),
+        }
 
         state.current = .{
             .stmt_idx = stmt_idx,
-            .stmt = self.cir.store.getStatement(stmt_idx),
+            .stmt = stmt,
             .statement_expected = if (state.diverges)
                 base_statement_expected.suppressHoistSelection()
             else

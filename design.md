@@ -972,6 +972,13 @@ intentionally phantom parameter; aliases and where aliases reject those names.
 This keeps every valid declaration formal's identity explicit through checking and
 `CheckedModule` construction.
 
+Every type declaration, including one written inside a function body, is
+generated before value checking at generalized rank, and its declaration var is
+the template that each use instantiates. Checking a block does not re-rank the
+type declarations and standalone annotations among its statements; a block-local
+declaration that took the block's rank would be shared rather than copied by its
+uses, tying an application such as `Label(b)` to the declaration's own formals.
+
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
 finalization is linear in the number of declarations plus recorded references,

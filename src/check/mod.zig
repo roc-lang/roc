@@ -138,6 +138,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11464_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11943_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11945_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12020_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12011_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12013_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12014_test.zig"));
