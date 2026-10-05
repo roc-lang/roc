@@ -11,7 +11,7 @@ const bundle = @import("bundle.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const test_util = @import("test_util.zig");
 const unbundle_mod = @import("unbundle");
-const DirExtractWriter = bundle.DirExtractWriter;
+const DirExtractWriter = unbundle_mod.DirExtractWriter;
 const BufferExtractWriter = unbundle_mod.BufferExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 const EntryIterator = test_util.EntryIterator;
@@ -298,15 +298,9 @@ test "path validation prevents directory traversal" {
     defer compressed_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(compressed_list.items);
-    var allocator_copy2 = allocator;
-    var dir_writer = DirExtractWriter.init(tmp.dir, io);
-    const result = bundle.unbundleStream(
-        &stream_reader,
-        dir_writer.extractWriter(),
-        &allocator_copy2,
-        &hash,
-        null,
-    );
+    var dir_writer = DirExtractWriter.init(tmp.dir, io, allocator);
+    defer dir_writer.deinit();
+    const result = unbundle_mod.unbundleStream(allocator, &stream_reader, dir_writer.extractWriter(), &hash, null, .{});
 
     try testing.expectError(error.InvalidPath, result);
 }
@@ -381,7 +375,7 @@ test "bundle and unbundle roundtrip" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Verify all files exist with correct content
     const file1_content = try dst_dir.readFileAlloc(io, "file1.txt", allocator, .limited(1024));
@@ -553,7 +547,7 @@ test "bundle and unbundle over socket stream" {
     var stream_buffer: [1024]u8 = undefined;
     var buffered_reader = stream.reader(io, &stream_buffer);
     const socket_reader = &buffered_reader.interface;
-    try bundle.unbundle(socket_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, socket_reader, dst_dir, io, filename, null);
 
     // Wait for server to finish
     try server_ctx.done.wait(io);
@@ -612,7 +606,7 @@ test "minimal bundle unbundle" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Read and verify content
     const content = try dst_dir.readFileAlloc(io, "test.txt", allocator, .limited(1024));
@@ -670,7 +664,7 @@ test "bundle stores an archive path distinct from its source path" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Verify files exist WITHOUT the prefix
     const main_content = try dst_dir.readFileAlloc(io, "main.txt", allocator, .limited(1024));
@@ -718,7 +712,7 @@ test "blake3 hash verification failure" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    const result = bundle.unbundle(&stream_reader, dst_dir, io, &allocator, wrong_filename, null);
+    const result = unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, wrong_filename, null);
 
     try testing.expectError(error.InvalidFilename, result);
 }
@@ -764,7 +758,7 @@ test "unbundle tolerates a pre-existing directory named after the archive" {
     defer output_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(output_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Verify the roundtrip content is intact
     const content = try dst_dir.readFileAlloc(io, "test.txt", allocator, .limited(1024));
@@ -814,7 +808,7 @@ test "blake3 hash detects corruption" {
 
     // Try to unbundle corrupted data - should fail with HashMismatch or DecompressionFailed
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    const result = bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    const result = unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Corruption can cause either hash mismatch (if decompression succeeds but data is wrong)
     // or decompression failure (if the compressed stream structure is corrupted)
@@ -835,6 +829,13 @@ test "blake3 hash detects corruption" {
             error.InvalidPath,
             error.NoDataExtracted,
             error.OutOfMemory,
+            error.EndOfStream,
+            error.WriteFailed,
+            error.ChecksumFailure,
+            error.DictionaryIdFlagUnsupported,
+            error.MalformedBlock,
+            error.MalformedFrame,
+            error.ExpandedSizeLimitExceeded,
             => return err,
         }
     }
@@ -907,7 +908,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         var reader_buffer: [4096]u8 = undefined;
         var bundle_reader = bundle_file.reader(io, &reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, io, &allocator, filename1, null);
+        try unbundle_mod.unbundleFiles(allocator, &bundle_reader.interface, extract_dir, io, filename1, null);
     }
 
     // Second bundle (from first extraction)
@@ -951,7 +952,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         var reader_buffer: [4096]u8 = undefined;
         var bundle_reader = bundle_file.reader(io, &reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, io, &allocator, filename2, null);
+        try unbundle_mod.unbundleFiles(allocator, &bundle_reader.interface, extract_dir, io, filename2, null);
     }
 
     // Verify all files match original content

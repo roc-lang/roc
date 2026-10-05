@@ -12,12 +12,10 @@ const std = @import("std");
 
 pub const bundle = @import("bundle.zig");
 pub const streaming_writer = @import("streaming_writer.zig");
-pub const streaming_reader = @import("streaming_reader.zig");
 
 // Re-export commonly used functions and types
 pub const bundleFiles = bundle.bundle;
 pub const pathHasBundleErr = bundle.pathHasBundleErr;
-pub const validateBase58Hash = bundle.validateBase58Hash;
 
 // Re-export error types
 pub const BundleError = bundle.BundleError;
