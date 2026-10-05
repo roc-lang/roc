@@ -191,6 +191,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Runtime float abs clears the sign of negative zero on every backend",
     },
     .{
+        .roc_file = "test/fx/runtime_float_libcalls.roc",
+        .io_spec = "0<3|1>rem: 1.5 1.5 -1.5|1>div_trunc: 3 3|1>floor: Ok(7) Ok(7)|1>ceiling: Ok(8) Ok(8)",
+        .description = "Runtime float remainder and rounding, which compiled code calls the C math library for, agree across backends",
+    },
+    .{
         .roc_file = "test/fx/runtime_zst_list_ownership.roc",
         .io_spec = "0<3|1>append: 2|1>literal: 3|1>concat: 5|1>repeat: 3|1>first: ok",
         .description = "Zero-sized-element lists keep their length through reserve/append/concat and strand no allocation",

@@ -19283,6 +19283,17 @@ runtime (macOS, Windows) resolve those routines from it and have no carrier.
 Each routine occupies its own section and the carrier has no debug info, so a
 link keeps only the routines it references.
 
+An object the compiler loads into its own process has no link at all: an
+optimized `roc test`, REPL evaluation or glue run compiles through LLVM and
+hands the object to the relocatable loader. There the compiler is what
+completes the program, so the loader binds the same routines itself, the
+compiler-rt arithmetic helpers to the decomposed implementations the builtins
+already carry and the C routines to the definitions in the compiler binary. The
+C routines are named in one place, `shim_symbols.c_memory_set` and
+`shim_symbols.c_math_set`. The loader's resolver and the machine-code shim's
+permitted imports are both derived from those sets, so a routine code
+generation starts calling is declared once for every provider.
+
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
 `arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows
