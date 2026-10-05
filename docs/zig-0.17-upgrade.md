@@ -108,7 +108,15 @@ native and WASM. Zig 0.17 rejects `@Vector` fields in `extern struct` and
 with Zig 0.16 and fails with 0.17. Replacing the field with an aligned array
 compiles but changes the SysV argument/result carrier from SSE to two integer
 pieces, contradicting the committed host ABI in `design.md`. No array
-substitution or skip has been applied. The earlier seven static-template ABI
+substitution or skip has been applied. An independent C caller confirms the
+old vector-containing host returns the correct transformed lanes, while the
+aligned-array substitute builds and links but returns the wrong lanes. A
+separate read-only review finds no supported stock 0.17 aggregate API that
+preserves the contract: `@Type` has no ABI-kind override, and C translation
+still produces `@Vector`. An `f128` surrogate also changes WASM function types
+and AArch64 multi-vector aggregate classification. An upstream Zig C-vector
+compatibility change therefore needs cross-language layout and calling-ABI
+regressions before it can unblock these hosts. The earlier seven static-template ABI
 locks do not establish dynamic SIMD aggregate support; this is an unresolved
 upgrade blocker.
 
