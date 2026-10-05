@@ -10,6 +10,7 @@ const Output = struct {
     source: LazyPath,
 };
 
+/// Stage declared fixture producers and provide isolated writable runner trees.
 pub const Plan = struct {
     b: *std.Build,
     outputs: std.ArrayList(Output) = .empty,

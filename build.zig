@@ -645,14 +645,6 @@ const CheckTypeCheckerPatternsStep = struct {
     }
 };
 
-/// Header marker present in files vendored from the Zig compiler. Such files
-/// are exempt from Roc's architecture-style checks (the @enumFromInt(0) and
-/// unused-suppression bans below): their idioms—e.g. zero-valued enum
-/// constants like `AddrSpace = @enumFromInt(0)` and `_ =` suppressions in
-/// upstream TODO stubs—are correct at the source and rewriting them would
-/// only diverge from upstream. This mirrors how ci/tidy.zig skips crates/.
-const vendored_zig_marker = "Adapted from the Zig compiler";
-
 /// Build step that checks for @enumFromInt(0) usage in all .zig files.
 ///
 /// We forbid @enumFromInt(0) because it hides bugs and makes them harder to debug.
@@ -1412,11 +1404,6 @@ fn addWasmStaticLibAppBuildForTarget(
     return .{ .run = run, .wasm = wasm };
 }
 
-fn absoluteBuildPath(b: *std.Build, path: []const u8) []const u8 {
-    if (std.fs.path.isAbsolute(path)) return path;
-    return b.root.joinString(b.allocator, path) catch @panic("OOM");
-}
-
 pub fn build(b: *std.Build) void {
     test_fixtures = .{ .b = b };
 
@@ -1820,7 +1807,7 @@ pub fn build(b: *std.Build) void {
         .path = b.path("src/build/unit_test_runner.zig"),
         .build_options = roc_modules.build_options,
         .zig_default_test_runner = b.createModule(.{
-            .root_source_file = b.path("src/build/stock_test_runner.zig"),
+            .root_source_file = b.path("vendor/zig_test_runner.zig"),
         }),
     };
 
@@ -7529,11 +7516,10 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
         }),
     });
     const inputs = b.addWriteFiles();
-    stageCompilerIdentitySources(b, inputs, "src") catch |err|
+    stageCompilerIdentitySources(b, inputs, "src", &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".tbd", ".json" }) catch |err|
         std.debug.panic("cannot stage compiler identity sources: {t}", .{err});
-    _ = inputs.addCopyDirectory(b.path("vendor"), "vendor", .{
-        .include_extensions = &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".zon" },
-    });
+    stageCompilerIdentitySources(b, inputs, "vendor", &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".zon" }) catch |err|
+        std.debug.panic("cannot stage compiler identity vendors: {t}", .{err});
     // Zig's executable and version do not identify a locally modified standard
     // library. Its independent cached stage tracks all contents, including an
     // explicit --zig-lib, and is reused when production sources change.
@@ -7626,7 +7612,13 @@ const compiler_identity_test_directories = [_][]const u8{
     "src/types/test",
 };
 
-fn stageCompilerIdentitySources(b: *std.Build, files: *Step.WriteFile, path: []const u8) !void {
+// This entrypoint is imported only by the registered unit test runner. Its
+// upstream TestFn ABI deliberately carries erased errors, unlike production.
+const compiler_identity_test_files = [_][]const u8{
+    "vendor/zig_test_runner.zig",
+};
+
+fn stageCompilerIdentitySources(b: *std.Build, files: *Step.WriteFile, path: []const u8, included_extensions: []const []const u8) !void {
     // Adding/removing/renaming a production import changes the configured graph.
     // Editing its bytes only reruns WriteFiles and the identity tool at make time.
     b.dependOnDirectoryContents(b.path(path));
@@ -7643,24 +7635,38 @@ fn stageCompilerIdentitySources(b: *std.Build, files: *Step.WriteFile, path: []c
         }
     }.less);
     for (entries.items) |entry| {
-        const child = b.pathJoin(&.{ path, entry.name });
+        // Use logical separators for the audited exclusions on every host.
+        const child = b.fmt("{s}/{s}", .{ path, entry.name });
         switch (entry.kind) {
             .directory => {
                 const excluded = for (compiler_identity_test_directories) |test_path| {
                     if (std.mem.eql(u8, child, test_path)) break true;
                 } else false;
-                if (!excluded) try stageCompilerIdentitySources(b, files, child);
+                if (!excluded) try stageCompilerIdentitySources(b, files, child, included_extensions);
             },
             .file => {
+                const excluded = for (compiler_identity_test_files) |test_path| {
+                    if (std.mem.eql(u8, child, test_path)) break true;
+                } else false;
+                if (excluded) continue;
                 const extension = std.fs.path.extension(child);
-                for ([_][]const u8{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".tbd", ".json" }) |included| {
+                for (included_extensions) |included| {
                     if (std.mem.eql(u8, extension, included)) {
                         _ = files.addCopyFile(b.path(child), child);
                         break;
                     }
                 }
             },
-            else => return error.NonRegularCompilerSource,
+            .block_device,
+            .character_device,
+            .named_pipe,
+            .sym_link,
+            .unix_domain_socket,
+            .whiteout,
+            .door,
+            .event_port,
+            .unknown,
+            => return error.NonRegularCompilerSource,
         }
     }
 }

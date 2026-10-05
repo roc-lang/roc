@@ -17,6 +17,7 @@ ZIG = sys.argv[1]
 BUILD_OPTIONS = sys.argv[2:]
 PRODUCTION = ROOT / "src/compile/roc_build_identity_probe.zig"
 TEST_ONLY = ROOT / "src/compile/test/roc_build_identity_probe.zig"
+TEST_RUNNER = ROOT / "vendor/zig_test_runner.zig"
 
 
 def git_head():
@@ -60,6 +61,13 @@ def main():
         assert identity("test edited") == baseline
         TEST_ONLY.unlink()
         assert identity("test deleted") == baseline
+        original_runner = TEST_RUNNER.read_bytes()
+        try:
+            TEST_RUNNER.write_bytes(original_runner + b"\n// Test-only runner identity probe.\n")
+            assert identity("vendored test runner edited") == baseline
+        finally:
+            TEST_RUNNER.write_bytes(original_runner)
+        assert identity("vendored test runner restored") == baseline
         PRODUCTION.write_text("// declared production identity probe\n")
         added = identity("production added")
         assert added != baseline

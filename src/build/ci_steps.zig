@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Run the semantic architecture audit against a declared source snapshot.
 pub const SemanticAuditStep = struct {
     pub fn create(b: *std.Build) *std.Build.Step {
         if (builtin.os.tag == .windows) {

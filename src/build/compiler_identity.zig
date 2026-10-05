@@ -12,6 +12,7 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 
 const NamedFile = struct { name: []const u8, path: []const u8 };
 
+/// Hash declared source, toolchain, dependency, and semantic option inputs.
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
@@ -105,7 +106,16 @@ fn identity(allocator: Allocator, io: std.Io, root: std.Io.Dir, zig_exe: []const
         switch (entry.kind) {
             .file => try paths.append(allocator, try allocator.dupe(u8, entry.path)),
             .directory => {},
-            else => return error.NonRegularSourceInput,
+            .block_device,
+            .character_device,
+            .named_pipe,
+            .sym_link,
+            .unix_domain_socket,
+            .whiteout,
+            .door,
+            .event_port,
+            .unknown,
+            => return error.NonRegularSourceInput,
         }
     }
     // Relative names participate in the identity so membership and renames

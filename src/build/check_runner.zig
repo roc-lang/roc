@@ -15,6 +15,7 @@ fn fail(comptime format: []const u8, args: anytype) error{CheckFailed} {
     return error.CheckFailed;
 }
 
+/// Dispatch the requested build check using its declared inputs and arguments.
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.gpa);
     if (args.len < 2) return error.MissingCommand;
