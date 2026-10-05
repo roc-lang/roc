@@ -7334,10 +7334,12 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
     const io = b.graph.io;
     const cwd = std.Io.Dir.cwd();
     const dot_git = b.root.joinString(b.allocator, ".git") catch @panic("OOM");
-    const git_stat = cwd.statFile(io, dot_git, .{}) catch |err| {
-        if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ dot_git, err });
-        dependOnExistingParentDirectory(b, dot_git);
-        return "no-git";
+    const git_stat = cwd.statFile(io, dot_git, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            dependOnExistingParentDirectory(b, dot_git);
+            return "no-git";
+        },
+        else => std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ dot_git, err }),
     };
     const git_dir = if (git_stat.kind == .directory) dir: {
         b.dependOnDirectoryMetadata(b.graph.cwdRelativePath(dot_git));
@@ -7367,10 +7369,12 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
 
 fn readVersionFile(b: *std.Build, path: []const u8) ?[]const u8 {
     const cwd = std.Io.Dir.cwd();
-    const stat = cwd.statFile(b.graph.io, path, .{}) catch |err| {
-        if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ path, err });
-        dependOnExistingParentDirectory(b, path);
-        return null;
+    const stat = cwd.statFile(b.graph.io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            dependOnExistingParentDirectory(b, path);
+            return null;
+        },
+        else => std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ path, err }),
     };
     if (stat.kind != .file) {
         std.debug.panic("expected regular Git metadata file: {s}", .{path});
@@ -7387,11 +7391,13 @@ fn dependOnExistingParentDirectory(b: *std.Build, path: []const u8) void {
     const cwd = std.Io.Dir.cwd();
     var parent = std.fs.path.dirname(path) orelse ".";
     while (true) {
-        const stat = cwd.statFile(b.graph.io, parent, .{}) catch |err| {
-            if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata parent {s}: {t}", .{ parent, err });
-            parent = std.fs.path.dirname(parent) orelse
-                std.debug.panic("no existing directory for Git metadata dependency: {s}", .{path});
-            continue;
+        const stat = cwd.statFile(b.graph.io, parent, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                parent = std.fs.path.dirname(parent) orelse
+                    std.debug.panic("no existing directory for Git metadata dependency: {s}", .{path});
+                continue;
+            },
+            else => std.debug.panic("cannot inspect Git metadata parent {s}: {t}", .{ parent, err }),
         };
         if (stat.kind != .directory) std.debug.panic("Git metadata parent is not a directory: {s}", .{parent});
         b.dependOnDirectoryContents(b.graph.cwdRelativePath(parent));
