@@ -4209,10 +4209,10 @@ const Builder = struct {
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
-    /// `monoTypeMentionsFunction`'s answers, valid while the program type
-    /// store's rollback count equals `function_mentions_rollbacks`.
-    function_mentions: collections.DenseMap(Type.TypeId, bool),
-    function_mentions_rollbacks: u64 = 0,
+    /// `monoTypeMentionsFunction`'s answers, indexed by program type id. A
+    /// program type store rollback frees ids for reuse, so the column is cut
+    /// back to the rollback floor before each read.
+    function_mentions: std.ArrayList(FunctionMention) = .empty,
     /// The types on `monoTypeMentionsFunction`'s current walk path and those
     /// its walk finished open, kept for its capacity between walks.
     function_scan_path: collections.DenseMap(Type.TypeId, void),
@@ -4408,7 +4408,6 @@ const Builder = struct {
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
-            .function_mentions = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .function_scan_path = collections.DenseMap(Type.TypeId, void).init(allocator),
             .resolved_callable_vectors = std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
@@ -4643,7 +4642,7 @@ const Builder = struct {
         self.reassigned_binder_pool.deinit(self.allocator);
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
-        self.function_mentions.deinit();
+        self.function_mentions.deinit(self.allocator);
         self.function_scan_path.deinit();
         var resolved_vectors = self.resolved_callable_vectors.valueIterator();
         while (resolved_vectors.next()) |vectors| vectors.deinit(self.allocator);
@@ -6518,13 +6517,12 @@ const Builder = struct {
     /// at every type an earlier one answered instead of walking the same
     /// nested types again.
     fn monoTypeMentionsFunction(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
-        if (self.function_mentions_rollbacks != self.program.types.rollbacks) {
-            self.function_mentions.clearRetainingCapacity();
-            self.function_mentions_rollbacks = self.program.types.rollbacks;
+        if (self.program.types.takeRollbackFloor()) |floor| {
+            if (floor < self.function_mentions.items.len) self.function_mentions.shrinkRetainingCapacity(floor);
         }
-        if (self.function_mentions.get(root)) |known| return known;
+        if (self.knownFunctionMention(root)) |known| return known;
         if (functionContent(self.program.types.view().get(root))) {
-            try self.function_mentions.put(root, true);
+            try self.setFunctionMention(root, true);
             return true;
         }
 
@@ -6556,16 +6554,14 @@ const Builder = struct {
             if (top.next < top.end) {
                 const child = children.items[top.next];
                 top.next += 1;
-                const found = if (self.function_mentions.get(child)) |known|
-                    known
-                else
-                    functionContent(self.program.types.view().get(child));
+                const known = self.knownFunctionMention(child);
+                const found = known orelse functionContent(self.program.types.view().get(child));
                 if (found) {
-                    try self.function_mentions.put(child, true);
-                    for (frames.items) |frame| try self.function_mentions.put(frame.ty, true);
+                    try self.setFunctionMention(child, true);
+                    for (frames.items) |frame| try self.setFunctionMention(frame.ty, true);
                     return true;
                 }
-                if (self.function_mentions.contains(child)) continue;
+                if (known != null) continue;
                 // On the path, or finished open earlier in this walk.
                 if (on_path.contains(child)) {
                     top.open = true;
@@ -6581,13 +6577,33 @@ const Builder = struct {
                 if (frames.items.len != 0) frames.items[frames.items.len - 1].open = true;
             } else {
                 _ = on_path.remove(finished.ty);
-                try self.function_mentions.put(finished.ty, false);
+                try self.setFunctionMention(finished.ty, false);
             }
         }
         // The walk from `root` found no function anywhere, so every type it
         // left open is function-free too.
-        for (open_finished.items) |ty| try self.function_mentions.put(ty, false);
+        for (open_finished.items) |ty| try self.setFunctionMention(ty, false);
         return false;
+    }
+
+    const FunctionMention = enum(u8) { unknown, none, some };
+
+    fn knownFunctionMention(self: *const Builder, ty: Type.TypeId) ?bool {
+        const index = @intFromEnum(ty);
+        if (index >= self.function_mentions.items.len) return null;
+        return switch (self.function_mentions.items[index]) {
+            .unknown => null,
+            .none => false,
+            .some => true,
+        };
+    }
+
+    fn setFunctionMention(self: *Builder, ty: Type.TypeId, mentions: bool) Allocator.Error!void {
+        const index = @intFromEnum(ty);
+        if (index >= self.function_mentions.items.len) {
+            try self.function_mentions.appendNTimes(self.allocator, .unknown, index + 1 - self.function_mentions.items.len);
+        }
+        self.function_mentions.items[index] = if (mentions) .some else .none;
     }
 
     fn functionContent(content: Type.Content) bool {

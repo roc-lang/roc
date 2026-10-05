@@ -15031,10 +15031,15 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     // The unfolding index must travel with the cloned digest caches: a clone
     // holding cached recursive digests but no unfoldings would digest a new
     // rolled-out prefix differently from the knot it unrolls.
+    // Each copy reserves the source's whole capacity first: inserting a hash
+    // table's entries in its own slot order into a smaller, growing table
+    // with the same hash function packs them into long probe runs.
+    try cloned.recursive_digest_unfoldings.ensureTotalCapacity(source.recursive_digest_unfoldings.count());
     var unfoldings = source.recursive_digest_unfoldings.iterator();
     while (unfoldings.next()) |entry| {
         try cloned.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+    try cloned.full_digest_interned.ensureTotalCapacity(source.full_digest_interned.count());
     var buckets = source.full_digest_interned.iterator();
     while (buckets.next()) |entry| {
         var copied = try cloneSlice(MonoType.TypeId, allocator, entry.value_ptr.items);

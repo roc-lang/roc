@@ -358,10 +358,11 @@ pub const Store = struct {
     /// borrowed store never computes a digest, so it never touches these.
     digest_storage: DigestEngine.Storage = .{},
     read_sharing_prepared: bool = false,
-    /// How many rollbacks have run. A rollback truncates type ids that a
-    /// later construction reuses, so a cache kept outside the store and keyed
-    /// by type id is valid only while this is unchanged.
-    rollbacks: u64 = 0,
+    /// The lowest type count a rollback has truncated to since
+    /// `takeRollbackFloor` last ran. A rollback frees the ids at and above
+    /// that count for reuse, so a cache kept outside the store and keyed by
+    /// type id drops its entries there.
+    rollback_floor: ?usize = null,
     read_sharing_coverage: ReadSharingQueries = .{},
 
     /// Workers declare their query needs so unrelated caches stay cold.
@@ -518,6 +519,15 @@ pub const Store = struct {
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
+    }
+
+    /// The lowest type count a rollback has truncated to since the last
+    /// call, if any rollback ran. The builder's function-mention column is
+    /// the one cache that reads this.
+    pub fn takeRollbackFloor(self: *Store) ?usize {
+        const floor = self.rollback_floor;
+        self.rollback_floor = null;
+        return floor;
     }
 
     pub fn freeze(self: *Store) void {
@@ -1172,7 +1182,10 @@ pub const Store = struct {
 
     fn restore(self: *Store, mark_: Mark) void {
         self.assertMutable();
-        self.rollbacks += 1;
+        // A reserved slot that survives may have been refilled (see below),
+        // so a rollback inside a construction invalidates every id.
+        const floor = if (mark_.unfinished_type_count != 0) 0 else mark_.types_len;
+        self.rollback_floor = @min(self.rollback_floor orelse floor, floor);
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);

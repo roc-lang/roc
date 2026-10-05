@@ -2066,7 +2066,7 @@ pub const InstGraph = struct {
     /// Class roots whose inhabitance proof can no longer hold: a `may` scan
     /// answered false for them without assuming anything about a node on its
     /// path. That answer is permanent (see `mayFinalizeAsUninhabited`).
-    never_uninhabited: std.AutoHashMapUnmanaged(NodeId, void) = .empty,
+    never_uninhabited: collections.DenseMap(NodeId, void),
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
@@ -2177,6 +2177,7 @@ pub const InstGraph = struct {
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
             .capture_scratch = InterfaceConstraints.CaptureScratch.init(allocator),
             .resolved_roots = collections.DenseMap(NodeId, u32).init(allocator),
+            .never_uninhabited = collections.DenseMap(NodeId, void).init(allocator),
             .resolved_epoch = 0,
             .structure_epoch = 0,
             .snapshot_free_types = collections.DenseMap(Type.TypeId, void).init(allocator),
@@ -2198,9 +2199,6 @@ pub const InstGraph = struct {
     /// Begin an unrelated specialization while retaining this lane's allocated
     /// graph capacity. Every prior node identity and snapshot becomes invalid;
     /// the cumulative destination type and name stores remain unchanged.
-    /// Slots a reset keeps in a hash index whose clear touches every slot.
-    const reset_retained_capacity = 4096;
-
     pub fn reset(self: *InstGraph) void {
         self.relation_state = .producing;
         self.diagnostics = null;
@@ -2226,7 +2224,7 @@ pub const InstGraph = struct {
         self.leaf_alias_origins.clearRetainingCapacity();
         self.imported_monos.clearRetainingCapacity();
         self.class_finished_monos.clearRetainingCapacity();
-        self.nominal_backing_index.clearRetainingCapacityAtMost(reset_retained_capacity);
+        self.nominal_backing_index.clearRetainingUsedCapacity();
         self.nominal_backing_instances.clearRetainingCapacity();
         var backing_occurrences = self.nominal_backings_by_root.valueIterator();
         while (backing_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
@@ -2252,7 +2250,7 @@ pub const InstGraph = struct {
         self.structure_epoch = 0;
         self.generated_private_nodes = 0;
         self.generated_iterator_nodes = 0;
-        self.generated_iterator_index.clearRetainingCapacityAtMost(reset_retained_capacity);
+        self.generated_iterator_index.clearRetainingUsedCapacity();
         self.generated_iterator_entries.clearRetainingCapacity();
         var iterator_occurrences = self.generated_iterators_by_root.valueIterator();
         while (iterator_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
@@ -2321,7 +2319,7 @@ pub const InstGraph = struct {
         self.type_uninhabited_scratch.deinit(self.allocator);
         self.resolved_roots.deinit();
         self.node_set_pool.deinit();
-        self.never_uninhabited.deinit(self.allocator);
+        self.never_uninhabited.deinit();
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
         self.row_label_right_generation.deinit(self.allocator);
@@ -7766,7 +7764,7 @@ const GraphUninhabitedScan = struct {
         _ = scan.visiting.remove(node);
         if (scan.mode != .may) return;
         const hits_before = scan.entered_hits.pop() orelse return;
-        if (result == false and scan.path_hits == hits_before) try scan.graph.never_uninhabited.put(scan.graph.allocator, node, {});
+        if (result == false and scan.path_hits == hits_before) try scan.graph.never_uninhabited.put(node, {});
     }
 };
 

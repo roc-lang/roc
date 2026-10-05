@@ -70,11 +70,12 @@ pub fn RekeyingHashMap(
             self.size = 0;
         }
 
-        /// Clear, keeping at most `max_capacity` slots: clearing touches every
-        /// slot, so a map that one large use grew is released instead of
-        /// costing that size on every later clear.
-        pub fn clearRetainingCapacityAtMost(self: *Self, max_capacity: usize) void {
-            if (self.slots.len > max_capacity) {
+        /// Clear, keeping the slots only while the use being cleared filled
+        /// at least a quarter of them. Clearing touches every slot, so a map
+        /// that one large use grew is released instead of costing that size
+        /// on every later, smaller use.
+        pub fn clearRetainingUsedCapacity(self: *Self) void {
+            if (self.slots.len > minimum_capacity and self.size * 4 < self.slots.len) {
                 self.allocator.free(self.slots);
                 self.slots = &.{};
                 self.size = 0;

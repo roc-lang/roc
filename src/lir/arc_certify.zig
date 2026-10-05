@@ -456,7 +456,7 @@ fn certifyUniqueArgs(
             proc_id,
             proc_stmts.items,
             local_to_dense,
-            dense_locals.items.len,
+            dense_locals.items,
             layouts,
             &order_scratch,
         );
@@ -1915,7 +1915,13 @@ const Certifier = struct {
     /// Statements with more than one structural predecessor. Only these
     /// statements can be revisited by distinct control-flow walks, so only
     /// these need quotient-state memoization.
-    memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
+    memo_points: collections.DenseMap(LIR.CFStmtId, void),
+    /// Structural predecessor counts (saturating at 2) of the statements
+    /// `collectMemoPoints` reaches, and the statements it has walked. Both
+    /// are kept for their capacity across procedures and hold only the
+    /// current procedure's statements.
+    memo_predecessors: collections.DenseMap(LIR.CFStmtId, u8),
+    memo_walked: collections.DenseMap(LIR.CFStmtId, void),
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
     join_meet_scratch: JoinMeetScratch = .{},
     repr_scratch: collections.DenseMap(ValueId, u32),
@@ -1993,6 +1999,9 @@ const Certifier = struct {
             .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
             .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
             .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
+            .memo_points = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
+            .memo_predecessors = collections.DenseMap(LIR.CFStmtId, u8).init(allocator),
+            .memo_walked = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .join_components = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
             .erased_owners = erased_owner.Owners.init(allocator),
@@ -2011,7 +2020,9 @@ const Certifier = struct {
         self.clearRecords();
         self.records.deinit();
         self.memo.deinit();
-        self.memo_points.deinit(self.allocator);
+        self.memo_points.deinit();
+        self.memo_predecessors.deinit();
+        self.memo_walked.deinit();
         self.summary_scratch.deinit(self.allocator);
         self.join_meet_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
@@ -3798,41 +3809,34 @@ const Certifier = struct {
     /// deduplication, so summarizing the whole proc state at each one would
     /// turn large generated initializers into quadratic work.
     fn collectMemoPoints(self: *Certifier, body: LIR.CFStmtId) Allocator.Error!void {
-        const stmt_count = self.store.cfStmtCount();
-        try self.memo_points.resize(self.allocator, stmt_count, false);
-        self.memo_points.unsetAll();
+        self.memo_points.clearRetainingCapacity();
+        self.memo_predecessors.clearRetainingCapacity();
+        self.memo_walked.clearRetainingCapacity();
+        const predecessor_counts = &self.memo_predecessors;
 
-        const predecessor_counts = try self.allocator.alloc(u8, stmt_count);
-        defer self.allocator.free(predecessor_counts);
-        @memset(predecessor_counts, 0);
-
-        var visited = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.allocator, stmt_count);
-        defer visited.deinit(self.allocator);
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
 
         const Walk = struct {
             fn add(
-                counts: []u8,
+                counts: *collections.DenseMap(LIR.CFStmtId, u8),
                 work: *std.ArrayList(LIR.CFStmtId),
                 allocator: Allocator,
                 successor: LIR.CFStmtId,
             ) Allocator.Error!void {
-                const index = @intFromEnum(successor);
-                if (counts[index] < 2) counts[index] += 1;
+                const count = try counts.getOrPutValue(successor, 0);
+                if (count.value_ptr.* < 2) count.value_ptr.* += 1;
                 try work.append(allocator, successor);
             }
         };
 
         // The procedure entry is a structural predecessor. A back edge to
         // the entry therefore makes it a memo point like any other cycle.
-        predecessor_counts[@intFromEnum(body)] = 1;
+        try predecessor_counts.put(body, 1);
         try stack.append(self.allocator, body);
 
         while (stack.pop()) |current| {
-            const current_index = @intFromEnum(current);
-            if (visited.isSet(current_index)) continue;
-            visited.set(current_index);
+            if ((try self.memo_walked.getOrPut(current)).found_existing) continue;
 
             switch (self.store.getCFStmt(current)) {
                 inline .assign_ref,
@@ -3920,8 +3924,9 @@ const Certifier = struct {
             }
         }
 
-        for (predecessor_counts, 0..) |count, index| {
-            if (count > 1) self.memo_points.set(index);
+        var counts = predecessor_counts.iterator();
+        while (counts.next()) |entry| {
+            if (entry.value_ptr.* > 1) try self.memo_points.put(entry.key_ptr.*, {});
         }
     }
 
@@ -4975,7 +4980,7 @@ const Certifier = struct {
             }
             self.current_stmt = cursor;
 
-            if (self.memo_points.isSet(@intFromEnum(cursor))) {
+            if (self.memo_points.contains(cursor)) {
                 const summary = try self.summarize(&state);
                 const memo_entry = MemoEntry{ .stmt = @intFromEnum(cursor), .digest = summaryDigest(cursor, summary) };
                 const seen = try self.memo.getOrPut(memo_entry);
