@@ -878,3 +878,45 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
     try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmt(join).join.params).len);
     try testing.expectEqual(write_arg, store.getCFStmt(join).join.remainder);
 }
+
+test "LIR proc pass range admits a procedure whose only provable check is a literal comparison" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const lhs = try store.addLocal(.{ .layout_idx = .u64 });
+    const rhs = try store.addLocal(.{ .layout_idx = .u64 });
+    const result = try store.addLocal(.{ .layout_idx = .bool });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const compare = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .num_is_eq,
+        .rc_effect = .none(),
+        .args = try store.addLocalSpan(&.{ lhs, rhs }),
+        .next = done,
+    } }, .test_fixture);
+    const right = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs,
+        .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
+        .next = compare,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs,
+        .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
+        .next = right,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+        .name = store.freshSyntheticSymbol(),
+        .args = .empty(),
+        .body = body,
+        .ret_layout = .bool,
+    }, .none);
+
+    try passes.run(testing.allocator, &store, &layouts, .range, null, null);
+
+    const folded = store.getCFStmt(compare).assign_tag;
+    try testing.expectEqual(@as(u16, 1), folded.discriminant);
+    try testing.expectEqual(result, folded.target);
+}
