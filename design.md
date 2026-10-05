@@ -90,17 +90,25 @@ incidental data structure shape.
 All user-facing failures are reported during checking at the latest. Checking is
 not complete until type checking, static-dispatch finalization, platform/app
 relation output, compile-time constant evaluation, and checked module
-output have all completed. After a checked module is output, every
-violated assumption is a compiler bug:
+output have all completed. Post-check stages do not return user-facing checking
+errors, and after a checked module is output, every violated assumption is a
+compiler bug.
+
+A compiler invariant is an assumption that can fail only if the compiler has a
+bug. Every stage of the compiler—parsing, canonicalization, checking, every
+post-check stage, the backends, and the build and cache machinery—handles a
+violated invariant the same way:
 
 ```text
 debug build: debug-only assertion
 release build: unreachable
 ```
 
-Post-check stages do not return user-facing checking errors. They do not emit
-fallback code. They do not silently repair missing data. They do not add
-release-build runtime checks for compiler invariants.
+No stage adds release-build runtime checks for compiler invariants, emits
+fallback code, or silently repairs missing data in response to one. A
+user-facing failure (malformed source, a type error, a missing or unreadable
+file, allocation failure, a corrupt cache entry) is not a compiler invariant:
+it is reported or propagated as described for that failure, never asserted.
 
 Checked identity and runtime encoding are separate data. A stable id, checked
 id, symbol, type variable, procedure reference, callable member, or source row
@@ -2847,10 +2855,12 @@ it is an operational failure and aborts the operation, as below.
 
 Parsing and error reporting may recover malformed source in order to construct
 the explicit malformed/runtime-error nodes that later stages consume. I/O,
-allocation failure, unsupported compiler hosts, corrupt serialized CheckedModule
-inputs, and compiler invariant violations are operational aborts, not user-error
-module outcomes. They must propagate as operation errors rather than being
-converted into a user diagnostic or a module `Failure` value.
+allocation failure, unsupported compiler hosts, and corrupt serialized
+CheckedModule inputs are operational aborts, not user-error module outcomes.
+They must propagate as operation errors rather than being converted into a user
+diagnostic or a module `Failure` value. A compiler invariant violation is
+neither: it is a debug-only assertion and unreachable in release builds, as
+stated above.
 
 Workers carry source-read and type-check operational errors through the existing
 result channel as explicit stage/error data. The coordinator preserves the
