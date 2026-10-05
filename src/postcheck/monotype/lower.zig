@@ -963,6 +963,33 @@ const SpecEvidenceTarget = struct {
     callable_contracts: []const SpecEvidence = &.{},
 };
 
+/// Whether materialized evidence selects a local procedure, as a target or
+/// anywhere in a target's nested evidence and callable contracts.
+fn specEvidenceSelectsLocalProc(entry: SpecEvidence) bool {
+    switch (entry) {
+        .target => |target| {
+            if (target.target.kind == .local_proc) return true;
+            switch (target.nested) {
+                .resolved => |nested| for (nested) |child| {
+                    if (specEvidenceSelectsLocalProc(child)) return true;
+                },
+                .synthesize => {},
+            }
+            for (target.callable_contracts) |contract| {
+                if (specEvidenceSelectsLocalProc(contract)) return true;
+            }
+            return false;
+        },
+        .from_callable => |from_callable| {
+            for (from_callable.callable_contracts) |contract| {
+                if (specEvidenceSelectsLocalProc(contract)) return true;
+            }
+            return false;
+        },
+        .structural, .from_scheme, .unreachable_value, .checked_error => return false,
+    }
+}
+
 /// Whether relating `contract` to its requirements relates anything: only a
 /// selected target or a checked structural derivation, directly or as a
 /// callable contract, is related to the requirement it satisfies.
@@ -30882,7 +30909,7 @@ const BodyContext = struct {
         frame.cursor = 1;
         if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
 
-        const lookup = self.iteratorMethodLookup(plan);
+        const lookup = try self.withLocalProcContext(self.iteratorMethodLookup(plan));
         task.lookup = lookup;
         task.call_ctx = try self.createCallContext();
         const call_ctx = task.call_ctx.?;
@@ -48624,7 +48651,52 @@ const BodyContext = struct {
         const site = self.literalRejectionSite(expr_id);
         const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, site);
         if (!self.builder.literal_roots) return value;
+        // A conversion reaching a local procedure that needs its declaration
+        // context runs where that context exists: in place, at runtime.
+        if (self.dispatchPlanSelectsLocalProc(plan)) return value;
         return try self.literalRootRead(expr_id, site, value, value_node);
+    }
+
+    /// Whether a dispatch plan's resolution in this body selects a local
+    /// procedure, as its target or anywhere in that target's nested evidence.
+    fn dispatchPlanSelectsLocalProc(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) bool {
+        const id = plan_id orelse return false;
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(id)];
+        return switch (plan.resolution) {
+            .direct_closed => false,
+            .direct_parametric => |direct| self.checkedEvidenceNodeSelectsLocalProc(direct.evidence),
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry|
+                specEvidenceSelectsLocalProc(selectCallableContract(entry, dependent.callable_contract) orelse entry)
+            else
+                false,
+            .direct_pending, .structural, .checked_error, .@"unreachable" => false,
+        };
+    }
+
+    fn checkedEvidenceNodeSelectsLocalProc(self: *BodyContext, node_id: static_dispatch.EvidenceNodeId) bool {
+        const plans = self.view.static_dispatch_plans;
+        const node = plans.evidenceNode(node_id);
+        if (node.target.kind == .local_proc) return true;
+        const nested = switch (node.nested) {
+            .resolved => plans.nestedEvidence(node),
+            .from_callable => return false,
+        };
+        for (nested) |evidence| {
+            if (self.checkedEvidenceSelectsLocalProc(evidence)) return true;
+        }
+        return false;
+    }
+
+    fn checkedEvidenceSelectsLocalProc(self: *BodyContext, evidence: static_dispatch.CheckedEvidence) bool {
+        const plans = self.view.static_dispatch_plans;
+        for (plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
+            if (self.checkedEvidenceSelectsLocalProc(contract)) return true;
+        }
+        return switch (evidence.resolution) {
+            .direct => |child| self.checkedEvidenceNodeSelectsLocalProc(child),
+            .constraint => |constraint| if (self.evidence.at(constraint.index)) |entry| specEvidenceSelectsLocalProc(entry) else false,
+            .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => false,
+        };
     }
 
     /// A program whose compile-time roots are evaluated with it evaluates a
@@ -50618,6 +50690,10 @@ const BodyContext = struct {
         for (vector) |entry| switch (entry) {
             .target => |target| {
                 if (target.instantiation != null or target.callable_contracts.len != 0) return true;
+                // A local procedure's declaration context exists only where
+                // this evidence was materialized; synthesis elsewhere cannot
+                // recover it.
+                if (target.local_proc_context != null) return true;
                 switch (target.nested) {
                     .resolved => return true,
                     .synthesize => {},
@@ -51651,8 +51727,16 @@ const BodyContext = struct {
                 local.context_anchor,
             ).owner_template;
         }
-        if (moduleBytesEqual(lookup.view.key.bytes, self.view.key.bytes)) return self.owner_template;
-        Common.invariant("cross-module local method type lookup had no declaration context");
+        // Without a lowered declaration instance, the target's checked
+        // declaration names the procedure template whose body declares it.
+        for (lookup.view.nested_proc_sites.sites) |site| {
+            if (site.checked_expr == null or site.checked_expr.? != local.expr) continue;
+            return switch (site.owner) {
+                .template => |template| template,
+                .default_root => Common.invariant("local method declaration had no owning procedure template"),
+            };
+        }
+        Common.invariant("local method declaration had no checked nested procedure site");
     }
 
     /// `relateFunctionRequestInterface` for a resolved dispatch target. When

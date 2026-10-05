@@ -237,3 +237,66 @@ test "to_inspect of a local type that captures a local is accepted without diagn
         \\}
     );
 }
+
+test "instantiating a generalized definition at its capturing local type escapes at the use" {
+    try expectEscapeAt(
+        \\total_of = |base, counts| {
+        \\    offset = base * 10
+        \\    Counter := { count : U64 }.{
+        \\        value = |c| c.count + offset
+        \\    }
+        \\    counters = counts.map(|n| Counter.{ count: n })
+        \\    List.sum(counters.map(|c| c.value()))
+        \\}
+        \\
+        \\run = |_| total_of(1, [1, 2, 3])
+    , "total_of");
+}
+
+test "a capturing local type leaving its block through a generalized variable escapes at the use" {
+    try expectEscapeAt(
+        \\total_of = |base, counts| {
+        \\    counters = {
+        \\        offset = base * 10
+        \\        Counter := { count : U64 }.{
+        \\            value = |c| c.count + offset
+        \\        }
+        \\        counts.map(|n| Counter.{ count: n })
+        \\    }
+        \\    List.sum(counters.map(|c| c.value()))
+        \\}
+        \\
+        \\run = |_| total_of(1, [1, 2, 3])
+    , "total_of");
+}
+
+test "an annotated definition fixes its capturing local type inside its block" {
+    try expectNoErrors(
+        \\total_of : U64, List(U64) -> U64
+        \\total_of = |base, counts| {
+        \\    offset = base * 10
+        \\    Counter := { count : U64 }.{
+        \\        value = |c| c.count + offset
+        \\    }
+        \\    counters = counts.map(|n| Counter.{ count: n })
+        \\    List.sum(counters.map(|c| c.value()))
+        \\}
+        \\
+        \\run = |_| total_of(1, [1, 2, 3])
+    );
+}
+
+test "a generic literal converted through a capturing local type inside its block is accepted" {
+    try expectNoErrors(
+        \\conv = |_u| "abc"
+        \\
+        \\run = |extra| {
+        \\    Name := { s : Str, n : U64 }.{
+        \\        from_quote = |s| Ok(Name.{ s, n: extra })
+        \\    }
+        \\    x : Name
+        \\    x = conv({})
+        \\    x.n
+        \\}
+    );
+}

@@ -5356,11 +5356,18 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Local Type Escapes Its Block", "", .runtime_error);
         errdefer report.deinit();
 
-        try D.renderSliceInto(&.{
-            D.bytes("This lets a value of type"),
-            D.ident(data.type_name).withAnnotation(.inline_code),
-            D.bytes("leave the block that declares that type."),
-        }, self, &report, &report.headline);
+        switch (data.kind) {
+            .value => try D.renderSliceInto(&.{
+                D.bytes("This lets a value of type"),
+                D.ident(data.type_name).withAnnotation(.inline_code),
+                D.bytes("leave the block that declares that type."),
+            }, self, &report, &report.headline),
+            .instantiation => try D.renderSliceInto(&.{
+                D.bytes("This uses a definition at type"),
+                D.ident(data.type_name).withAnnotation(.inline_code),
+                D.bytes("outside the block that declares that type."),
+            }, self, &report, &report.headline),
+        }
 
         try self.addSourceHighlightRegion(&report, data.region);
 
@@ -5373,6 +5380,13 @@ pub const ReportBuilder = struct {
             D.ident(data.type_name).withAnnotation(.inline_code),
             D.bytes("can only be used inside the block that declares it."),
         }, self, &report);
+        if (data.kind == .instantiation) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("A type annotation on the definition can fix its types inside the block instead."),
+            }, self, &report);
+        }
         return report;
     }
 

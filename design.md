@@ -4592,9 +4592,16 @@ mentions the capturing local type. That point becomes a runtime error, and
 so does every live dispatch outside the block whose lineage selects one of the
 type's capturing methods. A lineage's evaluation site is its outermost
 dispatch with a site: a target's introducing expression, or the lookup that
-instantiated the requirement. Such a site outside the block exists only if
-the type escaped, so later stages never meet a local method call without its
-declaration context.
+instantiated the requirement, including a literal conversion the lookup
+copied out of a scheme. That site supplies the evidence, so a site outside
+the block selects a capturing method where its declaration context does not
+exist. With no value leaving the block, such a site exists only when a use
+outside the block instantiates a generalized definition at the type: the
+type mentioned by that use's instantiated requirements leaves its block, and
+checking reports the escape at the first such use and makes every such site a
+runtime error. An annotation that fixes the definition's types inside the
+block avoids it. Later stages therefore never meet a local method call without
+its declaration context.
 
 A local procedure candidate is not proof of compile-time availability before
 that greatest fixpoint settles. Conditional diagnostics retain any pending
@@ -5400,7 +5407,14 @@ declaring module, so a local procedure target found in any module of a lookup
 scope is that owner's exact target. Specialization-interface evidence uses its
 checked declaration; body-lowering evidence carries the declaration context of
 the body that declares it, so a generic procedure specialized with such
-evidence lowers with that context as an explicit input.
+evidence lowers with that context as an explicit input. Without a lowered
+declaration context, a local method target's type is read in the procedure
+template its checked nested procedure site names as its owner. Materialized
+nested evidence that selects a local procedure with a declaration context is
+kept resolved rather than left for the receiving body to synthesize from
+types: only the body that materialized it has that context. An iterator
+protocol dispatch that selects a local procedure carries its context exactly
+like any other dispatch.
 
 Some method registry targets are generated structural targets rather than
 procedure bodies. A nominal or opaque type can opt in to a compiler-derived
@@ -10777,13 +10791,26 @@ dictionary method's own nested call) carries the `ContextArg`s supplying them:
   runtime capture, read from the declaring frame's own bindings.
 - A derived component call that reaches a capturing local procedure calls that
   procedure's specialization receiving its own runtime captures as `capture`
-  inputs, so a derivation runs in whichever frame holds those values.
+  inputs, so a derivation runs in whichever frame holds those values. An
+  iterator protocol call (`IteratorCallPlan`) whose direct target is a
+  capturing local procedure reaches it the same way, and a loop dispatching
+  through a dictionary requirement that is a `requirement` input calls the
+  input.
 
 Specialization is keyed by the generic worker and its exact inputs, so
 programs whose evidence selects no capturing local procedure plan exactly the
 workers and dictionaries they would otherwise. A generated codec or derived
-procedure never receives context inputs, and an iterator protocol dispatch
-that selects a capturing local procedure is an invariant failure.
+procedure never receives context inputs.
+
+A literal conversion that reaches a capturing local procedure has no frame to
+construct it from at compile time. A literal whose direct conversion selects
+one, as its target or in that target's nested evidence, and a literal site
+whose worker received its conversion method as a context input, are recorded in
+`ProgramPlan.in_place_conversions` instead of being planned as literal sites:
+lowering converts them in place, at runtime, through the dispatch that frame
+can make. Monotype lowers such a literal's conversion in place too instead of
+hoisting it as a literal root, when the conversion's resolution in that body
+selects a local procedure.
 
 A closure's captures are the values its captured binders hold at the closure's
 declaration. Constructing the callable at a later use reads the same values only
@@ -12041,7 +12068,8 @@ and nested sites propagate their required bindings to their lexical parents.
 The same walk records each site's runtime captures: the binders of enclosing
 frames whose values the site needs, which are its source captures plus the
 runtime captures of every local procedure its body selects (a lookup resolved
-to a local procedure, or a dispatch plan whose direct target is one), less the
+to a local procedure, or a dispatch or iterator protocol plan whose direct
+target is one), less the
 binders the site itself binds. A site's needs propagate to its lexical parent
 the same way, and the walk records which site binds each binder so the
 subtraction is exact. Recursive selections make this a least fixpoint, solved

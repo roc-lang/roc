@@ -23940,6 +23940,7 @@ const NestedProcSiteBuilder = struct {
             },
             .tuple_access => |access| try self.pushExpr(access.tuple, owner),
             .for_ => |for_| {
+                try self.selectIteratorTargets(for_.plan);
                 try self.pushPattern(for_.pattern, owner);
                 try self.pushExpr(for_.expr, owner);
                 try self.pushExpr(for_.body, owner);
@@ -24123,6 +24124,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(ret.expr, owner);
             },
             .for_ => |for_| {
+                try self.selectIteratorTargets(for_.plan);
                 try self.pushPattern(for_.pattern, owner);
                 try self.pushExpr(for_.expr, owner);
                 try self.pushExpr(for_.body, owner);
@@ -24197,6 +24199,17 @@ const NestedProcSiteBuilder = struct {
 
     /// Select the local procedures a checked evidence vector's targets are,
     /// through every nested vector checking resolved.
+    /// Select the iterator protocol methods a loop's plan calls, which may be
+    /// local procedures.
+    fn selectIteratorTargets(self: *NestedProcSiteBuilder, maybe_plan: ?static_dispatch.IteratorForPlanId) Allocator.Error!void {
+        const plan_id = maybe_plan orelse return;
+        const plan = self.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
+        for ([_]static_dispatch.IteratorDispatchCall{ plan.iter, plan.next }) |call| switch (call.resolution) {
+            .direct_closed, .direct_parametric => |direct| try self.selectEvidenceNode(direct.evidence),
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        };
+    }
+
     fn selectEvidence(self: *NestedProcSiteBuilder, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!void {
         for (evidence) |entry| switch (entry.resolution) {
             .direct => |node| try self.selectEvidenceNode(node),
