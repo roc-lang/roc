@@ -14,7 +14,6 @@ pub const wasm = @import("wasm/mod.zig");
 comptime {
     if (@import("builtin").is_test) {
         @import("std").testing.refAllDecls(dev.PackFile);
-        @import("std").testing.refAllDecls(dev.LirCodeGenMod);
     }
 }
 

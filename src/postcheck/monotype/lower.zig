@@ -64277,6 +64277,12 @@ test "completion relation preserves recursive and shared DAG outcomes" {
     ctx.graph = graph;
     ctx.inhabitation_visiting = .{};
     defer ctx.inhabitation_visiting.deinit(allocator);
+    ctx.inhabitation_entered = .empty;
+    defer ctx.inhabitation_entered.deinit(allocator);
+    ctx.settled_node_uninhabited = .{ .empty, .empty };
+    defer for (&ctx.settled_node_uninhabited) |*memo| memo.deinit(allocator);
+    ctx.node_uninhabited_scratch = .{};
+    defer ctx.node_uninhabited_scratch.deinit(allocator);
 
     for ([_]BodyContext.RequestCompletion{ .unchanged, .completed, .mismatch }) |expected| {
         // Each side is a recursive list of pairs. Repeated tuple edges below

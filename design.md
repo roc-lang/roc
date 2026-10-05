@@ -535,20 +535,13 @@ existing coinductive interpretation: a recursive component without a finite
 proof of emptiness remains potentially inhabited. A shared completed subgraph
 is not a recursive-path assumption.
 
-The view implementation expresses one finite monotone AND/OR graph per query
-context. Required record fields and tuple components are conjunctions; a tag's
-payload is a conjunction, and alternatives form a disjunction. Optional fields
-need not exist and do not require a witness. Functions, error-recovery types,
-field-presence terms, and builtin numeric types retain their existing inhabited
-leaf behavior. Exact known-empty view identities are false.
-
-An unconditional disjunction witness permits omission of its other dependencies.
-A zero-argument tag proves its row inhabited before any alternative payload or
-extension is traversed; an open terminal proves the same only under the query's
-tail policy. Such proofs propagate through row disjunctions and shared completed
-rows, but never through an exact known-empty identity. They are distinct from
-initial true values and coinductive cycle answers. Record conjunctions and
-row-only SCCs retain their full equations when no unconditional witness exists.
+Each query defines a finite monotone AND/OR graph: required fields, tuple
+components, and tag payloads are conjunctions; tag alternatives are disjunctions.
+Optional fields require no witness. Functions, recovery types, field-presence
+terms, and builtin numerics retain their existing inhabited leaf behavior.
+Exact known-empty identities are false. An unconditional witness, such as a
+zero-argument tag, may prune other disjunction dependencies, but a provisional
+cycle answer cannot.
 
 Leaf and tail policy is explicit:
 
@@ -569,13 +562,10 @@ add no required fields in any mode. A record row-only cycle therefore has the
 empty conjunction as its identity, unlike a union's empty disjunction. Exact
 known-empty tail identities still make the record empty.
 
-The solver starts every graph node at true and propagates false through reverse
-edges until convergence. Each node changes at most once; conjunction failures
-and disjunction live-child counts process each dependency edge only when needed.
-This computes the greatest fixed point of the stated equations without
-enumerating recursive paths. Only converged answers may be reused, with query
-mode, assumptions, and stable reader identity kept distinct. Shared DAGs above
-recursive components must have graph-proportional work, not path-count work.
+Potential inhabitedness is the greatest fixed point of those equations.
+Only converged answers may be reused, with query mode, assumptions, and reader
+identity kept distinct. Shared DAGs above recursive components must have
+graph-proportional work, not path-count work.
 
 ### Early Compile-Time Object Reuse
 

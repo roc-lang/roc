@@ -31,7 +31,6 @@ zig-out
 zig-pkg
 .zig-cache
 .tmp/
-.ctfe-investigation/
 .direnv
 .envrc
 *.rs.bk

@@ -9080,6 +9080,11 @@ fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compile
 /// not separately store compiler version, builtin identity, semantic build
 /// switches, or serialization format identity.
 fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    // Unconditional implementations must not reuse experimental flag namespaces.
+    hasher.update("roc-checked-artifact-v2");
+    hasher.update(compiler_version);
+
     // Resolve against the build root rather than cwd so the hash works both for
     // standalone builds and when roc is consumed as a dependency (cwd is then the
     // consumer's directory, not roc's).
@@ -9090,12 +9095,8 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
         std.Io.Limit.limited(32 * 1024 * 1024),
     ) catch @panic("unable to read Builtin.roc while constructing compiler artifact hash");
     defer b.allocator.free(builtin_source);
-
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    // Unconditional implementations must not reuse any experimental flag namespace.
-    hasher.update("roc-checked-artifact-v2");
-    hasher.update(compiler_version);
     hasher.update(builtin_source);
+
     return hasher.finalResult();
 }
 

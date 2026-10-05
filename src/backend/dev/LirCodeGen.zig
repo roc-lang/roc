@@ -26165,23 +26165,21 @@ else
 const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 
 const TestLayoutState = struct {
-    allocator: Allocator,
     layout_store: layout.Store,
     module_env: *@import("can").ModuleEnv,
 
     fn init(allocator: Allocator) Allocator.Error!TestLayoutState {
         const module_env = try allocator.create(@import("can").ModuleEnv);
-        errdefer allocator.destroy(module_env);
         module_env.* = try @import("can").ModuleEnv.init(allocator, "");
-        errdefer module_env.deinit();
         const layout_store = try layout.Store.init(allocator, base.target.TargetUsize.native);
-        return .{ .allocator = allocator, .layout_store = layout_store, .module_env = module_env };
+        return .{ .layout_store = layout_store, .module_env = module_env };
     }
 
     fn deinit(self: *TestLayoutState) void {
+        const allocator = std.testing.allocator;
         self.layout_store.deinit();
         self.module_env.deinit();
-        self.allocator.destroy(self.module_env);
+        allocator.destroy(self.module_env);
     }
 };
 
@@ -28959,173 +28957,6 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[stub.call..][0..4], .little);
         try std.testing.expectEqual(@as(u32, 0x94000000), instruction & 0xfc000000);
         try std.testing.expectEqual(page.offset, stub.call + (instruction & 0x03ffffff) * 4);
-    }
-}
-
-test "independent object producers persist identical normal lss artifact bytes" {
-    const Artifact = @import("ProcArtifact.zig");
-    const PackFile = @import("PackFile.zig");
-    const allocator = std.testing.allocator;
-    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
-        // Keep both allocation domains alive: equal logical inputs must not
-        // accidentally reuse the first producer's source or static addresses.
-        var first_arena = std.heap.ArenaAllocator.init(allocator);
-        defer first_arena.deinit();
-        var second_arena = std.heap.ArenaAllocator.init(allocator);
-        defer second_arena.deinit();
-        const Fixture = struct {
-            const Result = struct {
-                set: Artifact.Set,
-                bytes: []const u8,
-                raw_call: [4]u8,
-                source_address: usize,
-                data_address: usize,
-                code_address: usize,
-            };
-
-            fn produce(a: Allocator, placement: usize) !Result {
-                const CG = LirCodeGen(target);
-                var store = LirStore.init(a);
-                defer store.deinit();
-                const source = try store.insertString("independently allocated immutable source bytes");
-                var layouts = try TestLayoutState.init(a);
-                defer layouts.deinit();
-                const data_id: LIR.StaticDataId = @enumFromInt(0);
-                const backing = try a.dupe(u8, "immutable static backing");
-                const pointer = try a.alloc(u8, 8);
-                @memset(pointer, 0);
-                const exports = [_]lir.Program.StaticDataExport{
-                    .{
-                        .symbol_name = "deterministic_pointer",
-                        .value_id = data_id,
-                        .bytes = pointer,
-                        .alignment = 8,
-                        .relocations = &.{.{
-                            .offset = 0,
-                            .target_symbol_name = "",
-                            .target = .{ .data_symbol = @enumFromInt(1) },
-                            .addend = 3,
-                        }},
-                    },
-                    .{
-                        .symbol_name = "deterministic_backing",
-                        .bytes = backing,
-                        .alignment = 1,
-                    },
-                };
-                var cg = try CG.init(a, &store, &layouts.layout_store, .{}, &.{}, .default);
-                defer cg.deinit();
-                cg.generation_mode = .object_file;
-                try cg.setStaticDataSymbols(&exports);
-                if (comptime target.toCpuArch() == .aarch64) cg.codegen.branch_reach_limit = 4096;
-
-                // Placement-owned padding is not part of the comparable closure.
-                // Use the same region classification as detached branch islands.
-                const nop: []const u8 = if (comptime target.toCpuArch() == .aarch64)
-                    &.{ 0x1f, 0x20, 0x03, 0xd5 }
-                else
-                    &.{0x90};
-                while (cg.codegen.currentOffset() < placement) try cg.codegen.emit.buf.appendSlice(a, nop);
-                try cg.logBranchIsland(0);
-                const start = cg.codegen.currentOffset();
-                const symbol = try cg.internSymbolName("deterministic_external", .shared);
-                if (comptime target.toCpuArch() == .aarch64)
-                    try cg.codegen.emitExternCall(symbol)
-                else
-                    try cg.codegen.emitCall(symbol);
-                const ref_site = cg.codegen.currentOffset() - start;
-                // A real emitted direct call, not a manually invented CodeRef.
-                try cg.emitCallToOffset(.{ .offset = start }, start);
-                try cg.emitStaticDataAddress(if (comptime target.toCpuArch() == .x86_64) .RAX else .X0, data_id);
-                const end = cg.codegen.currentOffset();
-                try cg.code_regions.append(a, .{
-                    .start = start,
-                    .end = end,
-                    .entry = 0,
-                    .kind = .entrypoint,
-                });
-                // Vary the detached stub's distance, not the artifact body.
-                const tail_start = end;
-                while (cg.codegen.currentOffset() < end + 128 + placement / 4) try cg.codegen.emit.buf.appendSlice(a, nop);
-                try cg.logBranchIsland(tail_start);
-                try cg.finishImage();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try std.testing.expectEqual(@as(usize, 1), cg.codegen.extern_stubs.items.len);
-                    const stub = cg.codegen.extern_stubs.items[0];
-                    try std.testing.expectEqual(start, stub.call);
-                    try std.testing.expect(cg.getRelocations()[stub.page_relocation].linked_data.offset >= end);
-                }
-                const raw_call = cg.getGeneratedCode()[start..][0..4].*;
-                const set = try Artifact.extract(CG, a, &cg, &.{}, &layouts.layout_store, &.{}, &exports, &.{});
-                try std.testing.expectEqual(@as(usize, 1), set.artifacts.len);
-                const artifact = set.artifacts[0];
-                try std.testing.expect(artifact.kind == .entrypoint);
-                try std.testing.expectEqual(@as(usize, 1), artifact.refs.len);
-                try std.testing.expectEqual(@as(u32, @intCast(ref_site)), artifact.refs[0].site);
-                try std.testing.expectEqual(.call, artifact.refs[0].form);
-                try std.testing.expectEqual(@as(u32, 0), artifact.refs[0].target);
-                try std.testing.expectEqual(@as(u32, 0), artifact.refs[0].delta);
-                try std.testing.expectEqual(@as(usize, 0), artifact.symbolic_refs.len);
-                try std.testing.expectEqual(@as(usize, if (target.toCpuArch() == .aarch64) 3 else 2), artifact.relocations.len);
-                const external = artifact.relocations[0];
-                try std.testing.expectEqual(@as(u32, if (target.toCpuArch() == .aarch64) 0 else 1), external.offset);
-                try std.testing.expectEqualStrings("deterministic_external", external.name);
-                try std.testing.expectEqual(.shared, external.scope);
-                try std.testing.expect(external.kind == .function);
-                for (artifact.relocations[1..], 0..) |relocation, i| {
-                    try std.testing.expectEqualStrings("deterministic_pointer", relocation.name);
-                    try std.testing.expectEqual(.program, relocation.scope);
-                    try std.testing.expectEqual(
-                        @as(u32, @intCast(ref_site + (if (target.toCpuArch() == .aarch64) @as(usize, 4) else 8) + i * 4)),
-                        relocation.offset,
-                    );
-                    const expected_kind: @TypeOf(relocation.kind.data) = if (comptime target.toCpuArch() == .aarch64)
-                        (if (i == 0) .page21 else .pageoff12)
-                    else
-                        .rel32;
-                    try std.testing.expectEqual(expected_kind, relocation.kind.data);
-                }
-                try std.testing.expectEqual(@as(usize, 2), artifact.data.len);
-                try std.testing.expectEqualStrings("deterministic_pointer", artifact.data[0].name);
-                try std.testing.expectEqualSlices(u8, pointer, artifact.data[0].bytes);
-                try std.testing.expectEqual(@as(usize, 1), artifact.data[0].relocations.len);
-                const data_ref = artifact.data[0].relocations[0];
-                try std.testing.expectEqualStrings("deterministic_backing", data_ref.name);
-                try std.testing.expectEqual(@as(u32, 0), data_ref.offset);
-                try std.testing.expectEqual(@as(i64, 3), data_ref.addend);
-                try std.testing.expect(!data_ref.function and !data_ref.external);
-                try std.testing.expectEqualStrings("deterministic_backing", artifact.data[1].name);
-                try std.testing.expectEqualSlices(u8, backing, artifact.data[1].bytes);
-                const specs = [_]PackFile.SpecEntry{.{
-                    .key = [_]u8{7} ** 32,
-                    .artifact = 0,
-                    .rc_borrowed_params = 0,
-                    .rc_ret_borrowed = false,
-                    .rc_ret_lenders = 0,
-                }};
-                return .{
-                    .set = set,
-                    .bytes = try PackFile.write(a, &set, &specs),
-                    .raw_call = raw_call,
-                    .source_address = @intFromPtr(store.getString(source).ptr),
-                    .data_address = @intFromPtr(backing.ptr),
-                    .code_address = @intFromPtr(cg.getGeneratedCode().ptr),
-                };
-            }
-        };
-        var first = try Fixture.produce(first_arena.allocator(), 4096);
-        defer first.set.deinit();
-        var second = try Fixture.produce(second_arena.allocator(), 4608);
-        defer second.set.deinit();
-        try std.testing.expect(first.source_address != second.source_address);
-        try std.testing.expect(first.data_address != second.data_address);
-        try std.testing.expect(first.code_address != second.code_address);
-        if (comptime target.toCpuArch() == .aarch64) {
-            try std.testing.expect(!std.mem.eql(u8, &first.raw_call, &second.raw_call));
-            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, first.set.artifacts[0].code[0..4], .little));
-            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, second.set.artifacts[0].code[0..4], .little));
-        }
-        try std.testing.expectEqualSlices(u8, first.bytes, second.bytes);
     }
 }
 

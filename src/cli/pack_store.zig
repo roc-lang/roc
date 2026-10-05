@@ -127,6 +127,10 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
         .rc_borrowed_params = 1,
         .rc_ret_borrowed = false,
         .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
     }});
     defer allocator.free(bytes);
     const incompatible = try allocator.dupe(u8, bytes);
@@ -342,9 +346,9 @@ pub const LoadedPacks = struct {
                 else => return error.PackDirectoryUnreadable,
             };
             defer allocator.free(bytes);
-            self.appendPack(bytes) catch |err| switch (err) {
-                error.UnsupportedPackVersion => if (input == .cache_offers) continue else return err,
-                else => return err,
+            self.appendPack(bytes) catch |err| {
+                if (err == error.UnsupportedPackVersion and input == .cache_offers) continue;
+                return @as(LoadError!void, err);
             };
         }
     }

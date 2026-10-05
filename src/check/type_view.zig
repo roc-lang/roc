@@ -140,20 +140,12 @@ pub fn resolveVar(self: *Self, view_id: Var) Allocator.Error!Resolved {
     return .{ .var_ = view_id, .desc = descriptor };
 }
 
-pub fn lookupNominalDecl(self: *const Self, nominal: types.NominalType) ?types.NominalDecl.Idx {
-    return self.source.lookupNominalDecl(nominal);
-}
-
-pub fn getNominalDecl(self: *const Self, index: types.NominalDecl.Idx) types.NominalDecl {
-    return self.source.getNominalDecl(index);
-}
-
 /// Actuals are already in their caller's scope. Substitution returns them
 /// directly and never interprets their rigid names in the callee's scope.
 pub fn openNominalBacking(self: *Self, nominal: types.NominalType) Allocator.Error!?Var {
-    const declaration = self.lookupNominalDecl(nominal) orelse
+    const declaration = self.source.lookupNominalDecl(nominal) orelse
         @panic("type view referenced a missing nominal declaration");
-    const decl = self.getNominalDecl(declaration);
+    const decl = self.source.getNominalDecl(declaration);
     if (!decl.isValid()) return null;
     try self.ensureDependencies(declaration);
     const args = self.sliceNominalArgs(nominal);

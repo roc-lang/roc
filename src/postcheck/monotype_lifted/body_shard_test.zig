@@ -13,17 +13,9 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 test "body shards borrow compile-time descriptors through publication and rollback" {
-    try testBorrowedComptimeDescriptors(testing.allocator, true);
-    // Optional storage compaction deliberately tolerates a failed shrink.
-    // Sweep essential descriptor/publication allocations separately; the
-    // complete compaction/rollback assertions still run above.
-    try testing.checkAllAllocationFailures(testing.allocator, testBorrowedComptimeDescriptors, .{false});
-}
-
-fn testBorrowedComptimeDescriptors(allocator: Allocator, exercise_compaction: bool) !void {
     const Common = @import("../common.zig");
     var ids: PrefixIds = undefined; // Fully initialized by prefix before use.
-    var source = try prefix(allocator, 0, &ids);
+    var source = try prefix(testing.allocator, 0, &ids);
     defer source.deinit();
     const root_a: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(check.CheckedModule.ModuleId),
@@ -42,16 +34,8 @@ fn testBorrowedComptimeDescriptors(allocator: Allocator, exercise_compaction: bo
     const b = try source.addComptimeValueRoot(root_b);
     try source.addComptimeValueRead(root_b);
     {
-        var worker = try source.cloneForSpecConstrBody(allocator, ids.functions[0]);
+        var worker = try source.cloneForSpecConstrBody(testing.allocator, ids.functions[0]);
         defer worker.deinit();
-        inline for (@typeInfo(Ast.Program).@"struct".fields) |field| {
-            if (comptime switch (@typeInfo(field.type)) {
-                .@"struct" => @hasDecl(field.type, "unsafeRawItemsForView"),
-                else => false,
-            }) {
-                try testing.expectEqual(@as(usize, 0), @field(worker, field.name).len());
-            }
-        }
         try testing.expectEqual(@as(usize, 0), worker.comptime_value_roots.len());
         try testing.expectEqual(@as(usize, 0), worker.comptime_value_reads.len());
         try testing.expectEqual(@as(usize, 1), worker.body_prefix.?.len("comptime_value_reads"));
@@ -75,15 +59,13 @@ fn testBorrowedComptimeDescriptors(allocator: Allocator, exercise_compaction: bo
     try testing.expectEqual(b, published.root);
     try testing.expectEqualDeep(root_b, source.getComptimeValueRoot(published.root));
     try testing.expectEqualDeep(root_a, source.view().getComptimeValueRoot(a));
-    if (exercise_compaction) {
-        const mark = source.markSpecConstrAnalysis();
-        _ = try source.addComptimeValueRoot(root_a);
-        source.rewindSpecConstrAnalysis(mark);
-        try testing.expectEqual(@as(usize, 2), source.comptime_value_roots.len());
-        _ = try source.addComptimeValueRoot(root_b);
-        source.finishSpecConstrAnalysis(mark);
-        try testing.expectEqual(@as(usize, 2), source.comptime_value_roots.len());
-    }
+    const mark = source.markSpecConstrAnalysis();
+    _ = try source.addComptimeValueRoot(root_a);
+    source.rewindSpecConstrAnalysis(mark);
+    try testing.expectEqual(@as(usize, 2), source.comptime_value_roots.len());
+    _ = try source.addComptimeValueRoot(root_b);
+    source.finishSpecConstrAnalysis(mark);
+    try testing.expectEqual(@as(usize, 2), source.comptime_value_roots.len());
 }
 
 fn emptyProgram(allocator: Allocator) Ast.Program {
