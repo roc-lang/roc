@@ -2784,6 +2784,7 @@ pub const Interpreter = struct {
                             // value; this procedure returns to whoever makes
                             // it without reading the value.
                             frame.setLocal(assign.target, result.value);
+                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
                             current = assign.next;
                             continue;
                         }
@@ -2894,6 +2895,7 @@ pub const Interpreter = struct {
                         };
                         if (!drivesHere(frame, assign.drive)) {
                             frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
+                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
                             current = assign.next;
                             continue;
                         }

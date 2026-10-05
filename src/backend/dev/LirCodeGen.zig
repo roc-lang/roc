@@ -17061,6 +17061,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try defer_builder.addImmArg(arg_layouts_span.start);
                 try defer_builder.addImmArg(arg_layouts_span.len);
                 try self.callBoxyBuiltin(&defer_builder, .defer_erased);
+                if (out_desc) |local| try self.bindAssignedLocal(local, .{ .immediate_i64 = 0 });
                 return if (ret_size == 0)
                     .{ .immediate_i64 = 0 }
                 else
@@ -17135,6 +17136,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             value_loc: ValueLocation,
             value_layout: layout.Idx,
             result_desc: ?lir.LIR.BoxyDescRef,
+            out_desc: ?LocalId,
         ) Allocator.Error!ValueLocation {
             if (drive == .none) return value_loc;
             try self.spillAllVectorLocals();
@@ -17143,7 +17145,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
             const result_slot = if (size == 0) 0 else self.codegen.allocStackSlot(size);
             if (size > 0) try self.copyBytesToStackOffset(result_slot, value_loc, size);
+            // The descriptor a pending call returns replaces the statement's
+            // own, which stays in place when nothing is pending.
             const out_desc_slot = self.codegen.allocStackSlot(8);
+            if (out_desc) |local| {
+                try self.copyBytesToStackOffset(out_desc_slot, try self.emitValueLocal(local), 8);
+            }
 
             var skip_patch: ?usize = null;
             if (drive == .unless_caller_drives) {
@@ -17168,6 +17175,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intFromEnum(runtime_layout));
             try self.callBoxyBuiltin(&builder, .drive_pending);
             if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
+            if (out_desc) |local| {
+                try self.bindAssignedLocal(local, self.stackLocationForLayout(self.localLayout(local), out_desc_slot));
+            }
 
             return if (size == 0)
                 .{ .immediate_i64 = 0 }
@@ -23393,7 +23403,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .ret_layout = self.localLayout(assign.target),
                                 .out_desc = assign.out_desc,
                             });
-                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc);
+                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
                             try self.bindAssignedLocal(assign.target, driven_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
@@ -23412,7 +23422,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.reuse_closure,
                                 assign.deferred,
                             );
-                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc);
+                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
                             try self.bindAssignedLocal(assign.target, driven_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },

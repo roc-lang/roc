@@ -10081,7 +10081,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
                 .out_desc = assign.out_desc,
             });
-            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc);
+            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -10099,7 +10099,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .reuse_closure = assign.reuse_closure,
                 .deferred = assign.deferred,
             });
-            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc);
+            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -11218,6 +11218,10 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         try self.emitI32Const(@intCast(c.arg_layouts.start));
         try self.emitI32Const(@intCast(c.arg_layouts.len));
         try self.emitBoxyCall("roc_boxy_defer_erased");
+        if (c.out_desc) |desc_local| {
+            try self.emitNullPtr();
+            try self.bindAssignedLocal(desc_local);
+        }
         if (ret_size == 0) {
             try self.emitZeroValue(try self.resolveValType(c.ret_layout));
         } else if (try self.isCompositeLayout(c.ret_layout)) {
@@ -11262,7 +11266,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 /// this statement. Takes the statement's value from the operand stack and
 /// leaves the last pending call's result there, or the same value when none
 /// was pending.
-fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx, result_desc: ?LIR.BoxyDescRef) Allocator.Error!void {
+fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx, result_desc: ?LIR.BoxyDescRef, out_desc: ?ProcLocalId) Allocator.Error!void {
     if (drive == .none) return;
     const runtime_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
     const ret_size = try self.layoutStorageByteSize(runtime_layout);
@@ -11285,7 +11289,13 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
         try self.emitStoreToMemSized(slot, 0, val_type, ret_size);
         slot_local = slot;
     }
+    // The descriptor a pending call returns replaces the statement's own,
+    // which stays in place when nothing is pending.
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
+    if (out_desc) |desc_local| {
+        try self.emitProcLocal(desc_local);
+        try self.emitStoreToMemSized(out_desc_ptr, 0, .i32, 4);
+    }
 
     if (drive == .unless_caller_drives) {
         const flag = self.caller_drives_local orelse
@@ -11302,6 +11312,11 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
     try self.emitBoxyCall("roc_boxy_drive_pending");
     if (drive == .unless_caller_drives) {
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    }
+    if (out_desc) |desc_local| {
+        try self.emitLocalGet(out_desc_ptr);
+        try self.emitLoadOpSized(.i32, 4, 0);
+        try self.bindAssignedLocal(desc_local);
     }
 
     if (ret_size == 0) {

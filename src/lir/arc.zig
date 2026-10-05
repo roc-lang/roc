@@ -3625,14 +3625,17 @@ const Inserter = struct {
 
     /// Whether an erased call is left pending for whoever awaits this
     /// procedure's result: its value is the procedure's whole result at the
-    /// same layout, no descriptor comes back with it, and the callee does not
-    /// repack the closure's allocation.
+    /// same layout, any descriptor that comes back with it is the one the
+    /// procedure returns, and the callee does not repack the closure's
+    /// allocation.
     fn erasedCallIsDeferred(self: *const Inserter, call: anytype) bool {
-        if (call.reuse_closure or call.out_desc != null) return false;
+        if (call.reuse_closure) return false;
         const next = self.store.getCFStmt(call.next);
         if (next != .ret or next.ret.value != call.target) return false;
         const caller = self.store.getProcSpec(self.current_proc);
-        return caller.hosted == null and caller.runtime_ret_desc == null and
+        // The descriptor that comes back with the value is the one this
+        // procedure returns with it, or there is none on either side.
+        return caller.hosted == null and call.out_desc == caller.runtime_ret_desc and
             self.store.getLocal(call.target).layout_idx == caller.ret_layout;
     }
 

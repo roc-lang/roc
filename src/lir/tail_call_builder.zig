@@ -128,7 +128,12 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         const stmt = store.getCFStmt(id);
         if (stmt == .assign_call_erased) {
             const erased = stmt.assign_call_erased;
-            if (erased.out_desc != null) continue;
+            // A descriptor output is returned with the value only when it is
+            // the descriptor local of the value itself.
+            if (erased.out_desc) |out_desc| {
+                const target_desc = store.getLocal(erased.target).boxy_desc orelse continue;
+                if (target_desc.localOrNull() != out_desc) continue;
+            }
             if (store.getCFStmt(erased.next) == .ret) continue;
             if (store.getLocal(erased.target).layout_idx != ret_layout) continue;
             const returned = try self.returnedLocal(store, erased.next) orelse continue;

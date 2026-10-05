@@ -3814,7 +3814,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitFrameReplacingCall(assign.proc, assign.args);
             } else {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc);
+                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
@@ -3831,7 +3831,7 @@ pub const MonoLlvmCodeGen = struct {
                     assign.reuse_closure,
                     assign.deferred,
                 );
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc);
+                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
@@ -4849,6 +4849,10 @@ pub const MonoLlvmCodeGen = struct {
                     try self.boxyInt(.i32, arg_layouts.len),
                 },
             );
+            if (out_desc) |desc_local| {
+                try self.prepareLocalWrite(desc_local);
+                try self.storePointer(self.slot(desc_local).ptr, try self.boxyNullPtr());
+            }
             return;
         }
         const ret_ptr = if (self.slot(target).size == 0)
@@ -4890,13 +4894,19 @@ pub const MonoLlvmCodeGen = struct {
         drive: lir.LIR.PendingDrive,
         target: LocalId,
         result_desc: ?lir.LIR.BoxyDescRef,
+        out_desc: ?LocalId,
     ) Error!void {
         if (drive == .none) return;
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const result_desc_ptr = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
-        const out_desc_ptr = try self.boxyOutDescPtr("boxy_driven_result_desc");
+        // The descriptor a pending call returns replaces the statement's
+        // own, which stays in place when nothing is pending.
+        const out_desc_ptr = if (out_desc) |desc_local|
+            self.slot(desc_local).ptr
+        else
+            try self.boxyOutDescPtr("boxy_driven_result_desc");
 
         var done_block: ?LlvmBuilder.Function.Block.Index = null;
         if (drive == .unless_caller_drives) {

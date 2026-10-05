@@ -1271,6 +1271,9 @@ fn callErasedOnce(
     const g = currentRuntime() orelse {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
         invokeErasedCallableDriving(raw, builtins.in_process_host.ops(), ret, args, capture, reuse, &returned_desc);
+        // A callee that deferred a call returned neither a value nor a
+        // descriptor; the pending call delivers both.
+        if (TailStateSelection.get().pending != null) return;
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     };
@@ -1279,6 +1282,9 @@ fn callErasedOnce(
     if (actual == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
         invokeErasedCallableDriving(raw, g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
+        // A callee that deferred a call returned neither a value nor a
+        // descriptor; the pending call delivers both.
+        if (TailStateSelection.get().pending != null) return;
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1308,6 +1314,9 @@ fn callErasedOnce(
     if (actual.?.ret_layout == expected and result_desc == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
         invokeErasedCallableDriving(raw, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
+        // A callee that deferred a call returned neither a value nor a
+        // descriptor; the pending call delivers both.
+        if (TailStateSelection.get().pending != null) return;
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }

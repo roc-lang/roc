@@ -25,3 +25,12 @@ chain = |n, done| if n == 0 done(7) else chain(n - 1, |x| done(x))
 
 expect bounce(30_000, |x| x + 1, |x| x + 2) == 1
 expect chain(1_000, |x| x) == 7
+
+# Unannotated functions are generic over their number type, so each call
+# returns a type descriptor along with its value.
+generic_through_lambda = |n| if n == 0 0 else n |> (|m| generic_through_lambda(m - 1))
+
+generic_ignoring_argument = |n| if n == 0 0 else 0 |> (|_| generic_ignoring_argument(n - 1))
+
+expect generic_through_lambda(30_000) == 0
+expect generic_ignoring_argument(30_000) == 0

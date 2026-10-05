@@ -25551,10 +25551,21 @@ const ProcBodyBuilder = struct {
         const descriptor_boundary_is_direct = !runtime_result_desc and
             ((target_desc == null and direct_result_desc.desc == null) or
                 (checked_return_types_match and (target_desc == null or direct_result_desc.desc != null)));
+        // A callee that returns its descriptor at runtime writes both the
+        // value and that descriptor straight into a target whose descriptor
+        // local is this frame's to overwrite, exactly as an erased call does.
+        const target_desc_is_shared = if (target_desc) |desc|
+            if (desc.localOrNull()) |local| self.localIsDescriptorSlot(local) else false
+        else
+            false;
+        const runtime_boundary_is_direct = runtime_result_desc and
+            !target_desc_is_shared and
+            self.callResultOutputDescriptorLocal(target) != null and
+            self.erasedCallResultCanUseTarget(target_rep, worker_ret_rep);
         var fresh_raw_out_desc: ?LIR.LocalId = null;
         const call_target = if (target_layout == ret_layout.layoutIdx() and
             self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep) and
-            descriptor_boundary_is_direct)
+            (descriptor_boundary_is_direct or runtime_boundary_is_direct))
         blk: {
             try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
             break :blk target;
