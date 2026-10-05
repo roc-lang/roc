@@ -4,7 +4,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const build_options = @import("build_options");
 const protocol = @import("../protocol.zig");
 const fmt = @import("fmt");
 const parse = @import("parse");

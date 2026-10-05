@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const CoreCtx = @import("ctx").CoreCtx;
 const unbundle = @import("unbundle");
 const Allocator = std.mem.Allocator;

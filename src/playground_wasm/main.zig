@@ -17,7 +17,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");

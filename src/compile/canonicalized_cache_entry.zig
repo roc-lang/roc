@@ -40,11 +40,13 @@ pub const PinValidation = struct {
     compiler_version: ?[]const u8,
 };
 
+/// Returns the supplied compiler version only when source-pin parsing recognizes it.
 pub fn recognizedPinVersion(version: ?[]const u8) ?[]const u8 {
     const text = version orelse return null;
     return if (@import("base").roc_version.parse(text) != null) text else null;
 }
 
+/// Records the compiler version used to validate a recognized source header pin.
 pub fn pinValidationForAst(ast: *const AST, version: ?[]const u8) ?PinValidation {
     const field = switch (ast.store.getHeader(ast.store.getFile().header)) {
         .app => |header| header.roc_version,
@@ -57,6 +59,8 @@ pub fn pinValidationForAst(ast: *const AST, version: ?[]const u8) ?PinValidation
     return .{ .compiler_version = recognizedPinVersion(version) };
 }
 
+/// Checks whether a cached source pin used the same recognized compiler version.
+/// Entries without a source pin match any compiler version.
 pub fn pinValidationMatches(stamp: ?PinValidation, version: ?[]const u8) bool {
     const pinned = stamp orelse return true;
     const current = recognizedPinVersion(version);

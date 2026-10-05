@@ -2,7 +2,6 @@
 //! The build places unmodified Zig compiler-rt sources beside this root.
 //! The explicit helpers below have local binding and cannot be supplied or
 //! interposed by the platform. Arithmetic remains owned by the Zig toolchain.
-const std = @import("std");
 const builtin = @import("builtin");
 const int = @import("compiler_rt/int.zig");
 const arm = @import("compiler_rt/arm.zig");

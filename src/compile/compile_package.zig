@@ -2,7 +2,6 @@
 //! operations used by the compilation coordinator and snapshot tooling.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
