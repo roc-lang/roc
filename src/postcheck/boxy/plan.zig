@@ -10057,8 +10057,8 @@ const Builder = struct {
         backing: TypeSource,
     ) Allocator.Error![]DeclaredField {
         const source = self.nominalDeclaredSource(view, nominal) orelse return &.{};
-        const backing_fields = switch (backing.view.checked_types.payload(backing.ty)) {
-            .record => |record| record.fields,
+        switch (backing.view.checked_types.payload(backing.ty)) {
+            .record => {},
             .pending,
             .err,
             .flex,
@@ -10071,7 +10071,32 @@ const Builder = struct {
             .tag_union,
             .empty_tag_union,
             => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
-        };
+        }
+        // The backing is a closed row, whose fields can span several row
+        // segments.
+        var row_fields = std.ArrayList(checked.CheckedRecordField).empty;
+        defer row_fields.deinit(self.allocator);
+        var segment = backing.ty;
+        while (true) {
+            switch (backing.view.checked_types.payload(segment)) {
+                .record => |record| {
+                    try row_fields.appendSlice(self.allocator, record.fields);
+                    segment = record.ext;
+                },
+                .alias => |alias| segment = alias.backing,
+                .empty_record => break,
+                .flex, .rigid => |variable| if (variable.row_default == .empty_record) break else boxyPlanInvariant("checked nominal declared field order had an open backing row"),
+                .pending,
+                .err,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_tag_union,
+                => boxyPlanInvariant("checked nominal declared field order had an open backing row"),
+            }
+        }
+        const backing_fields = row_fields.items;
 
         // Layout field indices are alphabetical-by-name, matching the index
         // space structural records use, so a value that materializes across an
