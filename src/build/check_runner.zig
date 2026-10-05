@@ -296,14 +296,14 @@ const CheckEnumFromIntZeroStep = struct {
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
             std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
-            std.debug.print("FORBIDDEN PATTERN: @enumFromInt(0)\n", .{});
+            std.debug.print("FORBIDDEN PATTERN: @fromBackingInt(0) or @enumFromInt(0)\n", .{});
             std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
 
             std.debug.print(
-                \\Using @enumFromInt(0) is forbidden in this codebase.
+                \\Using @fromBackingInt(0) or its legacy spelling @enumFromInt(0) is forbidden.
                 \\
                 \\WHY THIS RULE EXISTS:
-                \\  @enumFromInt(0) hides bugs and makes them harder to debug. It creates
+                \\  Converting zero into an enum hides bugs and makes them harder to debug. It creates
                 \\  a "valid-looking" value that can silently propagate through the code
                 \\  when something goes wrong.
                 \\
@@ -316,7 +316,7 @@ const CheckEnumFromIntZeroStep = struct {
                 \\  (e.g., where it will be overwritten before being read).
                 \\
                 \\  Example - WRONG:
-                \\    .anno = @enumFromInt(0), // placeholder - will be replaced
+                \\    .anno = @fromBackingInt(0), // placeholder - will be replaced
                 \\
                 \\  Example - RIGHT:
                 \\    .anno = undefined, // overwritten in Phase 1.7 before use
@@ -336,8 +336,8 @@ const CheckEnumFromIntZeroStep = struct {
             std.debug.print("\n" ++ @as([80]u8, @splat('=')) ++ "\n", .{});
 
             return fail(
-                "Found {d} uses of @enumFromInt(0). Using placeholder values like this has consistently led to bugs in this code base. " ++
-                    "Do not use @enumFromInt(0) and also do not uncritically replace it with another placeholder like .first or something like that. " ++
+                "Found {d} zero integer to enum conversions. Using placeholder values like this has consistently led to bugs in this code base. " ++
+                    "Do not use @fromBackingInt(0) or @enumFromInt(0), and do not uncritically replace it with another placeholder like .first. " ++
                     "If you want it to be uninitialized and are very confident it will be overwritten before it is ever read, then use `undefined`. " ++
                     "Otherwise, take a step back and rethink how this code works; there should be a way to implement this in a way that does not use hardcoded placeholder indices like 0! " ++
                     "See above for details.",
@@ -391,8 +391,12 @@ const CheckEnumFromIntZeroStep = struct {
                         continue;
                     }
 
-                    // Check for @enumFromInt(0) usage
-                    if (std.mem.find(u8, line, "@enumFromInt(0)") != null) {
+                    // Zig 0.17's formatter renames the legacy builtin spelling.
+                    if (std.mem.find(u8, line, "@fromBackingInt(0)") != null or
+                        std.mem.find(u8, line, "@fromBackingInt(@intCast(0))") != null or
+                        std.mem.find(u8, line, "@enumFromInt(0)") != null or
+                        std.mem.find(u8, line, "@enumFromInt(@intCast(0))") != null)
+                    {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,

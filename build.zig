@@ -6,6 +6,7 @@ const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const ci_steps = @import("src/build/ci_steps.zig");
 const roc_target = @import("src/target/mod.zig");
 const TestFixturePlan = @import("src/build/test_fixtures.zig").Plan;
+const isImmutableNixStorePath = @import("src/build/nix_path.zig").isImmutableStorePath;
 var test_fixtures: TestFixturePlan = undefined;
 const Dependency = std.Build.Dependency;
 const OptimizeMode = std.builtin.OptimizeMode;
@@ -7474,7 +7475,7 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
         .include_extensions = &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".zon" },
     });
     if (tracy_path) |path| {
-        if (!std.mem.startsWith(u8, path, "/nix/store/")) {
+        if (!isImmutableNixStorePath(path)) {
             _ = inputs.addCopyDirectory(b.graph.cwdRelativePath(path).path(b, "public"), "dependencies/tracy/public", .{});
         }
     }
@@ -7488,7 +7489,7 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
     _ = inputs.addCopyFile(b.path("build.zig.zon"), "build.zig.zon");
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
-            if (!std.mem.startsWith(u8, path, "/nix/store/")) {
+            if (!isImmutableNixStorePath(path)) {
                 const root = b.graph.cwdRelativePath(path);
                 _ = inputs.addCopyDirectory(root.path(b, "include"), "dependencies/include", .{});
                 _ = inputs.addCopyDirectory(root.path(b, "lib"), "dependencies/lib", .{});
@@ -7509,12 +7510,12 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
     for (semantic_options) |option| run.addArgs(&.{ "--option", option });
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
-            if (std.mem.startsWith(u8, path, "/nix/store/")) run.addArgs(&.{ "--option", b.fmt("immutable-dependencies={s}", .{path}) });
+            if (isImmutableNixStorePath(path)) run.addArgs(&.{ "--option", b.fmt("immutable-dependencies={s}", .{path}) });
         },
         .downloaded_bundle, .system_llvm => {},
     }
     if (tracy_path) |path| {
-        if (std.mem.startsWith(u8, path, "/nix/store/")) run.addArgs(&.{ "--option", b.fmt("immutable-tracy={s}", .{path}) });
+        if (isImmutableNixStorePath(path)) run.addArgs(&.{ "--option", b.fmt("immutable-tracy={s}", .{path}) });
     }
     run.addArg("--output");
     const output = run.addOutputFileArg("compiler_identity.zig");

@@ -553,7 +553,7 @@ fn writeBuiltinIndicesZig(
     inline for (@typeInfo(BuiltinIndices).@"struct".field_names) |field_name| {
         const FieldType = @FieldType(BuiltinIndices, field_name);
         if (FieldType == CIR.Statement.Idx) {
-            try out.print("        .{s} = @enumFromInt(builtin_indices_raw.{s}),\n", .{ field_name, field_name });
+            try out.print("        .{s} = @fromBackingInt(builtin_indices_raw.{s}),\n", .{ field_name, field_name });
         } else if (FieldType == base.Ident.Idx) {
             try out.print("        .{s} = @bitCast(@as(u32, builtin_indices_raw.{s})),\n", .{ field_name, field_name });
         } else {
