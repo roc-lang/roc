@@ -42,6 +42,16 @@ mtime: stock Zig 0.17 reuses stale configure output when size, inode, and
 mtime remain unchanged. This is a recorded upstream cache assumption,
 not a passing control or a reason to poison routine build configurations.
 
+The LSP recovery at consolidation `7c85a30a7c` passes all 33 build steps
+and 67 tests in ReleaseSafe. Upstream then advanced to `c34079d4cd`, with
+changes to tail-call joins, constant-root types, dispatch evidence, dependency
+resolution phases, and embedded builtin documentation. The LLVM conflict is
+resolved in a separate integration checkout before further heavy gates;
+validation at `7c85a30a7c` remains evidence for that checkpoint. The merged
+source retains upstream regressions and applies Zig 0.17 API migration to
+new code. The report regression also replaces its optimize option when
+switching modes; Zig rejects duplicate scalar `-Doptimize` arguments.
+
 Full validation remains broader than MiniCI: all four evaluator backends,
 full CLI size/speed cases, Debug/ReleaseSafe/ReleaseFast correctness,
 Nix and Tracy builds, instrumented AFL, Valgrind, and cache/fixture gates.
@@ -49,7 +59,7 @@ Executed results retain their actual source revisions; earlier counts
 below do not establish completion of these final gates. Compatible bundle
 publication and supported-platform CI remain pending.
 
-## Current upstream integration
+## Earlier upstream integration
 
 The integration of upstream `1665a944c27f1be90dc8928d37d64cd4be8ae977`
 into migration checkpoint `693d526824` preserves the new UTF decoding,
