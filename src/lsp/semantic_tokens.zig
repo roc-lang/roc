@@ -25,7 +25,9 @@ const AST = parse.AST;
 const CIR = can.CIR;
 const Region = base.Region;
 
-/// Semantic token indices matching TOKEN_TYPES in capabilities.zig.
+/// The semantic token types, named as the LSP specification spells them. A
+/// token is encoded as its type's value, and `capabilities.TOKEN_TYPES` is the
+/// legend generated from these names in value order.
 pub const SemanticType = enum(u32) {
     namespace = 0, // module names
     type = 1, // UpperIdent, type keywords
