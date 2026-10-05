@@ -107,6 +107,7 @@
       in
       {
         packages = {
+          inherit zig;
           default = self.packages.${system}.roc;
           roc = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "roc";
