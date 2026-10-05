@@ -1029,7 +1029,19 @@ A shared post-check program represents a selected root read as an explicit
 root id, and optional const locator (callable roots have no const locator). Its
 initializer is an explicit zero-argument proof call to the one declared root
 function, whose return owns the concrete Monotype representation and lambda
-sets. Lambda solving unifies reads with that return. The proof call is not an
+sets. Lambda solving unifies reads with that return without letting a read
+change it. Each use of an imported constant is checked at its own copy of the
+constant's type, and a copy may lift an anonymous record or tag union into a
+nominal the declaring module never names, so a read's type can differ from its
+root's by such lifts. A lifted pair, and every pair containing one, unifies its
+components without joining the two types: the callable slots beneath are
+shared, every type with no lift beneath it is joined as usual, and the root's
+return stays the type its own module declared. A read whose type holds no
+callable slot has no evidence to take and is not unified at all. All reads of
+one root at one lifted Monotype type share one solved type. The type a root is
+evaluated, stored, and cached at is therefore a function of its declaring
+module alone; no consumer's use reaches a checked module's stored root type or
+its cache entry. The proof call is not an
 expression to execute at the read. Lifting and lambda solving preserve that witness. Value
 folding must treat the read as opaque. LIR interns storage slots only after
 exact concrete representation equality and committed layout equality, and
@@ -1098,7 +1110,12 @@ Unrequested callable bindings retain their ordinary checked body computation.
 
 A shared compile-time value slot has its root type's own layout. A read whose
 target stores that type boxed, such as a recursive payload field, reads the
-slot at the type's layout and boxes the value into the target.
+slot at the type's layout and boxes the value into the target. Every read
+demands the slot at the proof call's return type, never at the read's own. A
+read whose type lifted the root's type takes the slot value as stored when the
+two types are one representation, or when they commit one layout and encode the
+value identically beneath an outer nominal; any other lifted read takes it
+through an explicit typed boundary from the root's type.
 
 Deferred literal-root diagnostics own their originating rejection and crash
 message bytes for the entire finalization session. Recording a failure copies

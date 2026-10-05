@@ -91,6 +91,9 @@ const UnifyFrame = union(enum) {
     finish: struct {
         pair: UnifyPair,
         action: UnifyFinishAction,
+        /// `Solver.lift_count` when this pair began; a different count at
+        /// its finish means a nominal lift lies at or below this pair.
+        lifts_before: u32,
     },
     /// Relate generated-private evidence for one public/private pair.
     relate: struct {
@@ -177,6 +180,17 @@ const Solver = struct {
     /// uses can read one clone; giving each use its own would make every
     /// meeting of two uses unify the whole type again.
     shared_leaf_context: ?u32,
+    /// The one type every read of a declared compile-time root shares at a
+    /// Monotype type other than the root's own, so each such type unifies
+    /// with the root's return once however many reads name it.
+    comptime_read_tys: std.AutoHashMapUnmanaged(ComptimeReadKey, Type.TypeVarId) = .empty,
+    /// Nominal lifts unification has met: a structural type unified with a
+    /// nominal whose inspectable backing it matches.
+    lift_count: u32 = 0,
+    /// Set while a root-slot read unifies with its root's return. A lifted
+    /// pair, and every pair containing one, then unifies its components
+    /// without joining the two types, so the root keeps the type it owns.
+    preserving_lifted_roots: bool = false,
     mono_set_pool: collections.DenseMapPool(MonoType.TypeId, void),
     /// Uninhabitedness of lifted Monotypes whose proof never stopped at a
     /// type already on the walk's path. Such a result is a pure function of
@@ -365,6 +379,7 @@ const Solver = struct {
         self.shared_clones.deinit();
         self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
+        self.comptime_read_tys.deinit(self.allocator);
         self.active_private_evidence_relations.deinit();
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit();
@@ -841,7 +856,8 @@ const Solver = struct {
             .local => |local| try self.unify(expected, self.localTy(local)),
             .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .checked_error, .comptime_exhaustiveness_failed, .@"unreachable" => {},
             .comptime_value => |value| {
-                if (cursor == 0) return .{ .expr = .{ .id = value.initializer, .expected = expected } };
+                if (cursor == 0) return .{ .expr = .{ .id = value.initializer } };
+                try self.unifyComptimeValueRead(expr.ty, expected, value.initializer);
             },
             .static_data_candidate => |candidate| {
                 if (cursor == 0) return .{ .expr = .{ .id = candidate.runtime_expr, .expected = expected } };
@@ -1967,6 +1983,56 @@ const Solver = struct {
         try self.drainUnifyStack(base);
     }
 
+    /// Unify a root-slot read with the declared root's return, which owns
+    /// the root's type. Each use of an imported constant is checked at its
+    /// own copy of the constant's type, and a copy may lift a record or tag
+    /// union into a nominal the root never names. Such a lifted pair, and
+    /// every pair containing one, unifies its components without joining the
+    /// two types: callable slots are shared, and no read changes the type
+    /// the root is evaluated, stored, and cached at.
+    fn unifyComptimeValueRead(
+        self: *Solver,
+        read_mono: MonoType.TypeId,
+        read_ty: Type.TypeVarId,
+        initializer: Lifted.ExprId,
+    ) Allocator.Error!void {
+        if (self.program.types.get(self.program.types.rootCompressed(read_ty)) == .unbound) {
+            try self.unify(read_ty, try self.lowerTypeFresh(read_mono));
+        }
+        // Monotype sealed both types, so a read with no callable slot has no
+        // Lambda Solved evidence to take from its root.
+        if (self.isCallableFree(read_mono)) return;
+        const root_ty = self.inferredExpr(initializer);
+        const initializer_expr = self.lifted.exprs[@intFromEnum(initializer)];
+        if (initializer_expr.data != .call_proc) return self.unify(read_ty, root_ty);
+        const root_fn = switch (Lifted.directCallee(initializer_expr.data.call_proc)) {
+            .local => |callee| callee,
+        };
+        // A read at the root's own Monotype type cannot contain a lift.
+        if (self.lifted.fns[@intFromEnum(root_fn)].ret == read_mono) return self.unify(read_ty, root_ty);
+
+        const entry = try self.comptime_read_tys.getOrPut(self.allocator, .{ .root_fn = root_fn, .read_mono = read_mono });
+        if (entry.found_existing) {
+            const read_root = self.program.types.rootCompressed(read_ty);
+            const shared = self.program.types.rootCompressed(entry.value_ptr.*);
+            if (read_root == shared) return;
+            const raw = self.program.types.get(read_root);
+            if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == Type.no_leaf_context) {
+                self.program.types.set(read_root, .{ .link = shared });
+                return;
+            }
+            return self.unify(read_ty, shared);
+        }
+        entry.value_ptr.* = read_ty;
+
+        const was_preserving = self.preserving_lifted_roots;
+        self.preserving_lifted_roots = true;
+        defer self.preserving_lifted_roots = was_preserving;
+        try self.unify(read_ty, root_ty);
+    }
+
+    const ComptimeReadKey = struct { root_fn: Lifted.FnId, read_mono: MonoType.TypeId };
+
     /// Relate generated-private evidence from a checked-public shape into
     /// its private representation, on the unification stack.
     fn relateGeneratedPrivateEvidence(self: *Solver, public_ty: Type.TypeVarId, private_ty: Type.TypeVarId) Allocator.Error!void {
@@ -1986,7 +2052,9 @@ const Solver = struct {
                     process.structural_isolated,
                 ),
                 .finish => |finish| {
-                    self.applyUnifyFinish(finish.action);
+                    if (!(self.preserving_lifted_roots and finish.lifts_before != self.lift_count and joinsTypeRoots(finish.action))) {
+                        self.applyUnifyFinish(finish.action);
+                    }
                     _ = self.active_unifications.remove(finish.pair);
                 },
                 .relate => |relate| try self.processRelate(&self.unify_stack, relate.public, relate.private),
@@ -2083,7 +2151,7 @@ const Solver = struct {
         // Reserve the finish frame before pushing any children so it pops last
         // and retires `pair` once every type it scheduled has been unified.
         const finish_index = stack.items.len;
-        try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none } });
+        try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none, .lifts_before = self.lift_count } });
         try self.unifyRoots(stack, finish_index, a, b, left, right, structural_isolated);
     }
 
@@ -2282,6 +2350,15 @@ const Solver = struct {
         }
     }
 
+    /// Whether a finish action joins the two unified types into one type,
+    /// as opposed to settling a callable slot or an alias's own backing.
+    fn joinsTypeRoots(action: UnifyFinishAction) bool {
+        return switch (action) {
+            .link_rhs_to_lhs, .link_structural_to_inspectable_named, .set_left_tag_union_link_right => true,
+            .none, .link_var_to_root, .set_left_erased_link_right, .set_left_lambda_set_link_right => false,
+        };
+    }
+
     fn applyUnifyFinish(self: *Solver, action: UnifyFinishAction) void {
         switch (action) {
             .none => {},
@@ -2419,6 +2496,7 @@ const Solver = struct {
         else
             try self.program.types.add(structural_content);
         if (!structural_isolated) {
+            self.lift_count += 1;
             stack.items[finish_index].finish.action = .{ .link_structural_to_inspectable_named = .{
                 .structural = structural_ty,
                 .named = named_ty,
@@ -4183,6 +4261,8 @@ test "inspectable backing unification isolates the structural type variable once
     solver.program = &program;
     solver.active_unifications = UnifyPairSet.init(allocator);
     defer solver.active_unifications.deinit();
+    solver.lift_count = 0;
+    solver.preserving_lifted_roots = false;
     solver.unify_stack = .empty;
     defer solver.unify_stack.deinit(allocator);
     solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
@@ -4245,6 +4325,8 @@ test "inspectable backing unification never redirects an owned backing to its no
     solver.lifted = undefined;
     solver.active_unifications = UnifyPairSet.init(allocator);
     defer solver.active_unifications.deinit();
+    solver.lift_count = 0;
+    solver.preserving_lifted_roots = false;
     solver.unify_stack = .empty;
     defer solver.unify_stack.deinit(allocator);
     program.types.markNamedBacking(backing);
@@ -4314,6 +4396,71 @@ test "generated-private evidence traverses a public inspectable named backing" {
     );
     try std.testing.expect(program.types.rootCompressed(public_named) != program.types.rootCompressed(private_record));
     try std.testing.expect(program.types.rootCompressed(public_backing) != program.types.rootCompressed(private_record));
+}
+
+test "root-slot read unification shares callables without joining a lifted pair" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var program = Ast.Program.init(allocator, lifted);
+    lifted = undefined;
+    defer program.deinit();
+
+    const field_name = try program.lifted.names.internRecordFieldLabel("step");
+    const ret_ty = try program.types.add(.zst);
+    const read_callable = try program.types.add(.unbound);
+    const root_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = @enumFromInt(1),
+        .captures = .empty(),
+    }}) });
+    const read_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = read_callable,
+        .ret = ret_ty,
+    } });
+    const root_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = root_callable,
+        .ret = ret_ty,
+    } });
+    const read_backing = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = read_fn,
+        .default = null,
+    }}) });
+    const root_record = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = root_fn,
+        .default = null,
+    }}) });
+    const read_named = try program.types.add(.{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = read_backing, .use = .inspectable },
+    } });
+    const read_list = try program.types.add(.{ .list = read_named });
+    const root_list = try program.types.add(.{ .list = root_record });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    solver.preserving_lifted_roots = true;
+    try solver.unify(read_list, root_list);
+    solver.preserving_lifted_roots = false;
+
+    // The function beneath the lift is one type with one callable slot.
+    try std.testing.expectEqual(program.types.rootCompressed(read_fn), program.types.rootCompressed(root_fn));
+    try std.testing.expectEqual(program.types.rootCompressed(read_callable), program.types.rootCompressed(root_callable));
+    // The lifted pair and the list containing it keep their own types.
+    try std.testing.expect(program.types.rootCompressed(read_named) != program.types.rootCompressed(root_record));
+    try std.testing.expect(program.types.rootCompressed(read_backing) != program.types.rootCompressed(root_record));
+    try std.testing.expect(program.types.rootCompressed(read_list) != program.types.rootCompressed(root_list));
+    try std.testing.expect(program.types.rootContent(root_record) == .record);
+    try std.testing.expectEqual(program.types.rootCompressed(root_record), program.types.rootContent(root_list).list);
+
+    // Ordinary unification of the same pair joins the record into the nominal.
+    try solver.unify(read_named, root_record);
+    try std.testing.expectEqual(program.types.rootCompressed(read_named), program.types.rootCompressed(root_record));
 }
 
 test "lambda solved solve declarations are referenced" {
