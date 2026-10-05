@@ -130,7 +130,7 @@ main! = |_| go!(Task.Task)
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "run!") (constraint-fn-var 301)
+			(e-dispatch-call (method "run!") (constraint-fn-var 305)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -148,7 +148,7 @@ main! = |_| go!(Task.Task)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 313)
+			(e-call (constraint-fn-var 317)
 				(e-lookup-local
 					(p-assign (ident "go!")))
 				(e-nominal (nominal "Task")

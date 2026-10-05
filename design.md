@@ -67,6 +67,49 @@ second stored expression, pattern, and statement tree. In `.boxy`, checked CIR
 is consumed directly with explicit boxy representation plans owned by that
 lowerer.
 
+## UTF-16 and UTF-32 decoding primitives
+
+`Str.from_utf16_le`, `Str.from_utf16_be`, `Str.from_utf16_bom`, and their
+UTF-32 equivalents consume `List(U8)`. Each has a `_lossy` variant. Byte order
+is explicit and independent of the target. The BOM variants require and consume
+one leading encoding-specific byte order mark; missing or incomplete markers
+return `MissingByteOrderMark`, including for lossy decoding. Explicit LE/BE
+variants preserve U+FEFF as text and never change byte order based on input.
+
+Strict decoding reports the first malformed sequence's zero-based byte offset
+in the original input, including the consumed BOM. `UnexpectedEndOfSequence`
+means a trailing partial code unit. Earlier malformed units take precedence.
+Lossy decoding replaces each unpaired UTF-16 surrogate, invalid UTF-32 unit,
+or trailing partial unit with U+FFFD. A high surrogate consumes a following
+unit only for a valid pair; a high surrogate followed by one remaining byte
+therefore produces two replacements. Noncharacters are preserved.
+
+Checked Roc code borrows the bytes and makes two forward passes: sizing, then
+encoding. Full ASCII blocks use existing byte-list `U16x8`/`U32x4` SIMD loads,
+which read little-endian bytes on every target. On wasm32v1, the loads, splats,
+bitwise operations, lane shifts, comparisons, bitmasks, and wrapping narrows
+used here lower to scalar instructions over sixteen-byte stack slots; list
+appends use the existing explicit LIR uniqueness data. BE lanes are byte-swapped with explicit
+shifts and masks before classification and narrowing. Bounds are checked before
+each full block; partial blocks use scalar decoding. Typed `load_units` APIs
+remain available independently and do not implement byte decoding.
+
+The private Roc helpers return `{ index : U64, status : U8, string : Str }`;
+public wrappers construct nominal error values. No backend knows the wide-UTF
+error representation. BOM wrappers borrow the payload slice and add the marker
+width to error offsets. Backends consume ordinary LIR operations and explicit
+ARC statements, with no encoding or ownership policy of their own.
+
+Sizing validates and computes exact UTF-8 length without allocating, so strict
+failure allocates nothing. Output of at most 23 bytes is built from a stack
+buffer by `str_from_utf16_le_short`, `str_from_utf16_be_short`, or the analogous
+UTF-32 primitives. These borrow bytes, read with fixed byte order, and contain
+only scalar code. Inline-sized results allocate nothing; on 32-bit targets a
+result above inline capacity allocates once. Longer output uses one exact-capacity
+byte list and `str_from_utf8_validated`, without a validation rescan. Successful
+decoding allocates at most once and leaves input unchanged. Output encoders
+(`to_utf16`/`to_utf32`) remain a separate API addition.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,
@@ -20524,6 +20567,18 @@ generated Zig and C declarations for x86-64 and AArch64 Linux/macOS/Windows plus
 wasm, compiles Rust for native and wasm, and the native/wasm glue runtime matrix
 calls the generated contracts in both directions.
 
+### WebAssembly 1.0 SIMD legalization
+
+The `wasm32v1` target has no SIMD instructions or `v128` value type. Its dev
+backend represents a Roc SIMD value as a pointer to its sixteen-byte lane
+storage, using the same explicit indirect-value conventions as scalar U128.
+The target's CPU level selects this representation before local, procedure,
+and memory emission. Each SIMD operation lowers to exact scalar integer
+instructions over its committed lane width and signedness. This is ordinary
+instruction legalization: there is no runtime operation descriptor, evaluator
+call, or alternate source decoder. The default Wasm target continues to use
+native `v128` values and SIMD instructions.
+
 ### Doc comments name the instructions
 
 Every operation's doc comment states the instruction (or short sequence)
@@ -20582,8 +20637,9 @@ the pass/fail bar while the language is 128-bit-only.
 - Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
-- Typed-item loads (`List(U16)` → `U16x8`, etc.)—deferred until a
-  kernel wants them; byte buffers are the codec substrate.
+- Additional typed-item loads beyond `U16x8.load_units` and
+  `U32x4.load_units` remain demand-driven. Wide-UTF decoding and other
+  byte-buffer codecs use the existing byte loads.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later
