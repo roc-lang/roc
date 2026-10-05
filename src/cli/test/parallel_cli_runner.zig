@@ -404,6 +404,11 @@ const CustomCase = enum {
     default_platform_build_arm64glibc,
     default_platform_build_x64freebsd,
     default_platform_build_x64netbsd,
+    default_platform_float_libcalls_x64musl,
+    default_platform_float_libcalls_arm64musl,
+    default_platform_float_libcalls_x64glibc,
+    default_platform_float_libcalls_arm64glibc,
+    default_platform_float_libcalls_x64v1musl,
     default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
@@ -1261,6 +1266,14 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
+    // No target has a float remainder instruction, and a baseline x86-64 CPU
+    // has none for rounding either, so compiled code calls `fmod`, `floor`,
+    // `ceil` and `trunc`. The freestanding default platform links no libc and
+    // provides them from its own compiler-rt carrier.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy open-union argument descriptor describes the value (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_open_union_arg.roc", .stdout_exact = "other color\nred\ngreen\n" } } },
@@ -2063,6 +2076,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc succeeds", .body = .{ .custom = .default_platform_build_arm64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64freebsd succeeds", .body = .{ .custom = .default_platform_build_x64freebsd } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64netbsd succeeds", .body = .{ .custom = .default_platform_build_x64netbsd } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64musl } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_arm64musl } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64glibc links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_arm64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64v1musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64v1musl } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64openbsd explains unsupported cross-link", .body = .{ .custom = .default_platform_build_x64openbsd_rejected } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
@@ -3871,6 +3889,11 @@ fn runCustomCase(
         .default_platform_build_arm64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
         .default_platform_build_x64freebsd => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64freebsd),
         .default_platform_build_x64netbsd => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64netbsd),
+        .default_platform_float_libcalls_x64musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64musl),
+        .default_platform_float_libcalls_arm64musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .arm64musl),
+        .default_platform_float_libcalls_x64glibc => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64glibc),
+        .default_platform_float_libcalls_arm64glibc => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
+        .default_platform_float_libcalls_x64v1musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64v1musl),
         .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -6261,6 +6284,7 @@ fn isHexDigit(byte: u8) bool {
 
 const DefaultPlatformTarget = enum {
     x64musl,
+    x64v1musl,
     arm64musl,
     x64glibc,
     arm64glibc,
@@ -6284,7 +6308,7 @@ const DefaultPlatformTarget = enum {
     fn canRunOnHost(self: DefaultPlatformTarget) bool {
         return switch (builtin.os.tag) {
             .linux => if (builtin.cpu.arch == .x86_64)
-                self == .x64musl or self == .x64glibc
+                self == .x64musl or self == .x64v1musl or self == .x64glibc
             else if (builtin.cpu.arch == .aarch64)
                 self == .arm64musl or self == .arm64glibc
             else
@@ -6461,6 +6485,65 @@ fn customDefaultPlatformBuild(
             .stdout_exact = "Hello, World!",
             .stderr_exact = "",
         })) |failure| return failure;
+    }
+
+    return null;
+}
+
+const default_platform_float_libcalls_app = "test/echo/runtime_float_libcalls.roc";
+const default_platform_float_libcalls_stdout = "rem: 1.5 1.5 -1.5, div_trunc: 3 3, floor: Ok(7) Ok(7), ceiling: Ok(8) Ok(8)";
+
+/// The Linux default platform links no libc, so every routine the compiled
+/// program calls for a float operation its target has no instruction for has
+/// to be defined inside the link. Builds the float program for `target` with
+/// each backend that can cross-compile, which fails at link time when one is
+/// left undefined, and runs the result where the host can.
+fn customDefaultPlatformFloatLibcallsBuild(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    target: DefaultPlatformTarget,
+) ?TestResult {
+    if (!target.canBuildOnHost()) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "{s} default-platform build requires Linux host support",
+            .{target.cliName()},
+        ) catch "default-platform build requires Linux host support";
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = message };
+    }
+
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.cliName()}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+
+    for ([_][]const u8{ "dev", "size", "speed" }) |opt| {
+        const output_name = std.fmt.allocPrint(allocator, "default_platform_float_libcalls_{s}", .{opt}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate default platform output name: {}", .{err});
+        const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, output_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate default platform output path: {}", .{err});
+        const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", opt_arg, "--no-cache", target_arg, out_arg },
+            .roc_file = default_platform_float_libcalls_app,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        if (target.canRunOnHost()) {
+            const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+                .args = &.{},
+                .stdout_exact = default_platform_float_libcalls_stdout,
+                .stderr_exact = "",
+            })) |failure| return failure;
+        }
     }
 
     return null;

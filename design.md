@@ -19258,6 +19258,18 @@ fault within `stack_overflow_proximity` of the stack pointer is reported as
 reported as a segmentation fault together with its fault address. A fault that
 is not a stack overflow is never reported as one.
 
+The Linux default platform links no C runtime, so it also owns a compiler-rt
+carrier: one target-specific object defining compiler-rt and the C math and
+memory routines that code generation calls for operations the target has no
+instruction for, such as `fmod` for a float remainder or `floor` on a baseline
+x86-64 CPU. The shared-memory run link and every standalone link of an LLVM
+app object consume the carrier as an explicit input, because an LLVM app
+object comes from target-independent builtin bitcode and bundles no
+compiler-rt of its own. Default platforms that link a C runtime (macOS,
+Windows) resolve those routines from it and have no carrier. Each routine
+occupies its own section and the carrier has no debug info, so a link keeps
+only the routines it references.
+
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
 `arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows

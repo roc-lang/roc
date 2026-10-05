@@ -8044,10 +8044,18 @@ fn addMainExe(
             embedded_digests.addArg(b.fmt("default_runtime_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(default_platform_runtime_obj.getEmittedBin());
 
-            // A shared-memory run of the synthetic Linux default platform has
-            // no external platform host to provide compiler-rt. Keep that
-            // carrier explicit and default-platform-owned instead of hiding it
-            // in the machine-code shim, which is also linked with user hosts.
+            // The synthetic Linux default platform links no libc and has no
+            // external platform host, so nothing else in its links is certain
+            // to provide compiler-rt or the C math and memory routines code
+            // generation calls. Keep that carrier explicit and
+            // default-platform-owned instead of hiding it in the machine-code
+            // shim, which is also linked with user hosts. A shared-memory run
+            // and a standalone link of an LLVM app object both consume it.
+            // Each routine gets its own section so a link keeps only the ones
+            // it references, and the object carries no debug info: a linker
+            // keeps an input's debug sections even when it discards all of
+            // that input's code, so they would be copied into every
+            // executable whether or not it calls anything here.
             if (default_platform_os == .linux) {
                 const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
                 const default_platform_compiler_rt_obj = b.addObject(.{
@@ -8056,12 +8064,14 @@ fn addMainExe(
                         .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
                         .target = cross_resolved_target,
                         .optimize = .ReleaseFast,
-                        .strip = strip,
+                        .strip = true,
                         .omit_frame_pointer = false,
                         .pic = true,
                     }),
                 });
                 default_platform_compiler_rt_obj.bundle_compiler_rt = false;
+                default_platform_compiler_rt_obj.link_function_sections = true;
+                default_platform_compiler_rt_obj.link_data_sections = true;
                 configureBackend(default_platform_compiler_rt_obj, cross_resolved_target);
 
                 const copy_default_platform_compiler_rt = b.addUpdateSourceFiles();

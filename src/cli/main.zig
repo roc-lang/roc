@@ -864,6 +864,11 @@ fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
     };
 }
 
+/// The default platform's compiler-rt carrier: compiler-rt and the C math and
+/// memory routines code generation calls, for the Linux targets, whose default
+/// platform is freestanding and so has no platform runtime library to provide
+/// them. Every other default platform links its target's C runtime, which
+/// does, and has no carrier.
 const DefaultPlatformCompilerRtObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_compiler_rt.o");
     const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_compiler_rt.o");
@@ -10647,6 +10652,15 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
                 try object_files.append(runtime_path);
             } else {
                 return error.UnsupportedTarget;
+            }
+            // The app object comes from target-independent builtin bitcode
+            // and bundles no compiler-rt, so it leaves undefined the routines
+            // instruction selection calls for operations the target has no
+            // instruction for (`fmod` for a float remainder, `floor` on a
+            // baseline x86-64 CPU, ...). A default platform that links no C
+            // runtime defines them in its compiler-rt carrier.
+            if (try writeDefaultPlatformCompilerRtObject(ctx, app_object.artifact_dir, target)) |compiler_rt_path| {
+                try object_files.append(compiler_rt_path);
             }
         }
         if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
