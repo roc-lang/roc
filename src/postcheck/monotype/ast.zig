@@ -641,7 +641,7 @@ pub fn valueEql(left: anytype, right: @TypeOf(left)) bool {
             const right_value = right orelse return false;
             return valueEql(left_value, right_value);
         },
-        else => return std.meta.eql(left, right),
+        .type, .void, .bool, .noreturn, .int, .float, .pointer, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => return std.meta.eql(left, right),
     }
 }
 
