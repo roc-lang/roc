@@ -15757,14 +15757,15 @@ const Builder = struct {
             if (state.method_evidence.len != 0) {
                 const method = self.plan.dictionary_method_evidence.items[state.method_evidence.start + state.method_index];
                 const fixed = switch (method.resolution) {
-                    .worker, .builtin_numeral, .unreachable_value => true,
+                    // A rejected or unreachable dispatch fixes a slot whose
+                    // method crashes when called.
+                    .worker, .builtin_numeral, .checked_error, .unreachable_value => true,
                     .structural => |kind| switch (kind) {
                         .equality, .hash => true,
                         .parser, .encoder => boxyPlanInvariant("structural codec dictionary evidence had no generated worker"),
                         .map, .map_effectful => boxyPlanInvariant("derived map evidence reached static dictionary worker planning"),
                     },
                     .constraint => false,
-                    .checked_error => boxyPlanInvariant("checked-error dictionary evidence reached Boxy worker planning"),
                 };
                 if (fixed) {
                     try state.planned.append(self.allocator, method);

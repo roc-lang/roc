@@ -3068,8 +3068,13 @@ const ProcedureBuilder = struct {
                 } } };
             }
             if (exact_method) |method| {
-                if (method.resolution == .unreachable_value) {
-                    frame.slots.items[slot_index] = try self.unreachableDictionaryMethodSlot(requirement, method.requirement_type);
+                const crash: ?CrashingDictionaryMethod = switch (method.resolution) {
+                    .checked_error => .checked_error,
+                    .unreachable_value => .unreachable_value,
+                    .worker, .structural, .constraint, .builtin_numeral => null,
+                };
+                if (crash) |kind| {
+                    frame.slots.items[slot_index] = try self.crashingDictionaryMethodSlot(requirement, method.requirement_type, kind);
                     continue;
                 }
             }
@@ -3077,9 +3082,8 @@ const ProcedureBuilder = struct {
                 .worker => |worker| worker,
                 .structural => boxyLowerInvariant("unsupported structural dictionary method reached boxy lowering"),
                 .constraint => boxyLowerInvariant("forwarded dictionary evidence reached static dictionary lowering"),
-                .checked_error => boxyLowerInvariant("checked-error dictionary evidence reached boxy lowering"),
                 .builtin_numeral => boxyLowerInvariant("compile-time numeral proof reached a runtime dictionary"),
-                .unreachable_value => boxyLowerInvariant("unreachable dictionary evidence reached boxy lowering"),
+                .checked_error, .unreachable_value => unreachable,
             } else self.methodWorkerForStaticDictionary(rep_id, requirement) orelse
                 boxyLowerInvariant("static boxy dictionary method target was not planned");
 
@@ -5822,17 +5826,27 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn unreachableDictionaryMethodSlot(
+    /// Why a static dictionary method slot crashes instead of calling a
+    /// method: the checked evidence for that slot is a rejected dispatch.
+    const CrashingDictionaryMethod = enum {
+        /// Checking rejected the dispatch and already reported it.
+        checked_error,
+        /// The dispatcher is a value that can never exist.
+        unreachable_value,
+    };
+
+    fn crashingDictionaryMethodSlot(
         self: *ProcedureBuilder,
         requirement: Plan.DictionaryRequirement,
         fn_type: Plan.CheckedTypeIdentity,
+        crash: CrashingDictionaryMethod,
     ) Allocator.Error!LirProgram.BoxyMethodSlot {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("unreachable dictionary function type was not analyzed");
+            boxyLowerInvariant("crashing dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("unreachable dictionary requirement was not a function");
+            boxyLowerInvariant("crashing dictionary requirement was not a function");
         if (self.layout_plan.worker_layouts.len == 0) {
-            boxyLowerInvariant("unreachable dictionary method was emitted without a worker layout context");
+            boxyLowerInvariant("crashing dictionary method was emitted without a worker layout context");
         }
 
         const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(function.ret)].worker.layoutIdx();
@@ -5845,20 +5859,25 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
         }, constructlessOrigin(.scaffold).loc);
-        try self.appendProcJob(.{ .unreachable_method = .{ .proc_id = proc_id, .fn_type = fn_type } });
+        try self.appendProcJob(.{ .crashing_method = .{ .proc_id = proc_id, .fn_type = fn_type, .crash = crash } });
         return .{
             .method = requirement.fn_name,
             .proc = proc_id,
         };
     }
 
-    /// Build a dictionary method that crashes: it can only be reached by
-    /// dispatching on a value that can never exist.
-    fn buildUnreachableDictionaryMethod(self: *ProcedureBuilder, proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity) Allocator.Error!void {
+    /// Build a dictionary method that crashes when called: the crash a
+    /// direct dispatch with the same rejected resolution lowers to.
+    fn buildCrashingDictionaryMethod(
+        self: *ProcedureBuilder,
+        proc_id: LIR.LirProcSpecId,
+        fn_type: Plan.CheckedTypeIdentity,
+        crash: CrashingDictionaryMethod,
+    ) Allocator.Error!void {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("unreachable dictionary function type was not analyzed");
+            boxyLowerInvariant("crashing dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("unreachable dictionary requirement was not a function");
+            boxyLowerInvariant("crashing dictionary requirement was not a function");
         const function_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
         const function_args = function_children[function.args_start..][0..function.arg_count];
         const saved_tail_builder = self.result.store.tail_call_builder;
@@ -5876,8 +5895,13 @@ const ProcedureBuilder = struct {
         }
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const message = switch (crash) {
+            .checked_error => "method dispatch failed to check",
+            .unreachable_value => "dispatch on a value that can never exist",
+        };
         const body = try self.result.store.addCFStmt(.{ .crash = .{
-            .msg = .{ .literal = try self.result.store.insertString("dispatch on a value that can never exist") },
+            .msg = .{ .literal = try self.result.store.insertString(message) },
+            .checked_error = crash == .checked_error,
         } }, proc.origin);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.args = args_span;
@@ -7196,7 +7220,7 @@ const ProcedureBuilder = struct {
             /// A literal conversion's procedures, filling its reserved
             /// dictionary's method slot.
             literal: struct { index: u32, method_slot: u32 },
-            unreachable_method: struct { proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity },
+            crashing_method: struct { proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity, crash: CrashingDictionaryMethod },
         },
     };
 
@@ -7242,7 +7266,7 @@ const ProcedureBuilder = struct {
                 adapter_job.deinit(self.allocator);
                 self.allocator.destroy(adapter_job);
             },
-            .literal, .unreachable_method => {},
+            .literal, .crashing_method => {},
         }
     }
 
@@ -7334,7 +7358,7 @@ const ProcedureBuilder = struct {
                 try self.pushWorkerJob(adapter_job.worker_id);
             },
             .derived => |derived_job| try self.buildDerivedHeader(derived_job),
-            .callable_adapter, .literal, .unreachable_method => {},
+            .callable_adapter, .literal, .crashing_method => {},
         }
     }
 
@@ -7359,7 +7383,7 @@ const ProcedureBuilder = struct {
             .callable_adapter => |adapter_job| try self.buildCallableAdapterBody(adapter_job),
             .static_method_adapter => |adapter_job| try self.buildStaticMethodAdapterBody(adapter_job),
             .literal => |literal| try self.buildLiteralAccessor(literal.index, literal.method_slot),
-            .unreachable_method => |method| try self.buildUnreachableDictionaryMethod(method.proc_id, method.fn_type),
+            .crashing_method => |method| try self.buildCrashingDictionaryMethod(method.proc_id, method.fn_type, method.crash),
         }
         const job = &self.proc_jobs.items[job_index];
         job.status = .finished;
@@ -22309,6 +22333,20 @@ const ProcBodyBuilder = struct {
         if (@intFromEnum(node) >= store_module.const_store.values.items.len) {
             boxyLowerInvariant("ConstStore node id was outside the store");
         }
+        // A crash or checked-error node is the value of a root whose
+        // evaluation stopped. It has no shape to unwrap at any
+        // representation, so it restores as that crash before the
+        // representation is consulted.
+        switch (store_module.const_store.get(node)) {
+            .crash => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+            } }, self.scaffoldOrigin())),
+            .checked_error => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
+            } }, self.scaffoldOrigin())),
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+        }
         const stored_type_value = store_module.const_store.type_store.get(stored_type);
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         switch (rep.kind) {
@@ -22333,7 +22371,8 @@ const ProcBodyBuilder = struct {
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing_node = switch (store_module.const_store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .fn_value => node,
+                        .crash, .checked_error => unreachable,
                     };
                     const backing_local = try self.addFrameLocalForRep(backing_rep);
                     const assign = try self.assignRepresentationBoundary(
@@ -22354,7 +22393,8 @@ const ProcBodyBuilder = struct {
                 while (true) switch (store_module.const_store.get(bool_node)) {
                     .nominal => |nominal| bool_node = nominal.backing,
                     .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
-                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .crash, .checked_error => unreachable,
                 };
             },
             .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
@@ -44983,11 +45023,16 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
 }
 
 test "boxy lowerer restores top-level consts from resolved local lookups" {
-    try expectBoxyTopLevelConstLookup(.local);
+    try expectBoxyTopLevelConstLookup(.local, .value);
 }
 
 test "boxy lowerer restores top-level consts from resolved external lookups" {
-    try expectBoxyTopLevelConstLookup(.external);
+    try expectBoxyTopLevelConstLookup(.external, .value);
+}
+
+test "boxy lowerer restores a checked-error top-level const as a checked-error crash" {
+    try expectBoxyTopLevelConstLookup(.local, .checked_error);
+    try expectBoxyTopLevelConstLookup(.external, .checked_error);
 }
 
 const ConstLookupExprKind = enum {
@@ -44995,7 +45040,14 @@ const ConstLookupExprKind = enum {
     external,
 };
 
-fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+/// What the looked-up constant's root stored: the value 5, or the checked
+/// error its evaluation stopped at.
+const ConstLookupStoredKind = enum {
+    value,
+    checked_error,
+};
+
+fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupStoredKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45025,7 +45077,18 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
         @enumFromInt(fixtureTableIndex(0)),
         typeSchemeKey(7),
     );
-    const const_node = try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } });
+    const const_node = switch (stored) {
+        .value => try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } }),
+        .checked_error => blk: {
+            const message = "method dispatch failed to check";
+            const data = try checked_module.const_store.addBlobData(message);
+            break :blk try checked_module.const_store.append(.{ .checked_error = .{
+                .data = data,
+                .offset = 0,
+                .len = message.len,
+            } });
+        },
+    };
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
     checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root_type = root_type });
     var compile_time_roots = [_]checked.CompileTimeRoot{.{
@@ -45117,7 +45180,15 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    switch (stored) {
+        .value => {},
+        .checked_error => {
+            try std.testing.expect(body == .crash and body.crash.checked_error);
+            return;
+        },
+    }
+    const assign = body.assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| {
             try std.testing.expectEqual(@as(i128, 5), literal.value);

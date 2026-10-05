@@ -708,8 +708,11 @@ stores a `checked_error` value for the root (`ConstValue.checked_error`) and
 reports nothing further. A read of that value crashes exactly as the rejected
 code does, and the root's failure record carries the same kind
 (`ComptimeFailureKind.checked_error`), so a dependent root that reads it stops
-the same way. A root whose evaluation never reaches the rejected code completes
-normally, whatever its callees contain elsewhere. A top-level expect that
+the same way. Runtime lowering restores a stored `checked_error` (or `crash`)
+node as that crash before it consults the use's representation: the node has no
+shape to unwrap, so Boxy's representation-directed restoration (a `Bool` read as
+its tag, a nominal read through its backing) never sees it. A root whose
+evaluation never reaches the rejected code completes normally, whatever its callees contain elsewhere. A top-level expect that
 reaches a checked error counts as a compiler-error test result, with the
 original checking diagnostic reported once. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
@@ -12985,6 +12988,15 @@ never instantiates the rejected callable's type or contributes a type relation.
 Literal-conversion lowering, including its compile-time entry wrapper, passes
 the same callable proof into raw conversion lowering. It cannot instantiate a
 conversion callable or request its target through an unchecked plan.
+
+Boxy lowers a generic body once, so an `evidence_dependent` dispatch calls the
+method slot of a runtime dictionary. Checked evidence that resolves a slot to
+`checked_error` or `unreachable_value` fixes that slot during Boxy planning
+exactly as a worker does, and lowering fills it with a crashing method: a
+procedure at the requirement's function type whose body is the checked-error
+crash (`method dispatch failed to check`, `checked_error = true`) or the
+unreachable-dispatch crash. Calling the slot is the dispatch, so the crash
+happens where the dispatch is reached.
 
 An ordinary function-valued binding whose bound expression is already a checked
 `runtime_error` likewise has no callable target. Initial checked-binding construction
