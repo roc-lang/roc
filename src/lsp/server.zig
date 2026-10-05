@@ -69,7 +69,10 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         pub const RunError = TransportType.ReadMessageError || PayloadError;
         const RunSyntaxCheckError = SyntaxDriverType.CheckError || Allocator.Error || error{WriteFailed};
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
-        const HandlerPtr = *const HandlerFn;
+        const HandlerRegistration = struct {
+            call: *const HandlerFn,
+            requires_trust: bool,
+        };
         const NotificationFn = fn (*Self, ?std.json.Value) NotificationError!void;
         const NotificationPtr = *const NotificationFn;
         const InitializeHandler = initialize_handler_mod.handler(Self);
@@ -88,23 +91,23 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const ReferencesHandler = references_handler_mod.handler(Self);
         const InlayHintHandler = inlay_hint_handler_mod.handler(Self);
         const CodeActionHandler = code_action_handler_mod.handler(Self);
-        const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
-            .{ "initialize", &InitializeHandler.call },
-            .{ "shutdown", &ShutdownHandler.call },
-            .{ "textDocument/semanticTokens/full", &SemanticTokensHandler.call },
-            .{ "textDocument/hover", &HoverHandler.call },
-            .{ "textDocument/definition", &DefinitionHandler.call },
-            .{ "textDocument/formatting", &FormattingHandler.call },
-            .{ "textDocument/documentSymbol", &DocumentSymbolHandler.call },
-            .{ "textDocument/foldingRange", &FoldingRangeHandler.call },
-            .{ "textDocument/selectionRange", &SelectionRangeHandler.call },
-            .{ "textDocument/documentHighlight", &DocumentHighlightHandler.call },
-            .{ "textDocument/completion", &CompletionHandler.call },
-            .{ "textDocument/rename", &RenameHandler.call },
-            .{ "textDocument/prepareRename", &PrepareRenameHandler.call },
-            .{ "textDocument/references", &ReferencesHandler.call },
-            .{ "textDocument/inlayHint", &InlayHintHandler.call },
-            .{ "textDocument/codeAction", &CodeActionHandler.call },
+        const request_handlers = std.StaticStringMap(HandlerRegistration).initComptime(.{
+            .{ "initialize", HandlerRegistration{ .call = &InitializeHandler.call, .requires_trust = false } },
+            .{ "shutdown", HandlerRegistration{ .call = &ShutdownHandler.call, .requires_trust = false } },
+            .{ "textDocument/semanticTokens/full", HandlerRegistration{ .call = &SemanticTokensHandler.call, .requires_trust = true } },
+            .{ "textDocument/hover", HandlerRegistration{ .call = &HoverHandler.call, .requires_trust = true } },
+            .{ "textDocument/definition", HandlerRegistration{ .call = &DefinitionHandler.call, .requires_trust = true } },
+            .{ "textDocument/formatting", HandlerRegistration{ .call = &FormattingHandler.call, .requires_trust = false } },
+            .{ "textDocument/documentSymbol", HandlerRegistration{ .call = &DocumentSymbolHandler.call, .requires_trust = true } },
+            .{ "textDocument/foldingRange", HandlerRegistration{ .call = &FoldingRangeHandler.call, .requires_trust = false } },
+            .{ "textDocument/selectionRange", HandlerRegistration{ .call = &SelectionRangeHandler.call, .requires_trust = false } },
+            .{ "textDocument/documentHighlight", HandlerRegistration{ .call = &DocumentHighlightHandler.call, .requires_trust = true } },
+            .{ "textDocument/completion", HandlerRegistration{ .call = &CompletionHandler.call, .requires_trust = true } },
+            .{ "textDocument/rename", HandlerRegistration{ .call = &RenameHandler.call, .requires_trust = true } },
+            .{ "textDocument/prepareRename", HandlerRegistration{ .call = &PrepareRenameHandler.call, .requires_trust = true } },
+            .{ "textDocument/references", HandlerRegistration{ .call = &ReferencesHandler.call, .requires_trust = true } },
+            .{ "textDocument/inlayHint", HandlerRegistration{ .call = &InlayHintHandler.call, .requires_trust = true } },
+            .{ "textDocument/codeAction", HandlerRegistration{ .call = &CodeActionHandler.call, .requires_trust = true } },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
@@ -274,7 +277,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
 
             if (request_handlers.get(method)) |handler| {
-                try handler(self, id, maybe_params);
+                if (handler.requires_trust and !self.client.trusted_workspace) {
+                    try self.sendError(id, .request_failed, "Semantic features require initializationOptions.trustedWorkspace: true; restart the server after granting trust.");
+                    return;
+                }
+                try handler.call(self, id, maybe_params);
                 return;
             }
 
@@ -362,6 +369,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         }
 
         fn runSyntaxCheck(self: *Self, uri: []const u8) RunSyntaxCheckError!void {
+            if (!self.client.trusted_workspace) return;
             const doc = self.doc_store.get(uri);
             const root_path = if (self.client.root_uri) |root_uri|
                 try uri_util.uriToPath(self.allocator, root_uri)
@@ -457,48 +465,48 @@ const LogFileInfo = struct {
     path: []u8,
 };
 
-/// Open the debug log in the user's Roc cache directory, which only that user
-/// can write to, creating the directory if needed.
+/// Create a private log for this session. Never reopen an existing path.
 fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io, roc_ctx: CoreCtx) CreateLogFileError!LogFileInfo {
     const cache_config = CacheConfig{ .roc_ctx = roc_ctx };
     const dir_path = try cache_config.getEffectiveCacheDir(allocator);
     defer allocator.free(dir_path);
     try std.Io.Dir.cwd().createDirPath(std_io, dir_path);
-    const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, "lsp-debug.log" });
+    var nonce: [16]u8 = undefined;
+    std_io.random(&nonce);
+    const filename = try std.fmt.allocPrint(allocator, "lsp-debug-{x}.log", .{nonce});
+    defer allocator.free(filename);
+    const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
     errdefer allocator.free(absolute_path);
-    const file = std.Io.Dir.createFileAbsolute(std_io, absolute_path, .{
-        .truncate = false,
-        .read = true,
-    }) catch |err| switch (err) {
-        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(std_io, absolute_path, .{
-            .mode = .read_write,
-        }),
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
-    // File is opened in append mode (non-truncate)
+    const file = try createPrivateLog(std_io, absolute_path);
     return .{ .file = file, .path = absolute_path };
+}
+
+fn createPrivateLog(std_io: std.Io, absolute_path: []const u8) std.Io.File.OpenError!std.Io.File {
+    return std.Io.Dir.createFileAbsolute(std_io, absolute_path, .{
+        .exclusive = true,
+        .permissions = if (builtin.os.tag == .windows) .default_file else .fromMode(0o600),
+    });
+}
+
+test "debug log refuses existing files and symlinks and has private permissions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(dir);
+    const path = try std.fs.path.join(std.testing.allocator, &.{ dir, "log" });
+    defer std.testing.allocator.free(path);
+    const file = try createPrivateLog(io, path);
+    defer file.close(io);
+    try file.writeStreamingAll(io, "original");
+    try std.testing.expectError(error.PathAlreadyExists, createPrivateLog(io, path));
+    const stat = try file.stat(io);
+    try std.testing.expectEqual(@as(u64, 8), stat.size);
+    if (builtin.os.tag != .windows) {
+        try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), stat.permissions.toMode() & 0o777);
+        const link = try std.fs.path.join(std.testing.allocator, &.{ dir, "link" });
+        defer std.testing.allocator.free(link);
+        try tmp.dir.symLink(io, "log", "link", .{});
+        try std.testing.expectError(error.PathAlreadyExists, createPrivateLog(io, link));
+    }
 }
