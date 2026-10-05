@@ -92,6 +92,13 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
     return info;
 }
 
+/// Begin an S-expression node named `name` that carries `region`'s position info.
+pub fn beginSexprNodeAt(self: *const AST, env: *const CommonEnv, tree: *SExprTree, name: []const u8, region: TokenizedRegion) std.mem.Allocator.Error!SExprTree.NodeBegin {
+    const begin = try tree.beginNamedNode(name);
+    try self.appendRegionInfoToSexprTree(env, tree, region);
+    return begin;
+}
+
 /// Append region information to an S-expression node for diagnostics
 pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree: *SExprTree, region: TokenizedRegion) std.mem.Allocator.Error!void {
     const start = self.tokens.resolve(region.start);
@@ -1114,9 +1121,7 @@ pub const Statement = union(enum) {
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .decl => |decl| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-decl");
-                try ast.appendRegionInfoToSexprTree(env, tree, decl.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-decl", decl.region);
                 const attrs = tree.beginNode();
 
                 // pattern
@@ -1128,9 +1133,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .@"var" => |v| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-var");
-                try ast.appendRegionInfoToSexprTree(env, tree, v.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-var", v.region);
 
                 const name_str = ast.resolve(v.name);
                 try tree.pushStringPair("name", name_str);
@@ -1146,9 +1149,7 @@ pub const Statement = union(enum) {
                 try ast.store.getExpr(expr.expr).pushToSExprTree(gpa, env, ast, tree);
             },
             .import => |import| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-import");
-                try ast.appendRegionInfoToSexprTree(env, tree, import.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-import", import.region);
 
                 // Reconstruct full qualified module name using the new helper
                 const full_module_name = ast.resolveImportTarget(import.target);
@@ -1165,8 +1166,7 @@ pub const Statement = union(enum) {
                 // exposed identifiers e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
                 const exposed_slice = ast.store.exposedItemSlice(import.exposes);
                 if (exposed_slice.len > 0) {
-                    const exposed = tree.beginNode();
-                    try tree.pushStaticAtom("exposing");
+                    const exposed = try tree.beginNamedNode("exposing");
                     const attrs2 = tree.beginNode();
                     for (ast.store.exposedItemSlice(import.exposes)) |e| {
                         try ast.store.getExposedItem(e).pushToSExprTree(env, ast, tree);
@@ -1176,9 +1176,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .file_import => |fi| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-file-import");
-                try ast.appendRegionInfoToSexprTree(env, tree, fi.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-file-import", fi.region);
                 const attrs = tree.beginNode();
 
                 try tree.pushStringPair("path", ast.resolve(fi.path_tok));
@@ -1188,15 +1186,12 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .type_decl => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-type-decl");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-type-decl", a.region);
                 const attrs = tree.beginNode();
 
                 // pattern
                 {
-                    const header = tree.beginNode();
-                    try tree.pushStaticAtom("header");
+                    const header = try tree.beginNamedNode("header");
                     // Check if the type header node is malformed before calling getTypeHeader
                     const header_node = ast.store.nodes.get(@enumFromInt(@intFromEnum(a.header)));
                     if (header_node.tag == .malformed) {
@@ -1204,8 +1199,7 @@ pub const Statement = union(enum) {
                         try ast.appendRegionInfoToSexprTree(env, tree, header_node.region);
                         try tree.pushStringPair("name", "<malformed>");
                         const attrs2 = tree.beginNode();
-                        const args_begin = tree.beginNode();
-                        try tree.pushStaticAtom("args");
+                        const args_begin = try tree.beginNamedNode("args");
                         try tree.endNodeWithoutChildren(args_begin);
                         try tree.endNode(header, attrs2);
                     } else {
@@ -1214,8 +1208,7 @@ pub const Statement = union(enum) {
                         try tree.pushStringPair("name", ast.resolve(ty_header.name));
                         const attrs2 = tree.beginNode();
 
-                        const args_begin = tree.beginNode();
-                        try tree.pushStaticAtom("args");
+                        const args_begin = try tree.beginNamedNode("args");
                         const args_node = tree.beginNode();
 
                         for (ast.store.typeAnnoSlice(ty_header.args)) |b| {
@@ -1230,8 +1223,7 @@ pub const Statement = union(enum) {
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
 
                 if (a.where) |where_coll| {
-                    const where_node = tree.beginNode();
-                    try tree.pushStaticAtom("where");
+                    const where_node = try tree.beginNamedNode("where");
                     const where_attrs = tree.beginNode();
                     for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
                         try ast.store.getWhereClause(clause_idx).pushToSExprTree(gpa, env, ast, tree);
@@ -1241,9 +1233,7 @@ pub const Statement = union(enum) {
 
                 // Add associated block if present
                 if (a.associated) |assoc| {
-                    const assoc_begin = tree.beginNode();
-                    try tree.pushStaticAtom("associated");
-                    try ast.appendRegionInfoToSexprTree(env, tree, assoc.region);
+                    const assoc_begin = try ast.beginSexprNodeAt(env, tree, "associated", assoc.region);
                     const assoc_attrs = tree.beginNode();
 
                     for (ast.store.statementSlice(assoc.statements)) |stmt_idx| {
@@ -1257,9 +1247,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .crash => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-crash");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-crash", a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -1267,9 +1255,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .dbg => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-dbg");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-dbg", a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -1277,9 +1263,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .expect => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-expect");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-expect", a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.body).pushToSExprTree(gpa, env, ast, tree);
@@ -1307,9 +1291,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .@"while" => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-while");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-while", a.region);
                 const attrs = tree.beginNode();
 
                 // condition
@@ -1321,15 +1303,11 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .@"break" => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-break");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-break", a.region);
                 try tree.endNodeWithoutChildren(begin);
             },
             .@"return" => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-return");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-return", a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -1337,17 +1315,14 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .type_anno => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-type-anno");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-type-anno", a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
                 const attrs = tree.beginNode();
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
 
                 if (a.where) |where_coll| {
-                    const where_node = tree.beginNode();
-                    try tree.pushStaticAtom("where");
+                    const where_node = try tree.beginNamedNode("where");
                     const attrs2 = tree.beginNode();
                     for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
                         const clause_child = ast.store.getWhereClause(clause_idx);
@@ -1358,9 +1333,7 @@ pub const Statement = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .malformed => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-malformed");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "s-malformed", a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
                 try tree.endNodeWithoutChildren(begin);
             },
@@ -1398,13 +1371,10 @@ pub const Block = struct {
 
     /// Push this Block to the SExprTree stack
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("e-block");
-        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
+        const begin = try ast.beginSexprNodeAt(env, tree, "e-block", self.region);
         const attrs = tree.beginNode();
 
-        const statements = tree.beginNode();
-        try tree.pushStaticAtom("statements");
+        const statements = try tree.beginNamedNode("statements");
         const attrs2 = tree.beginNode();
         // Push all statements
         for (ast.store.statementSlice(self.statements)) |stmt_idx| {
@@ -1551,13 +1521,10 @@ pub const Pattern = union(enum) {
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .ident => |ident| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-ident");
-                try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-ident", ident.region);
 
                 // Add raw attribute
-                const raw_begin = tree.beginNode();
-                try tree.pushStaticAtom("raw");
+                const raw_begin = try tree.beginNamedNode("raw");
                 try tree.pushString(ast.resolve(ident.ident_tok));
                 try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
@@ -1565,13 +1532,10 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .var_ident => |ident| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-var-ident");
-                try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-var-ident", ident.region);
 
                 // Add raw attribute
-                const raw_begin = tree.beginNode();
-                try tree.pushStaticAtom("raw");
+                const raw_begin = try tree.beginNamedNode("raw");
                 try tree.pushString(ast.resolve(ident.ident_tok));
                 try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
@@ -1579,9 +1543,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tag => |tag| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-tag");
-                try ast.appendRegionInfoToSexprTree(env, tree, tag.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-tag", tag.region);
                 try tree.pushStringPair("raw", ast.resolve(tag.tag_tok));
                 const attrs = tree.beginNode();
 
@@ -1593,39 +1555,29 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .int => |num| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-int");
-                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-int", num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try tree.endNodeWithoutChildren(begin);
             },
             .frac => |num| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-frac");
-                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-frac", num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try tree.endNodeWithoutChildren(begin);
             },
             .typed_int => |num| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-typed-int");
-                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-typed-int", num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
             },
             .typed_frac => |num| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-typed-frac");
-                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-typed-frac", num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
             },
             .string => |str| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-string");
-                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-string", str.region);
                 try tree.pushStringPair("raw", ast.resolve(str.string_tok));
                 const attrs = tree.beginNode();
                 for (ast.store.patternStringPartSlice(str.parts)) |part_idx| {
@@ -1634,9 +1586,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .single_quote => |sq| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-single-quote");
-                try ast.appendRegionInfoToSexprTree(env, tree, sq.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-single-quote", sq.region);
                 try tree.pushStringPair("raw", ast.resolve(sq.token));
                 if (sq.type_suffix) |type_suffix| {
                     try ast.pushLiteralTypeSuffix(env, tree, type_suffix);
@@ -1644,16 +1594,12 @@ pub const Pattern = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .record => |rec| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-record");
-                try ast.appendRegionInfoToSexprTree(env, tree, rec.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-record", rec.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
                     const field = ast.store.getPatternRecordField(field_idx);
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("field");
-                    try ast.appendRegionInfoToSexprTree(env, tree, field.region);
+                    const field_begin = try ast.beginSexprNodeAt(env, tree, "field", field.region);
                     if (field.name) |name_tok| {
                         try tree.pushStringPair("name", ast.resolve(name_tok));
                     }
@@ -1670,9 +1616,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .list => |list| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-list");
-                try ast.appendRegionInfoToSexprTree(env, tree, list.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-list", list.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.patternSlice(list.patterns)) |pat| {
@@ -1682,9 +1626,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .list_rest => |rest| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-list-rest");
-                try ast.appendRegionInfoToSexprTree(env, tree, rest.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-list-rest", rest.region);
 
                 if (rest.name) |name_tok| {
                     try tree.pushStringPair("name", ast.resolve(name_tok));
@@ -1694,9 +1636,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple => |tuple| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-tuple");
-                try ast.appendRegionInfoToSexprTree(env, tree, tuple.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-tuple", tuple.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.patternSlice(tuple.patterns)) |pat| {
@@ -1706,13 +1646,11 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .underscore => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-underscore");
+                const begin = try tree.beginNamedNode("p-underscore");
                 try tree.endNodeWithoutChildren(begin);
             },
             .alternatives => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-alternatives");
+                const begin = try tree.beginNamedNode("p-alternatives");
                 const attrs = tree.beginNode();
 
                 for (ast.store.patternSlice(a.patterns)) |pat| {
@@ -1722,9 +1660,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .as => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-as");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-as", a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
                 const attrs = tree.beginNode();
 
@@ -1733,9 +1669,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .malformed => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-malformed");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-malformed", a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
                 try tree.endNodeWithoutChildren(begin);
             },
@@ -1761,16 +1695,12 @@ pub const PatternStringPart = union(enum) {
     pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) Allocator.Error!void {
         switch (self) {
             .text => |text| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-string-text");
-                try ast.appendRegionInfoToSexprTree(env, tree, text.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-string-text", text.region);
                 try tree.pushStringPair("raw", ast.resolve(text.token));
                 try tree.endNodeWithoutChildren(begin);
             },
             .capture => |capture| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-string-capture");
-                try ast.appendRegionInfoToSexprTree(env, tree, capture.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "p-string-capture", capture.region);
                 if (capture.name) |name| {
                     try tree.pushStringPair("name", ast.resolve(name));
                 } else {
@@ -1798,8 +1728,7 @@ pub const BinOp = struct {
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
 
         // Push the operator as an attribute-style pair
-        const op_begin = tree.beginNode();
-        try tree.pushStaticAtom("op");
+        const op_begin = try tree.beginNamedNode("op");
         try tree.pushString(ast.resolve(self.operator));
         try tree.endNodeWithoutChildren(op_begin);
         const attrs = tree.beginNode();
@@ -1871,8 +1800,7 @@ pub const Unary = struct {
 
     /// Push this Unary to the SExprTree stack
     pub fn pushToSExprTree(self: *const @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("unary");
+        const begin = try tree.beginNamedNode("unary");
         try tree.pushString(ast.resolve(self.operator));
         const attrs = tree.beginNode();
 
@@ -1907,17 +1835,14 @@ pub const File = struct {
 
     /// Push this File to the SExprTree stack
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("file");
-        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
+        const begin = try ast.beginSexprNodeAt(env, tree, "file", self.region);
         const attrs = tree.beginNode();
 
         // Push header
         const header = ast.store.getHeader(self.header);
         try header.pushToSExprTree(gpa, env, ast, tree);
 
-        const begin2 = tree.beginNode();
-        try tree.pushStaticAtom("statements");
+        const begin2 = try tree.beginNamedNode("statements");
         const attrs2 = tree.beginNode();
         for (ast.store.statementSlice(self.statements)) |stmt_id| {
             const stmt = ast.store.getStatement(stmt_id);
@@ -2009,18 +1934,14 @@ pub const Header = union(enum) {
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .app => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("app");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "app", a.region);
                 try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Provides
                 const provides_coll = ast.store.getCollection(a.provides);
                 const provides_items = ast.store.exposedItemSlice(.{ .span = provides_coll.span });
-                const provides_begin = tree.beginNode();
-                try tree.pushStaticAtom("provides");
-                try ast.appendRegionInfoToSexprTree(env, tree, provides_coll.region);
+                const provides_begin = try ast.beginSexprNodeAt(env, tree, "provides", provides_coll.region);
                 const attrs2 = tree.beginNode();
                 // Could push region info for provides_coll here if desired
                 for (provides_items) |item_idx| {
@@ -2038,9 +1959,7 @@ pub const Header = union(enum) {
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
                 const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-                const packages_begin = tree.beginNode();
-                try tree.pushStaticAtom("packages");
-                try ast.appendRegionInfoToSexprTree(env, tree, packages_coll.region);
+                const packages_begin = try ast.beginSexprNodeAt(env, tree, "packages", packages_coll.region);
                 const attrs3 = tree.beginNode();
                 for (packages_items) |item_idx| {
                     const item = ast.store.getRecordField(item_idx);
@@ -2051,15 +1970,11 @@ pub const Header = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .module => |module| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("module");
-                try ast.appendRegionInfoToSexprTree(env, tree, module.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "module", module.region);
                 const attrs = tree.beginNode();
 
                 const exposes = ast.store.getCollection(module.exposes);
-                const exposes_begin = tree.beginNode();
-                try tree.pushStaticAtom("exposes");
-                try ast.appendRegionInfoToSexprTree(env, tree, exposes.region);
+                const exposes_begin = try ast.beginSexprNodeAt(env, tree, "exposes", exposes.region);
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
@@ -2070,17 +1985,13 @@ pub const Header = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .package => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("package");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "package", a.region);
                 try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Exposes
                 const exposes = ast.store.getCollection(a.exposes);
-                const exposes_begin = tree.beginNode();
-                try tree.pushStaticAtom("exposes");
-                try ast.appendRegionInfoToSexprTree(env, tree, exposes.region);
+                const exposes_begin = try ast.beginSexprNodeAt(env, tree, "exposes", exposes.region);
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
@@ -2091,9 +2002,7 @@ pub const Header = union(enum) {
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
                 const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-                const packages_begin = tree.beginNode();
-                try tree.pushStaticAtom("packages");
-                try ast.appendRegionInfoToSexprTree(env, tree, packages_coll.region);
+                const packages_begin = try ast.beginSexprNodeAt(env, tree, "packages", packages_coll.region);
                 const attrs3 = tree.beginNode();
                 for (packages_items) |item_idx| {
                     const item = ast.store.getRecordField(item_idx);
@@ -2104,32 +2013,25 @@ pub const Header = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .platform => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("platform");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "platform", a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
                 try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Requires Entries (for-clause syntax)
-                const requires_begin = tree.beginNode();
-                try tree.pushStaticAtom("requires");
+                const requires_begin = try tree.beginNamedNode("requires");
                 const attrs3 = tree.beginNode();
                 for (ast.store.requiresEntrySlice(a.requires_entries)) |entry_idx| {
                     const entry = ast.store.getRequiresEntry(entry_idx);
-                    const entry_begin = tree.beginNode();
-                    try tree.pushStaticAtom("requires-entry");
-                    try ast.appendRegionInfoToSexprTree(env, tree, entry.region);
+                    const entry_begin = try ast.beginSexprNodeAt(env, tree, "requires-entry", entry.region);
                     const entry_attrs = tree.beginNode();
 
                     // Type aliases
-                    const aliases_begin = tree.beginNode();
-                    try tree.pushStaticAtom("type-aliases");
+                    const aliases_begin = try tree.beginNamedNode("type-aliases");
                     const aliases_attrs = tree.beginNode();
                     for (ast.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
                         const alias = ast.store.getForClauseTypeAlias(alias_idx);
-                        const alias_begin = tree.beginNode();
-                        try tree.pushStaticAtom("alias");
+                        const alias_begin = try tree.beginNamedNode("alias");
                         try tree.pushStringPair("name", ast.resolve(alias.alias_name));
                         try tree.pushStringPair("rigid", ast.resolve(alias.rigid_name));
                         try tree.endNodeWithoutChildren(alias_begin);
@@ -2149,9 +2051,7 @@ pub const Header = union(enum) {
 
                 // Exposes
                 const exposes = ast.store.getCollection(a.exposes);
-                const exposes_begin = tree.beginNode();
-                try tree.pushStaticAtom("exposes");
-                try ast.appendRegionInfoToSexprTree(env, tree, exposes.region);
+                const exposes_begin = try ast.beginSexprNodeAt(env, tree, "exposes", exposes.region);
                 const attrs4 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
@@ -2162,9 +2062,7 @@ pub const Header = union(enum) {
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
                 const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-                const packages_begin = tree.beginNode();
-                try tree.pushStaticAtom("packages");
-                try ast.appendRegionInfoToSexprTree(env, tree, packages_coll.region);
+                const packages_begin = try ast.beginSexprNodeAt(env, tree, "packages", packages_coll.region);
                 const attrs5 = tree.beginNode();
                 for (packages_items) |item_idx| {
                     const item = ast.store.getRecordField(item_idx);
@@ -2173,13 +2071,11 @@ pub const Header = union(enum) {
                 try tree.endNode(packages_begin, attrs5);
 
                 // Provides
-                const provides_begin = tree.beginNode();
-                try tree.pushStaticAtom("provides");
+                const provides_begin = try tree.beginNamedNode("provides");
                 const attrs6 = tree.beginNode();
                 for (ast.store.symbolMapEntrySlice(a.provides)) |entry_idx| {
                     const entry = ast.store.getSymbolMapEntry(entry_idx);
-                    const entry_begin = tree.beginNode();
-                    try tree.pushStaticAtom("symbol-map-entry");
+                    const entry_begin = try tree.beginNamedNode("symbol-map-entry");
                     try tree.pushStringPair("symbol", ast.resolve(entry.symbol));
                     if (entry.module) |module_tok| {
                         try tree.pushStringPair("module", ast.resolve(module_tok));
@@ -2191,13 +2087,11 @@ pub const Header = union(enum) {
 
                 // Hosted
                 if (a.hosted.span.len > 0) {
-                    const hosted_begin = tree.beginNode();
-                    try tree.pushStaticAtom("hosted");
+                    const hosted_begin = try tree.beginNamedNode("hosted");
                     const attrs7 = tree.beginNode();
                     for (ast.store.symbolMapEntrySlice(a.hosted)) |entry_idx| {
                         const entry = ast.store.getSymbolMapEntry(entry_idx);
-                        const entry_begin = tree.beginNode();
-                        try tree.pushStaticAtom("symbol-map-entry");
+                        const entry_begin = try tree.beginNamedNode("symbol-map-entry");
                         try tree.pushStringPair("symbol", ast.resolve(entry.symbol));
                         if (entry.module) |module_tok| {
                             try tree.pushStringPair("module", ast.resolve(module_tok));
@@ -2221,15 +2115,11 @@ pub const Header = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .hosted => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("hosted");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "hosted", a.region);
                 const attrs = tree.beginNode();
 
                 const exposes = ast.store.getCollection(a.exposes);
-                const exposes_begin = tree.beginNode();
-                try tree.pushStaticAtom("exposes");
-                try ast.appendRegionInfoToSexprTree(env, tree, exposes.region);
+                const exposes_begin = try ast.beginSexprNodeAt(env, tree, "exposes", exposes.region);
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
@@ -2240,23 +2130,17 @@ pub const Header = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .type_module => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("type-mod");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "type-mod", a.region);
                 try tree.endNodeWithoutChildren(begin);
             },
             .default_app => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("default-app");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "default-app", a.region);
                 const attrs = tree.beginNode();
                 try tree.pushStringPairFmt("main-fn-idx", "{d}", .{a.main_fn_idx});
                 try tree.endNode(begin, attrs);
             },
             .malformed => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("malformed-header");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "malformed-header", a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
                 try tree.endNodeWithoutChildren(begin);
             },
@@ -2308,14 +2192,11 @@ pub const ExposedItem = union(enum) {
     pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .lower_ident => |i| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("exposed-lower-ident");
-                try ast.appendRegionInfoToSexprTree(env, tree, i.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "exposed-lower-ident", i.region);
 
                 const attrs = tree.beginNode();
 
-                const text_begin = tree.beginNode();
-                try tree.pushStaticAtom("text");
+                const text_begin = try tree.beginNamedNode("text");
                 const ident_idx = ast.tokens.resolveIdentifier(i.ident) orelse {
                     // Fallback for malformed tokens
                     try tree.pushString("MALFORMED");
@@ -2341,9 +2222,7 @@ pub const ExposedItem = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .upper_ident => |i| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("exposed-upper-ident");
-                try ast.appendRegionInfoToSexprTree(env, tree, i.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "exposed-upper-ident", i.region);
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
@@ -2362,22 +2241,17 @@ pub const ExposedItem = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .upper_ident_star => |i| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("exposed-upper-ident-star");
-                try ast.appendRegionInfoToSexprTree(env, tree, i.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "exposed-upper-ident-star", i.region);
 
                 // text attribute
                 try ast.pushQualifiedName(env, tree, "text", i.qualifiers, i.ident);
                 try tree.endNodeWithoutChildren(begin);
             },
             .malformed => |m| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("exposed-malformed");
-                try ast.appendRegionInfoToSexprTree(env, tree, m.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "exposed-malformed", m.region);
 
                 // reason attribute
-                const reason_begin = tree.beginNode();
-                try tree.pushStaticAtom("reason");
+                const reason_begin = try tree.beginNamedNode("reason");
                 try tree.pushString(@tagName(m.reason));
                 try tree.endNodeWithoutChildren(reason_begin);
 
@@ -2622,9 +2496,7 @@ pub const TypeAnno = union(enum) {
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .apply => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-apply");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-apply", a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.typeAnnoSlice(a.args)) |b| {
@@ -2634,28 +2506,21 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .ty_var => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-var");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-var", a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.tok));
                 try tree.endNodeWithoutChildren(begin);
             },
             .underscore_type_var => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("underscore-ty-var");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "underscore-ty-var", a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.tok));
                 try tree.endNodeWithoutChildren(begin);
             },
             .underscore => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("_");
+                const begin = try tree.beginNamedNode("_");
                 try tree.endNodeWithoutChildren(begin);
             },
             .ty => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty", a.region);
 
                 // Resolve the fully qualified name
                 try ast.pushQualifiedName(env, tree, "name", a.qualifiers, a.token);
@@ -2664,14 +2529,11 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tag_union => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tag-union");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-tag-union", a.region);
                 const attrs = tree.beginNode();
 
                 const tags = ast.store.typeAnnoSlice(a.tags);
-                const tags_begin = tree.beginNode();
-                try tree.pushStaticAtom("tags");
+                const tags_begin = try tree.beginNamedNode("tags");
                 const attrs2 = tree.beginNode();
                 for (tags) |tag_idx| {
                     try ast.store.getTypeAnno(tag_idx).pushToSExprTree(gpa, env, ast, tree);
@@ -2691,9 +2553,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tuple");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-tuple", a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.typeAnnoSlice(a.annos)) |b| {
@@ -2703,17 +2563,14 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-record");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-record", a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.annoRecordFieldSlice(a.fields)) |f_idx| {
                     const field = ast.store.getAnnoRecordField(f_idx) catch |err| switch (err) {
                         error.MalformedNode => {
                             // Create a malformed-field node for debugging
-                            const malformed_begin = tree.beginNode();
-                            try tree.pushStaticAtom("malformed-field");
+                            const malformed_begin = try tree.beginNamedNode("malformed-field");
                             try tree.endNodeWithoutChildren(malformed_begin);
                             continue;
                         },
@@ -2724,17 +2581,14 @@ pub const TypeAnno = union(enum) {
                 // Output extension if present
                 switch (a.ext) {
                     .named => |named| {
-                        const ext_begin = tree.beginNode();
-                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_begin = try tree.beginNamedNode("ty-record-ext");
                         const ext_attrs = tree.beginNode();
                         try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
                         try tree.endNode(ext_begin, ext_attrs);
                     },
                     .open => {
-                        const ext_begin = tree.beginNode();
-                        try tree.pushStaticAtom("ty-record-ext");
-                        const ext_attrs = tree.beginNode();
-                        try tree.pushStaticAtom("..");
+                        const ext_begin = try tree.beginNamedNode("ty-record-ext");
+                        const ext_attrs = try tree.beginNamedNode("..");
                         try tree.endNode(ext_begin, ext_attrs);
                     },
                     .closed => {},
@@ -2743,9 +2597,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .@"fn" => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-fn");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-fn", a.region);
                 const attrs = tree.beginNode();
 
                 // arguments
@@ -2763,9 +2615,7 @@ pub const TypeAnno = union(enum) {
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
             },
             .malformed => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-malformed");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "ty-malformed", a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
                 try tree.endNodeWithoutChildren(begin);
             },
@@ -2788,9 +2638,7 @@ pub const AnnoRecordField = struct {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("anno-record-field");
-        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
+        const begin = try ast.beginSexprNodeAt(env, tree, "anno-record-field", self.region);
         try tree.pushStringPair("name", ast.resolve(self.name));
         if (self.optional_mark != null) try tree.pushBoolPair("optional", true);
         const attrs = tree.beginNode();
@@ -2799,8 +2647,7 @@ pub const AnnoRecordField = struct {
         try anno.pushToSExprTree(gpa, env, ast, tree);
 
         if (self.default_value) |default_idx| {
-            const default_begin = tree.beginNode();
-            try tree.pushStaticAtom("default");
+            const default_begin = try tree.beginNamedNode("default");
             const default_attrs = tree.beginNode();
             const default_expr = ast.store.getExpr(default_idx);
             try default_expr.pushToSExprTree(gpa, env, ast, tree);
@@ -2867,9 +2714,7 @@ pub const WhereClause = union(enum) {
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .mod_method => |m| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("method");
-                try ast.appendRegionInfoToSexprTree(env, tree, m.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "method", m.region);
 
                 try tree.pushStringPair("module-of", ast.resolve(m.var_tok));
 
@@ -2882,9 +2727,7 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .mod_alias => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("alias");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "alias", a.region);
 
                 try tree.pushStringPair("module-of", ast.resolve(a.var_tok));
 
@@ -2893,9 +2736,7 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .malformed => |m| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("malformed");
-                try ast.appendRegionInfoToSexprTree(env, tree, m.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "malformed", m.region);
                 try tree.pushStringPair("reason", @tagName(m.reason));
                 try tree.endNodeWithoutChildren(begin);
             },
@@ -3139,13 +2980,10 @@ pub const Expr = union(enum) {
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .int => |int| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-int");
-                try ast.appendRegionInfoToSexprTree(env, tree, int.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-int", int.region);
 
                 // Add raw attribute
-                const raw_begin = tree.beginNode();
-                try tree.pushStaticAtom("raw");
+                const raw_begin = try tree.beginNamedNode("raw");
                 try tree.pushString(ast.resolve(int.token));
                 try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
@@ -3153,32 +2991,24 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .frac => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-frac");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-frac", a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try tree.endNodeWithoutChildren(begin);
             },
             .typed_int => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-int");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-int", a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
             },
             .typed_frac => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-frac");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-frac", a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
             },
             .single_quote => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-single-quote");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-single-quote", a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 if (a.type_suffix) |type_suffix| {
                     try ast.pushLiteralTypeSuffix(env, tree, type_suffix);
@@ -3186,19 +3016,14 @@ pub const Expr = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .string_part => |sp| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-string-part");
-                try ast.appendRegionInfoToSexprTree(env, tree, sp.region);
-                const raw = tree.beginNode();
-                try tree.pushStaticAtom("raw");
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-string-part", sp.region);
+                const raw = try tree.beginNamedNode("raw");
                 try tree.pushString(ast.resolve(sp.token));
                 try tree.endNodeWithoutChildren(raw);
                 try tree.endNodeWithoutChildren(begin);
             },
             .string => |str| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-string");
-                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-string", str.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {
@@ -3209,9 +3034,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .multiline_string => |str| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-multiline-string");
-                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-multiline-string", str.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {
@@ -3222,9 +3045,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .typed_string => |str| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-string");
-                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-string", str.region);
                 try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
                 const attrs = tree.beginNode();
 
@@ -3236,9 +3057,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .typed_multiline_string => |str| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-multiline-string");
-                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-multiline-string", str.region);
                 try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
                 const attrs = tree.beginNode();
 
@@ -3250,9 +3069,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .list => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-list");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-list", a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(a.items)) |b| {
@@ -3262,9 +3079,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-tuple");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-tuple", a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(a.items)) |b| {
@@ -3274,23 +3089,19 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-record");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-record", a.region);
                 const attrs = tree.beginNode();
 
                 // Add extension if present
                 if (a.ext) |ext_idx| {
-                    const ext_wrapper = tree.beginNode();
-                    try tree.pushStaticAtom("ext");
+                    const ext_wrapper = try tree.beginNamedNode("ext");
                     try ast.store.getExpr(ext_idx).pushToSExprTree(gpa, env, ast, tree);
                     try tree.endNode(ext_wrapper, attrs);
                 }
 
                 for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
                     const record_field = ast.store.getRecordField(field_idx);
-                    const field_node = tree.beginNode();
-                    try tree.pushStaticAtom("field");
+                    const field_node = try tree.beginNamedNode("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
                     if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
@@ -3303,12 +3114,9 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tag => |tag| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-tag");
-                try ast.appendRegionInfoToSexprTree(env, tree, tag.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-tag", tag.region);
 
-                const raw_begin = tree.beginNode();
-                try tree.pushStaticAtom("raw");
+                const raw_begin = try tree.beginNamedNode("raw");
                 try ast.pushQualifiedName(env, tree, null, tag.qualifiers, tag.token);
                 try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
@@ -3316,13 +3124,10 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .lambda => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lambda");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-lambda", a.region);
                 const attrs = tree.beginNode();
 
-                const args = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args = try tree.beginNamedNode("args");
                 const attrs2 = tree.beginNode();
                 // Push args (patterns)
                 for (ast.store.patternSlice(a.args)) |pat| {
@@ -3336,9 +3141,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .apply => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-apply");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-apply", a.region);
                 const attrs = tree.beginNode();
 
                 // Push function
@@ -3352,15 +3155,12 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record_updater => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-record-updater");
+                const begin = try tree.beginNamedNode("e-record-updater");
                 try tree.pushString(ast.resolve(a.token));
                 try tree.endNodeWithoutChildren(begin);
             },
             .if_then_else => |stmt| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-if-then-else");
-                try ast.appendRegionInfoToSexprTree(env, tree, stmt.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-if-then-else", stmt.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
@@ -3370,9 +3170,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .if_without_else => |stmt| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-if-without-else");
-                try ast.appendRegionInfoToSexprTree(env, tree, stmt.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-if-without-else", stmt.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
@@ -3381,14 +3179,12 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .match => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-match");
+                const begin = try tree.beginNamedNode("e-match");
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
 
-                const branches = tree.beginNode();
-                try tree.pushStaticAtom("branches");
+                const branches = try tree.beginNamedNode("branches");
                 const attrs2 = tree.beginNode();
 
                 for (ast.store.matchBranchSlice(a.branches)) |branch_idx| {
@@ -3400,13 +3196,10 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .ident => |ident| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-ident");
-                try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-ident", ident.region);
 
                 // Add raw attribute
-                const raw_begin = tree.beginNode();
-                try tree.pushStaticAtom("raw");
+                const raw_begin = try tree.beginNamedNode("raw");
                 try ast.pushQualifiedName(env, tree, null, ident.qualifiers, ident.token);
                 try tree.endNodeWithoutChildren(raw_begin);
 
@@ -3415,8 +3208,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .dbg => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dbg");
+                const begin = try tree.beginNamedNode("e-dbg");
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -3424,9 +3216,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .crash => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-crash");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-crash", a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -3434,22 +3224,18 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record_builder => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-record-builder");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-record-builder", a.region);
                 const attrs = tree.beginNode();
 
                 // Push mapper (the type suffix)
-                const mapper_wrapper = tree.beginNode();
-                try tree.pushStaticAtom("mapper");
+                const mapper_wrapper = try tree.beginNamedNode("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNodeWithoutChildren(mapper_wrapper);
 
                 // Push fields
                 for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
                     const record_field = ast.store.getRecordField(field_idx);
-                    const field_node = tree.beginNode();
-                    try tree.pushStaticAtom("field");
+                    const field_node = try tree.beginNamedNode("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
                     if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
@@ -3462,31 +3248,24 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .nominal_record => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-nominal-record");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-nominal-record", a.region);
                 const attrs = tree.beginNode();
 
-                const mapper_wrapper = tree.beginNode();
-                try tree.pushStaticAtom("mapper");
+                const mapper_wrapper = try tree.beginNamedNode("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNodeWithoutChildren(mapper_wrapper);
 
-                const backing_wrapper = tree.beginNode();
-                try tree.pushStaticAtom("backing");
+                const backing_wrapper = try tree.beginNamedNode("backing");
                 try ast.store.getExpr(a.backing).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNodeWithoutChildren(backing_wrapper);
 
                 try tree.endNode(begin, attrs);
             },
             .nominal_apply => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-nominal-apply");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-nominal-apply", a.region);
                 const attrs = tree.beginNode();
 
-                const mapper_wrapper = tree.beginNode();
-                try tree.pushStaticAtom("mapper");
+                const mapper_wrapper = try tree.beginNamedNode("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNodeWithoutChildren(mapper_wrapper);
 
@@ -3497,20 +3276,15 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .ellipsis => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-ellipsis");
+                const begin = try tree.beginNamedNode("e-ellipsis");
                 try tree.endNodeWithoutChildren(begin);
             },
             .@"break" => |b| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-break");
-                try ast.appendRegionInfoToSexprTree(env, tree, b.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-break", b.region);
                 try tree.endNodeWithoutChildren(begin);
             },
             .@"return" => |ret| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-return");
-                try ast.appendRegionInfoToSexprTree(env, tree, ret.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-return", ret.region);
                 const attrs = tree.beginNode();
                 try ast.store.getExpr(ret.expr).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
@@ -3523,20 +3297,16 @@ pub const Expr = union(enum) {
                 try a.pushToSExprTree(gpa, env, ast, tree);
             },
             .field_access => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-field-access");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-field-access", a.region);
                 const attrs = tree.beginNode();
 
-                const receiver = tree.beginNode();
-                try tree.pushStaticAtom("receiver");
+                const receiver = try tree.beginNamedNode("receiver");
                 const receiver_attrs = tree.beginNode();
                 try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(receiver, receiver_attrs);
 
                 for (ast.store.fieldAccessSegmentSlice(a.segments)) |segment| {
-                    const segment_node = tree.beginNode();
-                    try tree.pushStaticAtom("segment");
+                    const segment_node = try tree.beginNamedNode("segment");
                     try tree.pushStringPair("mode", @tagName(segment.mode));
                     const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
                     try tree.pushStringPair("field", env.getIdent(field_ident));
@@ -3546,20 +3316,16 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .method_call => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-method-call");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-method-call", a.region);
                 try tree.pushStringPair("method", ast.resolve(a.method_token));
                 const attrs = tree.beginNode();
 
-                const receiver = tree.beginNode();
-                try tree.pushStaticAtom("receiver");
+                const receiver = try tree.beginNamedNode("receiver");
                 const receiver_attrs = tree.beginNode();
                 try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(receiver, receiver_attrs);
 
-                const args = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ast.store.exprSlice(a.args)) |arg_id| {
                     try ast.store.getExpr(arg_id).pushToSExprTree(gpa, env, ast, tree);
@@ -3569,9 +3335,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple_access => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-tuple-access");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-tuple-access", a.region);
                 const attrs = tree.beginNode();
 
                 // Push the tuple expression
@@ -3583,9 +3347,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .arrow_call => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-arrow-call");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-arrow-call", a.region);
                 const attrs = tree.beginNode();
 
                 // Push left expression
@@ -3600,16 +3362,12 @@ pub const Expr = union(enum) {
                 try a.pushToSExprTree(gpa, env, ast, tree);
             },
             .malformed => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-malformed");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-malformed", a.region);
                 try tree.pushStringPair("reason", @tagName(a.reason));
                 try tree.endNodeWithoutChildren(begin);
             },
             .suffix_single_question => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-question-suffix");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const begin = try ast.beginSexprNodeAt(env, tree, "e-question-suffix", a.region);
                 const attrs = tree.beginNode();
 
                 // Push child expression
@@ -3679,11 +3437,8 @@ pub const RecordField = struct {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("record-field");
-        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
-        const name = tree.beginNode();
-        try tree.pushStaticAtom("name");
+        const begin = try ast.beginSexprNodeAt(env, tree, "record-field", self.region);
+        const name = try tree.beginNamedNode("name");
         try tree.pushString(ast.resolve(self.name));
         try tree.endNodeWithoutChildren(name);
         // No unset rendering here: only header paths (an app header's
@@ -3721,15 +3476,12 @@ pub const MatchBranch = struct {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("branch");
-        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
+        const begin = try ast.beginSexprNodeAt(env, tree, "branch", self.region);
         const attrs = tree.beginNode();
 
         try ast.store.getPattern(self.pattern).pushToSExprTree(gpa, env, ast, tree);
         if (self.guard) |guard| {
-            const guard_begin = tree.beginNode();
-            try tree.pushStaticAtom("guard");
+            const guard_begin = try tree.beginNamedNode("guard");
             const guard_attrs = tree.beginNode();
             try ast.store.getExpr(guard).pushToSExprTree(gpa, env, ast, tree);
             try tree.endNode(guard_begin, guard_attrs);

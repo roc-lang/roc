@@ -5957,12 +5957,12 @@ const TypeAnnoIdent = struct {
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, false);
 }
 
 /// Walk `pattern_idx` and append every `assign`/`as` binder it introduces to
 /// `target`, recursing through tuple/record/list/tag/nominal/str-interp shapes.
-fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx) Allocator.Error!void {
+fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx, comptime skip_existing: bool) Allocator.Error!void {
     var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
     const stack_allocator = stack_allocator_state.get();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
@@ -5973,7 +5973,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
         const pattern = self.env.store.getPattern(current_idx);
         switch (pattern) {
             .assign, .var_assign => {
-                try target.append(current_idx);
+                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
             },
             .record_destructure => |destructure| {
                 const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
@@ -6006,7 +6006,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                 }
             },
             .as => |as_pat| {
-                try target.append(current_idx);
+                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
                 try pending.append(stack_allocator, as_pat.pattern);
             },
             .list => |list| {
@@ -6068,7 +6068,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 /// therefore not self-referential, so it is excluded from the set.
 fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
-    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false);
 
     const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
     if (reassign_targets.len > 0) {
@@ -6111,100 +6111,7 @@ fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
-    var pending: std.ArrayList(Pattern.Idx) = .empty;
-    defer pending.deinit(stack_allocator);
-
-    try pending.append(stack_allocator, pattern_idx);
-    while (pending.pop()) |current_idx| {
-        const pattern = self.env.store.getPattern(current_idx);
-        switch (pattern) {
-            .assign, .var_assign => {
-                if (!self.scratch_bound_vars.contains(current_idx)) {
-                    try self.scratch_bound_vars.append(current_idx);
-                }
-            },
-            .record_destructure => |destructure| {
-                const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
-                var i = destructs.len;
-                while (i > 0) {
-                    i -= 1;
-                    const destruct = self.env.store.getRecordDestruct(destructs[i]);
-                    const sub_pattern_idx = switch (destruct.kind) {
-                        .Required => |idx| idx,
-                        .SubPattern => |idx| idx,
-                        .Rest => |idx| idx,
-                    };
-                    try pending.append(stack_allocator, sub_pattern_idx);
-                }
-            },
-            .tuple => |tuple| {
-                const elems = self.env.store.slicePatterns(tuple.patterns);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .applied_tag => |tag| {
-                const args = self.env.store.slicePatterns(tag.args);
-                var i = args.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, args[i]);
-                }
-            },
-            .as => |as_pat| {
-                if (!self.scratch_bound_vars.contains(current_idx)) {
-                    try self.scratch_bound_vars.append(current_idx);
-                }
-                try pending.append(stack_allocator, as_pat.pattern);
-            },
-            .list => |list| {
-                if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pat_idx| {
-                        try pending.append(stack_allocator, rest_pat_idx);
-                    }
-                }
-                const elems = self.env.store.slicePatterns(list.patterns);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .nominal => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .nominal_external => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .deferred_import_ref => |deferred| {
-                try pending.append(stack_allocator, deferred.backing_pattern);
-            },
-            .str_interpolation => |str| {
-                var i: u32 = str.steps.span.len;
-                while (i > 0) {
-                    i -= 1;
-                    const step = self.env.store.getStrPatternStep(str.steps, i);
-                    if (step.capture) |capture| {
-                        try pending.append(stack_allocator, capture);
-                    }
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, true);
 }
 
 fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {

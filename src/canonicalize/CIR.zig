@@ -460,8 +460,7 @@ pub const TypeHeader = struct {
     args: TypeAnno.Span,
 
     pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("ty-header");
+        const begin = try tree.beginNamedNode("ty-header");
 
         // Get the region for this TypeHeader
         const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -474,8 +473,7 @@ pub const TypeHeader = struct {
         const attrs = tree.beginNode();
 
         if (self.args.span.len > 0) {
-            const args_begin = tree.beginNode();
-            try tree.pushStaticAtom("ty-args");
+            const args_begin = try tree.beginNamedNode("ty-args");
             const args_attrs = tree.beginNode();
             for (cir.store.sliceTypeAnnos(self.args)) |anno_idx| {
                 try cir.store.getTypeAnno(anno_idx).pushToSExprTree(cir, tree, anno_idx);
@@ -531,8 +529,7 @@ pub const WhereClause = union(enum) {
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) Allocator.Error!void {
         switch (self.*) {
             .w_method => |method| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("method");
+                const begin = try tree.beginNamedNode("method");
 
                 // Get the region for this WhereClause
                 const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -549,8 +546,7 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .w_alias => |alias| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("alias");
+                const begin = try tree.beginNamedNode("alias");
 
                 // Get the region for this WhereClause
                 const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -563,8 +559,7 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .w_malformed => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("malformed");
+                const begin = try tree.beginNamedNode("malformed");
 
                 // Get the region for this WhereClause
                 const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -614,8 +609,7 @@ pub const Annotation = struct {
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
 
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("annotation");
+        const begin = try tree.beginNamedNode("annotation");
         const attrs = tree.beginNode();
 
         // Get the region for this Annotation
@@ -627,8 +621,7 @@ pub const Annotation = struct {
 
         // Append where clause
         if (annotation.where) |where_span| {
-            const where_begin = tree.beginNode();
-            try tree.pushStaticAtom("where");
+            const where_begin = try tree.beginNamedNode("where");
             const where_attrs = tree.beginNode();
             const where_clauses = env.store.sliceWhereClauses(where_span);
             for (where_clauses) |clause_idx| {
@@ -655,8 +648,7 @@ pub const ExposedItem = struct {
     kind: Kind,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("exposed");
+        const begin = try tree.beginNamedNode("exposed");
 
         const name_str = cir.getIdent(self.name);
         try tree.pushStringPair("name", name_str);
@@ -1129,8 +1121,7 @@ pub const RecordField = struct {
     value: Expr.Idx,
 
     pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("field");
+        const begin = try tree.beginNamedNode("field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
         const attrs = tree.beginNode();
         try cir.store.getExpr(self.value).pushToSExprTree(cir, tree, self.value);
@@ -1149,8 +1140,7 @@ pub const UnsetField = struct {
     name: base.Ident.Idx,
 
     pub fn pushToSExprTree(self: *const UnsetField, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("unset-field");
+        const begin = try tree.beginNamedNode("unset-field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
         try tree.endNodeWithoutChildren(begin);
     }
@@ -1177,8 +1167,7 @@ pub const ExternalDecl = struct {
     pub const SafeList = collections.SafeList(ExternalDecl);
 
     pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) Allocator.Error!void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
+        const node = try tree.beginNamedNode("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
 
         // Add fully qualified name

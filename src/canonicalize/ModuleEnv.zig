@@ -4978,8 +4978,7 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
         // Only output the given expression
         try self.store.getExpr(expr_idx).pushToSExprTree(self, tree, expr_idx);
     } else {
-        const root_begin = tree.beginNode();
-        try tree.pushStaticAtom("can-ir");
+        const root_begin = try tree.beginNamedNode("can-ir");
 
         // Iterate over all the definitions in the file and convert each to an S-expression tree
         const defs_slice = self.store.sliceDefs(self.all_defs);
@@ -5005,6 +5004,13 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
 
         try tree.endNode(root_begin, attrs);
     }
+}
+
+/// Begin an S-expression node named `name` that carries the region of node `idx`.
+pub fn beginSExprNodeAt(self: *const Self, tree: *SExprTree, name: []const u8, idx: anytype) std.mem.Allocator.Error!SExprTree.NodeBegin {
+    const begin = try tree.beginNamedNode(name);
+    try self.appendRegionInfoToSExprTree(tree, idx);
+    return begin;
 }
 
 /// Append region information to an S-expression node for a given index.
@@ -5040,14 +5046,12 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         defer type_writer.deinit();
 
         // Generate full type information for all definitions and expressions
-        const root_begin = tree.beginNode();
-        try tree.pushStaticAtom("inferred-types");
+        const root_begin = try tree.beginNamedNode("inferred-types");
 
         const root_attrs = tree.beginNode();
 
         // Create defs section
-        const defs_begin = tree.beginNode();
-        try tree.pushStaticAtom("defs");
+        const defs_begin = try tree.beginNamedNode("defs");
         const defs_attrs = tree.beginNode();
 
         // Iterate through all definitions to extract pattern types
@@ -5072,8 +5076,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             try type_writer.write(def_var, .one_line);
 
             // Add the pattern type entry
-            const patt_begin = tree.beginNode();
-            try tree.pushStaticAtom("patt");
+            const patt_begin = try tree.beginNamedNode("patt");
             try self.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
 
             const type_str = type_writer.get();
@@ -5097,16 +5100,14 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
         // Create type_decls section if we have any type declarations
         if (has_type_decl) {
-            const type_decls_begin = tree.beginNode();
-            try tree.pushStaticAtom("type_decls");
+            const type_decls_begin = try tree.beginNamedNode("type_decls");
             const type_decls_attrs = tree.beginNode();
 
             for (all_stmts) |stmt_idx| {
                 const stmt = self.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_alias_decl => |alias| {
-                        const stmt_begin = tree.beginNode();
-                        try tree.pushStaticAtom("alias");
+                        const stmt_begin = try tree.beginNamedNode("alias");
 
                         // Add region info for the statement
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
@@ -5130,8 +5131,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_where_alias_decl => |where_alias| {
-                        const stmt_begin = tree.beginNode();
-                        try tree.pushStaticAtom("where-alias");
+                        const stmt_begin = try tree.beginNamedNode("where-alias");
 
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
                         try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
@@ -5145,8 +5145,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_nominal_decl => |nominal| {
-                        const stmt_begin = tree.beginNode();
-                        try tree.pushStaticAtom("nominal");
+                        const stmt_begin = try tree.beginNamedNode("nominal");
 
                         // Add region info for the statement
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
@@ -5195,8 +5194,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         }
 
         // Create expressions section
-        const exprs_begin = tree.beginNode();
-        try tree.pushStaticAtom("expressions");
+        const exprs_begin = try tree.beginNamedNode("expressions");
         const exprs_attrs = tree.beginNode();
 
         // Iterate through all definitions to extract expression types
@@ -5213,8 +5211,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             try type_writer.write(expr_var, .one_line);
 
             // Add the expression type entry
-            const expr_begin = tree.beginNode();
-            try tree.pushStaticAtom("expr");
+            const expr_begin = try tree.beginNamedNode("expr");
             try self.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
 
             const type_str = type_writer.get();
@@ -5229,8 +5226,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 }
 
 fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTree) (std.mem.Allocator.Error || error{WriteFailed})!void {
-    const expr_begin = tree.beginNode();
-    try tree.pushStaticAtom("expr");
+    const expr_begin = try tree.beginNamedNode("expr");
 
     // Add region info for the expression
     try self.appendRegionInfoToSExprTree(tree, expr_idx);

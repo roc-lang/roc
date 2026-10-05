@@ -3904,42 +3904,18 @@ pub const CheckResult = struct {
     }
 };
 
-/// Perform full exhaustiveness and redundancy checking on a match expression.
-///
-/// This is the main entry point for the type checker.
-/// Uses 1-phase on-demand resolution: patterns are converted to UnresolvedPattern
-/// and resolved on-demand during checking when type information is needed.
-///
-/// Returns `error.TypeError` when a pattern cannot be resolved due to type issues
-/// (e.g., polymorphic types, type mismatches). The caller should handle this by
-/// skipping exhaustiveness error reporting for that match expression.
-pub fn checkMatch(
-    allocator: std.mem.Allocator,
+/// Run redundancy and exhaustiveness checking over converted `rows`. Every
+/// allocation lives in `arena`, which the returned result takes ownership of.
+fn checkRows(
+    arena: *base.SingleThreadArena,
     type_store: *TypeStore,
-    module_env: *const Can.ModuleEnv,
-    node_store: *const NodeStore,
     builtin_idents: BuiltinIdents,
-    branches_span: CIR.Expr.Match.Branch.Span,
+    rows: []const UnresolvedRow,
     scrutinee_type: Var,
-    overall_region: Region,
     known_empty_payload_vars: []const Var,
     scrutinee_constructors_known: bool,
 ) PatternResolveError!CheckResult {
-    // Every allocation, results included, lives in one arena that the result
-    // owns.
-    var arena = base.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
     const arena_alloc = arena.allocator();
-
-    // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
-    var numeral_keys = NumeralKeyInterner{ .module_env = module_env };
-    const sketched = try convertMatchBranches(
-        arena_alloc,
-        node_store,
-        &numeral_keys,
-        branches_span,
-        overall_region,
-    );
 
     // Create initial column types for on-demand resolution
     const initial_types = try arena_alloc.alloc(Var, 1);
@@ -3961,7 +3937,7 @@ pub fn checkMatch(
         arena_alloc,
         type_store,
         builtin_idents,
-        sketched.rows,
+        rows,
         column_types,
         &payload_vars_to_close,
         scrutinee_constructors_known,
@@ -4002,7 +3978,7 @@ pub fn checkMatch(
     }
 
     return .{
-        .arena = arena,
+        .arena = arena.*,
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
         .redundant_indices = redundancy.redundant_indices,
@@ -4012,6 +3988,46 @@ pub fn checkMatch(
         .ext_vars_to_close = filtered_close.items,
         .payload_vars_to_close = payload_vars_to_close.items,
     };
+}
+
+/// Perform full exhaustiveness and redundancy checking on a match expression.
+///
+/// This is the main entry point for the type checker.
+/// Uses 1-phase on-demand resolution: patterns are converted to UnresolvedPattern
+/// and resolved on-demand during checking when type information is needed.
+///
+/// Returns `error.TypeError` when a pattern cannot be resolved due to type issues
+/// (e.g., polymorphic types, type mismatches). The caller should handle this by
+/// skipping exhaustiveness error reporting for that match expression.
+pub fn checkMatch(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    module_env: *const Can.ModuleEnv,
+    node_store: *const NodeStore,
+    builtin_idents: BuiltinIdents,
+    branches_span: CIR.Expr.Match.Branch.Span,
+    scrutinee_type: Var,
+    overall_region: Region,
+    known_empty_payload_vars: []const Var,
+    scrutinee_constructors_known: bool,
+) PatternResolveError!CheckResult {
+    // Every allocation, results included, lives in one arena that the result
+    // owns.
+    var arena = base.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
+    var numeral_keys = NumeralKeyInterner{ .module_env = module_env };
+    const sketched = try convertMatchBranches(
+        arena_alloc,
+        node_store,
+        &numeral_keys,
+        branches_span,
+        overall_region,
+    );
+
+    return checkRows(&arena, type_store, builtin_idents, sketched.rows, scrutinee_type, known_empty_payload_vars, scrutinee_constructors_known);
 }
 
 /// Perform exhaustiveness checking for a single destructuring pattern.
@@ -4046,69 +4062,7 @@ pub fn checkDestructure(
         .branch_index = 0,
     };
 
-    const initial_types = try arena_alloc.alloc(Var, 1);
-    initial_types[0] = scrutinee_type;
-    const column_types = ColumnTypes{
-        .types = initial_types,
-        .type_store = type_store,
-        .builtin_idents = builtin_idents,
-    };
-
-    var payload_vars_to_close: std.ArrayList(Var) = .empty;
-    for (known_empty_payload_vars) |payload_var| {
-        try appendUniqueVar(arena_alloc, &payload_vars_to_close, type_store.resolveVar(payload_var).var_);
-    }
-
-    const redundancy = try checkRedundancySketched(
-        arena_alloc,
-        type_store,
-        builtin_idents,
-        rows,
-        column_types,
-        &payload_vars_to_close,
-        scrutinee_constructors_known,
-    );
-
-    const sketched_matrix = SketchedMatrix.init(arena_alloc, redundancy.non_redundant_rows);
-    var ext_vars_to_close: std.ArrayList(Var) = .empty;
-    var ext_vars_to_keep_open: std.ArrayList(Var) = .empty;
-    const missing = try checkExhaustiveSketched(
-        arena_alloc,
-        type_store,
-        builtin_idents,
-        sketched_matrix,
-        column_types,
-        &ext_vars_to_close,
-        &ext_vars_to_keep_open,
-        &payload_vars_to_close,
-        scrutinee_constructors_known,
-    );
-
-    var filtered_close: std.ArrayList(Var) = .empty;
-    for (ext_vars_to_close.items) |close_var| {
-        var dominated = false;
-        for (ext_vars_to_keep_open.items) |keep_var| {
-            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
-                dominated = true;
-                break;
-            }
-        }
-        if (!dominated) {
-            try filtered_close.append(arena_alloc, close_var);
-        }
-    }
-
-    return .{
-        .arena = arena,
-        .is_exhaustive = missing.len == 0,
-        .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
-        .unmatchable_indices = redundancy.unmatchable_indices,
-        .unmatchable_regions = redundancy.unmatchable_regions,
-        .ext_vars_to_close = filtered_close.items,
-        .payload_vars_to_close = payload_vars_to_close.items,
-    };
+    return checkRows(&arena, type_store, builtin_idents, rows, scrutinee_type, known_empty_payload_vars, scrutinee_constructors_known);
 }
 
 /// Format a pattern for display in error messages.

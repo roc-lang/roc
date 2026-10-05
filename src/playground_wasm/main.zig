@@ -1830,8 +1830,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
     const stmts_count = cir.store.sliceStatements(cir.all_statements).len;
 
     if (defs_count == 0 and stmts_count == 0) {
-        const debug_begin = tree.beginNode();
-        try tree.pushStaticAtom("empty-cir-debug");
+        const debug_begin = try tree.beginNamedNode("empty-cir-debug");
         try tree.pushStaticAtom("no-defs-or-statements");
         try tree.endNodeWithoutChildren(debug_begin);
     }

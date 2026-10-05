@@ -44,8 +44,7 @@ const Allocator = std.mem.Allocator;
 
 /// Serialize a list of reports as a single `(reports ...)` node.
 pub fn pushReportsToSExprTree(reports: []const Report, tree: *SExprTree) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom("reports");
+    const begin = try tree.beginNamedNode("reports");
     const attrs = tree.beginNode();
     for (reports) |*report| {
         try pushReportToSExprTree(report, tree);
@@ -55,13 +54,11 @@ pub fn pushReportsToSExprTree(reports: []const Report, tree: *SExprTree) Allocat
 
 /// Serialize one report as a `(report ...)` node.
 pub fn pushReportToSExprTree(report: *const Report, tree: *SExprTree) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom("report");
+    const begin = try tree.beginNamedNode("report");
     const attrs = tree.beginNode();
 
     {
-        const sev_begin = tree.beginNode();
-        try tree.pushStaticAtom("severity");
+        const sev_begin = try tree.beginNamedNode("severity");
         try tree.pushStaticAtom(@tagName(report.severity));
         try tree.endNodeWithoutChildren(sev_begin);
     }
@@ -71,8 +68,7 @@ pub fn pushReportToSExprTree(report: *const Report, tree: *SExprTree) Allocator.
     // The report's overall region: the first source region in its document,
     // already 1-based (getRegionInfo passes display-region coordinates through).
     if (report.getRegionInfo()) |region_info| {
-        const region_begin = tree.beginNode();
-        try tree.pushStaticAtom("region");
+        const region_begin = try tree.beginNamedNode("region");
         try pushLineColNode(tree, "start", region_info.start_line_idx, region_info.start_col_idx);
         try pushLineColNode(tree, "end", region_info.end_line_idx, region_info.end_col_idx);
         try tree.endNodeWithoutChildren(region_begin);
@@ -86,8 +82,7 @@ pub fn pushReportToSExprTree(report: *const Report, tree: *SExprTree) Allocator.
 
 /// A container node whose element children each render on their own line.
 fn pushElementsNode(tree: *SExprTree, name: []const u8, elements: []const DocumentElement) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom(name);
+    const begin = try tree.beginNamedNode(name);
     const attrs = tree.beginNode();
     for (elements) |*element| {
         try pushElement(tree, element);
@@ -99,8 +94,7 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
     switch (element.*) {
         .text => |text| try pushEscapedStringPair(tree, "text", text),
         .annotated => |annotated| {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("annotated");
+            const begin = try tree.beginNamedNode("annotated");
             try tree.pushStaticAtom(annotated.annotation.semanticName());
             try pushEscapedString(tree, annotated.content);
             try tree.endNodeWithoutChildren(begin);
@@ -109,14 +103,12 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
         .indent => |levels| try tree.pushU64Pair("indent", levels),
         .space => |count| try tree.pushU64Pair("space", count),
         .horizontal_rule => |width| {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("horizontal-rule");
+            const begin = try tree.beginNamedNode("horizontal-rule");
             if (width) |w| try tree.pushU64(w);
             try tree.endNodeWithoutChildren(begin);
         },
         .annotation_start => |annotation| {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("annotation-start");
+            const begin = try tree.beginNamedNode("annotation-start");
             try tree.pushStaticAtom(annotation.semanticName());
             try tree.endNodeWithoutChildren(begin);
         },
@@ -128,16 +120,14 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
         .horizontal_concat => |children| try pushElementsNode(tree, "horizontal-concat", children),
         .source_code_region => |region| try pushDisplayRegionNode(tree, "source-region", region),
         .source_code_multi_region => |multi| {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("multi-region");
+            const begin = try tree.beginNamedNode("multi-region");
             const attrs = tree.beginNode();
             if (multi.filename) |filename| {
                 try pushEscapedStringPair(tree, "file", sanitisePathForSnapshots(filename));
             }
             try pushEscapedStringPair(tree, "source", multi.source);
             for (multi.regions) |region| {
-                const region_begin = tree.beginNode();
-                try tree.pushStaticAtom("region");
+                const region_begin = try tree.beginNamedNode("region");
                 try pushLineColNode(tree, "start", region.start_line, region.start_column);
                 try pushLineColNode(tree, "end", region.end_line, region.end_column);
                 try pushAnnotationNode(tree, region.annotation);
@@ -146,13 +136,11 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
             try tree.endNode(begin, attrs);
         },
         .source_code_with_underlines => |underlines| {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("source-underlines");
+            const begin = try tree.beginNamedNode("source-underlines");
             const attrs = tree.beginNode();
             try pushDisplayRegionNode(tree, "display", underlines.display_region);
             for (underlines.underline_regions) |underline| {
-                const underline_begin = tree.beginNode();
-                try tree.pushStaticAtom("underline");
+                const underline_begin = try tree.beginNamedNode("underline");
                 try pushLineColNode(tree, "start", underline.start_line, underline.start_column);
                 try pushLineColNode(tree, "end", underline.end_line, underline.end_column);
                 try pushAnnotationNode(tree, underline.annotation);
@@ -161,8 +149,7 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
             try tree.endNode(begin, attrs);
         },
         .source_location => |location| {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("source-location");
+            const begin = try tree.beginNamedNode("source-location");
             const attrs = tree.beginNode();
             if (location.filename) |filename| {
                 try pushEscapedStringPair(tree, "file", sanitisePathForSnapshots(filename));
@@ -175,8 +162,7 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
 }
 
 fn pushDisplayRegionNode(tree: *SExprTree, name: []const u8, region: SourceCodeDisplayRegion) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom(name);
+    const begin = try tree.beginNamedNode(name);
     if (region.filename) |filename| {
         try pushEscapedStringPair(tree, "file", sanitisePathForSnapshots(filename));
     }
@@ -188,29 +174,25 @@ fn pushDisplayRegionNode(tree: *SExprTree, name: []const u8, region: SourceCodeD
 }
 
 fn pushAnnotationNode(tree: *SExprTree, annotation: Annotation) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom("annotation");
+    const begin = try tree.beginNamedNode("annotation");
     try tree.pushStaticAtom(annotation.semanticName());
     try tree.endNodeWithoutChildren(begin);
 }
 
 fn pushLineColNode(tree: *SExprTree, name: []const u8, line: u32, column: u32) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom(name);
+    const begin = try tree.beginNamedNode(name);
     try tree.pushU64(line);
     try tree.pushU64(column);
     try tree.endNodeWithoutChildren(begin);
 }
 
 fn pushEmptyNode(tree: *SExprTree, name: []const u8) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom(name);
+    const begin = try tree.beginNamedNode(name);
     try tree.endNodeWithoutChildren(begin);
 }
 
 fn pushEscapedStringPair(tree: *SExprTree, key: []const u8, value: []const u8) Allocator.Error!void {
-    const begin = tree.beginNode();
-    try tree.pushStaticAtom(key);
+    const begin = try tree.beginNamedNode(key);
     try pushEscapedString(tree, value);
     try tree.endNodeWithoutChildren(begin);
 }

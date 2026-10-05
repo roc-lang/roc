@@ -97,20 +97,16 @@ pub const TypeAnno = union(enum) {
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .apply => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-apply");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-apply", type_anno_idx);
                 try tree.pushStringPair("name", ir.getIdentText(a.name));
 
                 switch (a.base) {
                     .builtin => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("builtin");
+                        const field_begin = try tree.beginNamedNode("builtin");
                         try tree.endNodeWithoutChildren(field_begin);
                     },
                     .local => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("local");
+                        const field_begin = try tree.beginNamedNode("local");
                         try tree.endNodeWithoutChildren(field_begin);
                     },
                     .external => |external| {
@@ -120,8 +116,7 @@ pub const TypeAnno = union(enum) {
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
                         if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                            const field_begin = tree.beginNode();
-                            try tree.pushStaticAtom("builtin");
+                            const field_begin = try tree.beginNamedNode("builtin");
                             try tree.endNodeWithoutChildren(field_begin);
                         } else {
                             try tree.pushStringPair("external-module", module_name);
@@ -151,39 +146,30 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .rigid_var => |tv| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-rigid-var");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-rigid-var", type_anno_idx);
                 try tree.pushStringPair("name", ir.getIdentText(tv.name));
                 try tree.endNodeWithoutChildren(begin);
             },
             .rigid_var_lookup => |rv_lookup| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-rigid-var-lookup");
+                const begin = try tree.beginNamedNode("ty-rigid-var-lookup");
                 try ir.store.getTypeAnno(rv_lookup.ref).pushToSExprTree(ir, tree, rv_lookup.ref);
                 try tree.endNodeWithoutChildren(begin);
             },
             .underscore => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-underscore");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-underscore", type_anno_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
             .lookup => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-lookup");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-lookup", type_anno_idx);
                 try tree.pushStringPair("name", ir.getIdentText(t.name));
 
                 switch (t.base) {
                     .builtin => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("builtin");
+                        const field_begin = try tree.beginNamedNode("builtin");
                         try tree.endNodeWithoutChildren(field_begin);
                     },
                     .local => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("local");
+                        const field_begin = try tree.beginNamedNode("local");
                         try tree.endNodeWithoutChildren(field_begin);
                     },
                     .external => |external| {
@@ -193,8 +179,7 @@ pub const TypeAnno = union(enum) {
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
                         if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                            const field_begin = tree.beginNode();
-                            try tree.pushStaticAtom("builtin");
+                            const field_begin = try tree.beginNamedNode("builtin");
                             try tree.endNodeWithoutChildren(field_begin);
                         } else {
                             try tree.pushStringPair("external-module", module_name);
@@ -218,9 +203,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .tag_union => |tu| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tag-union");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-tag-union", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
@@ -235,8 +218,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tag => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tag-name");
+                const begin = try tree.beginNamedNode("ty-tag-name");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
 
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
@@ -250,9 +232,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tuple");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-tuple", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 const annos_slice = ir.store.sliceTypeAnnos(t.elems);
@@ -263,17 +243,14 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record => |r| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-record");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-record", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
                 for (fields_slice) |field_idx| {
                     const field = ir.store.getAnnoRecordField(field_idx);
 
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("field");
+                    const field_begin = try tree.beginNamedNode("field");
                     try tree.pushStringPair("field", ir.getIdentText(field.name));
                     if (field.is_optional) try tree.pushBoolPair("optional", true);
                     if (field.default_value != null) try tree.pushBoolPair("defaulted", true);
@@ -287,9 +264,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .@"fn" => |f| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-fn");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-fn", type_anno_idx);
                 try tree.pushBoolPair("effectful", f.effectful);
                 const attrs = tree.beginNode();
 
@@ -303,9 +278,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .parens => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-parens");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-parens", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 try ir.store.getTypeAnno(p.anno).pushToSExprTree(ir, tree, p.anno);
@@ -313,9 +286,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .malformed => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-malformed");
-                try ir.appendRegionInfoToSExprTree(tree, type_anno_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-malformed", type_anno_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
         }

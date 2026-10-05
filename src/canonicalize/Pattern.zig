@@ -311,24 +311,21 @@ pub const Pattern = union(enum) {
             pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree) std.mem.Allocator.Error!void {
                 switch (self.*) {
                     .Required => |pattern_idx| {
-                        const begin = tree.beginNode();
-                        try tree.pushStaticAtom("required");
+                        const begin = try tree.beginNamedNode("required");
                         const attrs = tree.beginNode();
                         const pattern = ir.store.getPattern(pattern_idx);
                         try pattern.pushToSExprTree(ir, tree, pattern_idx);
                         try tree.endNode(begin, attrs);
                     },
                     .SubPattern => |pattern_idx| {
-                        const begin = tree.beginNode();
-                        try tree.pushStaticAtom("sub-pattern");
+                        const begin = try tree.beginNamedNode("sub-pattern");
                         const attrs = tree.beginNode();
                         const pattern = ir.store.getPattern(pattern_idx);
                         try pattern.pushToSExprTree(ir, tree, pattern_idx);
                         try tree.endNode(begin, attrs);
                     },
                     .Rest => |pattern_idx| {
-                        const begin = tree.beginNode();
-                        try tree.pushStaticAtom("rest-pattern");
+                        const begin = try tree.beginNamedNode("rest-pattern");
                         const attrs = tree.beginNode();
                         const pattern = ir.store.getPattern(pattern_idx);
                         try pattern.pushToSExprTree(ir, tree, pattern_idx);
@@ -339,9 +336,7 @@ pub const Pattern = union(enum) {
         };
 
         pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) std.mem.Allocator.Error!void {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("record-destruct");
-            try ir.appendRegionInfoToSExprTree(tree, destruct_idx);
+            const begin = try ir.beginSExprNodeAt(tree, "record-destruct", destruct_idx);
 
             const label_text = ir.getIdent(self.label);
             const ident_text = ir.getIdent(self.ident);
@@ -357,9 +352,7 @@ pub const Pattern = union(enum) {
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .assign => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-assign");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-assign", pattern_idx);
 
                 const ident = ir.getIdentText(p.ident);
                 try tree.pushStringPair("ident", ident);
@@ -367,9 +360,7 @@ pub const Pattern = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .var_assign => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-var-assign");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-var-assign", pattern_idx);
 
                 const ident = ir.getIdentText(p.ident);
                 try tree.pushStringPair("ident", ident);
@@ -377,9 +368,7 @@ pub const Pattern = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .as => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-as");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-as", pattern_idx);
                 const ident = ir.getIdentText(p.ident);
                 try tree.pushStringPair("as", ident);
 
@@ -388,24 +377,18 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .applied_tag => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-applied-tag");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-applied-tag", pattern_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
             .nominal => |n| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-nominal");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-nominal", pattern_idx);
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);
                 try tree.endNode(begin, attrs);
             },
             .deferred_import_ref => |n| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-deferred-import-ref");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-deferred-import-ref", pattern_idx);
 
                 const entry = ir.deferred_import_refs.items.items[@intFromEnum(n.ref)];
                 try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
@@ -416,9 +399,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .nominal_external => |n| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-nominal-external");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-nominal-external", pattern_idx);
 
                 const module_idx_int = @intFromEnum(n.module_idx);
                 std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
@@ -426,8 +407,7 @@ pub const Pattern = union(enum) {
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("builtin");
+                    const field_begin = try tree.beginNamedNode("builtin");
                     try tree.endNodeWithoutChildren(field_begin);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
@@ -438,13 +418,10 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record_destructure => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-record-destructure");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-record-destructure", pattern_idx);
                 const attrs = tree.beginNode();
 
-                const destructs_begin = tree.beginNode();
-                try tree.pushStaticAtom("destructs");
+                const destructs_begin = try tree.beginNamedNode("destructs");
                 const destructs_attrs = tree.beginNode();
 
                 for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
@@ -456,13 +433,10 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .list => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-list");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-list", pattern_idx);
                 const attrs = tree.beginNode();
 
-                const patterns_begin = tree.beginNode();
-                try tree.pushStaticAtom("patterns");
+                const patterns_begin = try tree.beginNamedNode("patterns");
                 const patterns_attrs = tree.beginNode();
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
@@ -471,8 +445,7 @@ pub const Pattern = union(enum) {
                 try tree.endNode(patterns_begin, patterns_attrs);
 
                 if (p.rest_info) |rest| {
-                    const rest_begin = tree.beginNode();
-                    try tree.pushStaticAtom("rest-at");
+                    const rest_begin = try tree.beginNamedNode("rest-at");
 
                     try tree.pushU64Pair("index", rest.index);
 
@@ -486,13 +459,10 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-tuple");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-tuple", pattern_idx);
                 const attrs = tree.beginNode();
 
-                const patterns_begin = tree.beginNode();
-                try tree.pushStaticAtom("patterns");
+                const patterns_begin = try tree.beginNamedNode("patterns");
                 const patterns_attrs = tree.beginNode();
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
@@ -503,30 +473,22 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .num_literal => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-num");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-num", pattern_idx);
 
                 try p.value.pushStringPair(tree, "value");
 
                 try tree.endNodeWithoutChildren(begin);
             },
             .small_dec_literal => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-small-dec");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-small-dec", pattern_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
             .dec_literal => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-dec");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-dec", pattern_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
             .frac_f32_literal => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-frac-f32");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-frac-f32", pattern_idx);
 
                 const value_begin = try tree.reserveStringBuffer(400);
                 errdefer tree.discardReservedStringBuffer(value_begin);
@@ -536,9 +498,7 @@ pub const Pattern = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .frac_f64_literal => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-frac-f64");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-frac-f64", pattern_idx);
 
                 const value_begin = try tree.reserveStringBuffer(400);
                 errdefer tree.discardReservedStringBuffer(value_begin);
@@ -548,15 +508,11 @@ pub const Pattern = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .num_from_numeral_literal => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-num-from-numeral");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-num-from-numeral", pattern_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
             .str_literal => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-str");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-str", pattern_idx);
 
                 const text = ir.getString(p.literal);
                 try tree.pushStringPair("text", text);
@@ -564,9 +520,7 @@ pub const Pattern = union(enum) {
                 try tree.endNodeWithoutChildren(begin);
             },
             .str_interpolation => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-str-interpolation");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-str-interpolation", pattern_idx);
 
                 try tree.pushStringPair("prefix", ir.getString(p.prefix));
                 try tree.pushStringPair("end", @tagName(p.end));
@@ -575,8 +529,7 @@ pub const Pattern = union(enum) {
                 var step_offset: u32 = 0;
                 while (step_offset < p.steps.span.len) : (step_offset += 1) {
                     const step = ir.store.getStrPatternStep(p.steps, step_offset);
-                    const step_begin = tree.beginNode();
-                    try tree.pushStaticAtom("step");
+                    const step_begin = try tree.beginNamedNode("step");
                     try tree.pushStringPair("delimiter", ir.getString(step.delimiter));
 
                     const step_attrs = tree.beginNode();
@@ -590,15 +543,11 @@ pub const Pattern = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .underscore => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-underscore");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-underscore", pattern_idx);
                 try tree.endNodeWithoutChildren(begin);
             },
             .runtime_error => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-runtime-error");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const begin = try ir.beginSExprNodeAt(tree, "p-runtime-error", pattern_idx);
 
                 const diagnostic = ir.store.getDiagnostic(e.diagnostic);
                 try tree.pushStringPair("tag", @tagName(diagnostic));

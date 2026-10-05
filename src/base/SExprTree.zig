@@ -281,6 +281,13 @@ pub fn beginNode(self: *SExprTree) NodeBegin {
     return NodeBegin{ .stack_idx = @intCast(self.stack.items.len) };
 }
 
+/// Begin a new node whose first item is the static atom `name`.
+pub fn beginNamedNode(self: *SExprTree, name: []const u8) std.mem.Allocator.Error!NodeBegin {
+    const begin = self.beginNode();
+    try self.pushStaticAtom(name);
+    return begin;
+}
+
 /// End a node whose items since the begin marker are all attributes.
 pub fn endNodeWithoutChildren(self: *SExprTree, begin: NodeBegin) std.mem.Allocator.Error!void {
     try self.endNode(begin, self.beginNode());
