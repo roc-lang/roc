@@ -8,6 +8,7 @@
   runCommand,
   zig,
   name ? "zig-packages",
+  includeFuzzingDependencies ? false,
 }:
 
 let
@@ -61,7 +62,10 @@ let
       '';
     };
 in
-linkFarm name (map unpackZig [
+# The ordinary Roc package does not declare fuzz steps. Zig's --system mode
+# activates every package supplied by the farm, including their build scripts,
+# so AFL dependencies are supplied only when fuzzing is explicitly requested.
+linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
   {
     name = "afl_kit-0.1.0-NdJ3csgfAABGuiQ4P99kFuaVSy4DHMilISiGF_VKX3xl.tar.gz";
     path = fetchZig {
@@ -89,6 +93,7 @@ linkFarm name (map unpackZig [
       hash = "sha256-XVa9UhZXYzUrD78Xm1epNqiRaqOM+Gfpf88LYU23DHg=";
     };
   }
+] ++ [
   {
     name = "N-V-__8AAI7KVRG6J1Tp9i70olobTIwsFtoF_O54b2H3PnHZ.tar.gz";
     path = fetchZig {
@@ -206,4 +211,4 @@ linkFarm name (map unpackZig [
       hash = "sha256-h35u+KqPsc9xZQ7xJu15M4etPnBIM33NUVG4NKzMZHw=";
     };
   }
-])
+]))

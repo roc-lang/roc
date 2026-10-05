@@ -22,6 +22,15 @@ buildcmd
 ./zig-out/bin/roc version
 ```
 
+The Nix dependency farm supplies ordinary compiler dependencies by default.
+The package build does not declare fuzz steps. `zig build --system` activates
+every supplied package, including its build script, so the three AFL entries
+are an explicit opt-in: pass `includeFuzzingDependencies = true` when calling
+`build.zig.zon.nix`. Their pins are retained, but the bundled AFL wrapper still
+uses removed Zig build APIs and needs a separate migration before this
+optional farm can configure with Zig 0.17. System AFL builds use `afl_kit`'s C
+adapter and an installed AFL compiler; they do not build the bundled wrapper.
+
 ## Local dependency bundles and caching
 
 A compatible roc-bootstrap bundle contains `include/` and `lib/` for the
