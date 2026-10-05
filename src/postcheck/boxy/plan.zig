@@ -20399,6 +20399,7 @@ pub const DivergentStep = union(enum) {
     operand: checked.CheckedExprId,
 };
 
+/// Select the checked divergent operand, or retain the enclosing terminating form.
 pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentStep {
     const bodies = view.checked_bodies;
     if (!bodies.exprDiverges(expr_id, .run)) return .normal;
@@ -20505,10 +20506,11 @@ fn divergentDispatchStep(view: anytype, maybe_plan: ?static_dispatch.StaticDispa
 fn isLookupExpr(data: anytype) bool {
     return switch (data) {
         .lookup_local, .lookup_external, .lookup_required => true,
-        else => false,
+        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
     };
 }
 
+/// Return the module identity and canonical labels used for cross-module comparison.
 pub fn moduleNamesOf(view: ModuleView) ModuleNames {
     return .{ .key = view.key, .canonical_names = view.canonical_names };
 }

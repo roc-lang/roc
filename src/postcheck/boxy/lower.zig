@@ -18287,7 +18287,7 @@ const ProcBodyBuilder = struct {
                 .crash, .runtime_error, .ellipsis, .break_, .return_, .expect_err => enclosing_target,
                 // A divergent operand with an erroneous result type is
                 // lowered at unit.
-                else => if (self.module.checked_types.payload(self.module.checked_bodies.expr(operand).ty) == .err)
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect, .anno_only, .for_, .hosted_lambda, .run_low_level => if (self.module.checked_types.payload(self.module.checked_bodies.expr(operand).ty) == .err)
                     try self.addFrameLocal(.zst)
                 else
                     try self.addFrameLocalForRep(self.repForTypeRef(.{
