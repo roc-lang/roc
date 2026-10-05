@@ -82,7 +82,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: L
         }
 
         // Check for ## doc comment
-        if (base.doc_comment.startsWithHashHash(source[pos..])) {
+        if (base.doc_comment.isDocCommentLine(source[pos..])) {
             if (lines.items.len == 0) {
                 first_line_byte = @intCast(line_start);
             }
@@ -127,75 +127,16 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: L
     };
 }
 
-/// Extract the doc comment immediately preceding a definition at the given byte offset.
-///
-/// Scans backwards from `def_start_offset` to find consecutive `##` lines.
-/// Returns null if no doc comment is found.
+/// Extract the doc comment block for the definition at the given byte offset,
+/// as `base.doc_comment.gatherBlockBefore` defines it. Returns null if the
+/// definition has none.
 pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32, line_index: LineIndex) Allocator.Error!?DocCommentExtract {
-    if (def_start_offset == 0 or def_start_offset > source.len) return null;
-
-    var lines = std.ArrayList([]const u8).empty;
-    defer lines.deinit(gpa);
-
-    var first_line_byte: u32 = 0;
-
-    var pos: usize = def_start_offset;
-
-    // Skip backwards over whitespace to find the end of the previous line
-    while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t' or source[pos - 1] == '\r')) {
-        pos -= 1;
-    }
-    // Skip the newline
-    if (pos > 0 and source[pos - 1] == '\n') {
-        pos -= 1;
-    }
-
-    // Now scan backwards collecting ## lines
-    while (pos > 0) {
-        // Find the start of the current line
-        var line_start = pos;
-        while (line_start > 0 and source[line_start - 1] != '\n') {
-            line_start -= 1;
-        }
-
-        // Check if this line is a ## doc comment
-        const line = source[line_start..pos];
-        const trimmed = trimLeft(line);
-
-        if (base.doc_comment.startsWithHashHash(trimmed)) {
-            // Track the earliest doc-comment line we've seen so far. Since we
-            // scan bottom-up and lines are added in reverse, the most recent
-            // assignment to this is the topmost ## line of the block.
-            first_line_byte = @intCast(line_start);
-            // It's a doc comment line
-            const content = base.doc_comment.stripPrefix(trimmed);
-            try lines.append(gpa, content);
-        } else if (trimmed.len == 0) {
-            // Empty/whitespace line—stop looking if we already have doc lines
-            if (lines.items.len > 0) break;
-            // Skip empty lines between def and potential doc comment
-        } else {
-            // Non-comment content—stop
-            break;
-        }
-
-        // Move to previous line
-        if (line_start == 0) break;
-        pos = line_start - 1;
-        // Skip the newline we backed over
-        while (pos > 0 and source[pos - 1] == '\r') {
-            pos -= 1;
-        }
-    }
-
-    if (lines.items.len == 0) return null;
-
-    // Reverse the lines (we collected them bottom-up)
-    std.mem.reverse([]const u8, lines.items);
+    const block = (try base.doc_comment.gatherBlockBefore(gpa, source, def_start_offset)) orelse return null;
+    defer block.deinit(gpa);
 
     return .{
-        .text = try joinLines(gpa, lines.items),
-        .start_line = line_index.lineOf(first_line_byte),
+        .text = try joinLines(gpa, block.lines),
+        .start_line = line_index.lineOf(block.start),
     };
 }
 
@@ -3106,14 +3047,6 @@ fn moveEntryForReparenting(
     return moved;
 }
 
-fn trimLeft(s: []const u8) []const u8 {
-    var i: usize = 0;
-    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) {
-        i += 1;
-    }
-    return s[i..];
-}
-
 /// Reference implementation of the old byteOffsetToLine for test comparison.
 fn oldByteOffsetToLine(source: []const u8, offset: u32) u32 {
     var line: u32 = 1;
@@ -3139,6 +3072,30 @@ fn expectLineIndexMatches(source: []const u8) Allocator.Error!void {
             std.debug.panic("lineOf({d}): expected {d}, got {d}", .{ offset, expected, actual });
         }
     }
+}
+
+test "extractDocComment: agrees with hover about section headers" {
+    const gpa = std.testing.allocator;
+    const source = "## a\n### b\n## c\nfoo = 42";
+    const index = try LineIndex.build(gpa, source);
+    defer index.deinit(gpa);
+
+    const doc = (try extractDocComment(gpa, source, @intCast(std.mem.find(u8, source, "foo").?), index)).?;
+    defer gpa.free(doc.text);
+    try std.testing.expectEqualStrings("c", doc.text);
+    try std.testing.expectEqual(@as(u32, 3), doc.start_line);
+}
+
+test "extractModuleDocComment: a section header is not module documentation" {
+    const gpa = std.testing.allocator;
+    const index = try LineIndex.build(gpa, "");
+    defer index.deinit(gpa);
+
+    try std.testing.expect(try extractModuleDocComment(gpa, "### Helpers\nfoo = 42", index) == null);
+
+    const doc = (try extractModuleDocComment(gpa, "## About\n### Helpers\nfoo = 42", index)).?;
+    defer gpa.free(doc.text);
+    try std.testing.expectEqualStrings("About", doc.text);
 }
 
 test "LineIndex: empty source" {
