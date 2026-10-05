@@ -1025,36 +1025,6 @@ pub const Import = struct {
             }
         }
 
-        /// Serialize this Store to the given CompactWriter. The resulting Store
-        /// in the writer's buffer will have offsets instead of pointers. Calling any
-        /// methods on it or dereferencing its internal "pointers" (which are now
-        /// offsets) is illegal behavior!
-        pub fn serialize(
-            self: *const Store,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!*const Store {
-            // First, write the Store struct itself
-            const offset_self = try writer.appendAlloc(allocator, Store);
-
-            // Then serialize the sub-structures and update the struct
-            offset_self.* = .{
-                .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
-                .imports = (try self.imports.serialize(allocator, writer)).*,
-                .import_idents = (try self.import_idents.serialize(allocator, writer)).*,
-                .resolved_modules = (try self.resolved_modules.serialize(allocator, writer)).*,
-            };
-
-            return @constCast(offset_self);
-        }
-
-        /// Add the given offset to the memory addresses of all pointers in `self`.
-        pub fn relocate(self: *Store, offset: isize) void {
-            self.imports.relocate(offset);
-            self.import_idents.relocate(offset);
-            self.resolved_modules.relocate(offset);
-        }
-
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
             // Placeholder to match Store size - not serialized

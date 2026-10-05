@@ -89,50 +89,6 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
     };
 }
 
-/// Add the given offset to the memory addresses of all pointers in `self`.
-pub fn relocate(self: *CommonEnv, offset: isize) void {
-    // Relocate all sub-structures
-    self.idents.relocate(offset);
-    self.strings.relocate(offset);
-    self.exposed_items.relocate(offset);
-    self.line_starts.relocate(offset);
-    // Relocate source slice pointer if it is non-empty.
-    // The underlying bytes live in the same allocation as the rest of the
-    // module data (e.g. shared memory used by the interpreter), so we can
-    // adjust the pointer by the same offset.
-    if (self.source.len > 0) {
-        const old_ptr = @intFromPtr(self.source.ptr);
-        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
-        self.source.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
-    }
-}
-
-/// Serialize this CommonEnv to the given CompactWriter.
-/// IMPORTANT: The returned pointer points to memory inside the writer!
-/// Attempting to dereference this pointer or calling any methods on it
-/// is illegal behavior!
-pub fn serialize(
-    self: *const CommonEnv,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const CommonEnv {
-    // First, write the CommonEnv struct itself
-    const offset_self = try writer.appendAlloc(allocator, CommonEnv);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .idents = (try self.idents.serialize(allocator, writer)).*,
-        .strings = (try self.strings.serialize(allocator, writer)).*,
-        .string_builder = .{},
-        .strings_insertable = false,
-        .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
-        .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
-        .source = "", // Will be set when deserializing
-    };
-
-    return @constCast(offset_self);
-}
-
 /// Serialized representation of CommonEnv
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
 pub const Serialized = extern struct {

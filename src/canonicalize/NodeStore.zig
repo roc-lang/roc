@@ -798,36 +798,6 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// This is used when loading a NodeStore from shared memory at a different address.
-pub fn relocate(store: *NodeStore, offset: isize) void {
-    store.nodes.relocate(offset);
-    store.replaced_source_nodes.relocate(offset);
-    store.regions.relocate(offset);
-    store.write_occurrences.relocate(offset);
-    store.int128_values.relocate(offset);
-    store.literal_dispatch_plans.relocate(offset);
-    store.literal_pattern_contexts.relocate(offset);
-    store.interpolation_data.relocate(offset);
-    store.span2_data.relocate(offset);
-    store.span_with_node_data.relocate(offset);
-    store.method_call_data.relocate(offset);
-    store.match_data.relocate(offset);
-    store.if_data.relocate(offset);
-    store.match_branch_data.relocate(offset);
-    store.closure_data.relocate(offset);
-    store.zero_arg_tag_data.relocate(offset);
-    store.def_data.relocate(offset);
-    store.import_data.relocate(offset);
-    store.type_apply_data.relocate(offset);
-    store.pattern_list_data.relocate(offset);
-    store.pattern_str_interpolation_data.relocate(offset);
-    store.pattern_str_interpolation_steps.relocate(offset);
-    store.where_clause_owners.relocate(offset);
-    store.index_data.relocate(offset);
-    // scratch is null for deserialized NodeStores, no need to relocate
-}
-
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///

@@ -258,46 +258,6 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             self.deduplicated = true;
         }
 
-        /// Relocate pointers after memory movement
-        pub fn relocate(self: *Self, offset: isize) void {
-            // Relocate the entries array pointer
-            if (self.entries.items.len > 0) {
-                const old_ptr = @intFromPtr(self.entries.items.ptr);
-                // Skip relocation if this is a sentinel value
-                // Define sentinel value locally since iovec_serialize is not available
-                const EMPTY_ARRAY_SENTINEL: usize = 0xDEADBEEF;
-                if (old_ptr != EMPTY_ARRAY_SENTINEL) {
-                    // Handle negative offsets properly
-                    if (offset >= 0) {
-                        const new_ptr = old_ptr + @as(usize, @intCast(offset));
-                        // Ensure proper alignment for Entry type
-                        const aligned_ptr_opt = std.mem.alignPointer(@as([*]u8, @ptrFromInt(new_ptr)), @alignOf(Entry));
-                        if (aligned_ptr_opt) |aligned_ptr| {
-                            self.entries.items.ptr = @as([*]Entry, @ptrCast(@alignCast(aligned_ptr)));
-                        } else {
-                            // If we can't align properly, skip relocation
-                            return;
-                        }
-                    } else {
-                        // For negative offsets, we need to ensure we don't underflow
-                        const abs_offset = @as(usize, @intCast(-offset));
-                        if (old_ptr >= abs_offset) {
-                            const new_ptr = old_ptr - abs_offset;
-                            // Ensure proper alignment for Entry type
-                            const aligned_ptr_opt = std.mem.alignPointer(@as([*]u8, @ptrFromInt(new_ptr)), @alignOf(Entry));
-                            if (aligned_ptr_opt) |aligned_ptr| {
-                                self.entries.items.ptr = @as([*]Entry, @ptrCast(@alignCast(aligned_ptr)));
-                            } else {
-                                // If we can't align properly, skip relocation
-                                return;
-                            }
-                        }
-                        // If old_ptr < abs_offset, we can't relocate safely, so skip
-                    }
-                }
-            }
-        }
-
         /// Get the number of entries
         pub fn count(self: *const Self) usize {
             return self.entries.items.len;

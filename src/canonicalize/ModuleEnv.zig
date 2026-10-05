@@ -1336,46 +1336,6 @@ pub const DeferredImportRef = extern struct {
     }
 };
 
-/// Relocate all pointers in the ModuleEnv by the given offset.
-/// This is used by serialized compiler artifacts whose internal pointers are
-/// stored relative to the artifact buffer.
-pub fn relocate(self: *Self, offset: isize) void {
-    // Relocate all sub-structures that contain pointers
-    self.common.relocate(offset);
-    self.types.relocate(offset);
-    self.module_identities.relocate(offset);
-    self.module_identity_displays.relocate(offset);
-    self.external_decls.relocate(offset);
-    self.requires_types.relocate(offset);
-    self.for_clause_aliases.relocate(offset);
-    self.provides_entries.relocate(offset);
-    self.hosted_entries.relocate(offset);
-    self.imports.relocate(offset);
-    self.file_dependencies.relocate(offset);
-    self.deferred_import_refs.relocate(offset);
-    self.import_identities.relocate(offset);
-    self.store.relocate(offset);
-    self.top_level_demand_dependencies.relocate(offset);
-    self.method_idents.relocate(offset);
-    self.method_defs.relocate(offset);
-    self.provided_low_level_defs.relocate(offset);
-    self.for_loop_dispatch_plans.relocate(offset);
-    self.scheme_uses.relocate(offset);
-    self.scheme_use_pairs.relocate(offset);
-    self.binding_schemes.relocate(offset);
-    self.binding_scheme_codec_requirements.relocate(offset);
-    self.rejected_static_dispatches.relocate(offset);
-    self.record_omitted_defaults.relocate(offset);
-    self.inspect_override_instances.relocate(offset);
-
-    // Relocate the module_name pointer if it's not empty
-    if (self.module_name.len > 0) {
-        const old_ptr = @intFromPtr(self.module_name.ptr);
-        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
-        self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
-    }
-}
-
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void {
     self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
