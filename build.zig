@@ -1,6 +1,7 @@
 const std = @import("std");
 const stack_budget = @import("src/base/stack_budget.zig");
 const builtin = @import("builtin");
+const downstream_package = @import("src/build/downstream_package.zig");
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const ci_steps = @import("src/build/ci_steps.zig");
@@ -6735,6 +6736,7 @@ pub fn build(b: *std.Build) void {
         });
         run_coverage_parser_step.dependOn(unsupported_step);
     }
+    build_ci_step.dependOn(downstream_package.create(b));
     build_ci_step.dependOn(build_roc_step);
     build_ci_step.dependOn(build_check_tools_step);
     build_ci_step.dependOn(build_snapshot_tool_step);

@@ -824,6 +824,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
         "src/echo_platform/echo_native.zig",
         "src/lsp/syntax.zig",
         "src/ctx/CoreCtx.zig",
+        "test/downstream-compiler/main.zig",
     };
 
     // Don't ban ourselves (this file contains the banned strings as literals)

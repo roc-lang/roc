@@ -124,6 +124,8 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        // Compiler modules import vendored implementations directly.
+        "vendor",
         "LICENSE",
         "legal_details",
     },
