@@ -6686,6 +6686,35 @@ const Builder = struct {
         }
     }
 
+    /// A dispatch that cannot run (`checked_error` or `unreachable`) calls no
+    /// method: it evaluates its operands and then crashes. Its plan is the
+    /// source operands it evaluates, exactly the expressions its lowering
+    /// evaluates; it selects no worker and binds no dictionary.
+    fn pushCrashingDispatchOperands(
+        self: *Builder,
+        actions: *std.ArrayList(PlanAction),
+        view: ModuleView,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!void {
+        const start = beginPlanSequence(actions);
+        defer finishPlanSequence(actions, start);
+        for (plan.argsSlice(view.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try actions.append(self.allocator, exprAction(view, expr)),
+            .generated_interpolation_iter => |expr| {
+                const interpolation = switch (view.checked_bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("crashing interpolation iterator referenced a non-interpolation expression"),
+                };
+                try actions.append(self.allocator, exprAction(view, interpolation.first));
+                for (interpolation.parts) |part| {
+                    try actions.append(self.allocator, exprAction(view, part.value));
+                    try actions.append(self.allocator, exprAction(view, part.following_segment));
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+    }
+
     fn stepDispatchPlanTypes(self: *Builder, actions: *std.ArrayList(PlanAction), view: ModuleView, maybe_plan: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         const plan_id = maybe_plan orelse
             boxyPlanInvariant("checked dispatch expression reached boxy planning without a dispatch plan");
@@ -6694,6 +6723,7 @@ const Builder = struct {
             boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
         }
         const plan = view.static_dispatch_plans.plans[raw];
+        if (dispatchCannotRun(plan.resolution)) return try self.pushCrashingDispatchOperands(actions, view, plan);
         _ = try self.analyzeType(view, plan.dispatcher_ty);
         _ = try self.analyzeType(view, plan.callable_ty);
         const operands = plan.argsSlice(view.static_dispatch_plans);
@@ -6761,6 +6791,9 @@ const Builder = struct {
             boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
+        // A dispatch that cannot run has no method target or dictionary; its
+        // operands were planned by `pushCrashingDispatchOperands`.
+        if (dispatchCannotRun(dispatch.resolution)) return;
         const dispatcher_rep = try self.analyzeType(view, dispatch.dispatcher_ty);
         // A transparent alias dispatches through its backing, so the
         // dispatcher's dictionaries are those of its alias-unwrapped
@@ -21810,6 +21843,16 @@ fn selectedDispatchCallableType(
     return switch (node.instantiation) {
         .callable => |callable_ty| typeRef(site_view, callable_ty),
         .monomorphic => typeRef(target_view, node.target.callable_ty),
+    };
+}
+
+/// Whether checking resolved a dispatch to a crash instead of a method:
+/// rejected (`checked_error`) or with no value that can reach its dispatcher
+/// (`unreachable`).
+fn dispatchCannotRun(resolution: static_dispatch.CheckedCallResolution) bool {
+    return switch (resolution) {
+        .checked_error, .@"unreachable" => true,
+        .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => false,
     };
 }
 

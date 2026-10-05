@@ -13247,6 +13247,13 @@ has already evaluated its operands, because every derivation binds its operands
 to locals, each evaluated once and in order, before any component comparison or
 hash runs.
 
+Boxy plans such a dispatch from its resolution alone. Planning
+(`pushCrashingDispatchOperands`) records the source operands the crash
+evaluates and nothing else: the dispatch selects no method worker, records no
+dictionary use for the enclosing worker, and adds no hidden dictionary
+parameter to it. A dispatch that cannot run has no dispatcher whose
+dictionary any caller could supply.
+
 Divergent expressions evaluate their earlier operands. Monotype lowers an
 expression that checking marked divergent without asking for its value, and
 that lowering keeps strict evaluation: a call (callee, then arguments), tuple,
