@@ -1254,6 +1254,43 @@ test "download from local server" {
     }
 }
 
+test "bundle download rejects a redirect to non-loopback HTTP" {
+    const testing = std.testing;
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        fn run(self: *@This()) void {
+            const thread_io = std.testing.io;
+            const stream = self.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+            var read_buffer: [1024]u8 = undefined;
+            var reader = stream.reader(thread_io, &read_buffer);
+            var request_buffer: [1024]u8 = undefined;
+            var slices = [_][]u8{&request_buffer};
+            _ = std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+            var write_buffer: [512]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buffer);
+            writer.interface.writeAll("HTTP/1.1 302 Found\r\nLocation: http://example.com/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch return;
+            writer.interface.flush() catch return;
+        }
+    };
+    var context = Server{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{server.socket.address.getPort()});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidUrl, download.download(&allocator, io, url, tmp.dir));
+}
+
 // Test unbundleStream with BufferExtractWriter - simulates WASM usage
 // This tests the full pipeline: zstd decompression -> tar extraction -> memory buffer
 test "unbundleStream with BufferExtractWriter (WASM simulation)" {

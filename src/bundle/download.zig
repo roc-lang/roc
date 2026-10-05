@@ -7,6 +7,7 @@ const bundle = @import("bundle.zig");
 const unbundle_mod = @import("unbundle");
 
 const localhost = unbundle_mod.localhost;
+const redirects = unbundle_mod.download;
 
 // Network constants
 const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
@@ -69,132 +70,137 @@ pub fn download(
     // Parse the URL
     var uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
-    // Check if we need to resolve localhost
-    var extra_headers: []const std.http.Header = &.{};
-    if (uri.host) |host| {
-        if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
-            const family = try localhost.resolveLoopback();
-            uri.host = switch (family) {
-                .ip4 => .{ .percent_encoded = "127.0.0.1" },
-                .ip6 => .{ .percent_encoded = "[::1]" },
+    var redirect_arena = std.heap.ArenaAllocator.init(allocator.*);
+    defer redirect_arena.deinit();
+    var redirect_count: usize = 0;
+    while (true) {
+        const target = redirects.prepareRequestUri(uri) catch |err| switch (err) {
+            error.LocalhostWasNotLoopback => return error.LocalhostWasNotLoopback,
+            error.NetworkError => return error.NetworkError,
+            else => return error.InvalidUrl,
+        };
+        var request = client.request(.GET, target.uri, .{
+            .redirect_behavior = .unhandled,
+            .extra_headers = target.headers,
+        }) catch |err| switch (err) {
+            error.AccessDenied,
+            error.AddressFamilyUnsupported,
+            error.AddressInUse,
+            error.AddressUnavailable,
+            error.Canceled,
+            error.CertificateBundleLoadFailure,
+            error.ConnectionPending,
+            error.ConnectionRefused,
+            error.ConnectionResetByPeer,
+            error.DetectingNetworkConfigurationFailed,
+            error.HostUnreachable,
+            error.InvalidDnsAAAARecord,
+            error.InvalidDnsARecord,
+            error.InvalidDnsCnameRecord,
+            error.NameServerFailure,
+            error.NetworkDown,
+            error.NetworkUnreachable,
+            error.NoAddressReturned,
+            error.OptionUnsupported,
+            error.ProcessFdQuotaExceeded,
+            error.ProtocolUnsupportedByAddressFamily,
+            error.ProtocolUnsupportedBySystem,
+            error.ResolvConfParseFailed,
+            error.SocketModeUnsupported,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Timeout,
+            error.TlsInitializationFailed,
+            error.Unexpected,
+            error.UnknownHostName,
+            error.UnsupportedUriScheme,
+            error.UriMissingHost,
+            error.WouldBlock,
+            => return error.HttpError,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        defer request.deinit();
+
+        // Send just the request head (no body)
+        request.sendBodiless() catch return error.HttpError;
+
+        // Receive headers into a temporary buffer
+        var head_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
+        var response = request.receiveHead(&head_buffer) catch |err| switch (err) {
+            error.AccessDenied,
+            error.AddressFamilyUnsupported,
+            error.AddressInUse,
+            error.AddressUnavailable,
+            error.Canceled,
+            error.CertificateBundleLoadFailure,
+            error.ConnectionPending,
+            error.ConnectionRefused,
+            error.ConnectionResetByPeer,
+            error.DetectingNetworkConfigurationFailed,
+            error.HostUnreachable,
+            error.HttpChunkInvalid,
+            error.HttpChunkTruncated,
+            error.HttpConnectionClosing,
+            error.HttpContentEncodingUnsupported,
+            error.HttpHeadersInvalid,
+            error.HttpHeadersOversize,
+            error.HttpRedirectLocationInvalid,
+            error.HttpRedirectLocationMissing,
+            error.HttpRedirectLocationOversize,
+            error.HttpRequestTruncated,
+            error.InvalidDnsAAAARecord,
+            error.InvalidDnsARecord,
+            error.InvalidDnsCnameRecord,
+            error.NameServerFailure,
+            error.NetworkDown,
+            error.NetworkUnreachable,
+            error.NoAddressReturned,
+            error.OptionUnsupported,
+            error.ProcessFdQuotaExceeded,
+            error.ProtocolUnsupportedByAddressFamily,
+            error.ProtocolUnsupportedBySystem,
+            error.ReadFailed,
+            error.RedirectRequiresResend,
+            error.ResolvConfParseFailed,
+            error.SocketModeUnsupported,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Timeout,
+            error.TlsInitializationFailed,
+            error.TooManyHttpRedirects,
+            error.Unexpected,
+            error.UnknownHostName,
+            error.UnsupportedUriScheme,
+            error.UriMissingHost,
+            error.WouldBlock,
+            error.WriteFailed,
+            => return error.HttpError,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+
+        if (response.head.status.class() == .redirect) {
+            if (redirect_count == redirects.MAX_REDIRECTS) return error.HttpError;
+            const location = response.head.location orelse return error.HttpError;
+            uri = redirects.resolveRedirect(redirect_arena.allocator(), uri, location) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidUrl,
             };
-            // Set Host header to preserve original hostname
-            extra_headers = &.{
-                .{ .name = "Host", .value = "localhost" },
-            };
+            redirect_count += 1;
+            continue;
         }
+
+        // Check response status
+        if (response.head.status != .ok) {
+            return error.HttpError;
+        }
+
+        // Prepare buffered reader for response body
+        var reader_buffer: [1024]u8 = undefined;
+        const reader = response.reader(&reader_buffer);
+
+        // Stream directly to unbundleStream
+        var dir_writer = bundle.DirExtractWriter.init(extract_dir, io);
+        try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash, null);
+        return;
     }
-
-    // Start the request with the potentially modified URI
-    var request = client.request(.GET, uri, .{
-        .redirect_behavior = .unhandled,
-        .extra_headers = extra_headers,
-    }) catch |err| switch (err) {
-        error.AccessDenied,
-        error.AddressFamilyUnsupported,
-        error.AddressInUse,
-        error.AddressUnavailable,
-        error.Canceled,
-        error.CertificateBundleLoadFailure,
-        error.ConnectionPending,
-        error.ConnectionRefused,
-        error.ConnectionResetByPeer,
-        error.DetectingNetworkConfigurationFailed,
-        error.HostUnreachable,
-        error.InvalidDnsAAAARecord,
-        error.InvalidDnsARecord,
-        error.InvalidDnsCnameRecord,
-        error.NameServerFailure,
-        error.NetworkDown,
-        error.NetworkUnreachable,
-        error.NoAddressReturned,
-        error.OptionUnsupported,
-        error.ProcessFdQuotaExceeded,
-        error.ProtocolUnsupportedByAddressFamily,
-        error.ProtocolUnsupportedBySystem,
-        error.ResolvConfParseFailed,
-        error.SocketModeUnsupported,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Timeout,
-        error.TlsInitializationFailed,
-        error.Unexpected,
-        error.UnknownHostName,
-        error.UnsupportedUriScheme,
-        error.UriMissingHost,
-        error.WouldBlock,
-        => return error.HttpError,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer request.deinit();
-
-    // Send just the request head (no body)
-    request.sendBodiless() catch return error.HttpError;
-
-    // Receive headers into a temporary buffer
-    var head_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
-    var response = request.receiveHead(&head_buffer) catch |err| switch (err) {
-        error.AccessDenied,
-        error.AddressFamilyUnsupported,
-        error.AddressInUse,
-        error.AddressUnavailable,
-        error.Canceled,
-        error.CertificateBundleLoadFailure,
-        error.ConnectionPending,
-        error.ConnectionRefused,
-        error.ConnectionResetByPeer,
-        error.DetectingNetworkConfigurationFailed,
-        error.HostUnreachable,
-        error.HttpChunkInvalid,
-        error.HttpChunkTruncated,
-        error.HttpConnectionClosing,
-        error.HttpContentEncodingUnsupported,
-        error.HttpHeadersInvalid,
-        error.HttpHeadersOversize,
-        error.HttpRedirectLocationInvalid,
-        error.HttpRedirectLocationMissing,
-        error.HttpRedirectLocationOversize,
-        error.HttpRequestTruncated,
-        error.InvalidDnsAAAARecord,
-        error.InvalidDnsARecord,
-        error.InvalidDnsCnameRecord,
-        error.NameServerFailure,
-        error.NetworkDown,
-        error.NetworkUnreachable,
-        error.NoAddressReturned,
-        error.OptionUnsupported,
-        error.ProcessFdQuotaExceeded,
-        error.ProtocolUnsupportedByAddressFamily,
-        error.ProtocolUnsupportedBySystem,
-        error.ReadFailed,
-        error.RedirectRequiresResend,
-        error.ResolvConfParseFailed,
-        error.SocketModeUnsupported,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Timeout,
-        error.TlsInitializationFailed,
-        error.TooManyHttpRedirects,
-        error.Unexpected,
-        error.UnknownHostName,
-        error.UnsupportedUriScheme,
-        error.UriMissingHost,
-        error.WouldBlock,
-        error.WriteFailed,
-        => return error.HttpError,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-
-    // Check response status
-    if (response.head.status != .ok) {
-        return error.HttpError;
-    }
-
-    // Prepare buffered reader for response body
-    var reader_buffer: [1024]u8 = undefined;
-    const reader = response.reader(&reader_buffer);
-
-    // Stream directly to unbundleStream
-    var dir_writer = bundle.DirExtractWriter.init(extract_dir, io);
-    try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash, null);
 }

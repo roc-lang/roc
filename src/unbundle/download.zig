@@ -16,6 +16,37 @@ const MAX_TEMP_FILE_RETRIES: usize = 10;
 
 // Length of random suffix for temp filenames
 const RANDOM_SUFFIX_LEN: usize = 16;
+pub const MAX_REDIRECTS: usize = 3;
+
+/// Resolve and validate a redirect before the next connection is opened.
+/// The returned URI borrows memory from `allocator`.
+pub fn resolveRedirect(allocator: Allocator, current: std.Uri, location: []const u8) DownloadError!std.Uri {
+    const current_url = try std.fmt.allocPrint(allocator, "{f}", .{std.Uri.fmt(&current, .all)});
+    const buffer = try allocator.alloc(u8, current_url.len + location.len + 1);
+    @memcpy(buffer[0..location.len], location);
+    var remaining = buffer;
+    const next = current.resolveInPlace(location.len, &remaining) catch return error.InvalidUrl;
+    const next_url = try std.fmt.allocPrint(allocator, "{f}", .{std.Uri.fmt(&next, .all)});
+    _ = try validateUrl(next_url);
+    return next;
+}
+
+/// Pin a verified localhost connection to loopback while preserving its Host header.
+pub fn prepareRequestUri(uri: std.Uri) DownloadError!struct { uri: std.Uri, headers: []const std.http.Header } {
+    var result = uri;
+    var headers: []const std.http.Header = &.{};
+    if (uri.host) |host| {
+        if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
+            const family = try localhost.resolveLoopback();
+            result.host = switch (family) {
+                .ip4 => .{ .percent_encoded = "127.0.0.1" },
+                .ip6 => .{ .percent_encoded = "[::1]" },
+            };
+            headers = &.{.{ .name = "Host", .value = "localhost" }};
+        }
+    }
+    return .{ .uri = result, .headers = headers };
+}
 
 /// Generate a random alphanumeric suffix for unique temp filenames.
 /// Uses cryptographically secure random bytes mapped to alphanumeric characters.
@@ -197,16 +228,10 @@ fn downloadToFile(
     // proxied/network-restricted environments (same variables `zig fetch` uses).
     try initProxiesFromEnv(&client, proxy_arena.allocator());
 
-    // Parse the URL
-    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
-
-    // Check if we need to resolve localhost and verify loopback
-    if (uri.host) |host| {
-        if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
-            // Security: resolve "localhost" and require at least one loopback result.
-            try localhost.requireLoopback();
-        }
-    }
+    // Redirect URI components live for the entire request chain.
+    var redirect_arena = std.heap.ArenaAllocator.init(allocator.*);
+    defer redirect_arena.deinit();
+    var uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
     // Try to create temp file with unique random suffix
     var attempts: usize = 0;
@@ -260,13 +285,43 @@ fn downloadToFile(
         var write_buffer: [IO_BUFFER_SIZE]u8 = undefined;
         var file_writer = file.writer(io, &write_buffer);
 
-        // Use fetch API with response_writer to write directly to file
-        const fetch_result = client.fetch(.{
-            .location = .{ .uri = uri },
-            .response_writer = &file_writer.interface,
-        }) catch {
-            return error.HttpError;
-        };
+        var redirects: usize = 0;
+        while (true) {
+            const target = try prepareRequestUri(uri);
+            var request = client.request(.GET, target.uri, .{
+                .redirect_behavior = .unhandled,
+                .extra_headers = target.headers,
+            }) catch return error.HttpError;
+            defer request.deinit();
+            request.sendBodiless() catch return error.HttpError;
+            var head_buffer: [16 * 1024]u8 = undefined;
+            var response = request.receiveHead(&head_buffer) catch return error.HttpError;
+
+            if (response.head.status.class() == .redirect) {
+                if (redirects == MAX_REDIRECTS) return error.HttpError;
+                const location = response.head.location orelse return error.HttpError;
+                uri = try resolveRedirect(redirect_arena.allocator(), uri, location);
+                redirects += 1;
+                continue;
+            }
+            if (response.head.status != .ok) return error.HttpError;
+
+            var transfer_buffer: [64]u8 = undefined;
+            var decompress: std.http.Decompress = undefined;
+            // HTTP content encoding is handled by the same standard-library reader
+            // that Client.fetch uses.
+            const decompress_len: usize = switch (response.head.content_encoding) {
+                .identity => 0,
+                .zstd => std.compress.zstd.default_window_len,
+                .deflate, .gzip => std.compress.flate.max_window_len,
+                .compress => return error.HttpError,
+            };
+            const decompress_buffer = try allocator.alloc(u8, decompress_len);
+            defer allocator.free(decompress_buffer);
+            const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
+            _ = reader.streamRemaining(&file_writer.interface) catch return error.HttpError;
+            break;
+        }
 
         // Flush the writer before closing
         file_writer.interface.flush() catch {
@@ -276,12 +331,6 @@ fn downloadToFile(
         // Close file after fetch completes
         file.close(io);
         file_closed = true;
-
-        // Check for successful response
-        if (fetch_result.status != .ok) {
-            dir.deleteFile(io, filename) catch {};
-            return error.HttpError;
-        }
 
         return filename;
     }
