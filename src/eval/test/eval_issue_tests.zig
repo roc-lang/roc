@@ -4460,6 +4460,77 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "([4, 12], [6], [8], [10])" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/12051
+        // `List.get` and `List.set` return `Try`, so this insertion sort has
+        // type errors. With `replace` left unannotated, compilation must still
+        // report those problems and evaluation must reach the runtime error
+        // rather than segfaulting.
+        .name = "issue 12051: unannotated replace helper in insertion sort with type errors",
+        .source_kind = .module,
+        .source =
+        \\f : List(U64) -> List(U64)
+        \\f = |array| g(array, 1)
+        \\
+        \\g = |array, i| {
+        \\    if i < array.len() {
+        \\        x = array.get(i)
+        \\        (arr, j) = shift(array, x, i)
+        \\        g(replace(arr, j, x), i + 1)
+        \\    } else {
+        \\        array
+        \\    }
+        \\}
+        \\
+        \\shift = |array, x, j| {
+        \\    if array.get(j - 1) > x {
+        \\        shift(replace(array, j, array.get(j - 1)), x, j - 1)
+        \\    } else {
+        \\        (array, j)
+        \\    }
+        \\}
+        \\
+        \\replace = |array, idx, elem| array.set(idx, elem)
+        \\
+        \\main = f([2, 1])
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12051
+        // The well-typed form of the same insertion sort keeps every helper
+        // unannotated, so its recursive calls forward the same dispatch
+        // evidence, and must sort correctly.
+        .name = "issue 12051: unannotated replace helper in well-typed insertion sort",
+        .source_kind = .module,
+        .source =
+        \\f : List(U64) -> List(U64)
+        \\f = |array| g(array, 1)
+        \\
+        \\g = |array, i| {
+        \\    if i < array.len() {
+        \\        x = array.get(i) ?? 0
+        \\        (arr, j) = shift(array, x, i)
+        \\        g(replace(arr, j, x), i + 1)
+        \\    } else {
+        \\        array
+        \\    }
+        \\}
+        \\
+        \\shift = |array, x, j| {
+        \\    if j > 0 and (array.get(j - 1) ?? 0) > x {
+        \\        shift(replace(array, j, array.get(j - 1) ?? 0), x, j - 1)
+        \\    } else {
+        \\        (array, j)
+        \\    }
+        \\}
+        \\
+        \\replace = |array, idx, elem| array.set(idx, elem) ?? array
+        \\
+        \\main = f([3, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "issue 11993: method call on a nominal type declared in a function body",
         .source_kind = .module,
         .source =

@@ -15436,8 +15436,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     reporter.start();
     errdefer reporter.fail();
 
-    reporter.begin("Type Checking");
-
     // --- Normal compilation path ---
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -15465,30 +15463,28 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
 
-    if (args.main) |main_path| {
-        build_env.buildWithMain(args.path, main_path) catch |err| {
-            _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
-            if (args.watch_inputs_file) |file_path| {
-                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
-            }
-            return err;
-        };
-    } else {
-        build_env.discoverDependencies(args.path) catch |err| {
-            _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
-            if (args.watch_inputs_file) |file_path| {
-                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
-            }
-            return err;
-        };
-        build_env.compileDiscovered() catch |err| {
-            _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
-            if (args.watch_inputs_file) |file_path| {
-                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
-            }
-            return err;
-        };
-    }
+    reporter.begin("Resolving Dependencies");
+    const discovered = if (args.main) |main_path|
+        build_env.discoverWithMain(args.path, main_path)
+    else
+        build_env.discoverDependencies(args.path);
+    discovered catch |err| {
+        _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+        if (args.watch_inputs_file) |file_path| {
+            try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+        }
+        return err;
+    };
+    reporter.end();
+
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+        if (args.watch_inputs_file) |file_path| {
+            try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+        }
+        return err;
+    };
 
     if (args.watch_inputs_file) |file_path| {
         try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
@@ -18344,8 +18340,24 @@ test "check report recovery propagates terminal interpreter failures" {
     try requireReportableCheckFailure(error.FileNotFound);
 }
 
-fn buildForCheckWithOptionalMain(build_env: *BuildEnv, filepath: []const u8, main_filepath: ?[]const u8) CheckFileWithBuildEnvPreservedError!void {
-    try build_env.buildResolvingMain(filepath, main_filepath);
+/// Resolving dependencies can download packages, so it is reported as its own
+/// phase rather than as part of Type Checking.
+fn buildForCheckWithOptionalMain(
+    build_env: *BuildEnv,
+    filepath: []const u8,
+    main_filepath: ?[]const u8,
+    reporter: ?*progress.Reporter,
+) CheckFileWithBuildEnvPreservedError!void {
+    if (reporter) |r| r.begin("Resolving Dependencies");
+    build_env.discoverResolvingMain(filepath, main_filepath) catch |err| {
+        if (reporter) |r| r.end();
+        return err;
+    };
+    if (reporter) |r| {
+        r.end();
+        r.begin("Type Checking");
+    }
+    try build_env.compileDiscovered();
 }
 
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
@@ -18362,6 +18374,7 @@ fn checkFileWithBuildEnvPreserved(
     source_dir_override: ?[]const u8,
     track_watch_inputs: bool,
     synthetic_default_app: bool,
+    reporter: ?*progress.Reporter,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -18382,7 +18395,7 @@ fn checkFileWithBuildEnvPreserved(
 
     errdefer build_env.deinit();
 
-    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
+    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
         try requireReportableCheckFailure(err);
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -18506,6 +18519,7 @@ fn checkFileWithBuildEnv(
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
     synthetic_default_app: bool,
+    reporter: ?*progress.Reporter,
 ) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -18527,7 +18541,7 @@ fn checkFileWithBuildEnv(
     });
     defer build_env.deinit();
 
-    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
+    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
         try requireReportableCheckFailure(err);
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -18701,6 +18715,7 @@ fn rocCheckDefaultApp(
     args: cli_args.CheckArgs,
     staged: *default_app.Staged,
     cache_config: CacheConfig,
+    reporter: *progress.Reporter,
 ) RocCheckError!CheckResult {
     defer staged.deinit(ctx.gpa);
 
@@ -18724,6 +18739,7 @@ fn rocCheckDefaultApp(
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
         true,
+        reporter,
     );
     errdefer check_result.deinit(ctx.gpa);
 
@@ -18754,6 +18770,7 @@ fn rocCheckDefaultAppPreserved(
     staged: *default_app.Staged,
     cache_config: CacheConfig,
     track_watch_inputs: bool,
+    reporter: *progress.Reporter,
 ) RocCheckError!DefaultAppCheckResultWithBuildEnv {
     defer staged.deinit(ctx.gpa);
 
@@ -18778,6 +18795,7 @@ fn rocCheckDefaultAppPreserved(
         original_source_dir,
         track_watch_inputs,
         true,
+        reporter,
     );
     errdefer result_with_env.deinit(ctx.gpa);
 
@@ -18841,7 +18859,6 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
     };
 
     // Use BuildEnv to check the file
-    reporter.begin("Type Checking");
     if (args.watch_inputs_file) |file_path| {
         var extra_buf: [2][]const u8 = undefined;
         const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
@@ -18854,6 +18871,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
                 &owned_staged,
                 cache_config,
                 true,
+                &reporter,
             ) catch |err| {
                 reporter.fail();
                 try writeWatchInputsFile(ctx, file_path, null, extra_paths);
@@ -18886,6 +18904,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             null,
             true,
             false,
+            &reporter,
         ) catch |err| {
             reporter.fail();
             try writeWatchInputsFile(ctx, file_path, null, extra_paths);
@@ -18907,7 +18926,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
 
     var staged_check = try stageDefaultApp(ctx, args.path, .checking);
     var check_result = if (staged_check != null)
-        rocCheckDefaultApp(ctx, args, &staged_check.?, cache_config) catch |err| {
+        rocCheckDefaultApp(ctx, args, &staged_check.?, cache_config, &reporter) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
         }
@@ -18924,6 +18943,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             resolutionConfigFromLimits(args.resolve_limits),
             null,
             false,
+            &reporter,
         ) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
@@ -19354,6 +19374,7 @@ fn bumpCheckSide(
         null,
         false,
         false,
+        null,
     ) catch |err| {
         try handleProcessFileError(err, stderr, path);
         return error.CliError;
@@ -19837,6 +19858,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         null,
         false,
         false,
+        null,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };

@@ -13192,7 +13192,10 @@ type per slot—keyed by the use expression, next to the edge's resolved
 requirements. A monomorphic edge to an in-flight recursive value or method
 target records the exact shared scheme root and no copy pairs; its
 substitution is the identity, every slot standing for the scheme's own
-variable. A specialization is the scheme instantiated under one substitution:
+variable. Evidence output reads constraint callables the same way: an
+instantiation pairs every callable it copies, so an unpaired callable is the
+use's own, and its forwarded evidence names that exact callable, including its
+side-vector contract index, never just the same-named primary callable. A specialization is the scheme instantiated under one substitution:
 Monotype seeds the callee's context with the substitution's live cells before
 instantiating the root, so every interior type and every requirement of the
 body is determined by the slots. The evidence vector is derived from the
