@@ -576,3 +576,86 @@ test "downloadAndExtract with bad archive returns error without crash" {
     try testing.expectError(download.DownloadError.InvalidTarHeader, result);
     try server_ctx.response_sent.wait(io);
 }
+
+test "download rejects a redirect to non-loopback HTTP before connecting" {
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(path);
+
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        fn run(self: *@This()) void {
+            const thread_io = testing.io;
+            const stream = self.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+            var read_buffer: [1024]u8 = undefined;
+            var reader = stream.reader(thread_io, &read_buffer);
+            var request_buffer: [1024]u8 = undefined;
+            var slices = [_][]u8{&request_buffer};
+            _ = std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+            var write_buffer: [512]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buffer);
+            writer.interface.writeAll("HTTP/1.1 302 Found\r\nLocation: http://example.com/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch return;
+            writer.interface.flush() catch return;
+        }
+    };
+    var context = Server{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{server.socket.address.getPort()});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidUrl, download.downloadAndExtract(&allocator, io, url, path, .{}));
+}
+
+test "download follows a validated loopback redirect" {
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(path);
+
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        port: u16,
+        fn run(self: *@This()) void {
+            const thread_io = testing.io;
+            for (0..2) |hop| {
+                const stream = self.server.accept(thread_io) catch return;
+                defer stream.close(thread_io);
+                var read_buffer: [1024]u8 = undefined;
+                var reader = stream.reader(thread_io, &read_buffer);
+                var request_buffer: [1024]u8 = undefined;
+                var slices = [_][]u8{&request_buffer};
+                _ = std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+                var write_buffer: [512]u8 = undefined;
+                var writer = stream.writer(thread_io, &write_buffer);
+                if (hop == 0) {
+                    writer.interface.print("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/next/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{self.port}) catch return;
+                } else {
+                    writer.interface.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\nnot a roc bundle") catch return;
+                }
+                writer.interface.flush() catch return;
+            }
+        }
+    };
+    var context = Server{ .server = &server, .port = server.socket.address.getPort() };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{context.port});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidTarHeader, download.downloadAndExtract(&allocator, io, url, path, .{}));
+}
