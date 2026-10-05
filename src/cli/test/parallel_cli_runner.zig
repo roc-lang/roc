@@ -11128,6 +11128,22 @@ fn runGlueRuntimeCase(
         .wasm32 => null,
     };
 
+    // Zig 0.17 rejects `@Vector` fields in `extern struct`/`extern union`
+    // (compiler commit 6d2c8349c5), so ZigGlue cannot declare the vector
+    // aggregates layout-probe exchanges with its host on any target. Roc's
+    // host ABI contract is unchanged and CGlue and RustGlue still exercise
+    // it. Aligned-array and f128 stand-ins change the C calling convention,
+    // so no substitute is generated.
+    // Unsupported pending a future design for Zig vector aggregates.
+    if (zigGlueUnsupportedVectorAggregates(runtime.language, runtime.platform.name)) {
+        return .{
+            .status = .skip,
+            .phase = .setup,
+            .duration_ns = timer.read(),
+            .message = "ZigGlue does not support SIMD vectors inside extern aggregates with Zig 0.17",
+        };
+    }
+
     // Zig 0.16.0 and 0.17.0-dev.1464 mislower two natural C ABI aggregate
     // signatures exercised by layout-probe. On x64mac, Zig splits a two-f64
     // aggregate after FP-register exhaustion instead of rolling the whole
@@ -11282,6 +11298,10 @@ fn runGlueRuntimeCase(
     util.cleanupTestWorkDir(io, env.dirs.work_dir);
     const elapsed = timer.read();
     return .{ .status = .pass, .phase = .run, .duration_ns = elapsed, .run_ns = elapsed };
+}
+
+fn zigGlueUnsupportedVectorAggregates(language: GlueLanguage, platform_name: []const u8) bool {
+    return language == .zig and std.mem.eql(u8, platform_name, "layout-probe");
 }
 
 fn zigCompilerMislowersLayoutProbeAbi(roc_target_name: []const u8) bool {
@@ -13992,6 +14012,14 @@ test "effectiveTimeoutMs extends default for glue suite only" {
     default_args.timeout_provided = true;
     default_args.timeout_ms = 15_000;
     try std.testing.expectEqual(@as(u64, 15_000), effectiveTimeoutMs(default_args, suites));
+}
+
+test "Zig vector aggregate exclusion is limited to the Zig layout-probe host" {
+    try std.testing.expect(zigGlueUnsupportedVectorAggregates(.zig, "layout-probe"));
+
+    try std.testing.expect(!zigGlueUnsupportedVectorAggregates(.c, "layout-probe"));
+    try std.testing.expect(!zigGlueUnsupportedVectorAggregates(.rust, "layout-probe"));
+    try std.testing.expect(!zigGlueUnsupportedVectorAggregates(.zig, "fx"));
 }
 
 test "Zig layout-probe ABI skip is limited to affected native targets" {

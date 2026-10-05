@@ -102,23 +102,19 @@ Safe runner and compiler pass all eight failing cases against an independently
 copied retained fixture tree with those two inputs restored. This targeted
 runtime control does not claim a full CLI pass on the fixed graph.
 
-The two remaining CLI failures are generated ZigGlue layout-probe hosts,
-native and WASM. Zig 0.17 rejects `@Vector` fields in `extern struct` and
-`extern union`. An identical tiny vector-containing extern struct compiles
-with Zig 0.16 and fails with 0.17. Replacing the field with an aligned array
-compiles but changes the SysV argument/result carrier from SSE to two integer
-pieces, contradicting the committed host ABI in `design.md`. No array
-substitution or skip has been applied. An independent C caller confirms the
-old vector-containing host returns the correct transformed lanes, while the
-aligned-array substitute builds and links but returns the wrong lanes. A
-separate read-only review finds no supported stock 0.17 aggregate API that
-preserves the contract: `@Type` has no ABI-kind override, and C translation
-still produces `@Vector`. An `f128` surrogate also changes WASM function types
-and AArch64 multi-vector aggregate classification. An upstream Zig C-vector
-compatibility change therefore needs cross-language layout and calling-ABI
-regressions before it can unblock these hosts. The earlier seven static-template ABI
-locks do not establish dynamic SIMD aggregate support; this is an unresolved
-upgrade blocker.
+ZigGlue does not support SIMD vectors inside extern aggregates with Zig 0.17.
+The generated layout-probe hosts (native and WASM) fail because Zig 0.17
+rejects `@Vector` fields in `extern struct` and `extern union`; an identical
+tiny vector-containing extern struct compiles with Zig 0.16. Aligned-array and
+`f128` stand-ins change the C calling convention (SysV SSE becomes integer
+pieces; WASM function types and AArch64 multi-vector classification differ),
+and `@Type` has no ABI-kind override, so no substitute is generated. The CLI
+runner therefore excludes only the Zig layout-probe runtime cases and says why;
+CGlue and RustGlue still exercise the full vector contract, and Roc's host ABI
+in `design.md` is unchanged. Supporting Zig hosts needs a future design, for
+example an upstream Zig C-vector layout guarantee with cross-language layout and
+calling-ABI regressions. The earlier static-template ABI locks do not establish
+dynamic SIMD aggregate support.
 
 Exact commands, source and artifact identities, fresh statistics, and logs are
 retained under
