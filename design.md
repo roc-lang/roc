@@ -16784,7 +16784,11 @@ only singleton raw bits and group-extension bits; grouped raw-member bits and
 borrowed-result bits do not select seed units. Absent and out-of-range subtrees
 are skipped. Each emission supplies its own committed residual masks and places
 the existing retained resources and join parameters, preserving the exact
-descending ownership fixed point.
+descending ownership fixed point. Until a jump reaches a join's body, the
+only reader of its body keep-set is the entry keep-set's membership test, so
+the seed stays represented by that exact membership predicate. A join whose
+body or remainder reaches a loop edge materializes the seed, because
+loop-keyed liveness enumerates the keep-set as boundary data.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
@@ -16817,6 +16821,18 @@ iteration occurs only inside genuinely cyclic components. Keep-free rows live
 at their compact graph nodes and the active source graph supplies their direct
 dense statement-to-node lookup.
 
+Debug builds check the keep-free solve against a certificate the solver keeps
+rather than re-solving it. Every row satisfies its equation exactly. Inside a
+cyclic component, every row is its innermost loop's carried row plus the bits
+its own node exposes, and every carried row is its parent loop's plus the bits
+its loop exposes. Each such bit carries a support witness: a read in its unit,
+an exit to a row of an earlier component, or an edge to a unit found earlier
+for the same bit. A loop unit defines and kills nothing of its bit, which the
+oracle recomputes independently. Loops are strongly connected, so every row bit
+then has a finite path to a read and the fixed point is the least one. The
+checks descend only where the shared rows diverge, so certification is linear
+like the solve.
+
 Each join receives a compact loop identity whose direct cache covers the
 forward closure of its explicit body and remainder roots. The join keep-set
 adds a boundary row to each reachable loop-edge node. When that keep-set
@@ -16836,7 +16852,21 @@ releasing down to the keep, but a parameter a back edge leaves alone re-enters
 the body still holding the value the previous iteration released, so the back
 edges maintain their own shrinking meet over the parameters and the body keep
 places only what survives it. A site contribution that shrinks without
-changing the global meet cannot schedule downstream work. Each loop identity
+changing the global meet cannot schedule downstream work.
+
+A loop nest's keep-sets each hold every enclosing loop's iteration state, so
+no keep-set step may rebuild or scan a keep-set per join. The entry keep-set
+is the entry state and the body keep-set is the jump meet, each with exactly
+its rejected units removed, so each shares the structure of the state it
+filters; release differences and equality tests against it then cost only
+their divergence. The rejected units are the state's members whose liveness
+group the region does not read. That dead-unit set is derived from a
+reference set, either the same join's previous one or the one for the region
+whose walk reached the join statement, by re-deciding only the units whose
+state entry or deciding liveness bit differs structurally between the two
+snapshots. The result is exact for any reference; the reference only bounds
+the work, which is the difference between related snapshots instead of the
+size of the sets, so a loop nest costs linear keep-set work in its depth. Each loop identity
 records whether its solved rows consumed any keep bits, answered from the
 row's structure rather than by counting its set bits. A keep change that
 supplied no boundary bits schedules no liveness work.
@@ -16886,6 +16916,27 @@ exists, hash-consed within the procedure, and shared by every alias of the
 summary representative. Release builds compile the certifier away entirely,
 so only debug compiler builds pay, and any certifier slowness is fixed inside
 the certifier, never by weakening what it checks.
+
+A join's summaries cover only the relevant locals its own body region names.
+The region is every statement the body reaches without entering a nested
+join's body, together with the regions of the joins nested in it; a
+continuation several regions reach belongs to each of them. Every other
+relevant local of an entry state is the arrival's frame. The region never
+names it and, because the summary domain is closed under aliasing and
+provenance in both directions, never reaches its value, so the frame passes
+the whole region unchanged and body walks track only the summarized part. A
+jump that leaves the region is recorded, and the enclosing region replays it
+against each arrival's frame, merging in the walk's bindings of locals named
+outside the region. A terminal inside the region requires every covered
+arrival's frame to be balanced and carries that requirement outward. A walk
+covers exactly the arrivals absorbed at or before the group version it started
+from, so a replay never pairs a frame with a walk that did not certify that
+arrival's entry state. Records are deduplicated by the summary their target
+computes for them, so effects the target cannot distinguish replay once. A loop
+nest's inner loops therefore summarize only their own state, and certifying the
+nest costs work linear in its depth. Read-before-rebind relevance is solved by
+loop structure into persistent rows, and per-procedure tables are sized by the
+procedure's own statements rather than the store's.
 
 Certification boundary checks enumerate the current path's nonzero balances
 and nonempty claim sets, never the procedure's history of abstract value
