@@ -619,7 +619,8 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: windows-2025
-    timeout-minutes: 120
+    # Two evaluator workers use less memory and need a longer job budget.
+    timeout-minutes: ${{ matrix.minici_shard == 'windows-eval' && 180 || 120 }}
     env: *minici_shard_env
     strategy:
       fail-fast: false

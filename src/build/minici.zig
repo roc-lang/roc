@@ -230,7 +230,13 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-trmc-lir" },
     .{ .name = "run-test-zig-build-helpers" },
     .{ .name = "run-test-zig-backend-llvm" },
-    .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
+    // Four evaluator workers exhaust the Windows runner's commit limit.
+    // Keep its CI memory budget explicit; single-backend diagnostics already
+    // pass the cases that fail under concurrent memory pressure.
+    .{ .name = "run-test-eval", .kind = .harness, .args = if (builtin.os.tag == .windows)
+        &.{ "--timeout", "120000", "--threads", "2" }
+    else
+        &.{ "--timeout", "120000" } },
     .{ .name = "run-test-simd-differential", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
