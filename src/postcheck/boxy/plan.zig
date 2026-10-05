@@ -1116,6 +1116,12 @@ pub const StoredCallableCaptureSource = struct {
     };
 };
 
+/// A representation's descriptor method whose declaration checking rejected.
+pub const RejectedDescriptorMethod = struct {
+    source_rep: TypeRepId,
+    kind: DescriptorMethod,
+};
+
 /// A method a runtime descriptor carries for the runtime operation that walks
 /// values by descriptor: a custom `to_inspect` for inspection, and an own
 /// `is_eq` or `to_hash` for descriptor-guided equality or hashing.
@@ -1329,6 +1335,9 @@ pub const ProgramPlan = struct {
     callable_uses: std.ArrayList(CallableUsePlan),
     stored_callable_capture_sources: std.ArrayList(StoredCallableCaptureSource),
     descriptor_methods: std.ArrayList(DescriptorMethodPlan),
+    /// Representations whose descriptor-guided `is_eq` or `to_hash` reaches a
+    /// declaration checking rejected; their descriptors crash there.
+    rejected_descriptor_methods: std.ArrayList(RejectedDescriptorMethod) = .empty,
     const_eval_calls: std.ArrayList(ConstEvalCallPlan),
     iterator_calls: std.ArrayList(IteratorCallPlan),
     generated_codec_calls: std.ArrayList(GeneratedCodecCallPlan),
@@ -1542,6 +1551,7 @@ pub const ProgramPlan = struct {
         self.iterator_calls.deinit(self.allocator);
         self.const_eval_calls.deinit(self.allocator);
         self.descriptor_methods.deinit(self.allocator);
+        self.rejected_descriptor_methods.deinit(self.allocator);
         self.stored_callable_capture_sources.deinit(self.allocator);
         self.callable_uses.deinit(self.allocator);
         self.nested_callable_uses.deinit(self.allocator);
@@ -2112,11 +2122,23 @@ pub const ProgramPlan = struct {
         return null;
     }
 
-    /// Whether `source_rep` owns a descriptor method of either kind, which
-    /// gives it a descriptor identity of its own.
+    /// Whether `source_rep`'s `kind` method is a declaration checking
+    /// rejected, which descriptor-guided equality or hashing crashes on.
+    pub fn descriptorMethodRejected(self: *const ProgramPlan, source_rep: TypeRepId, kind: DescriptorMethod) bool {
+        for (self.rejected_descriptor_methods.items) |rejected| {
+            if (rejected.source_rep == source_rep and rejected.kind == kind) return true;
+        }
+        return false;
+    }
+
+    /// Whether `source_rep` owns a descriptor method of any kind, or a
+    /// rejected one, which gives it a descriptor identity of its own.
     pub fn repOwnsDescriptorMethod(self: *const ProgramPlan, source_rep: TypeRepId) bool {
         for (self.descriptor_methods.items) |method| {
             if (method.source_rep == source_rep) return true;
+        }
+        for (self.rejected_descriptor_methods.items) |rejected| {
+            if (rejected.source_rep == source_rep) return true;
         }
         return false;
     }
@@ -6192,7 +6214,12 @@ const Builder = struct {
                 const found = self.derivedMethodTarget(rep_id, if (method == .equality) .equality else .hash) orelse break :blk null;
                 break :blk switch (found) {
                     .target => |target| target,
-                    .rejected => boxyPlanInvariant("OMNIBUS-TODO descriptor method target was a rejected declaration"),
+                    .rejected => {
+                        if (!self.plan.descriptorMethodRejected(rep_id, kind)) {
+                            try self.plan.rejected_descriptor_methods.append(self.allocator, .{ .source_rep = rep_id, .kind = kind });
+                        }
+                        break :blk null;
+                    },
                 };
             },
         };
@@ -13429,6 +13456,7 @@ const Builder = struct {
             const representation_count = self.plan.representations.items.len;
             const dictionary_count = self.plan.dictionaries.items.len;
             const descriptor_method_count = self.plan.descriptor_methods.items.len;
+            const rejected_descriptor_method_count = self.plan.rejected_descriptor_methods.items.len;
             const descriptor_method_demand_count = self.descriptor_method_demand_count;
             const generated_codec_call_count = self.plan.generated_codec_calls.items.len;
             const worker_dictionary_use_count = self.worker_dictionary_uses.items.len;
@@ -13470,6 +13498,7 @@ const Builder = struct {
                 representation_count == self.plan.representations.items.len and
                 dictionary_count == self.plan.dictionaries.items.len and
                 descriptor_method_count == self.plan.descriptor_methods.items.len and
+                rejected_descriptor_method_count == self.plan.rejected_descriptor_methods.items.len and
                 descriptor_method_demand_count == self.descriptor_method_demand_count and
                 generated_codec_call_count == self.plan.generated_codec_calls.items.len and
                 worker_dictionary_use_count == self.worker_dictionary_uses.items.len and

@@ -122,7 +122,7 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = false };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method", "eq_method", "eq_nested_dicts", "hash_method", "hash_nested_dicts", "is_bool" }) |field| {
+        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method", "eq_method", "eq_nested_dicts", "eq_rejected", "hash_method", "hash_nested_dicts", "hash_rejected", "is_bool" }) |field| {
             if (!std.meta.eql(@field(a, field), @field(b, field))) return false;
         }
         inline for (.{ "nested_descs", "inspect_hidden_descs", "inspect_arg_descs", "eq_hidden_descs", "eq_arg_descs", "hash_hidden_descs", "hash_arg_descs" }) |field| {

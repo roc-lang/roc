@@ -13820,14 +13820,6 @@ fn poisonLiteralFailureOwners(
     return literal_exprs.items.len != 0 or pattern_owners.items.len != 0;
 }
 
-fn poisonConstraintSourceExpr(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-) Allocator.Error!void {
-    return self.poisonConstraintFailureSource(dispatcher_var, constraint, null);
-}
-
 fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
     if (deferred.failure_expr.get()) |raw| return @enumFromInt(raw);
 

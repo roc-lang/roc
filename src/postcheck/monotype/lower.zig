@@ -51012,8 +51012,8 @@ const BodyContext = struct {
             .target => |target| {
                 if (target.instantiation != null or target.callable_contracts.len != 0) return true;
                 // A local procedure's declaration context exists only where
-                // this evidence was materialized; synthesis elsewhere cannot
-                // recover it.
+                // this evidence was materialized; synthesis elsewhere does not
+                // have it.
                 if (target.local_proc_context != null) return true;
                 switch (target.nested) {
                     .resolved => return true,

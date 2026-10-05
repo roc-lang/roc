@@ -157,7 +157,7 @@ pub const DirExtractWriter = struct {
     /// Walk one component at a time from the extraction handle. Opening each
     /// component without following links prevents an existing directory link
     /// from redirecting a later create outside the extraction root.
-    fn openContainedDir(self: *DirExtractWriter, path: []const u8) !std.Io.Dir {
+    fn openContainedDir(self: *DirExtractWriter, path: []const u8) (std.Io.Dir.RealPathError || std.Io.Dir.OpenError || std.Io.Dir.CreateDirPathOpenError || std.Io.Dir.StatError || error{ AccessDenied, NotDir })!std.Io.Dir {
         var root_buf: [MAX_PATH_BYTES]u8 = undefined;
         const root_len = try self.dir.realPath(self.io, &root_buf);
         const root = root_buf[0..root_len];

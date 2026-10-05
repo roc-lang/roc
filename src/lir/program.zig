@@ -423,6 +423,10 @@ pub const BoxyTypeDesc = struct {
     /// The static dictionaries `eq_method`'s worker receives at this
     /// descriptor's type, in worker parameter order.
     eq_nested_dicts: BoxySpan = .{},
+    /// The type declares `is_eq`, but checking rejected that declaration:
+    /// descriptor-guided equality reaching this type crashes as code checking
+    /// rejected, exactly as a specialized comparison of it does.
+    eq_rejected: bool = false,
     /// The type's own `to_hash`, which descriptor-guided hashing calls in
     /// place of hashing the value's structure.
     hash_method: ?BoxyMethodSlotId = null,
@@ -435,6 +439,9 @@ pub const BoxyTypeDesc = struct {
     /// The static dictionaries `hash_method`'s worker receives at this
     /// descriptor's type, in worker parameter order.
     hash_nested_dicts: BoxySpan = .{},
+    /// The type declares `to_hash`, but checking rejected that declaration,
+    /// like `eq_rejected`.
+    hash_rejected: bool = false,
     /// The described value is builtin Bool, which derived hashing writes as a
     /// Bool rather than as a tag.
     is_bool: bool = false,

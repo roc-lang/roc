@@ -1339,6 +1339,11 @@ pub const Interpreter = struct {
             );
         }
 
+        /// Crash at code checking rejected and already reported.
+        pub fn crashCheckedError(self: BoxyFrameHooks, message: []const u8) Error {
+            return self.interp.triggerCrash(message);
+        }
+
         /// Call the `kind` method slot the first argument's descriptor
         /// carries with the borrowed `args`.
         pub fn callDescriptorMethod(

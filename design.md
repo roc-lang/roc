@@ -121,11 +121,11 @@ transitive dependency processed by that server; clients must isolate untrusted
 folders in separate server sessions.
 
 Untrusted sessions retain document text and provide formatting, folding ranges,
-and selection ranges using parsing alone. They do not create builds or publish
-compiler diagnostics, and semantic requests receive an explicit trust-required
-error. Request registrations declare whether they require trust. This gate
-precedes compiler entry; it does not skip stages or publish partially checked
-modules as checked artifacts.
+and selection ranges using parsing alone. They do not create builds or send
+compiler diagnostics, and every request that needs checked types or names
+receives an explicit trust-required error. Request registrations declare
+whether they require trust. This gate precedes compiler entry; it does not skip
+stages or produce partially checked modules as checked module data.
 
 ## Core Principles
 
@@ -15980,7 +15980,11 @@ component whose type declares its own `is_eq` or `to_hash` calls that method:
 the nominal's descriptor carries it as a method slot (`eq_method`,
 `hash_method`) with its own instantiation's argument descriptors, hidden
 descriptors, and dictionaries, as an inspect override's descriptor carries its
-`to_inspect`. Demand for these slots starts at the descriptor-compared
+`to_inspect`. A component whose type declares `is_eq` or `to_hash` in a
+declaration checking rejected has no slot for it: its descriptor marks the
+method rejected (`eq_rejected`, `hash_rejected`), and the walk crashes there as
+code checking rejected, with the message a specialized comparison of that type
+crashes with. Demand for these slots starts at the descriptor-compared
 representation and propagates as inspection demand does: across call
 substitutions, and across the dictionaries that relate a receiving frame to the
 frame that built them, between the receiving worker's scheme variables and the

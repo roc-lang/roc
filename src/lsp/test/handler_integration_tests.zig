@@ -6389,6 +6389,7 @@ pub fn codeActionsMatchDocumentLineEndings() integration_spec.SpecError!void {
     );
 }
 
+/// An untrusted workspace serves parse-only features and never starts a build.
 pub fn untrustedWorkspaceNeverBuilds() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     const messages = [_][]const u8{

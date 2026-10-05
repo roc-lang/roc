@@ -61,7 +61,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v39: `crash` statements record whether checking rejected the code they stand for.
 /// v40: source file table entries carry their module's content identity.
 /// v41: wide-UTF decoding ops renumber later LowLevel ops, alongside v39 and v40.
-pub const FORMAT_VERSION: u32 = 41;
+/// v42: Boxy type descriptors record rejected `is_eq` and `to_hash` declarations.
+pub const FORMAT_VERSION: u32 = 42;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

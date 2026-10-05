@@ -2436,6 +2436,8 @@ const ProcedureBuilder = struct {
                     .hash_arg_descs = frame.methods[2].args,
                     .hash_nested_dicts = frame.methods[2].dictionaries,
                     .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
+                    .eq_rejected = self.plan.descriptorMethodRejected(frame.rep, .equality),
+                    .hash_rejected = self.plan.descriptorMethodRejected(frame.rep, .hash),
                     .is_bool = self.repDescribesBool(frame.rep),
                     .debug_checked_type = rep.source_type.ty,
                 };
@@ -2635,6 +2637,8 @@ const ProcedureBuilder = struct {
                     .hash_arg_descs = frame.methods[2].args,
                     .hash_nested_dicts = frame.methods[2].dictionaries,
                     .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
+                    .eq_rejected = self.plan.descriptorMethodRejected(frame.source orelse frame.worker, .equality),
+                    .hash_rejected = self.plan.descriptorMethodRejected(frame.source orelse frame.worker, .hash),
                     .is_bool = self.repDescribesBool(frame.worker),
                     .debug_checked_type = worker_rep.source_type.ty,
                 };
@@ -35059,6 +35063,8 @@ const ProcBodyBuilder = struct {
             .hash_arg_descs = frame.methods[2].args,
             .hash_nested_dicts = frame.methods[2].dictionaries,
             .is_bool = self.parent.repDescribesBool(rep_id),
+            .eq_rejected = self.parent.plan.descriptorMethodRejected(rep_id, .equality),
+            .hash_rejected = self.parent.plan.descriptorMethodRejected(rep_id, .hash),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };

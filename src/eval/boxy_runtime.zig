@@ -199,6 +199,11 @@ pub const PreparedWorkerCall = struct {
 /// see `BoxyTypeDesc.inspect_method` and `BoxyTypeDesc.eq_method`.
 pub const DescriptorMethodKind = enum { inspect, equality, hash };
 
+/// The message descriptor-guided equality or hashing crashes with on reaching
+/// a type whose `is_eq` or `to_hash` declaration checking rejected. It is the
+/// message a specialized comparison of that type crashes with.
+pub const rejected_method_message = "method dispatch failed to check";
+
 /// Result and ownership metadata returned by a descriptor-carried method.
 pub const DescriptorMethodCallResult = struct {
     value: Value,
@@ -235,6 +240,15 @@ pub const ResolvedTagUnionBase = struct {
     value: Value,
     layout: layout_mod.Idx,
 };
+
+/// Whether two scalars of one layout hold the same bytes.
+fn scalarBytesEqual(lhs: []const u8, rhs: []const u8) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
+}
 
 /// Borrow the UTF-8 bytes represented by a Roc string value.
 pub fn readRocStr(val: Value) []const u8 {
@@ -1237,7 +1251,9 @@ pub const BoxyRuntime = struct {
                 existing.field_names.len == 0 and
                 existing.inspect_method == null and
                 existing.eq_method == null and
+                !existing.eq_rejected and
                 existing.hash_method == null and
+                !existing.hash_rejected and
                 !existing.is_bool and
                 !existing.inspect_opaque and
                 existing.presence_slot_present_discriminant == null and
@@ -1871,7 +1887,9 @@ pub const BoxyRuntime = struct {
         target.eq_arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.eq_arg_descs, copied);
         // Equality dictionaries are static; runtime copies keep the span.
         target.eq_nested_dicts = source.eq_nested_dicts;
+        target.eq_rejected = source.eq_rejected;
         target.hash_method = source.hash_method;
+        target.hash_rejected = source.hash_rejected;
         target.hash_hidden_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.hash_hidden_descs, copied);
         target.hash_arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.hash_arg_descs, copied);
         target.hash_nested_dicts = source.hash_nested_dicts;
@@ -5560,6 +5578,7 @@ pub const BoxyRuntime = struct {
             if (layout_val.tag == .box_of_zst) return try self.layoutEq(hooks, Value.zst, Value.zst, .zst, desc);
             return try self.layoutEq(hooks, self.boxedPayloadValue(lhs), self.boxedPayloadValue(rhs), layout_val.getIdx(), desc);
         }
+        if (desc.eq_rejected) return hooks.crashCheckedError(rejected_method_message);
         if (desc.eq_method) |method| {
             const result = try hooks.callDescriptorMethod(.equality, method, &.{
                 .{ .value = lhs, .layout = layout_idx, .source_desc = desc },
@@ -5612,7 +5631,7 @@ pub const BoxyRuntime = struct {
                 }
                 const size = self.helper.sizeOf(layout_idx);
                 return switch (layout_val.getScalar().tag) {
-                    .str => std.mem.eql(u8, readRocStr(lhs), readRocStr(rhs)),
+                    .str => builtins.str.strEqual(valueToRocStr(lhs), valueToRocStr(rhs)),
                     .frac => switch (size) {
                         4 => lhs.read(f32) == rhs.read(f32),
                         8 => lhs.read(f64) == rhs.read(f64),
@@ -5622,7 +5641,7 @@ pub const BoxyRuntime = struct {
                             .{ size, @intFromEnum(layout_idx) },
                         ),
                     },
-                    .int, .opaque_ptr, .vector => std.mem.eql(u8, lhs.readBytes(size), rhs.readBytes(size)),
+                    .int, .opaque_ptr, .vector => scalarBytesEqual(lhs.readBytes(size), rhs.readBytes(size)),
                 };
             },
             .record, .tuple => return try self.structEq(hooks, lhs, rhs, layout_idx, desc),
@@ -5874,6 +5893,7 @@ pub const BoxyRuntime = struct {
             if (layout_val.tag == .box_of_zst) return try self.layoutHash(hooks, Value.zst, .zst, desc, hasher);
             return try self.layoutHash(hooks, self.boxedPayloadValue(value), layout_val.getIdx(), desc, hasher);
         }
+        if (desc.hash_rejected) return hooks.crashCheckedError(rejected_method_message);
         if (desc.hash_method) |method| return try self.callHashMethod(hooks, method, value, layout_idx, desc, hasher);
         if (layout_val.tag == .erased_box) {
             // Erased storage: the boxed allocation's descriptor describes the value.

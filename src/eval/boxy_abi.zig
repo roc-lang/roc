@@ -698,6 +698,12 @@ const AbiHooks = struct {
         };
     }
 
+    /// Crash at code checking rejected and already reported.
+    pub fn crashCheckedError(_: AbiHooks, message: []const u8) Error {
+        builtins.dev_wrappers.roc_builtins_checked_error_crashed(message.ptr, message.len);
+        unreachable;
+    }
+
     /// Call the `kind` method slot the first argument's descriptor carries
     /// with the borrowed `args`.
     pub fn callDescriptorMethod(
