@@ -909,7 +909,7 @@ pub const WasmOpcode = enum(u16) {
     F64x2_Convert_Low_I32x4_U = 0xFDFF,
 
     pub fn toOpcode(wasm: WasmOpcode) Opcode {
-        const opcode_int = @intFromEnum(wasm);
+        const opcode_int = @backingInt(wasm);
         var opcode: Opcode = undefined;
         if (opcode_int < ConversionTables.wasmOpcodeToOpcodeTable.len) {
             opcode = ConversionTables.wasmOpcodeToOpcodeTable[opcode_int];

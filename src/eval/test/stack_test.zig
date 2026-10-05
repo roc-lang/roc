@@ -53,7 +53,7 @@ test "Stack.alloca with alignment" {
             const start_used = stack.used;
             const allocation_size: u32 = 32; // Use a consistent size for testing
 
-            const aligned_ptr = try stack.alloca(allocation_size, @enumFromInt(std.math.log2_int(u32, alignment)));
+            const aligned_ptr = try stack.alloca(allocation_size, @fromBackingInt(@intCast(std.math.log2_int(u32, alignment))));
 
             // Verify the pointer is properly aligned
             try std.testing.expectEqual(@as(usize, 0), @intFromPtr(aligned_ptr) % alignment);
@@ -76,7 +76,7 @@ test "Stack.alloca with alignment" {
         _ = try stack.alloca(3, .@"1");
 
         const before_used = stack.used;
-        const ptr = try stack.alloca(alignment * 2, @enumFromInt(std.math.log2_int(u32, alignment)));
+        const ptr = try stack.alloca(alignment * 2, @fromBackingInt(@intCast(std.math.log2_int(u32, alignment))));
 
         // Verify alignment
         try std.testing.expectEqual(@as(usize, 0), @intFromPtr(ptr) % alignment);

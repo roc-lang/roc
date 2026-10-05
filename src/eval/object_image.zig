@@ -25,7 +25,7 @@ pub fn load(gpa: Allocator, object_bytes: []const u8) LoadError!Image {
 
 fn resolveHostSymbol(_: ?*anyopaque, name: []const u8) ?usize {
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
-    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_abi.nativeFnTable()[@intFromEnum(boxy_fn)];
+    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_abi.nativeFnTable()[@backingInt(boxy_fn)];
     return builtins.native_runtime_libcalls.resolve(name);
 }
 

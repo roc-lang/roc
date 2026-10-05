@@ -32,9 +32,9 @@ test "check - repro - issue 11938 - undeclared local annotation becomes a runtim
     var found_users = false;
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (test_env.module_env.store.nodes.get(node_idx).tag != .statement_decl) continue;
-        const stmt = test_env.module_env.store.getStatement(@enumFromInt(raw_node_idx)).s_decl;
+        const stmt = test_env.module_env.store.getStatement(@fromBackingInt(@intCast(raw_node_idx))).s_decl;
         const pattern = test_env.module_env.store.getPattern(stmt.pattern);
         if (pattern != .assign or !std.mem.eql(u8, test_env.module_env.getIdent(pattern.assign.ident), "users")) continue;
         found_users = true;
@@ -60,14 +60,14 @@ test "check - mismatched reassignment becomes a runtime error statement" {
     var repeated_diagnostic_count: usize = 0;
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const node = test_env.module_env.store.nodes.get(node_idx);
         if (node.tag != .malformed) continue;
         const diagnostic = node.getPayload().malformed.diagnostic;
         var same_diagnostic_count: usize = 0;
         var other_raw_node_idx: u32 = 0;
         while (other_raw_node_idx < test_env.module_env.store.nodes.len()) : (other_raw_node_idx += 1) {
-            const other_node = test_env.module_env.store.nodes.get(@enumFromInt(other_raw_node_idx));
+            const other_node = test_env.module_env.store.nodes.get(@fromBackingInt(@intCast(other_raw_node_idx)));
             if (other_node.tag == .malformed and other_node.getPayload().malformed.diagnostic == diagnostic) {
                 same_diagnostic_count += 1;
             }
@@ -103,11 +103,11 @@ test "check - repro - issue 10365 - erroneous captured lambda poisons closure ow
 
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const node = test_env.checker.cir.store.nodes.get(node_idx);
         if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_")) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const expr = test_env.checker.cir.store.getExpr(expr_idx);
         if (expr == .e_closure) {
             try std.testing.expect(test_env.checker.cir.store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
@@ -1243,7 +1243,7 @@ test "check - repro - issue 11398 - annotated lambda return mismatch points at t
 
     const problem = test_env.checker.problems.problems.items[0];
     const actual_var = problem.type_mismatch.types.actual_var;
-    const region = test_env.checker.regions.get(@enumFromInt(@intFromEnum(actual_var))).*;
+    const region = test_env.checker.regions.get(@fromBackingInt(@intCast(@backingInt(actual_var)))).*;
     try std.testing.expectEqualStrings("{}", test_env.module_env.getSource(region));
 }
 
@@ -1255,7 +1255,7 @@ fn expectOneMismatchAt(src: []const u8, expected_region_text: []const u8) TestEn
 
     const problem = test_env.checker.problems.problems.items[0];
     const actual_var = problem.type_mismatch.types.actual_var;
-    const region = test_env.checker.regions.get(@enumFromInt(@intFromEnum(actual_var))).*;
+    const region = test_env.checker.regions.get(@fromBackingInt(@intCast(@backingInt(actual_var)))).*;
     try std.testing.expectEqualStrings(expected_region_text, test_env.module_env.getSource(region));
 }
 

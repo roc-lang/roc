@@ -359,7 +359,7 @@ pub fn reset(self: *TypeWriter) void {
 /// across an unbounded number of nested renders never carries a pointer that
 /// growth of the store could invalidate.
 fn varAt(self: *const TypeWriter, range: Var.SafeList.Range, idx: u32) Var {
-    return self.types.vars.get(@enumFromInt(@intFromEnum(range.start) + idx)).*;
+    return self.types.vars.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx))).*;
 }
 
 /// Empty a map without paying for its capacity when it is already empty.
@@ -635,7 +635,7 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
 /// either finish it outright (returning true) or push the frame that will
 /// render its children (returning false).
 fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
-    if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
+    if (@backingInt(var_) >= self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
         return true;
@@ -643,7 +643,7 @@ fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeCon
 
     const resolved = self.types.resolveVar(var_);
 
-    if (@intFromEnum(resolved.var_) >= self.types.slots.backing.len()) {
+    if (@backingInt(resolved.var_) >= self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
         return true;
@@ -882,7 +882,7 @@ fn startTagUnion(
     row_var: Var,
 ) error{ OutOfMemory, WriteFailed }!bool {
     // Bounds check the tags range before iterating
-    const tags_start_idx = @intFromEnum(tag_union.tags.start);
+    const tags_start_idx = @backingInt(tag_union.tags.start);
     const tags_len = self.types.tags.len();
     if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
         try writer.writeAll("[Error]");
@@ -1365,7 +1365,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
     const resolved_var = self.types.resolveVar(var_).var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
-    if (@intFromEnum(resolved_var) >= self.types.slots.backing.len()) {
+    if (@backingInt(resolved_var) >= self.types.slots.backing.len()) {
         try writer.writeAll("_");
         try self.generateContextualName(writer, context);
         return;
@@ -1465,7 +1465,7 @@ fn countAllOccurrences(self: *TypeWriter, root_var: Var) std.mem.Allocator.Error
 /// outright (returning true) or push the frame that will visit its children
 /// (returning false).
 fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!bool {
-    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return true;
+    if (@backingInt(current_var) >= self.types.slots.backing.len()) return true;
 
     const resolved = self.types.resolveVar(current_var);
 
@@ -1563,7 +1563,7 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
         },
         .tag_union => |tag_union| {
             // Bounds check the tags range before iterating
-            const tags_start_idx = @intFromEnum(tag_union.tags.start);
+            const tags_start_idx = @backingInt(tag_union.tags.start);
             const tags_len = self.types.tags.len();
             if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
                 // Tags range is out of bounds - skip counting in corrupted data

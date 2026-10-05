@@ -255,7 +255,7 @@ fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     // Allocator alignment is a base-2 exponent. Compute it directly so x86
     // baseline builds use BSR, without LLVM's REP-prefixed BSF encoding.
     std.debug.assert(std.math.isPowerOfTwo(byte_alignment));
-    const raw_alignment: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, byte_alignment));
+    const raw_alignment: std.mem.Alignment = @fromBackingInt(@intCast(std.math.log2_int(usize, byte_alignment)));
     const raw = heap.rawAlloc(raw_len, raw_alignment, @returnAddress()) orelse outOfMemory();
     const user = raw + prefix;
     storeAllocationHeader(user, prefix, raw_len, raw_alignment);
@@ -266,7 +266,7 @@ fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c)
     const old_user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(old_user, 0);
     const old_raw_len = allocationHeaderValue(old_user, 1);
-    const raw_alignment: std.mem.Alignment = @enumFromInt(allocationHeaderValue(old_user, 2));
+    const raw_alignment: std.mem.Alignment = @fromBackingInt(@intCast(allocationHeaderValue(old_user, 2)));
     const new_raw_len = prefix + new_length;
     const old_raw = (old_user - prefix)[0..old_raw_len];
     if (heap.rawResize(old_raw, raw_alignment, new_raw_len, @returnAddress())) {
@@ -289,7 +289,7 @@ fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
     const user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(user, 0);
     const raw_len = allocationHeaderValue(user, 1);
-    const raw_alignment: std.mem.Alignment = @enumFromInt(allocationHeaderValue(user, 2));
+    const raw_alignment: std.mem.Alignment = @fromBackingInt(@intCast(allocationHeaderValue(user, 2)));
     heap.rawFree((user - prefix)[0..raw_len], raw_alignment, @returnAddress());
 }
 
@@ -342,7 +342,7 @@ fn signalHandler(sig: linux.SIG, _: *const linux.siginfo_t, ctx: ?*anyopaque) ca
         writeLiteral(stderr_fd, "Roc application overflowed its stack memory\n\n");
     } else {
         writeLiteral(stderr_fd, "Roc process terminated by signal ");
-        writeUnsigned(stderr_fd, @intFromEnum(sig));
+        writeUnsigned(stderr_fd, @backingInt(sig));
         writeLiteral(stderr_fd, "\n\n");
     }
 
@@ -625,7 +625,7 @@ fn lookupBacktraceEntry(ip: usize) ?BacktraceEntry {
 fn storeAllocationHeader(user: [*]u8, prefix: usize, raw_len: usize, raw_alignment: std.mem.Alignment) void {
     allocationHeaderPtr(user, 0).* = prefix;
     allocationHeaderPtr(user, 1).* = raw_len;
-    allocationHeaderPtr(user, 2).* = @intFromEnum(raw_alignment);
+    allocationHeaderPtr(user, 2).* = @backingInt(raw_alignment);
 }
 
 fn allocationHeaderValue(user: [*]u8, index: usize) usize {

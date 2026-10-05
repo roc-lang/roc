@@ -27,7 +27,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
     var stack = std.ArrayList(ReachTask).empty;
     defer stack.deinit(allocator);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (store.getProcSpec(proc_id).body != null) try stack.append(allocator, .{ .proc = proc_id });
     }
 
@@ -36,7 +36,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
     var retained_list_sets: usize = 0;
     while (stack.pop()) |task| switch (task) {
         .proc => |proc_id| {
-            const index = @intFromEnum(proc_id);
+            const index = @backingInt(proc_id);
             if (seen_procs[index]) continue;
             seen_procs[index] = true;
             saw_root = true;
@@ -45,7 +45,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
             }
         },
         .stmt => |stmt_id| {
-            const index = @intFromEnum(stmt_id);
+            const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
             switch (store.getCFStmt(stmt_id)) {

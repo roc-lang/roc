@@ -42,7 +42,7 @@ pub const Table = struct {
     /// has one scope.
     pub fn intern(self: *Table, allocator: std.mem.Allocator, name: []const u8, scope_: Scope) std.mem.Allocator.Error!Id {
         const id = try self.internEmitted(allocator, name);
-        const declared = &self.scopes.items[@intFromEnum(id)];
+        const declared = &self.scopes.items[@backingInt(id)];
         if (declared.*) |existing| {
             if (existing != scope_) std.debug.panic("symbol {s} was declared with two scopes", .{name});
         } else {
@@ -64,7 +64,7 @@ pub const Table = struct {
         const entry = try self.indices.getOrPut(allocator, name);
         if (!entry.found_existing) {
             errdefer _ = self.indices.remove(name);
-            const id: Id = @enumFromInt(self.names.items.len);
+            const id: Id = @fromBackingInt(@intCast(self.names.items.len));
             try self.names.ensureUnusedCapacity(allocator, 1);
             try self.scopes.ensureUnusedCapacity(allocator, 1);
             self.names.appendAssumeCapacity(name);
@@ -76,8 +76,8 @@ pub const Table = struct {
 
     /// The scope generated code declared for `id`.
     pub fn scope(self: *const Table, id: Id) Scope {
-        return self.scopes.items[@intFromEnum(id)] orelse
-            std.debug.panic("generated code refers to {s} without declaring its scope", .{self.names.items[@intFromEnum(id)]});
+        return self.scopes.items[@backingInt(id)] orelse
+            std.debug.panic("generated code refers to {s} without declaring its scope", .{self.names.items[@backingInt(id)]});
     }
 
     pub fn clearRetainingCapacity(self: *Table) void {
@@ -109,5 +109,5 @@ fn exerciseTable(allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
     std.debug.assert(try table.internEmitted(allocator, "first") == first);
     table.clearRetainingCapacity();
     std.debug.assert(table.names.items.len == 0 and table.required_definitions.items.len == 0);
-    std.debug.assert(@intFromEnum(try table.internEmitted(allocator, "after_reset")) == 0);
+    std.debug.assert(@backingInt(try table.internEmitted(allocator, "after_reset")) == 0);
 }

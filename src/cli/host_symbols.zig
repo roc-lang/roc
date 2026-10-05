@@ -183,9 +183,9 @@ fn collectObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
     }
     if (bytes.len >= 2) {
         const machine = std.mem.readInt(u16, bytes[0..2], .little);
-        if (machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.AMD64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.ARM64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.I386))
+        if (machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.AMD64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.ARM64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.I386))
         {
             return collectCoffObject(bytes, sink);
         }
@@ -231,7 +231,7 @@ fn collectElfObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
             // Only DEFAULT or PROTECTED visibility symbols are exported from a
             // shared object; HIDDEN/INTERNAL are the host's internals.
             const visibility: u3 = @intCast(sym.st_other & 0x3);
-            if (visibility != @intFromEnum(elf.STV.DEFAULT) and visibility != @intFromEnum(elf.STV.PROTECTED)) continue;
+            if (visibility != @backingInt(elf.STV.DEFAULT) and visibility != @backingInt(elf.STV.PROTECTED)) continue;
             const name_off: usize = sym.st_name;
             if (name_off >= strtab.len) continue;
             const name = std.mem.sliceTo(strtab[name_off..], 0);
@@ -361,9 +361,9 @@ fn scanObject(bytes: []const u8, remaining: *std.StringHashMap(void)) bool {
     }
     if (bytes.len >= 2) {
         const machine = std.mem.readInt(u16, bytes[0..2], .little);
-        if (machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.AMD64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.ARM64) or
-            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.I386))
+        if (machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.AMD64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.ARM64) or
+            machine == @backingInt(std.coff.IMAGE.FILE.MACHINE.I386))
         {
             return scanCoffObject(bytes, remaining);
         }

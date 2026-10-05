@@ -43,7 +43,7 @@ pub const Plan = struct {
 
     pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
         if (self.kinds.len == 0) return .none;
-        const index = @intFromEnum(fn_id);
+        const index = @backingInt(fn_id);
         if (index >= self.kinds.len) {
             Common.invariant("inline plan did not contain a lifted function");
         }
@@ -65,7 +65,7 @@ pub const Plan = struct {
     pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
         if (self.inline_bodies.len == 0) return null;
 
-        const index = @intFromEnum(fn_id);
+        const index = @backingInt(fn_id);
         if (index >= self.inline_bodies.len) {
             Common.invariant("inline plan did not contain a lifted function");
         }
@@ -175,7 +175,7 @@ const InlineAnalyzer = struct {
         defer analyzer.stack.deinit(allocator);
 
         for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             _ = try analyzer.inlineBody(fn_id);
         }
 
@@ -183,7 +183,7 @@ const InlineAnalyzer = struct {
         defer allocator.free(materialization_states);
         @memset(materialization_states, .unknown);
         for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
 
@@ -280,7 +280,7 @@ const InlineAnalyzer = struct {
 
     fn solvedCapturesForFn(self: *const InlineAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
         const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
-        const fn_content = self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)]);
+        const fn_content = self.solved.types.rootContent(self.solved.fn_tys.items[@backingInt(fn_id)]);
         if (fn_content != .func) Common.invariant("direct Lambda Mono function table contains a non-function type");
         const callable_content = self.solved.types.rootContent(fn_content.func.callable);
         const callable = if (callable_content == .lambda_set)
@@ -337,7 +337,7 @@ const InlineAnalyzer = struct {
     }
 
     fn enterInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!Entered {
-        const index = @intFromEnum(fn_id);
+        const index = @backingInt(fn_id);
         switch (self.decisions[index]) {
             .unknown => {},
             .visiting => {
@@ -375,7 +375,7 @@ const InlineAnalyzer = struct {
     }
 
     fn finishVisit(self: *InlineAnalyzer, visit: Visit, closed: bool) ?Lifted.ExprId {
-        const index = @intFromEnum(visit.fn_id);
+        const index = @backingInt(visit.fn_id);
         defer self.leaveInlineBody(visit.fn_id);
         if (!closed) {
             self.decisions[index] = .never;
@@ -527,7 +527,7 @@ const InlineAnalyzer = struct {
             const frame = frames.items[frames.items.len - 1];
             switch (frame) {
                 .resolve => |fn_id| {
-                    const index = @intFromEnum(fn_id);
+                    const index = @backingInt(fn_id);
                     if (result) |once| {
                         if (!once) self.decisions[index] = .never;
                         states[index] = .once;
@@ -570,7 +570,7 @@ const InlineAnalyzer = struct {
                     try frames.append(self.allocator, .{ .body_once = owner });
                 },
                 .body_once => |fn_id| {
-                    const index = @intFromEnum(fn_id);
+                    const index = @backingInt(fn_id);
                     if (result) |once| {
                         states[index] = if (once) .once else .multiple;
                         _ = frames.pop();
@@ -911,7 +911,7 @@ const InlineAnalyzer = struct {
         }
         const start = cycle_start orelse Common.invariant("inline cycle did not refer to a visiting function");
         for (self.stack.items[start..]) |fn_id| {
-            self.decisions[@intFromEnum(fn_id)] = .never;
+            self.decisions[@backingInt(fn_id)] = .never;
         }
     }
 };

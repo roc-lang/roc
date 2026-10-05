@@ -541,8 +541,8 @@ export fn bb_module_instance_mem_grow_absolute(module: ?*ModuleInstance, total_p
 
 export fn bb_module_instance_find_global(module: ?*ModuleInstance, c_global_name: ?[*:0]const u8) CGlobalExport {
     comptime {
-        std.debug.assert(@intFromEnum(CGlobalMut.Immutable) == @intFromEnum(core.GlobalMut.Immutable));
-        std.debug.assert(@intFromEnum(CGlobalMut.Mutable) == @intFromEnum(core.GlobalMut.Mutable));
+        std.debug.assert(@backingInt(CGlobalMut.Immutable) == @backingInt(core.GlobalMut.Immutable));
+        std.debug.assert(@backingInt(CGlobalMut.Mutable) == @backingInt(core.GlobalMut.Mutable));
     }
 
     if (module != null and c_global_name != null) {
@@ -551,7 +551,7 @@ export fn bb_module_instance_find_global(module: ?*ModuleInstance, c_global_name
             return CGlobalExport{
                 .value = global.val,
                 .type = global.valtype,
-                .mut = @as(CGlobalMut, @enumFromInt(@intFromEnum(global.mut))),
+                .mut = @as(CGlobalMut, @fromBackingInt(@intCast(@backingInt(global.mut)))),
             };
         } else |_| {}
     }

@@ -17,7 +17,7 @@ pub const ErrorCode = enum(i32) {
     request_cancelled = -32800,
 
     pub fn jsonStringify(self: ErrorCode, writer: anytype) error{WriteFailed}!void {
-        try writer.write(@intFromEnum(self));
+        try writer.write(@backingInt(self));
     }
 };
 

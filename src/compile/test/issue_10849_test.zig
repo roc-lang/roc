@@ -17,7 +17,7 @@ const Counts = struct {
 
 fn findNamedProc(store: *const lir.LirStore, expected_name: []const u8) ?lir.LIR.LirProcSpecId {
     for (store.getProcSpecs(), 0..) |_, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (std.mem.eql(u8, name, expected_name)) return proc_id;
     }
@@ -45,13 +45,13 @@ fn countReachableOps(
 
     var counts = Counts{};
     while (proc_work.pop()) |proc_id| {
-        const proc_index = @intFromEnum(proc_id);
+        const proc_index = @backingInt(proc_id);
         if (seen_procs[proc_index]) continue;
         seen_procs[proc_index] = true;
         if (store.getProcSpec(proc_id).body) |body| try stmt_work.append(allocator, body);
 
         while (stmt_work.pop()) |stmt_id| {
-            const stmt_index = @intFromEnum(stmt_id);
+            const stmt_index = @backingInt(stmt_id);
             if (seen_stmts[stmt_index]) continue;
             seen_stmts[stmt_index] = true;
 

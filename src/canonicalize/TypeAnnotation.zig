@@ -117,7 +117,7 @@ pub const TypeAnno = union(enum) {
                         try tree.endNode(field_begin, field_attrs);
                     },
                     .external => |external| {
-                        const module_idx_int = @intFromEnum(external.module_idx);
+                        const module_idx_int = @backingInt(external.module_idx);
                         std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
@@ -132,7 +132,7 @@ pub const TypeAnno = union(enum) {
                         }
                     },
                     .pending => |pending| {
-                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        const module_idx_int = @backingInt(pending.module_idx);
                         std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
@@ -199,7 +199,7 @@ pub const TypeAnno = union(enum) {
                         try tree.endNode(field_begin, field_attrs);
                     },
                     .external => |external| {
-                        const module_idx_int = @intFromEnum(external.module_idx);
+                        const module_idx_int = @backingInt(external.module_idx);
                         std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
@@ -214,7 +214,7 @@ pub const TypeAnno = union(enum) {
                         }
                     },
                     .pending => |pending| {
-                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        const module_idx_int = @backingInt(pending.module_idx);
                         std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);

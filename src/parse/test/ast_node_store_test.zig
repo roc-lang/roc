@@ -22,7 +22,7 @@ fn rand_idx(random: std.Random, comptime T: type) T {
     }
 
     if (@typeInfo(T) != .@"enum") @compileError("rand_idx needs an explicit constructor for this index type");
-    return @enumFromInt(random.int(u32));
+    return @fromBackingInt(@intCast(random.int(u32)));
 }
 
 /// Generate a random token index.
@@ -76,9 +76,9 @@ test "NodeStore round trip - Headers" {
     try headers.append(gpa, AST.Header{
         .app = .{
             .packages = rand_idx(random, AST.Collection.Idx),
-            .platform_idx = @enumFromInt(11),
+            .platform_idx = @fromBackingInt(@intCast(11)),
             .provides = rand_idx(random, AST.Collection.Idx),
-            .roc_version = @enumFromInt(7),
+            .roc_version = @fromBackingInt(@intCast(7)),
             .region = rand_region(random),
         },
     });
@@ -105,7 +105,7 @@ test "NodeStore round trip - Headers" {
         .package = .{
             .exposes = rand_idx(random, AST.Collection.Idx),
             .packages = rand_idx(random, AST.Collection.Idx),
-            .platform_idx = @enumFromInt(9),
+            .platform_idx = @fromBackingInt(@intCast(9)),
             .roc_version = null,
             .region = rand_region(random),
         },
@@ -120,7 +120,7 @@ test "NodeStore round trip - Headers" {
             .hosted = .{ .span = rand_span(random), .layout = .expanded },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
-            .roc_version = @enumFromInt(3),
+            .roc_version = @fromBackingInt(@intCast(3)),
             .region = rand_region(random),
         },
     });
@@ -371,15 +371,15 @@ test "NodeStore round trip - Statement type annotation full-width where index" {
     const statements = [_]AST.Statement{
         .{ .type_anno = .{
             .name = 1,
-            .anno = @enumFromInt(2),
-            .where = @enumFromInt(0x80000000),
+            .anno = @fromBackingInt(@intCast(2)),
+            .where = @fromBackingInt(@intCast(0x80000000)),
             .is_var = false,
             .region = .{ .start = 3, .end = 4 },
         } },
         .{ .type_anno = .{
             .name = 5,
-            .anno = @enumFromInt(6),
-            .where = @enumFromInt(0xffffffff),
+            .anno = @fromBackingInt(@intCast(6)),
+            .where = @fromBackingInt(@intCast(0xffffffff)),
             .is_var = true,
             .region = .{ .start = 7, .end = 8 },
         } },
@@ -399,22 +399,22 @@ test "NodeStore round trip - Statement type declaration optional data starts at 
     const zero_collection_idx: u32 = 0; // Collection.Idx 0 is a valid value and must round-trip.
     const statements = [_]AST.Statement{
         .{ .type_decl = .{
-            .anno = @enumFromInt(1),
-            .header = @enumFromInt(2),
+            .anno = @fromBackingInt(@intCast(1)),
+            .header = @fromBackingInt(@intCast(2)),
             .kind = .nominal,
             .region = .{ .start = 3, .end = 4 },
-            .where = @enumFromInt(zero_collection_idx),
+            .where = @fromBackingInt(@intCast(zero_collection_idx)),
             .associated = null,
         } },
         .{ .type_decl = .{
-            .anno = @enumFromInt(5),
-            .header = @enumFromInt(6),
+            .anno = @fromBackingInt(@intCast(5)),
+            .header = @fromBackingInt(@intCast(6)),
             .kind = .nominal,
             .region = .{ .start = 7, .end = 8 },
             .where = null,
             .associated = .{
                 .statements = .{ .span = .{ .start = 9, .len = 10 } },
-                .scope = @enumFromInt(11),
+                .scope = @fromBackingInt(@intCast(11)),
                 .region = .{ .start = 12, .end = 13 },
             },
         } },
@@ -1023,7 +1023,7 @@ test "NodeStore preserves flat field-access paths" {
     );
 
     try testing.expectEqual(required, mixed);
-    const mixed_node = store.nodes.get(@enumFromInt(@intFromEnum(mixed)));
+    const mixed_node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(mixed))));
     try testing.expectEqual(.field_access, mixed_node.tag);
 
     const access = store.getExpr(mixed).field_access;
@@ -1171,11 +1171,11 @@ test "NodeStore rejects optional index sentinel overflow in release builds" {
     var store = try NodeStore.initCapacity(gpa, 16);
     defer store.deinit();
 
-    const max_expr: AST.Expr.Idx = @enumFromInt(std.math.maxInt(u32));
+    const max_expr: AST.Expr.Idx = @fromBackingInt(@intCast(std.math.maxInt(u32)));
     try testing.expectError(error.OutOfMemory, store.addMatchBranch(.{
-        .pattern = @enumFromInt(1),
+        .pattern = @fromBackingInt(@intCast(1)),
         .guard = max_expr,
-        .body = @enumFromInt(1),
+        .body = @fromBackingInt(@intCast(1)),
         .region = .{ .start = 0, .end = 0 },
     }));
 }
@@ -1188,7 +1188,7 @@ test "NodeStore round trip - expression record field value states" {
     const fields = [_]AST.RecordField{
         .{
             .name = 1,
-            .value = .{ .supplied = @enumFromInt(2) },
+            .value = .{ .supplied = @fromBackingInt(@intCast(2)) },
             .region = .{ .start = 1, .end = 3 },
         },
         .{
@@ -1218,19 +1218,19 @@ test "NodeStore round trip - annotation record field optional marker" {
         .{
             .name = 1,
             .optional_mark = null,
-            .ty = @enumFromInt(2),
+            .ty = @fromBackingInt(@intCast(2)),
             .region = .{ .start = 1, .end = 3 },
         },
         .{
             .name = 4,
             .optional_mark = 0,
-            .ty = @enumFromInt(5),
+            .ty = @fromBackingInt(@intCast(5)),
             .region = .{ .start = 4, .end = 7 },
         },
         .{
             .name = std.math.maxInt(u32),
             .optional_mark = std.math.maxInt(u32) - 1,
-            .ty = @enumFromInt(std.math.maxInt(u32)),
+            .ty = @fromBackingInt(@intCast(std.math.maxInt(u32))),
             .region = .{ .start = std.math.maxInt(u32) - 1, .end = std.math.maxInt(u32) },
         },
     };
@@ -1249,7 +1249,7 @@ test "NodeStore rejects optional annotation field marker sentinel overflow" {
     try testing.expectError(error.OutOfMemory, store.addAnnoRecordField(.{
         .name = 1,
         .optional_mark = std.math.maxInt(u32),
-        .ty = @enumFromInt(2),
+        .ty = @fromBackingInt(@intCast(2)),
         .region = .{ .start = 0, .end = 1 },
     }));
 }
@@ -1265,9 +1265,9 @@ test "NodeStore rejects unaddressable extra data reservations in release builds"
 
     try testing.expectError(error.OutOfMemory, store.addHeader(.{
         .platform = .{
-            .exposes = @enumFromInt(1),
+            .exposes = @fromBackingInt(@intCast(1)),
             .name = 0,
-            .packages = @enumFromInt(1),
+            .packages = @fromBackingInt(@intCast(1)),
             .provides = .{ .span = .{ .start = 0, .len = 0 } },
             .hosted = .{ .span = .{ .start = 0, .len = 0 } },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },

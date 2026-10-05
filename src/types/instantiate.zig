@@ -600,7 +600,7 @@ pub const Instantiator = struct {
                     arg_span.dropFirstElem();
                     var i: u32 = 0;
                     while (i < arg_span.count) : (i += 1) {
-                        try self.visitReachChild(parent, self.store.vars.items.items[@intFromEnum(arg_span.start) + i]);
+                        try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(arg_span.start) + i]);
                     }
                     try self.visitReachChild(parent, self.store.getAliasBackingVar(alias));
                 },
@@ -620,7 +620,7 @@ pub const Instantiator = struct {
                     .tag_union => |tag_union| {
                         var i: u32 = 0;
                         while (i < tag_union.tags.count) : (i += 1) {
-                            const tag = self.store.tags.get(@enumFromInt(@intFromEnum(tag_union.tags.start) + i));
+                            const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(tag_union.tags.start) + i)));
                             try self.visitReachVars(parent, tag.args);
                         }
                         try self.visitReachChild(parent, tag_union.ext);
@@ -651,14 +651,14 @@ pub const Instantiator = struct {
     fn visitReachVars(self: *Self, parent: Var, vars: Var.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < vars.count) : (i += 1) {
-            try self.visitReachChild(parent, self.store.vars.items.items[@intFromEnum(vars.start) + i]);
+            try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(vars.start) + i]);
         }
     }
 
     fn visitReachFields(self: *Self, parent: Var, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < fields.count) : (i += 1) {
-            const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(fields.start) + i));
+            const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(fields.start) + i)));
             try self.visitReachChild(parent, field.presence.typeVar());
             if (field.presence.presenceVar()) |presence_var| {
                 try self.visitReachChild(parent, presence_var);
@@ -669,7 +669,7 @@ pub const Instantiator = struct {
     fn visitReachConstraints(self: *Self, parent: Var, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
             if (constraint.interpolation.isPresent()) {
                 const metadata = constraint.interpolation;
@@ -801,7 +801,7 @@ pub const Instantiator = struct {
         const allocator = self.store.gpa;
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = polarity, .reach = .nested });
             if (constraint.interpolation.isPresent()) {
                 const metadata = constraint.interpolation;
@@ -1063,7 +1063,7 @@ pub const Instantiator = struct {
                         .rigid => .rigid,
                     },
                     .name = rigid.name,
-                    .cons_start = @intFromEnum(rigid.constraints.start),
+                    .cons_start = @backingInt(rigid.constraints.start),
                     .cons_len = @intCast(rigid.constraints.len()),
                     .cons_base = @intCast(machine.pending_constraints.items.len),
                 } });
@@ -1089,7 +1089,7 @@ pub const Instantiator = struct {
                     },
                     .result = .flex,
                     .name = flex.name,
-                    .cons_start = @intFromEnum(flex.constraints.start),
+                    .cons_start = @backingInt(flex.constraints.start),
                     .cons_len = @intCast(flex.constraints.len()),
                     .cons_base = @intCast(machine.pending_constraints.items.len),
                 } });
@@ -1107,7 +1107,7 @@ pub const Instantiator = struct {
                         .flags = flags,
                     },
                     .alias = alias,
-                    .args_start = @intFromEnum(arg_span.start),
+                    .args_start = @backingInt(arg_span.start),
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
                     .saved_reach = self.current_reach,
@@ -1145,7 +1145,7 @@ pub const Instantiator = struct {
                                 .fresh_var = fresh_var,
                                 .flags = flags,
                             },
-                            .elems_start = @intFromEnum(tuple.elems.start),
+                            .elems_start = @backingInt(tuple.elems.start),
                             .elems_count = tuple.elems.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
                         } });
@@ -1164,7 +1164,7 @@ pub const Instantiator = struct {
                                 .flags = flags,
                             },
                             .nominal = nominal,
-                            .args_start = @intFromEnum(arg_span.start),
+                            .args_start = @backingInt(arg_span.start),
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_reach = self.current_reach,
@@ -1469,7 +1469,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
-                const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
+                const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
                 // Each function establishes its own input position. No
                 // position inside a function is adapter-reachable: the adapter
                 // re-tags the result it is generated for, never a row inside a
@@ -1487,7 +1487,7 @@ pub const Instantiator = struct {
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
-                const dep_var = self.store.vars.items.items[@intFromEnum(frame.func.effect_deps.start) + (arrived - args_count - 1)];
+                const dep_var = self.store.vars.items.items[@backingInt(frame.func.effect_deps.start) + (arrived - args_count - 1)];
                 self.current_polarity = frame.saved_polarity;
                 self.current_reach = .nested;
                 if (!try self.requestVar(dep_var, false)) return false;
@@ -1526,7 +1526,7 @@ pub const Instantiator = struct {
                         // Indexing through the run's start only happens when
                         // the record has fields; start may be undefined when
                         // count is 0.
-                        const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + frame.field_idx));
+                        const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(frame.source_fields.start) + frame.field_idx)));
                         const child_var = switch (frame.field_axis) {
                             .type_var => blk: {
                                 if (field.presence.presenceVar() != null) {
@@ -1577,7 +1577,7 @@ pub const Instantiator = struct {
         for (0..source_fields.count) |i| {
             // The loop body runs only for a non-empty run, so reading the
             // run's start here never reads an empty range's undefined start.
-            const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + i));
+            const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + i)));
             const fresh_type_var = machine.value_stack.items[vars_idx];
             vars_idx += 1;
             const fresh_presence = if (field.presence.presenceVar()) |_| blk: {
@@ -1619,12 +1619,12 @@ pub const Instantiator = struct {
                     }
                     // Indexing through the run's start only happens when the
                     // union has tags; start may be undefined when count is 0.
-                    const tag = self.store.tags.get(@enumFromInt(@intFromEnum(frame.source_tags.start) + frame.tag_idx));
+                    const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
                         // tag has payloads; start may be undefined when count is 0.
-                        const arg_var = self.store.vars.items.items[@intFromEnum(tag.args.start) + arrived];
+                        const arg_var = self.store.vars.items.items[@backingInt(tag.args.start) + arrived];
                         self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
                         continue;

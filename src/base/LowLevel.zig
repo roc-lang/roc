@@ -644,9 +644,9 @@ pub const LowLevel = enum(u16) {
     /// evaluator share the semantic oracle's operation vocabulary without a
     /// module cycle.
     pub fn simdOpIndex(self: LowLevel) ?u8 {
-        const raw = @intFromEnum(self);
-        const first = @intFromEnum(LowLevel.simd_load_16_unchecked);
-        const last = @intFromEnum(LowLevel.simd_clmul_hi);
+        const raw = @backingInt(self);
+        const first = @backingInt(LowLevel.simd_load_16_unchecked);
+        const last = @backingInt(LowLevel.simd_clmul_hi);
         if (raw < first or raw > last) return null;
         return @intCast(raw - first);
     }

@@ -64,7 +64,7 @@ pub const Nightly = struct {
     pub fn dateOrder(self: Nightly, other: Nightly) std.math.Order {
         const year_order = std.math.order(self.year, other.year);
         if (year_order != .eq) return year_order;
-        const month_order = std.math.order(@intFromEnum(self.month), @intFromEnum(other.month));
+        const month_order = std.math.order(@backingInt(self.month), @backingInt(other.month));
         if (month_order != .eq) return month_order;
         return std.math.order(self.day, other.day);
     }
@@ -170,7 +170,7 @@ fn parseMonth(text: []const u8) ?Month {
 
     const number = parseDigits(u8, text, 1, 2) orelse return null;
     if (number < 1 or number > 12) return null;
-    return @enumFromInt(number);
+    return @fromBackingInt(@intCast(number));
 }
 
 /// Parse `MAJOR.MINOR.PATCH` with an optional `-PRERELEASE` suffix.

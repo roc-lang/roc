@@ -253,7 +253,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
             // mov [rbp-offset], reg for each callee-saved (4-8 bytes each)
             for (CalleeSavedInfo.SLOTS) |slot| {
-                if ((self.callee_saved_mask & (@as(u32, 1) << @intFromEnum(slot.reg))) != 0) {
+                if ((self.callee_saved_mask & (@as(u32, 1) << @backingInt(slot.reg))) != 0) {
                     // MOV [rbp+disp8], reg: 3-4 bytes typically
                     // REX.W + MOV r/m64, r64 + ModR/M + disp8
                     if (slot.offset >= -128 and slot.offset < 128) {
@@ -388,7 +388,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
         fn emitSaveCalleeSavedX86_64(self: *const Self, emit: *EmitType) Allocator.Error!void {
             for (CalleeSavedInfo.SLOTS) |slot| {
-                if ((self.callee_saved_mask & (@as(u32, 1) << @intFromEnum(slot.reg))) != 0) {
+                if ((self.callee_saved_mask & (@as(u32, 1) << @backingInt(slot.reg))) != 0) {
                     try emit.movMemReg(.w64, .RBP, slot.offset, slot.reg);
                 }
             }
@@ -396,7 +396,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
         fn emitRestoreCalleeSavedX86_64(self: *const Self, emit: *EmitType) Allocator.Error!void {
             for (CalleeSavedInfo.SLOTS) |slot| {
-                if ((self.callee_saved_mask & (@as(u32, 1) << @intFromEnum(slot.reg))) != 0) {
+                if ((self.callee_saved_mask & (@as(u32, 1) << @backingInt(slot.reg))) != 0) {
                     try emit.movRegMem(.w64, slot.reg, .RBP, slot.offset);
                 }
             }
@@ -577,8 +577,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         fn isPairUsed(self: *const Self, pair: [2]GeneralReg) bool {
-            const mask1 = @as(u32, 1) << @intFromEnum(pair[0]);
-            const mask2 = @as(u32, 1) << @intFromEnum(pair[1]);
+            const mask1 = @as(u32, 1) << @backingInt(pair[0]);
+            const mask2 = @as(u32, 1) << @backingInt(pair[1]);
             return (self.callee_saved_mask & (mask1 | mask2)) != 0;
         }
 
@@ -1073,8 +1073,8 @@ test "DeferredFrameBuilder with callee-saved mask x86_64" {
 
     var frame = Builder.init();
     // Set mask for RBX (bit 3) and R12 (bit 12)
-    const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-    const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+    const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
+    const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
     frame.setCalleeSavedMask(rbx_bit | r12_bit);
     frame.setStackSize(128);
 
@@ -1140,7 +1140,7 @@ test "DeferredFrameBuilder aarch64 large frame prologue probes and matches emitt
     defer emit.deinit();
 
     var frame = Builder.init();
-    const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+    const x19_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
     frame.setCalleeSavedMask(x19_bit);
     frame.setStackSize(4096);
 
@@ -1160,7 +1160,7 @@ test "DeferredFrameBuilder aarch64 caller stack arg base prologue size matches e
     defer emit.deinit();
 
     var frame = Builder.init();
-    const x28_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X28);
+    const x28_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X28);
     frame.setCalleeSavedMask(x28_bit);
     frame.setStackSize(64);
     frame.setCallerStackArgBaseReg(.X28);
@@ -1183,7 +1183,7 @@ test "DeferredFrameBuilder Windows x86_64 no red zone" {
 
     var frame = Builder.init();
     // Set mask for R12 (Windows callee-saved)
-    const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+    const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
     frame.setCalleeSavedMask(r12_bit);
     frame.setStackSize(64);
 

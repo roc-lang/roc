@@ -54,7 +54,7 @@ pub const ResourceError = Allocator.Error;
 /// Prepare pointer layouts serially; every accepted wrapper returns its box.
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         const proc = store.getProcSpec(proc_id);
         if (proc.body == null or proc.hosted != null or proc.abi != .roc) continue;
         const ret = layouts.getLayout(proc.ret_layout);
@@ -72,7 +72,7 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
         try runProcWithScratch(store, layouts, proc_id, store.allocator, &analysis);
     }
 }
@@ -727,7 +727,7 @@ fn testZst(store: *LirStore, target: LocalId, next: CFStmtId) ResourceError!CFSt
 }
 
 fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
-    const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
+    const id: LIR.JoinPointId = @fromBackingInt(@intCast(next_join_point.*));
     next_join_point.* += 1;
     return id;
 }

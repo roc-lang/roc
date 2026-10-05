@@ -41,19 +41,19 @@ pub fn Schema(comptime Image: type) type {
                     .addend = reloc.addend,
                     .data_symbol = switch (reloc.target) {
                         .named => missing,
-                        .data_symbol => |id| @intFromEnum(id),
+                        .data_symbol => |id| @backingInt(id),
                     },
                     .capture_offset = reloc.callable_capture_offset orelse missing,
-                    .procedure = if (reloc.procedure) |id| @intFromEnum(id) else missing,
-                    .rc_layout = if (reloc.rc_helper) |helper| @intCast(@intFromEnum(helper.layout_idx)) else missing,
-                    .rc_op = if (reloc.rc_helper) |helper| @intFromEnum(helper.op) else missing,
+                    .procedure = if (reloc.procedure) |id| @backingInt(id) else missing,
+                    .rc_layout = if (reloc.rc_helper) |helper| @intCast(@backingInt(helper.layout_idx)) else missing,
+                    .rc_op = if (reloc.rc_helper) |helper| @backingInt(helper.op) else missing,
                     .function_pointer = @intFromBool(reloc.kind == .function_pointer),
                 };
                 row.* = .{
                     .name = try Image.copyArrayRef(allocator, base, capacity, item.symbol_name),
                     .bytes = try Image.copyArrayRef(allocator, base, capacity, item.bytes),
                     .relocations = try Image.arrayRef(base, capacity, relocations),
-                    .value_id = if (item.value_id) |id| @intFromEnum(id) else missing,
+                    .value_id = if (item.value_id) |id| @backingInt(id) else missing,
                     .symbol_offset = item.symbol_offset,
                     .alignment = item.alignment,
                     .is_global = @intFromBool(item.is_global),
@@ -84,19 +84,19 @@ pub fn Schema(comptime Image: type) type {
                 const relocs = try Image.sliceFromRef(Relocation, base, size, row.relocations);
                 const name = try Image.sliceFromRef(u8, base, size, row.name);
                 const decoded = try allocator.alloc(Program.StaticDataRelocation, relocs.len);
-                item.* = .{ .symbol_name = name, .bytes = bytes, .value_id = if (row.value_id == missing) null else @enumFromInt(row.value_id), .symbol_offset = row.symbol_offset, .alignment = row.alignment, .is_global = row.is_global != 0, .is_exported = row.is_exported != 0, .relocations = decoded };
+                item.* = .{ .symbol_name = name, .bytes = bytes, .value_id = if (row.value_id == missing) null else @fromBackingInt(@intCast(row.value_id)), .symbol_offset = row.symbol_offset, .alignment = row.alignment, .is_global = row.is_global != 0, .is_exported = row.is_exported != 0, .relocations = decoded };
                 initialized += 1;
                 for (relocs, decoded) |reloc, *out| {
                     if (reloc.offset > bytes.len or pointer_bytes > bytes.len - reloc.offset or reloc.function_pointer > 1 or (reloc.data_symbol != missing and reloc.data_symbol >= rows.len) or (reloc.procedure != missing and reloc.procedure >= proc_count) or ((reloc.rc_layout == missing) != (reloc.rc_op == missing))) return error.InvalidLirImage;
                     if (reloc.rc_layout != missing and (reloc.rc_layout >= layout_count or reloc.rc_layout > std.math.maxInt(@typeInfo(layout.Idx).@"enum".tag_type))) return error.InvalidLirImage;
                     if (reloc.capture_offset != missing and (reloc.capture_offset > bytes.len - reloc.offset or reloc.procedure == missing)) return error.InvalidLirImage;
-                    const rc_op: layout.RcOp = if (reloc.rc_op == missing or reloc.rc_op == @intFromEnum(layout.RcOp.incref))
+                    const rc_op: layout.RcOp = if (reloc.rc_op == missing or reloc.rc_op == @backingInt(layout.RcOp.incref))
                         .incref
-                    else if (reloc.rc_op == @intFromEnum(layout.RcOp.decref))
+                    else if (reloc.rc_op == @backingInt(layout.RcOp.decref))
                         .decref
-                    else if (reloc.rc_op == @intFromEnum(layout.RcOp.free))
+                    else if (reloc.rc_op == @backingInt(layout.RcOp.free))
                         .free
-                    else if (reloc.rc_op == @intFromEnum(layout.RcOp.host_drop))
+                    else if (reloc.rc_op == @backingInt(layout.RcOp.host_drop))
                         .host_drop
                     else
                         return error.InvalidLirImage;
@@ -105,11 +105,11 @@ pub fn Schema(comptime Image: type) type {
                         .offset = reloc.offset,
                         .addend = reloc.addend,
                         .target_symbol_name = try Image.sliceFromRef(u8, base, size, reloc.name),
-                        .target = if (reloc.data_symbol == missing) .named else .{ .data_symbol = @enumFromInt(reloc.data_symbol) },
+                        .target = if (reloc.data_symbol == missing) .named else .{ .data_symbol = @fromBackingInt(@intCast(reloc.data_symbol)) },
                         .kind = if (reloc.function_pointer != 0) .function_pointer else .address,
                         .callable_capture_offset = if (reloc.capture_offset == missing) null else reloc.capture_offset,
-                        .procedure = if (reloc.procedure == missing) null else @enumFromInt(reloc.procedure),
-                        .rc_helper = if (reloc.rc_layout == missing) null else .{ .op = rc_op, .layout_idx = @enumFromInt(reloc.rc_layout) },
+                        .procedure = if (reloc.procedure == missing) null else @fromBackingInt(@intCast(reloc.procedure)),
+                        .rc_helper = if (reloc.rc_layout == missing) null else .{ .op = rc_op, .layout_idx = @fromBackingInt(@intCast(reloc.rc_layout)) },
                     };
                 }
             }

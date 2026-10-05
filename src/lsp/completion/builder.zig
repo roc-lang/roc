@@ -118,9 +118,9 @@ fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
 fn completionKindForExpr(expr: CIR.Expr) u32 {
     const tag = std.meta.activeTag(expr);
     return if (tag == .e_closure or tag == .e_lambda or tag == .e_hosted_lambda)
-        @intFromEnum(CompletionItemKind.function)
+        @backingInt(CompletionItemKind.function)
     else
-        @intFromEnum(CompletionItemKind.variable);
+        @backingInt(CompletionItemKind.variable);
 }
 
 /// Builder for constructing completion item lists.
@@ -269,7 +269,7 @@ pub const CompletionBuilder = struct {
 
                 _ = try self.addItem(.{
                     .label = name,
-                    .kind = @intFromEnum(CompletionItemKind.module),
+                    .kind = @backingInt(CompletionItemKind.module),
                     .detail = null,
                 });
             }
@@ -291,7 +291,7 @@ pub const CompletionBuilder = struct {
                 if (name.len > 0) {
                     _ = try self.addItem(.{
                         .label = name,
-                        .kind = @intFromEnum(CompletionItemKind.module),
+                        .kind = @backingInt(CompletionItemKind.module),
                         .detail = null,
                     });
                 }
@@ -337,7 +337,7 @@ pub const CompletionBuilder = struct {
         for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
             _ = try self.addItem(.{
                 .label = builtin_name,
-                .kind = @intFromEnum(CompletionItemKind.module),
+                .kind = @backingInt(CompletionItemKind.module),
                 .detail = null,
             });
         }
@@ -379,16 +379,16 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
+                @backingInt(CompletionItemKind.class)
             else
-                @intFromEnum(CompletionItemKind.function);
+                @backingInt(CompletionItemKind.function);
 
             var detail: ?[]const u8 = null;
             var documentation: ?[]const u8 = null;
             if (type_writer) |*tw| {
                 if (module_env.common.getValueNodeIndexById(self.allocator, ident_idx)) |node_idx| {
                     if (module_env.store.isDefNode(node_idx)) {
-                        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+                        const def_idx: CIR.Def.Idx = @fromBackingInt(@intCast(node_idx));
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
                         // Type formatting is best-effort; missing type info is acceptable
@@ -444,9 +444,9 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             const kind: u32 = if (std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
+                @backingInt(CompletionItemKind.class)
             else
-                @intFromEnum(CompletionItemKind.field);
+                @backingInt(CompletionItemKind.field);
 
             if (try self.addItem(.{ .label = label, .kind = kind, .detail = null })) {
                 added_any = true;
@@ -465,9 +465,9 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             const kind: u32 = if (std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
+                @backingInt(CompletionItemKind.class)
             else
-                @intFromEnum(CompletionItemKind.field);
+                @backingInt(CompletionItemKind.field);
 
             if (try self.addItem(.{ .label = label, .kind = kind, .detail = null })) {
                 added_any = true;
@@ -518,7 +518,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = name,
-                .kind = @intFromEnum(CompletionItemKind.class),
+                .kind = @backingInt(CompletionItemKind.class),
                 .detail = null,
                 .documentation = documentation,
             });
@@ -546,7 +546,7 @@ pub const CompletionBuilder = struct {
             if (label.len == 0) continue;
 
             // Determine kind - parameters and local variables
-            const kind: u32 = @intFromEnum(CompletionItemKind.variable);
+            const kind: u32 = @backingInt(CompletionItemKind.variable);
 
             // Get type information for the binding
             var detail: ?[]const u8 = null;
@@ -641,7 +641,7 @@ pub const CompletionBuilder = struct {
                 if (std.mem.findScalar(u8, name, '.') != null) continue;
 
                 // Determine completion kind
-                var kind: u32 = @intFromEnum(CompletionItemKind.variable);
+                var kind: u32 = @backingInt(CompletionItemKind.variable);
                 if (stmt_parts.expr) |expr_idx| {
                     const expr = module_env.store.getSourceExpr(expr_idx);
                     kind = completionKindForExpr(expr);
@@ -824,7 +824,7 @@ pub const CompletionBuilder = struct {
                         const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
                         const added = try self.addItem(.{
                             .label = label,
-                            .kind = @intFromEnum(CompletionItemKind.field),
+                            .kind = @backingInt(CompletionItemKind.field),
                             .detail = detail,
                         });
                         if (added) {} else {}
@@ -998,7 +998,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = field_name,
-                .kind = @intFromEnum(CompletionItemKind.field),
+                .kind = @backingInt(CompletionItemKind.field),
                 .detail = detail,
                 .insertText = insert_text,
             });
@@ -1132,13 +1132,13 @@ pub const CompletionBuilder = struct {
 
             const method_owner_opt: ?MethodOwnerLookup = if (std.meta.activeTag(content) == .alias)
                 if (content.alias.source_decl.toOptional()) |source_decl| .{
-                    .owner = @enumFromInt(source_decl),
+                    .owner = @fromBackingInt(@intCast(source_decl)),
                     .type_name = module_env.getIdentText(content.alias.ident.ident_idx),
                     .builtin_origin = content.alias.source_decl.originIsBuiltin(),
                 } else null
             else if (std.meta.activeTag(content) == .structure and std.meta.activeTag(content.structure) == .nominal_type)
                 if (content.structure.nominal_type.sourceDeclOptional()) |source_decl| .{
-                    .owner = @enumFromInt(source_decl),
+                    .owner = @fromBackingInt(@intCast(source_decl)),
                     .type_name = module_env.getIdentText(content.structure.nominal_type.ident.ident_idx),
                     .builtin_origin = content.structure.nominal_type.originIsBuiltin(),
                 } else null
@@ -1224,7 +1224,7 @@ pub const CompletionBuilder = struct {
 
             const added = try self.addItem(.{
                 .label = method_name,
-                .kind = @intFromEnum(CompletionItemKind.method),
+                .kind = @backingInt(CompletionItemKind.method),
                 .detail = detail,
             });
             if (added) {} else {}
@@ -1310,7 +1310,7 @@ pub const CompletionBuilder = struct {
 
                 const added = try self.addItem(.{
                     .label = method_name,
-                    .kind = @intFromEnum(CompletionItemKind.method),
+                    .kind = @backingInt(CompletionItemKind.method),
                     .detail = detail,
                     .documentation = documentation,
                 });
@@ -1454,7 +1454,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = tag_name,
-                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                .kind = @backingInt(CompletionItemKind.enum_member),
                 .detail = detail,
             });
         }
@@ -1595,7 +1595,7 @@ pub const CompletionBuilder = struct {
 
             _ = try self.addItem(.{
                 .label = tag_name,
-                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                .kind = @backingInt(CompletionItemKind.enum_member),
                 .detail = null,
             });
         }

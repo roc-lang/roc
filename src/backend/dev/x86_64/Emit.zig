@@ -666,20 +666,20 @@ pub fn Emit(comptime target: RocTarget) type {
             greater = 0xF, // G, NLE (signed >)
 
             pub fn invert(self: Condition) Condition {
-                return @enumFromInt(@intFromEnum(self) ^ 1);
+                return @fromBackingInt(@intCast(@backingInt(self) ^ 1));
             }
         };
 
         /// Jcc rel32 (conditional jump near)
         pub fn jccRel32(self: *Self, cond: Condition, rel: i32) Allocator.Error!void {
             try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x80 + @as(u8, @intFromEnum(cond)));
+            try self.buf.append(self.allocator, 0x80 + @as(u8, @backingInt(cond)));
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(rel)));
         }
 
         /// Jcc rel8 (conditional jump short)
         pub fn jccRel8(self: *Self, cond: Condition, rel: i8) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x70 + @as(u8, @intFromEnum(cond)));
+            try self.buf.append(self.allocator, 0x70 + @as(u8, @backingInt(cond)));
             try self.buf.append(self.allocator, @bitCast(rel));
         }
 
@@ -700,7 +700,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.emitRex(width, dst, src);
             try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x40 + @as(u8, @intFromEnum(cond)));
+            try self.buf.append(self.allocator, 0x40 + @as(u8, @backingInt(cond)));
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
@@ -712,7 +712,7 @@ pub fn Emit(comptime target: RocTarget) type {
                 try self.buf.append(self.allocator, rex(0, 0, 0, reg.rexB()));
             }
             try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x90 + @as(u8, @intFromEnum(cond)));
+            try self.buf.append(self.allocator, 0x90 + @as(u8, @backingInt(cond)));
             try self.buf.append(self.allocator, modRM(0b11, 0, reg.enc()));
         }
 
@@ -965,14 +965,14 @@ pub fn Emit(comptime target: RocTarget) type {
             const byte2: u8 = (@as(u8, inv_r) << 7) |
                 (@as(u8, 1) << 6) | // no index register: inverted X = 1
                 (@as(u8, inv_b) << 5) |
-                @intFromEnum(map);
+                @backingInt(map);
             const encoded_vvvv: u4 = if (src1) |reg|
-                @truncate(~@as(u4, @intCast(@intFromEnum(reg))))
+                @truncate(~@as(u4, @intCast(@backingInt(reg))))
             else
                 0xF;
             const byte3: u8 = (@as(u8, @intFromBool(w)) << 7) |
                 (@as(u8, encoded_vvvv) << 3) |
-                @intFromEnum(prefix); // L=0: 128-bit operation
+                @backingInt(prefix); // L=0: 128-bit operation
             try self.buf.appendSlice(self.allocator, &.{ 0xC4, byte2, byte3 });
         }
 
@@ -1126,9 +1126,9 @@ pub fn Emit(comptime target: RocTarget) type {
             imm: u8,
         ) Allocator.Error!void {
             const inv_b: u1 = 1 - src.rexB();
-            const byte2: u8 = 0xC0 | (@as(u8, inv_b) << 5) | @intFromEnum(VexMap.map_0f);
-            const encoded_vvvv: u4 = @truncate(~@as(u4, @intCast(@intFromEnum(dst))));
-            const byte3: u8 = (@as(u8, encoded_vvvv) << 3) | @intFromEnum(VexPrefix.p66);
+            const byte2: u8 = 0xC0 | (@as(u8, inv_b) << 5) | @backingInt(VexMap.map_0f);
+            const encoded_vvvv: u4 = @truncate(~@as(u4, @intCast(@backingInt(dst))));
+            const byte3: u8 = (@as(u8, encoded_vvvv) << 3) | @backingInt(VexPrefix.p66);
             try self.buf.appendSlice(self.allocator, &.{
                 0xC4,
                 byte2,
@@ -1195,7 +1195,7 @@ pub fn Emit(comptime target: RocTarget) type {
             const inv_r: u1 = 1 - dst.rexR();
             const inv_b: u1 = 1 - mask.rexB();
             const byte2: u8 = (@as(u8, inv_r) << 7) | 0x40 | (@as(u8, inv_b) << 5) | 2;
-            const encoded_vvvv: u4 = @truncate(~@as(u4, @intCast(@intFromEnum(value))));
+            const encoded_vvvv: u4 = @truncate(~@as(u4, @intCast(@backingInt(value))));
             const byte3: u8 = 0x80 | (@as(u8, encoded_vvvv) << 3) | 2;
             try self.buf.appendSlice(self.allocator, &.{
                 0xC4,

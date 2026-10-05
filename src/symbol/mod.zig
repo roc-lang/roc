@@ -11,14 +11,14 @@ const base = @import("base");
 pub const Symbol = enum(u32) {
     _,
 
-    pub const none: Symbol = @enumFromInt(std.math.maxInt(u32));
+    pub const none: Symbol = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
     pub fn fromRaw(value: u32) Symbol {
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 
     pub fn raw(self: Symbol) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     pub fn isNone(self: Symbol) bool {
@@ -150,11 +150,11 @@ pub const Store = struct {
             .name = name,
             .origin = origin,
         });
-        return @enumFromInt(idx);
+        return @fromBackingInt(@intCast(idx));
     }
 
     pub fn get(self: *const Store, symbol: Symbol) Entry {
-        return self.entries.items[@intFromEnum(symbol)];
+        return self.entries.items[@backingInt(symbol)];
     }
 
     pub fn len(self: *const Store) usize {

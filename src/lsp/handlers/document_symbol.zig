@@ -131,7 +131,7 @@ pub const SymbolKind = enum(u32) {
 
     /// Custom JSON serialization to output as integer (LSP spec requirement)
     pub fn jsonStringify(self: SymbolKind, jw: anytype) error{WriteFailed}!void {
-        try jw.write(@intFromEnum(self));
+        try jw.write(@backingInt(self));
     }
 };
 

@@ -176,7 +176,7 @@ pub fn manifestBytes(
     const store = &lowered.lir_result.store;
     const procs = store.getProcSpecs();
     for (lowered.lir_result.root_procs.items) |proc_id| {
-        const proc = procs[@intFromEnum(proc_id)];
+        const proc = procs[@backingInt(proc_id)];
         const symbol = try proc.identity.symbolName(allocator);
         defer allocator.free(symbol);
         const line = try std.fmt.allocPrint(allocator, "root {s} borrowed_params={x} {s}\n", .{ symbol, proc.rc_borrowed_params, store.procDebugName(proc_id) orelse "" });
@@ -184,7 +184,7 @@ pub fn manifestBytes(
         try bytes.appendSlice(allocator, line);
     }
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
-        const symbol = try procs[@intFromEnum(spec_proc.proc)].identity.symbolName(allocator);
+        const symbol = try procs[@backingInt(spec_proc.proc)].identity.symbolName(allocator);
         defer allocator.free(symbol);
         const line = try std.fmt.allocPrint(allocator, "spec {s} {s}\n", .{ &std.fmt.bytesToHex(spec_proc.key, .lower), symbol });
         defer allocator.free(line);
@@ -194,7 +194,7 @@ pub fn manifestBytes(
         if (proc.is_static_initializer) continue;
         const symbol = try proc.identity.symbolName(allocator);
         defer allocator.free(symbol);
-        const line = try std.fmt.allocPrint(allocator, "proc {s} {s}\n", .{ symbol, store.procDebugName(@enumFromInt(@as(u32, @intCast(index)))) orelse "" });
+        const line = try std.fmt.allocPrint(allocator, "proc {s} {s}\n", .{ symbol, store.procDebugName(@fromBackingInt(@intCast(@as(u32, @intCast(index))))) orelse "" });
         defer allocator.free(line);
         try bytes.appendSlice(allocator, line);
     }
@@ -202,7 +202,7 @@ pub fn manifestBytes(
 }
 
 fn testTypeId(index: usize) checked.CheckedTypeId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 test "closed export types reject records with undetermined field kinds" {
@@ -210,7 +210,7 @@ test "closed export types reject records with undetermined field kinds" {
     const leaf = testTypeId(0);
     const undetermined = testTypeId(1);
     const required = testTypeId(2);
-    const label: check.CanonicalNames.RecordFieldLabelId = @enumFromInt(7);
+    const label: check.CanonicalNames.RecordFieldLabelId = @fromBackingInt(@intCast(7));
     const fields = [_]checked.CheckedRecordField{
         .{ .name = label, .ty = leaf, .kind = .undetermined(leaf) },
         .{ .name = label, .ty = leaf, .kind = .required },
@@ -230,19 +230,19 @@ test "closed export types reject records with undetermined field kinds" {
 }
 
 fn testNominalDeclarationId(index: usize) checked.CheckedNominalDeclarationId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 fn testModuleIdentity(index: usize) check.CanonicalNames.ModuleIdentityId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 fn testTypeName(index: usize) check.CanonicalNames.TypeNameId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 fn testTagLabel(index: usize) check.CanonicalNames.TagLabelId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 test "closed export types bind a nominal backing's formal parameters to its arguments" {
@@ -320,14 +320,14 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
     defer work.deinit(allocator);
     @memset(seen, false);
     for (converts, 0..) |*result, index| {
-        for (visited.items) |stmt_id| seen[@intFromEnum(stmt_id)] = false;
+        for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
-        const body = store.getProcSpec(@enumFromInt(index)).body orelse continue;
+        const body = store.getProcSpec(@fromBackingInt(@intCast(index))).body orelse continue;
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
-            if (seen[@intFromEnum(stmt_id)]) continue;
-            seen[@intFromEnum(stmt_id)] = true;
+            if (seen[@backingInt(stmt_id)]) continue;
+            seen[@backingInt(stmt_id)] = true;
             try visited.append(allocator, stmt_id);
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .crash and stmt.crash.literal_rejection != null) {

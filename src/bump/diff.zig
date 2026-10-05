@@ -21,7 +21,7 @@ pub const Magnitude = enum(u8) {
     major = 2,
 
     pub fn combine(self: Magnitude, other: Magnitude) Magnitude {
-        return @enumFromInt(@max(@intFromEnum(self), @intFromEnum(other)));
+        return @fromBackingInt(@intCast(@max(@backingInt(self), @backingInt(other))));
     }
 
     pub fn name(self: Magnitude) []const u8 {

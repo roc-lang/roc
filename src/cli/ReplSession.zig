@@ -2062,7 +2062,7 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
         return if (inputDiagnosticsAreIncomplete(ast)) .incomplete else .invalid;
     }
 
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
     return .{
         .complete = switch (statement) {
             .expr,
@@ -2281,7 +2281,7 @@ fn declarationBoundNames(allocator: Allocator, line: []const u8) Allocator.Error
 
     var names = std.ArrayList([]const u8).empty;
     errdefer names.deinit(allocator);
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
     if (statement == .decl) {
         try collectPatternBoundNames(ast, statement.decl.pattern, &names, allocator);
     } else if (statement == .@"var") {

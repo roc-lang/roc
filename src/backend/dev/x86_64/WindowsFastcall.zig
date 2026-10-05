@@ -121,12 +121,12 @@ pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
 /// addresses). Including it here would allow allocTempGeneral() to assign
 /// it, which gets clobbered when CallBuilder uses R11 as scratch.
 pub const CALLER_SAVED_GENERAL_MASK: u32 =
-    (1 << @intFromEnum(GeneralReg.RAX)) |
-    (1 << @intFromEnum(GeneralReg.RCX)) |
-    (1 << @intFromEnum(GeneralReg.RDX)) |
-    (1 << @intFromEnum(GeneralReg.R8)) |
-    (1 << @intFromEnum(GeneralReg.R9)) |
-    (1 << @intFromEnum(GeneralReg.R10));
+    (1 << @backingInt(GeneralReg.RAX)) |
+    (1 << @backingInt(GeneralReg.RCX)) |
+    (1 << @backingInt(GeneralReg.RDX)) |
+    (1 << @backingInt(GeneralReg.R8)) |
+    (1 << @backingInt(GeneralReg.R9)) |
+    (1 << @backingInt(GeneralReg.R10));
 
 /// Bitmask of caller-saved float registers (XMM0-XMM5 only on Windows)
 pub const CALLER_SAVED_FLOAT_MASK: u32 = 0x3F; // XMM0-XMM5

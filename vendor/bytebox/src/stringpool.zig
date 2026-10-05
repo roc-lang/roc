@@ -44,7 +44,7 @@ pub fn put(self: *StringPool, str: []const u8) ![]const u8 {
     try self.lookup.put(hash, str_offset_begin);
 
     var bytes: []u8 = self.buffer.items[str_offset_begin..str_offset_end];
-    const str_len: *StringLenType = @alignCast(@ptrCast(bytes.ptr));
+    const str_len: *StringLenType = @ptrCast(@alignCast(bytes.ptr));
     str_len.* = @as(StringLenType, @intCast(str.len));
     const str_bytes: []u8 = bytes[@sizeOf(StringLenType)..];
     @memcpy(str_bytes, str);
@@ -57,7 +57,7 @@ pub fn find(self: *StringPool, str: []const u8) ?[]const u8 {
 
     if (self.lookup.get(hash)) |string_bytes_begin| {
         var str_bytes: [*]u8 = self.buffer.items[string_bytes_begin..].ptr;
-        const str_len: *StringLenType = @alignCast(@ptrCast(str_bytes));
+        const str_len: *StringLenType = @ptrCast(@alignCast(str_bytes));
         const pooled_str: []u8 = str_bytes[@sizeOf(StringLenType) .. @sizeOf(StringLenType) + str_len.*];
         return pooled_str;
     }

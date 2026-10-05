@@ -507,7 +507,7 @@ pub fn findBindingByName(module_env: *ModuleEnv, name: []const u8, offset: u32) 
         if (extractIdentFromPattern(&module_env.store, def.pattern)) |ident_idx| {
             const ident_name = module_env.getIdentText(ident_idx);
             if (std.mem.eql(u8, ident_name, name)) {
-                const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
+                const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(def.pattern)));
                 const region = module_env.store.getRegionAt(pattern_node_idx);
                 return BindingInfo{
                     .pattern_idx = def.pattern,
@@ -526,7 +526,7 @@ pub fn findBindingByName(module_env: *ModuleEnv, name: []const u8, offset: u32) 
         const parts = getStatementParts(stmt);
 
         if (parts.pattern) |pattern_idx| {
-            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+            const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
             const region = module_env.store.getRegionAt(pattern_node_idx);
 
             // Only consider bindings that are defined before the offset

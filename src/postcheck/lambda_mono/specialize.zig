@@ -54,15 +54,15 @@ test "lambda mono specialize queue keeps distinct capture shapes" {
     defer queue.deinit(std.testing.allocator);
 
     try std.testing.expect(try queue.enqueue(std.testing.allocator, testSpec(0, 0, null)));
-    try std.testing.expect(try queue.enqueue(std.testing.allocator, testSpec(0, 0, @enumFromInt(1))));
+    try std.testing.expect(try queue.enqueue(std.testing.allocator, testSpec(0, 0, @fromBackingInt(@intCast(1)))));
     try std.testing.expect(try queue.enqueue(std.testing.allocator, testSpec(1, 0, null)));
     try std.testing.expectEqual(@as(usize, 3), queue.entries.items.len);
 }
 
 fn testSpec(comptime symbol_index: u32, comptime fn_ty_index: u32, capture_shape: ?Type.TypeId) Spec {
     return .{
-        .symbol = @enumFromInt(symbol_index),
-        .solved_fn_ty = @enumFromInt(fn_ty_index),
+        .symbol = @fromBackingInt(@intCast(symbol_index)),
+        .solved_fn_ty = @fromBackingInt(@intCast(fn_ty_index)),
         .capture_shape = capture_shape,
     };
 }

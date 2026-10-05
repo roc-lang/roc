@@ -1886,7 +1886,7 @@ pub fn scanHeaderSource(
     const ast = try parse.header(gpa, &env.common);
     defer ast.deinit();
 
-    const header = ast.store.getHeader(@enumFromInt(ast.root_node_idx));
+    const header = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx)));
 
     if (ast.parse_diagnostics.items.len > 0) {
         return error.HeaderParseFailed;

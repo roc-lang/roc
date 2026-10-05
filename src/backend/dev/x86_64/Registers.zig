@@ -30,19 +30,19 @@ pub const GeneralReg = enum(u4) {
 
     /// Get the 3-bit register encoding (for ModR/M and SIB bytes)
     pub fn enc(self: GeneralReg) u3 {
-        return @truncate(@intFromEnum(self));
+        return @truncate(@backingInt(self));
     }
 
     /// Returns true if this register requires a REX prefix (R8-R15)
     pub fn requiresRex(self: GeneralReg) bool {
-        return @intFromEnum(self) >= 8;
+        return @backingInt(self) >= 8;
     }
 
     /// Returns true if this register requires a REX prefix for byte-sized
     /// operations (setcc, movzx from byte, etc.). Without REX, register
     /// encodings 4-7 map to the legacy AH/CH/DH/BH instead of SPL/BPL/SIL/DIL.
     pub fn requiresRexForByteOp(self: GeneralReg) bool {
-        return @intFromEnum(self) >= 4;
+        return @backingInt(self) >= 4;
     }
 
     /// Get the REX.B bit value for this register
@@ -172,12 +172,12 @@ pub const FloatReg = enum(u4) {
 
     /// Get the 3-bit register encoding
     pub fn enc(self: FloatReg) u3 {
-        return @truncate(@intFromEnum(self));
+        return @truncate(@backingInt(self));
     }
 
     /// Returns true if this register requires a REX prefix (XMM8-XMM15)
     pub fn requiresRex(self: FloatReg) bool {
-        return @intFromEnum(self) >= 8;
+        return @backingInt(self) >= 8;
     }
 
     /// Get the REX.B bit value for this register

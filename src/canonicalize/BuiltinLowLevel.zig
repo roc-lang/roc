@@ -1688,21 +1688,21 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
                 // Now replace the e_anno_only expression with the e_lambda
                 // Def structure is stored in def_data list
-                const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
+                const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @fromBackingInt(@intCast(@backingInt(def_idx))));
                 const def_node = env.store.nodes.get(def_node_idx);
                 const def_data_idx = def_node.getPayload().def.def_data_idx;
 
                 // Update the expr field in def_data
-                env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
+                env.store.def_data.items.items[def_data_idx].expr = @backingInt(expr_idx);
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
                 if (env.provided_low_level_defs.items.items.len > 0) {
                     const previous = env.provided_low_level_defs.items.items[env.provided_low_level_defs.items.items.len - 1];
-                    std.debug.assert(previous.def_idx < @intFromEnum(def_idx));
+                    std.debug.assert(previous.def_idx < @backingInt(def_idx));
                 }
                 _ = try env.provided_low_level_defs.append(gpa, .{
-                    .def_idx = @intFromEnum(def_idx),
+                    .def_idx = @backingInt(def_idx),
                     .op = low_level_op,
                     ._padding = 0,
                 });

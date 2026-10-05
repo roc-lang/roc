@@ -89,7 +89,7 @@ pub const Var = enum(u32) {
 
     /// Debug representation of a type variable, panics on allocation failure
     pub fn allocPrint(self: Var, gpa: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
-        return try std.fmt.allocPrint(gpa, "#{d}", .{@intFromEnum(self)});
+        return try std.fmt.allocPrint(gpa, "#{d}", .{@backingInt(self)});
     }
 };
 
@@ -162,22 +162,22 @@ pub const Rank = enum(u32) {
 
     /// Get the lowest rank
     pub fn min(a: Rank, b: Rank) Rank {
-        return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
+        return @fromBackingInt(@intCast(@min(@backingInt(a), @backingInt(b))));
     }
 
     /// Get the lowest rank
     pub fn max(a: Rank, b: Rank) Rank {
-        return @enumFromInt(@max(@intFromEnum(a), @intFromEnum(b)));
+        return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
     }
 
     /// Get the next rank
     pub fn next(a: Rank) Rank {
-        return @enumFromInt(@intFromEnum(a) + 1);
+        return @fromBackingInt(@intCast(@backingInt(a) + 1));
     }
 
     /// Get the prev rank
     pub fn prev(a: Rank) Rank {
-        return @enumFromInt(@intFromEnum(a) - 1);
+        return @fromBackingInt(@intCast(@backingInt(a) - 1));
     }
 };
 
@@ -594,7 +594,7 @@ pub const Int = struct {
         pub fn alignment(self: @This()) std.mem.Alignment {
             // Both self and std.mem.Alignment are stored as log2(alignment) integers,
             // although we have to divide self by 2 to get to that exact representation.
-            return @enumFromInt(@intFromEnum(self) / 2);
+            return @fromBackingInt(@intCast(@backingInt(self) / 2));
         }
     };
 };
@@ -618,7 +618,7 @@ pub const Frac = struct {
             // f32 (2) -> 4 bytes -> log2(4) = 2
             // f64 (3) -> 8 bytes -> log2(8) = 3
             // dec (4) -> 16 bytes -> log2(16) = 4
-            return @enumFromInt(@intFromEnum(self));
+            return @fromBackingInt(@intCast(@backingInt(self)));
         }
     };
 };
@@ -789,7 +789,7 @@ pub const RecordField = struct {
         /// A field-kind variable, or `no_presence_var` for a required field.
         presence_var: Var,
 
-        const no_presence_var: Var = @enumFromInt(std.math.maxInt(u32));
+        const no_presence_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
         pub const Decoded = union(enum) {
             required: Var,
@@ -1124,12 +1124,12 @@ pub const StaticDispatchConstraint = struct {
 
             pub fn from(raw: u32) OptExprIdx {
                 std.debug.assert(raw != std.math.maxInt(u32));
-                return @enumFromInt(raw);
+                return @fromBackingInt(@intCast(raw));
             }
 
             /// The raw index, or null when absent.
             pub fn get(self: OptExprIdx) ?u32 {
-                return if (self == .none) null else @intFromEnum(self);
+                return if (self == .none) null else @backingInt(self);
             }
         };
     };
@@ -1161,7 +1161,7 @@ pub const StaticDispatchConstraint = struct {
         item_var: Var = no_var,
         interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
 
-        const no_var: Var = @enumFromInt(std.math.maxInt(u32));
+        const no_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
         pub const none = InterpolationMetadata{};
 

@@ -19,7 +19,7 @@ pub fn init() Error!Unix {
     new_termios.lflag.ISIG = false;
     new_termios.lflag.IEXTEN = false;
 
-    new_termios.cc[@intFromEnum(std.posix.V.INTR)] = 0;
+    new_termios.cc[@backingInt(std.posix.V.INTR)] = 0;
 
     try std.posix.tcsetattr(stdin_handle, .NOW, new_termios);
 

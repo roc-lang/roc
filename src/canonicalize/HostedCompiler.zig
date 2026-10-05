@@ -47,7 +47,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             const full_ident = expr.e_anno_only.ident;
 
             // Get the region from the original def for better error messages
-            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+            const def_node_idx: @TypeOf(env.store.nodes).Idx = @fromBackingInt(@intCast(@backingInt(def_idx)));
             const def_region = env.store.getRegionAt(def_node_idx);
 
             // Extract the local name by stripping the module name prefix (first dot-separated segment).
@@ -104,7 +104,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             }, def_region);
 
             // Ensure types array has an entry for this new expression
-            const expr_int = @intFromEnum(expr_idx);
+            const expr_int = @backingInt(expr_idx);
             while (env.types.len() <= expr_int) {
                 _ = try env.types.fresh();
             }
@@ -115,7 +115,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             const def_node = env.store.nodes.get(def_node_idx);
             const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-            env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
+            env.store.def_data.items.items[def_data_idx].expr = @backingInt(expr_idx);
 
             try env.store.addScratchDef(def_idx);
         }

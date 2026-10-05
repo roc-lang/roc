@@ -404,7 +404,7 @@ const CollectReferencesContext = struct {
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-        if (std.meta.activeTag(expr) == .e_lookup_local and @intFromEnum(expr.e_lookup_local.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
+        if (std.meta.activeTag(expr) == .e_lookup_local and @backingInt(expr.e_lookup_local.pattern_idx) == @backingInt(ctx.target_pattern)) {
             const region = ctx.store.getExprRegion(expr_idx);
             if (regionToRange(ctx.module_env, region)) |range| {
                 ctx.results.append(ctx.allocator, range) catch |err| {
@@ -433,7 +433,7 @@ const CollectDeclarationsContext = struct {
     /// block-level annotation that binds the target pattern.
     fn visitStmtPre(ctx: *CollectDeclarationsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
         const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
-        if (@intFromEnum(pattern_idx) != @intFromEnum(ctx.target_pattern)) return .continue_traversal;
+        if (@backingInt(pattern_idx) != @backingInt(ctx.target_pattern)) return .continue_traversal;
 
         const anno_idx = statementAnnotation(stmt) orelse return .continue_traversal;
         ctx.appendAnnotationName(anno_idx) catch |err| {
@@ -907,7 +907,7 @@ const FindTagAtOffsetContext = struct {
         nominal_ext: ?TagNominalExternal,
     ) void {
         if (ctx.result != null) return;
-        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
         const region = ctx.store.getRegionAt(node_idx);
         if (!regionContainsOffset(region, ctx.target_offset)) return;
 
@@ -1156,7 +1156,7 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
         return null;
 
     const name = module_env.common.idents.getText(ident);
-    const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
+    const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(target_pattern)));
     const region = module_env.store.getRegionAt(pattern_node_idx);
 
     const source = module_env.common.source;
@@ -1172,7 +1172,7 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
-        if (@intFromEnum(def.pattern) != @intFromEnum(target_pattern)) continue;
+        if (@backingInt(def.pattern) != @backingInt(target_pattern)) continue;
         const anno_idx = def.annotation orelse continue;
         const name_region = module_env.store.getAnnotation(anno_idx).name_region orelse continue;
         return regionToRange(module_env, name_region);
@@ -1474,7 +1474,7 @@ pub fn collectDeclarationRegions(
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
 
-        if (@intFromEnum(def.pattern) == @intFromEnum(target_pattern)) {
+        if (@backingInt(def.pattern) == @backingInt(target_pattern)) {
             if (def.annotation) |anno_idx| {
                 try ctx.appendAnnotationName(anno_idx);
             }

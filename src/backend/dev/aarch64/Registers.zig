@@ -62,7 +62,7 @@ pub const GeneralReg = enum(u5) {
 
     /// Get the 5-bit register encoding
     pub fn enc(self: GeneralReg) u5 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Get the 64-bit register name
@@ -182,7 +182,7 @@ pub const FloatReg = enum(u5) {
 
     /// Get the 5-bit register encoding
     pub fn enc(self: FloatReg) u5 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Get the single-precision (32-bit float) register name
@@ -193,7 +193,7 @@ pub const FloatReg = enum(u5) {
             "s16", "s17", "s18", "s19", "s20", "s21", "s22", "s23",
             "s24", "s25", "s26", "s27", "s28", "s29", "s30", "s31",
         };
-        return names[@intFromEnum(self)];
+        return names[@backingInt(self)];
     }
 
     /// Get the double-precision (64-bit float) register name
@@ -204,7 +204,7 @@ pub const FloatReg = enum(u5) {
             "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23",
             "d24", "d25", "d26", "d27", "d28", "d29", "d30", "d31",
         };
-        return names[@intFromEnum(self)];
+        return names[@backingInt(self)];
     }
 
     /// Get the quad-precision (128-bit) register name
@@ -215,7 +215,7 @@ pub const FloatReg = enum(u5) {
             "q16", "q17", "q18", "q19", "q20", "q21", "q22", "q23",
             "q24", "q25", "q26", "q27", "q28", "q29", "q30", "q31",
         };
-        return names[@intFromEnum(self)];
+        return names[@backingInt(self)];
     }
 };
 
@@ -236,7 +236,7 @@ pub const RegisterWidth = enum(u1) {
 
     /// Get the sf (size flag) bit for instruction encoding
     pub fn sf(self: RegisterWidth) u1 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

@@ -354,11 +354,11 @@ test "invalid generalized numeral use preserves the source literal and valid spe
     var runtime_error_exprs: usize = 0;
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const node = test_env.checker.cir.store.nodes.get(node_idx);
         if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_") and node.tag != .malformed) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (test_env.checker.cir.store.getExpr(expr_idx) == .e_runtime_error) runtime_error_exprs += 1;
     }
     try testing.expect(runtime_error_exprs > 0);

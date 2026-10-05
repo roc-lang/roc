@@ -668,17 +668,17 @@ pub const Program = struct {
     }
 
     pub fn addComptimeValueRoot(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
-        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        const id: Common.ComptimeValueRootId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_value_roots.len()))));
         try self.comptime_value_roots.append(self.allocator, root);
         return id;
     }
 
     pub fn getComptimeValueRoot(self: *const Program, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
-        return self.comptime_value_roots.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.comptime_value_roots.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
-        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
+        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
         try self.fns.append(self.allocator, fn_);
         return id;
     }
@@ -692,7 +692,7 @@ pub const Program = struct {
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
-        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len())));
+        const id: ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(self.exprs.len()))));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
@@ -701,32 +701,32 @@ pub const Program = struct {
 
     /// Source location of an expression.
     pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
-        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.expr_locs.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     /// Checked source region of an expression.
     pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
-        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.expr_regions.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.stmt_locs.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     /// Checked source region of a statement.
     pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
-        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.stmt_regions.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
-        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.len())));
+        const id: PatId = @fromBackingInt(@intCast(@as(u32, @intCast(self.pats.len()))));
         try self.pats.append(self.allocator, pat);
         return id;
     }
 
     pub fn addStmt(self: *Program, stmt: Stmt) std.mem.Allocator.Error!StmtId {
-        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.len())));
+        const id: StmtId = @fromBackingInt(@intCast(@as(u32, @intCast(self.stmts.len()))));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         try self.stmt_regions.append(self.allocator, self.current_region);
@@ -743,7 +743,7 @@ pub const Program = struct {
     ) std.mem.Allocator.Error!ComptimeSiteId {
         const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
         errdefer self.allocator.free(owned_branch_regions);
-        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
+        const id: ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.len()))));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .owner = owner,
@@ -755,7 +755,7 @@ pub const Program = struct {
     }
 
     pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
-        return self.comptime_sites.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.comptime_sites.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
@@ -768,7 +768,7 @@ pub const Program = struct {
         ty: Type.TypeId,
         binder: ?checked.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
-        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const id: LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.locals.len()))));
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -777,14 +777,14 @@ pub const Program = struct {
     /// Record the source-level name of a local (dupes; empty means none).
     pub fn setLocalName(self: *Program, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
-        const slot = self.local_names.getPtrImmediate(@intFromEnum(id));
+        const slot = self.local_names.getPtrImmediate(@backingInt(id));
         if (slot.len > 0) self.allocator.free(slot.*);
         slot.* = try self.allocator.dupe(u8, name);
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.local_names.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
@@ -921,27 +921,27 @@ pub const Program = struct {
     }
 
     pub fn getFn(self: *const Program, id: FnId) Fn {
-        return self.fns.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.fns.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn setFn(self: *Program, id: FnId, fn_: Fn) void {
-        self.fns.set(@intFromEnum(id), fn_);
+        self.fns.set(@backingInt(id), fn_);
     }
 
     pub fn getExpr(self: *const Program, id: ExprId) Expr {
-        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.exprs.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn getPat(self: *const Program, id: PatId) Pat {
-        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.pats.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn getStmt(self: *const Program, id: StmtId) Stmt {
-        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.stmts.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn getLocal(self: *const Program, id: LocalId) Local {
-        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.locals.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn stringLiteralText(self: *const Program, id: StringLiteralId) []const u8 {
@@ -949,7 +949,7 @@ pub const Program = struct {
     }
 
     pub fn stringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
-        return self.string_literals.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.string_literals.unsafeRawItemsForView()[@backingInt(id)];
     }
 };
 

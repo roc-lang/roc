@@ -590,7 +590,7 @@ const InstructionFuncs = struct {
     }
 
     fn lookup(opcode: Opcode) InstructionFunc {
-        return opcodeToFuncTable[@intFromEnum(opcode)];
+        return opcodeToFuncTable[@backingInt(opcode)];
     }
 
     fn op_Invalid(pc: u32, code: [*]const Instruction, stack: *Stack) TrapError!void {

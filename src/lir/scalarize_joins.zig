@@ -78,7 +78,7 @@ fn runMeasured(store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Me
     // converges on its own before moving on; a proc that changes nothing is
     // scanned exactly once instead of once per global round.
     for (0..store.procSpecCount()) |proc_index| {
-        try pass.transformProc(@enumFromInt(@as(u32, @intCast(proc_index))));
+        try pass.transformProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
     }
 }
 
@@ -2294,7 +2294,7 @@ const ScalarizeTest = struct {
     }
 
     fn freshJoinPointId(self: *ScalarizeTest) LIR.JoinPointId {
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point));
         self.next_join_point += 1;
         return id;
     }
@@ -2383,7 +2383,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
         for (0..store.procSpecCount()) |index| {
             var scratch = std.heap.ArenaAllocator.init(testing.allocator);
             defer scratch.deinit();
-            try runProc(store, &f.layouts, @enumFromInt(index), scratch.allocator());
+            try runProc(store, &f.layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
         }
     } else {
         try run(store, &f.layouts);
@@ -3075,7 +3075,7 @@ test "scalarize dissolves nested wrappers in one round" {
     // One eliminating round and one confirming round, each collecting the
     // proc's statements twice.
     try testing.expect(metrics.collected_statements <= 4 * (2 * depth + 1));
-    const final_body = store.getProcSpec(@enumFromInt(@as(u32, 0))).body.?;
+    const final_body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
     const first = store.getCFStmt(final_body);
     try testing.expect(first == .assign_ref);
     try testing.expectEqual(reads[0], first.assign_ref.target);
@@ -3108,7 +3108,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.alias_edges <= aliases.len);
-    try testing.expectEqual(body, store.getProcSpec(@enumFromInt(@as(u32, 0))).body.?);
+    try testing.expectEqual(body, store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
 }
 
 test "scalarize keeps a constructor with an alias definition and its source" {
@@ -3198,25 +3198,25 @@ test "scalarize alias roots share resolved tails and identify cycles explicitly"
     // Root resolution never reads statement IDs; this fixture only supplies alias edges.
     const unused_stmt: LIR.CFStmtId = undefined;
     for (0..10_000) |index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        try aliases.put(local, .{ .stmt = unused_stmt, .source = @enumFromInt(@as(u32, @intCast(index + 1))), .def_count = 1 });
+        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        try aliases.put(local, .{ .stmt = unused_stmt, .source = @fromBackingInt(@intCast(@as(u32, @intCast(index + 1)))), .def_count = 1 });
         try transparent.put(local, {});
     }
     // A cycle and a separate incoming edge have no constructor/parameter
     // root. Their exact graph is retained instead of selecting a guessed root.
     for ([_]u32{ 10_002, 10_001, 10_002 }, 10_001..) |source, index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        try aliases.put(local, .{ .stmt = unused_stmt, .source = @enumFromInt(source), .def_count = 1 });
+        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        try aliases.put(local, .{ .stmt = unused_stmt, .source = @fromBackingInt(@intCast(source)), .def_count = 1 });
         try transparent.put(local, {});
     }
     try resolveTransparentRoots(allocator, &aliases, &transparent, null);
     for (0..10_000) |index| {
-        const def = aliases.get(@enumFromInt(@as(u32, @intCast(index)))).?;
+        const def = aliases.get(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).?;
         try testing.expectEqual(.complete, def.root_state);
-        try testing.expectEqual(@as(LIR.LocalId, @enumFromInt(10_000)), def.root.?);
+        try testing.expectEqual(@as(LIR.LocalId, @fromBackingInt(@intCast(10_000))), def.root.?);
     }
     for (10_001..10_004) |index| {
-        const def = aliases.get(@enumFromInt(@as(u32, @intCast(index)))).?;
+        const def = aliases.get(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).?;
         try testing.expectEqual(.complete, def.root_state);
         try testing.expectEqual(null, def.root);
     }

@@ -358,7 +358,7 @@ fn formatU64(value: u64, buffer: []u8) []const u8 {
 
 const linux = struct {
     const os = std.os.linux;
-    const EINTR = @intFromEnum(os.E.INTR);
+    const EINTR = @backingInt(os.E.INTR);
 
     fn rawRead(fd: c_int, buffer: []u8) HostError!usize {
         while (true) {
@@ -387,7 +387,7 @@ const linux = struct {
     }
 
     fn errno(result: usize) usize {
-        return @intFromEnum(os.errno(result));
+        return @backingInt(os.errno(result));
     }
 };
 

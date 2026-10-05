@@ -52,19 +52,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// System V: RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
         /// Windows: RBX, RSI, RDI, R12, R13, R14, R15 (not RBP - it's the frame pointer)
         pub const CALLEE_SAVED_GENERAL_MASK: u32 = if (target.isWindows())
-            (1 << @intFromEnum(GeneralReg.RBX)) |
-                (1 << @intFromEnum(GeneralReg.RSI)) |
-                (1 << @intFromEnum(GeneralReg.RDI)) |
-                (1 << @intFromEnum(GeneralReg.R12)) |
-                (1 << @intFromEnum(GeneralReg.R13)) |
-                (1 << @intFromEnum(GeneralReg.R14)) |
-                (1 << @intFromEnum(GeneralReg.R15))
+            (1 << @backingInt(GeneralReg.RBX)) |
+                (1 << @backingInt(GeneralReg.RSI)) |
+                (1 << @backingInt(GeneralReg.RDI)) |
+                (1 << @backingInt(GeneralReg.R12)) |
+                (1 << @backingInt(GeneralReg.R13)) |
+                (1 << @backingInt(GeneralReg.R14)) |
+                (1 << @backingInt(GeneralReg.R15))
         else
-            (1 << @intFromEnum(GeneralReg.RBX)) |
-                (1 << @intFromEnum(GeneralReg.R12)) |
-                (1 << @intFromEnum(GeneralReg.R13)) |
-                (1 << @intFromEnum(GeneralReg.R14)) |
-                (1 << @intFromEnum(GeneralReg.R15));
+            (1 << @backingInt(GeneralReg.RBX)) |
+                (1 << @backingInt(GeneralReg.R12)) |
+                (1 << @backingInt(GeneralReg.R13)) |
+                (1 << @backingInt(GeneralReg.R14)) |
+                (1 << @backingInt(GeneralReg.R15));
 
         /// Size of the callee-saved register area
         /// Windows: 7 registers * 8 bytes = 56 bytes
@@ -134,7 +134,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
             // Try callee-saved
             if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
-                self.callee_saved_used |= @as(u16, 1) << @intCast(@intFromEnum(reg));
+                self.callee_saved_used |= @as(u16, 1) << @intCast(@backingInt(reg));
                 return reg;
             }
             return null;
@@ -144,12 +144,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (mask.* == 0) return null;
             const bit: u5 = @intCast(@ctz(mask.*));
             mask.* &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
+            return @fromBackingInt(@intCast(bit));
         }
 
         /// Free a general-purpose register, making it available for allocation.
         pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             // Return to appropriate pool
             if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
                 self.callee_saved_available |= @as(u32, 1) << idx;
@@ -161,7 +161,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Mark a register as in use so it won't be allocated.
         /// Used for return values from function calls that need to persist.
         pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             // Remove from free pool (it's now in use)
             self.free_general &= ~(@as(u16, 1) << @intCast(idx));
             self.callee_saved_available &= ~(@as(u16, 1) << @intCast(idx));
@@ -171,11 +171,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (self.free_float == 0) return null;
             const bit: u5 = @intCast(@ctz(self.free_float));
             self.free_float &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
+            return @fromBackingInt(@intCast(bit));
         }
 
         pub fn freeFloat(self: *Self, reg: FloatReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             self.free_float |= @as(u32, 1) << idx;
         }
 
@@ -776,7 +776,7 @@ test "Windows vector allocation excludes nonvolatile XMM registers" {
     defer cg.deinit();
 
     for (0..6) |index| {
-        try std.testing.expectEqual(@as(FloatReg, @enumFromInt(index)), cg.allocFloat().?);
+        try std.testing.expectEqual(@as(FloatReg, @fromBackingInt(@intCast(index))), cg.allocFloat().?);
     }
     try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
 }
@@ -940,10 +940,10 @@ test "free register returns it to correct pool" {
     cg.freeGeneral(callee_reg);
 
     // caller_reg should be back in free_general
-    try std.testing.expect((cg.free_general & (@as(u32, 1) << @intFromEnum(caller_reg))) != 0);
+    try std.testing.expect((cg.free_general & (@as(u32, 1) << @backingInt(caller_reg))) != 0);
 
     // callee_reg should be back in callee_saved_available
-    try std.testing.expect((cg.callee_saved_available & (@as(u32, 1) << @intFromEnum(callee_reg))) != 0);
+    try std.testing.expect((cg.callee_saved_available & (@as(u32, 1) << @backingInt(callee_reg))) != 0);
 }
 
 test "epilogue restores callee-saved registers with MOV" {

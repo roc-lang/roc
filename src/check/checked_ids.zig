@@ -46,15 +46,15 @@ pub fn OptionalId(comptime Id: type) type {
         /// Wrap a present id. `maxInt(u32)` is unrepresentable (it would bias
         /// to the `none` sentinel), which no checked-artifact id space reaches.
         pub fn some(id: Id) Self {
-            const raw = @intFromEnum(id);
+            const raw = @backingInt(id);
             std.debug.assert(raw != std.math.maxInt(u32));
-            return @enumFromInt(raw + 1);
+            return @fromBackingInt(@intCast(raw + 1));
         }
 
         /// The wrapped id, or null for `none`.
         pub fn get(self: Self) ?Id {
             if (self == .none) return null;
-            return @enumFromInt(@intFromEnum(self) - 1);
+            return @fromBackingInt(@intCast(@backingInt(self) - 1));
         }
     };
 }
@@ -64,9 +64,9 @@ test "OptionalId round-trips none and some" {
     const absent: Opt = .none;
     try std.testing.expectEqual(@as(?CheckedVarNameId, null), absent.get());
     // The lowest id exercises the +1-bias boundary (raw 0 is reserved for none).
-    const id: CheckedVarNameId = @enumFromInt(std.math.minInt(u32));
+    const id: CheckedVarNameId = @fromBackingInt(@intCast(std.math.minInt(u32)));
     try std.testing.expectEqual(id, Opt.some(id).get().?);
-    const high: CheckedVarNameId = @enumFromInt(std.math.maxInt(u32) - 1);
+    const high: CheckedVarNameId = @fromBackingInt(@intCast(std.math.maxInt(u32) - 1));
     try std.testing.expectEqual(high, Opt.some(high).get().?);
     comptime std.debug.assert(@sizeOf(Opt) == 4);
 }
@@ -113,32 +113,32 @@ pub const CaptureId = enum(u32) {
 
     /// The canonical capture id for a captured binder.
     pub fn fromBinder(id: PatternBinderId) CaptureId {
-        return canonical(@intFromEnum(id));
+        return canonical(@backingInt(id));
     }
 
     /// The canonical capture id for a raw binder index.
     pub fn canonical(index: u32) CaptureId {
         std.debug.assert(index <= max_canonical_index);
-        return @enumFromInt(index);
+        return @fromBackingInt(@intCast(index));
     }
 
     /// The generated capture id minted by compile-time evaluation for a
     /// per-`ConstStore`-closure counter value.
     pub fn generatedCheck(index: u32) CaptureId {
         std.debug.assert(index <= max_generated_index);
-        return @enumFromInt(index | generated_bit);
+        return @fromBackingInt(@intCast(index | generated_bit));
     }
 
     /// The generated capture id minted by final Monotype publication, closure
     /// lifting, or spec_constr for a per-Lifted-program counter value.
     pub fn generatedLift(index: u32) CaptureId {
         std.debug.assert(index <= max_generated_index);
-        return @enumFromInt(index | generated_bit | lift_bit);
+        return @fromBackingInt(@intCast(index | generated_bit | lift_bit));
     }
 
     /// Whether this id names a captured checked binder.
     pub fn isCanonical(self: CaptureId) bool {
-        return (@intFromEnum(self) & generated_bit) == 0;
+        return (@backingInt(self) & generated_bit) == 0;
     }
 
     /// Whether this id names a compiler-synthesized capturable local.
@@ -149,32 +149,32 @@ pub const CaptureId = enum(u32) {
     /// Whether this id was minted by Monotype publication, closure lifting,
     /// or a later post-check transform.
     pub fn isLiftGenerated(self: CaptureId) bool {
-        const raw = @intFromEnum(self);
+        const raw = @backingInt(self);
         return (raw & generated_bit) != 0 and (raw & lift_bit) != 0;
     }
 
     /// Whether this id belongs to the lift-time generated sub-range.
     pub fn isGeneratedLift(self: CaptureId) bool {
-        return (@intFromEnum(self) & (generated_bit | lift_bit)) == (generated_bit | lift_bit);
+        return (@backingInt(self) & (generated_bit | lift_bit)) == (generated_bit | lift_bit);
     }
 
     /// The `PatternBinderId` this canonical id was derived from. Asserts the id
     /// is canonical.
     pub fn binder(self: CaptureId) PatternBinderId {
         std.debug.assert(self.isCanonical());
-        return @enumFromInt(@intFromEnum(self));
+        return @fromBackingInt(@intCast(@backingInt(self)));
     }
 
     /// The opaque low-31-bit index of a generated id, unique within its
     /// generated sub-range. Asserts the id is generated.
     pub fn generatedIndex(self: CaptureId) u32 {
         std.debug.assert(self.isGenerated());
-        return @intFromEnum(self) & ~generated_bit;
+        return @backingInt(self) & ~generated_bit;
     }
 
     /// Direct-column index for this namespaced identity.
     pub fn denseIndex(self: CaptureId) usize {
-        const raw = @intFromEnum(self);
+        const raw = @backingInt(self);
         const namespace: usize = if ((raw & generated_bit) == 0)
             0
         else if ((raw & lift_bit) == 0)

@@ -91,11 +91,11 @@ pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR
 pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
     for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
         const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
-        try visitor.visit(@enumFromInt(requirement.receiver_var));
+        try visitor.visit(@fromBackingInt(@intCast(requirement.receiver_var)));
         try visitor.visit(constraint.fn_var);
     }
     for (module_env.scheme_use_pairs.items.items) |pair| {
-        try visitor.visit(@enumFromInt(pair.fresh_var));
+        try visitor.visit(@fromBackingInt(@intCast(pair.fresh_var)));
     }
     for (module_env.generated_codec_derivations.items.items) |derivation| {
         inline for (.{
@@ -114,15 +114,15 @@ pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) A
             derivation.state_var,
             derivation.error_var,
         }) |raw_var| {
-            try visitor.visit(@enumFromInt(raw_var));
+            try visitor.visit(@fromBackingInt(@intCast(raw_var)));
         }
         const calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
         for (calls) |call| {
             inline for (.{ call.dispatcher_var, call.callable_var, call.evidence_var }) |raw_var| {
-                try visitor.visit(@enumFromInt(raw_var));
+                try visitor.visit(@fromBackingInt(@intCast(raw_var)));
             }
             if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
-                try visitor.visit(@enumFromInt(call.subject_var));
+                try visitor.visit(@fromBackingInt(@intCast(call.subject_var)));
             }
         }
     }
@@ -133,28 +133,28 @@ pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) A
 /// the use's substitution.
 pub fn forEachSchemeUseTypeRoot(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
     for (module_env.scheme_uses.items.items) |record| {
-        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
-            record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-            record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
-            record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
+        if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
+            record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
+            record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+            record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
         {
-            try visitor.visit(@enumFromInt(record.slot_data));
+            try visitor.visit(@fromBackingInt(@intCast(record.slot_data)));
         }
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
         for (pairs) |pair| {
-            try visitor.visit(@enumFromInt(pair.fresh_var));
+            try visitor.visit(@fromBackingInt(@intCast(pair.fresh_var)));
         }
     }
 }
 
 /// The roots of a `for` loop's dispatch plan.
 pub fn forEachForLoopDispatchTypeRoot(plan: ModuleEnv.ForLoopDispatchPlan, visitor: anytype) Allocator.Error!void {
-    try visitor.visit(@enumFromInt(plan.iterator_var));
-    try visitor.visit(@enumFromInt(plan.step_var));
-    try visitor.visit(@enumFromInt(plan.iter_fn_var));
-    try visitor.visit(@enumFromInt(plan.next_fn_var));
-    try visitor.visit(@enumFromInt(plan.step_topology.one_payload_var));
-    try visitor.visit(@enumFromInt(plan.step_topology.skip_payload_var));
+    try visitor.visit(@fromBackingInt(@intCast(plan.iterator_var)));
+    try visitor.visit(@fromBackingInt(@intCast(plan.step_var)));
+    try visitor.visit(@fromBackingInt(@intCast(plan.iter_fn_var)));
+    try visitor.visit(@fromBackingInt(@intCast(plan.next_fn_var)));
+    try visitor.visit(@fromBackingInt(@intCast(plan.step_topology.one_payload_var)));
+    try visitor.visit(@fromBackingInt(@intCast(plan.step_topology.skip_payload_var)));
 }
 
 /// The roots of every literal conversion that dispatches to a custom or
@@ -170,11 +170,11 @@ pub fn forEachLiteralDispatchTypeRoot(module_env: *const ModuleEnv, visitor: any
                 continue;
             },
         }
-        try visitor.visit(@enumFromInt(plan.target_var));
-        try visitor.visit(@enumFromInt(plan.fn_var));
+        try visitor.visit(@fromBackingInt(@intCast(plan.target_var)));
+        try visitor.visit(@fromBackingInt(@intCast(plan.fn_var)));
         if (plan.patternContext(&module_env.store)) |context| {
             std.debug.assert(context.equality_fn_var_plus_one != 0);
-            try visitor.visit(@enumFromInt(context.equality_fn_var_plus_one - 1));
+            try visitor.visit(@fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1)));
         }
     }
 }

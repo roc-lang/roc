@@ -273,11 +273,11 @@ const Arm64Kind = enum(u16) {
 
 pub fn isBranch(arch: std.Target.Cpu.Arch, kind: u32) bool {
     return switch (arch) {
-        .x86_64 => switch (@as(Amd64Kind, @enumFromInt(@as(u16, @truncate(kind))))) {
+        .x86_64 => switch (@as(Amd64Kind, @fromBackingInt(@intCast(@as(u16, @truncate(kind)))))) {
             .rel32, .rel32_1, .rel32_2, .rel32_3, .rel32_4, .rel32_5 => true,
             else => false,
         },
-        .aarch64 => @as(Arm64Kind, @enumFromInt(@as(u16, @truncate(kind)))) == .branch26,
+        .aarch64 => @as(Arm64Kind, @fromBackingInt(@intCast(@as(u16, @truncate(kind))))) == .branch26,
         else => false,
     };
 }
@@ -308,7 +308,7 @@ fn sectionRelative(ctx: *loader.Apply) LoadError!i64 {
 }
 
 fn applyAmd64(ctx: *loader.Apply) LoadError!void {
-    const kind: Amd64Kind = @enumFromInt(@as(u16, @truncate(ctx.reloc.kind)));
+    const kind: Amd64Kind = @fromBackingInt(@intCast(@as(u16, @truncate(ctx.reloc.kind))));
     const P = ctx.placeAddress();
     const S = ctx.symbolAddress();
     switch (kind) {
@@ -326,7 +326,7 @@ fn applyAmd64(ctx: *loader.Apply) LoadError!void {
         },
         .rel32, .rel32_1, .rel32_2, .rel32_3, .rel32_4, .rel32_5 => {
             if (ctx.code.len < 4) return error.MalformedObject;
-            const trailing: i64 = @intFromEnum(kind) - @intFromEnum(Amd64Kind.rel32);
+            const trailing: i64 = @backingInt(kind) - @backingInt(Amd64Kind.rel32);
             const A: i64 = ctx.read(i32);
             const next = P + 4 + trailing;
             if (std.math.cast(i32, S + A - next)) |disp| {
@@ -348,7 +348,7 @@ fn applyAmd64(ctx: *loader.Apply) LoadError!void {
 }
 
 fn applyArm64(ctx: *loader.Apply) LoadError!void {
-    const kind: Arm64Kind = @enumFromInt(@as(u16, @truncate(ctx.reloc.kind)));
+    const kind: Arm64Kind = @fromBackingInt(@intCast(@as(u16, @truncate(ctx.reloc.kind))));
     const P = ctx.placeAddress();
     const S = ctx.symbolAddress();
     switch (kind) {

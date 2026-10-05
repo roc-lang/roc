@@ -65,7 +65,7 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
     switch (stmt) {
         .join => |join| {
             try self.joins.put(join.id, join.body);
-            self.next_join = @max(self.next_join, @intFromEnum(join.id) + 1);
+            self.next_join = @max(self.next_join, @backingInt(join.id) + 1);
         },
         .assign_call => |call| if (call.proc == proc) {
             try self.calls.append(self.allocator, id);
@@ -141,7 +141,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
             head = id;
         }
     }
-    return if (head) |first| .{ .head = first, .loop = @enumFromInt(self.next_join) } else null;
+    return if (head) |first| .{ .head = first, .loop = @fromBackingInt(@intCast(self.next_join)) } else null;
 }
 
 fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
@@ -157,7 +157,7 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
             => null,
         },
         .assign_boxy_adapt => |assign| if (assign.source_mode == .move and
-            self.adapters[@intFromEnum(assign.adapter)].operation == .relabel)
+            self.adapters[@backingInt(assign.adapter)].operation == .relabel)
             assign.next
         else
             null,
