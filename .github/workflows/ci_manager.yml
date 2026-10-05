@@ -206,6 +206,15 @@ jobs:
             "-Droc-deps-path=$RUNNER_TEMP/roc-test-report-deps" \
             -j2 --cache-poison=disallowed
 
+      # Exercises the production display-version reader in source archives,
+      # ordinary checkouts and worktrees without compiling Roc.
+      - name: Check cached Git display metadata
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_build_version_metadata.py zig \
+            --work-dir "$RUNNER_TEMP/roc-git-display-metadata" -- -j2
+
       - name: Install actionlint
         if: ${{ !cancelled() }}
         shell: bash

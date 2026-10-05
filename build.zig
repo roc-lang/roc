@@ -474,6 +474,8 @@ fn addSha256Floor(query: *std.Target.Query) void {
 const TestsSummaryStep = struct {
     step: *Step,
     run: *Step.Run,
+    mutable_reports: std.Build.LazyPath,
+    producers: std.StringHashMapUnmanaged(void) = .empty,
     serialize_runs: bool = false,
     last_run: ?*Step = null,
 
@@ -483,7 +485,9 @@ const TestsSummaryStep = struct {
         run.addArg(b.fmt("{d}", .{forced_passes}));
         run.addArg(b.fmt("{d}", .{test_filters.len}));
         run.addArgs(test_filters);
-        self.* = .{ .step = &run.step, .run = run };
+        const mutable_reports = b.addWriteFiles();
+        mutable_reports.mode = .tmp;
+        self.* = .{ .step = &run.step, .run = run, .mutable_reports = mutable_reports.getDirectory() };
         return self;
     }
 
@@ -493,13 +497,22 @@ const TestsSummaryStep = struct {
 
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
-        // Dynamic passthrough deliberately keeps tests runnable on every
-        // invocation. Zig 0.17 uses the argument hash for those output paths,
-        // so the basename must also distinguish unrelated test producers.
-        const report = run.addPrefixedOutputFileArg(
-            "--roc-test-report=",
-            run.step.owner.fmt("{s}.tsv", .{run.producer.?.name}),
-        );
+        const b = run.step.owner;
+        const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
+        if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
+        const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
+        // Test runs always execute because they accept dynamic passthrough.
+        // Each summary owns a temporary destination so concurrent invocations
+        // never mutate the same report. Retain an immutable copy only after
+        // the test writer succeeds, before the summary reads its contents.
+        run.addDirectoryArg2(self.mutable_reports, .{
+            .prefix = "--roc-test-report-dir=",
+            .make_absolute = true,
+        });
+        run.addArg(b.fmt("--roc-test-report-name={s}", .{basename}));
+        const retained_reports = b.addWriteFiles();
+        const report = retained_reports.addCopyFile(self.mutable_reports.path(b, basename), basename);
+        retained_reports.step.dependOn(run_step);
         self.run.addArg(run.producer.?.name);
         self.run.addFileArg(report);
         if (self.serialize_runs) {
@@ -4284,6 +4297,12 @@ pub fn build(b: *std.Build) void {
     run_test_zig_step.dependOn(run_guarded_list_violations_step);
 
     for (module_tests_result.tests) |module_test| {
+        // Standalone module tests have fresh roots, so display-version imports
+        // must be declared separately from the production LSP module.
+        if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
+            module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
+        }
+
         // Add compiled builtins to tests that canonicalize ordinary modules.
         if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -7315,19 +7334,20 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
     const io = b.graph.io;
     const cwd = std.Io.Dir.cwd();
     const dot_git = b.root.joinString(b.allocator, ".git") catch @panic("OOM");
-    const git_stat = cwd.statFile(io, dot_git, .{}) catch {
-        b.dependOnFileContents(b.graph.cwdRelativePath(dot_git));
+    const git_stat = cwd.statFile(io, dot_git, .{}) catch |err| {
+        if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ dot_git, err });
+        dependOnExistingParentDirectory(b, dot_git);
         return "no-git";
     };
     const git_dir = if (git_stat.kind == .directory) dir: {
         b.dependOnDirectoryMetadata(b.graph.cwdRelativePath(dot_git));
         break :dir dot_git;
-    } else dir: {
+    } else if (git_stat.kind == .file) dir: {
         const pointer = readVersionFile(b, dot_git) orelse return "no-git";
         const prefix = "gitdir: ";
         if (!std.mem.startsWith(u8, pointer, prefix)) return "no-git";
         break :dir std.fs.path.resolve(b.allocator, &.{ std.fs.path.dirname(dot_git).?, pointer[prefix.len..] }) catch @panic("OOM");
-    };
+    } else std.debug.panic("expected Git metadata directory or pointer file: {s}", .{dot_git});
     const head = readVersionFile(b, b.pathJoin(&.{ git_dir, "HEAD" })) orelse return "no-git";
     if (!std.mem.startsWith(u8, head, "ref: ")) return shortCommit(head);
     const ref_name = head["ref: ".len..];
@@ -7346,9 +7366,37 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
 }
 
 fn readVersionFile(b: *std.Build, path: []const u8) ?[]const u8 {
+    const cwd = std.Io.Dir.cwd();
+    const stat = cwd.statFile(b.graph.io, path, .{}) catch |err| {
+        if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ path, err });
+        dependOnExistingParentDirectory(b, path);
+        return null;
+    };
+    if (stat.kind != .file) {
+        std.debug.panic("expected regular Git metadata file: {s}", .{path});
+    }
     b.dependOnFileContents(b.graph.cwdRelativePath(path));
-    const contents = std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(1024 * 1024)) catch return null;
+    const contents = cwd.readFileAlloc(b.graph.io, path, b.allocator, .limited(1024 * 1024)) catch return null;
     return std.mem.trim(u8, contents, " \n\r\t");
+}
+
+/// Zig 0.17 cannot record contents of a missing configure input. Watching its
+/// nearest existing directory's entries detects ordinary creation/deletion
+/// without poisoning every build. Stock Zig still trusts cached stat data.
+fn dependOnExistingParentDirectory(b: *std.Build, path: []const u8) void {
+    const cwd = std.Io.Dir.cwd();
+    var parent = std.fs.path.dirname(path) orelse ".";
+    while (true) {
+        const stat = cwd.statFile(b.graph.io, parent, .{}) catch |err| {
+            if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata parent {s}: {t}", .{ parent, err });
+            parent = std.fs.path.dirname(parent) orelse
+                std.debug.panic("no existing directory for Git metadata dependency: {s}", .{path});
+            continue;
+        };
+        if (stat.kind != .directory) std.debug.panic("Git metadata parent is not a directory: {s}", .{parent});
+        b.dependOnDirectoryContents(b.graph.cwdRelativePath(parent));
+        return;
+    }
 }
 
 fn shortCommit(commit: []const u8) []const u8 {
