@@ -316,8 +316,27 @@ materialization, unchanged repeats without new HTTP requests, exact file
 bytes, and rejection of genuine wrong hashes or corrupted bytes. Evidence
 is retained at `/tmp/roc-017-package-consumption-script-final/results.json`.
 These synthetic format/cache checks are separate from the real wrapped
-direct-download proof above. The final real flat release repack and consumer
-validation are pending.
+direct-download proof above.
+
+The real flat x86_64 Linux archive from clean bootstrap source
+`1df6e1c163ce3115bc5d2bf27f290506440a5762` passes metadata, header, library,
+architecture, and archive-normalization checks. Its 47,173,456 bytes and
+2,649 entries are byte-identical after an offline archive-assembly rebuild;
+this does not establish independent reproduction of the compiled libraries.
+Evidence is retained at
+`/tmp/roc-zig-017-validation/flat-release-validation-results.json`.
+Standalone fetch followed by consumption from distinct fresh package and
+local cache directories also passes with the HTTP server stopped, including
+the unchanged repeat. The exact returned dependency root, default paths,
+and clean LLVM 22 metadata are verified at
+`/tmp/roc-017-real-flat-consumer-foxjxjoa/results.json`. This private artifact
+is validation evidence; its hash is not a published release pin.
+
+When switching `--pkg-dir` on stock Zig 0.17, also select a distinct local
+`--cache-dir`. Reusing the local cache can retain the previous build graph's
+dependency paths even after the new package root is materialized. Keep each
+local cache paired with its package root when testing separate consumers;
+they can share `ZIG_GLOBAL_CACHE_DIR`.
 
 ## Native CLI and cache execution
 
