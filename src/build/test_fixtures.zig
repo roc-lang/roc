@@ -89,7 +89,10 @@ pub const Plan = struct {
             _ = files.addCopyDirectory(self.b.path(dir), dir, .{});
         }
         _ = files.addCopyDirectory(self.b.path("ci"), "ci", .{ .exclude_extensions = &.{ ".pyc", ".pyo" } });
-        inline for (.{ "build.zig", "build.zig.zon", "design.md", "legal_details" }) |path| {
+        // Roc's string-import fixtures reference these files relative to their
+        // original test directories. Declare the external inputs at the same
+        // paths so prepared trees preserve those imports and hash their bytes.
+        inline for (.{ "build.zig", "build.zig.zon", "design.md", "legal_details", "README.md", "CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc" }) |path| {
             _ = files.addCopyFile(self.b.path(path), path);
         }
         const root = files.getDirectory();

@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
         run.addArg(tag);
         run.addArg(if (index == 0) "first" else "second");
         run.addDirectoryArg(cached);
+        run.addDirectoryArg(b.path("."));
         run.setCwd(plan.mutableRoot(deps));
         run.expectExitCode(0);
         verify.dependOn(&run.step);
@@ -43,9 +44,10 @@ from pathlib import Path
 import sys
 import time
 
-tag, selected, cached_path = sys.argv[1:]
+tag, selected, cached_path, source_path = sys.argv[1:]
 root = Path.cwd()
 cached = Path(cached_path)
+source = Path(source_path)
 fixture = Path("test") / selected / "platform/targets/native/libhost.a"
 other = "second" if selected == "first" else "first"
 assert (root / fixture).read_text() == tag
@@ -55,6 +57,8 @@ assert (root / "test/input.roc").read_text() == "fixture input\n"
 assert (root / "test/first/platform/targets/native/crt1.o").read_bytes() == b"tracked runtime"
 assert (root / "test/first/platform/targets/native/libc.a").read_bytes() == b"tracked archive"
 for prepared in (root, cached):
+    for imported in ("README.md", "CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc"):
+        assert (prepared / imported).read_bytes() == (source / imported).read_bytes()
     assert not list((prepared / "ci").rglob("*.pyc"))
     assert not list((prepared / "ci").rglob("*.pyo"))
 # A fixture runner may create binaries and rewrite a copied input. These must
@@ -78,7 +82,7 @@ def main() -> None:
     source = Path(__file__).resolve().parents[1] / "src/build/test_fixtures.zig"
     with tempfile.TemporaryDirectory(prefix="roc-fixture-isolation-") as temp:
         root = Path(temp)
-        for name in ("src/build", "vendor", "ci", "test/first/platform/targets/native"):
+        for name in ("src/build", "vendor", "ci", "test/first/platform/targets/native", "CONTRIBUTING/profiling"):
             (root / name).mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, root / "src/build/test_fixtures.zig")
         (root / "build.zig").write_text(BUILD)
@@ -87,6 +91,8 @@ def main() -> None:
             (root / name).write_text("fixture metadata\n")
         (root / "build.zig.zon").write_text('.{ .name = .fixture_probe, .version = "0.0.0", .fingerprint = 0xceb1d2ec669ad2f3, .minimum_zig_version = "0.17.0", .paths = .{""} }\n')
         (root / "test/input.roc").write_text("fixture input\n")
+        (root / "README.md").write_text("readme string import\n")
+        (root / "CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc").write_text("profiling string import\n")
         target = root / "test/first/platform/targets/native"
         (target / "crt1.o").write_bytes(b"tracked runtime")
         (target / "libc.a").write_bytes(b"tracked archive")
@@ -120,6 +126,17 @@ def main() -> None:
             # Identical concurrent graphs also share immutable cache entries,
             # while their mutable runner directories must remain independent.
             assert list(pool.map(build, ("debug", "debug"))) == [baseline[0], baseline[0]]
+            # External string imports are content dependencies of the retained
+            # root. Editing either import must stage new bytes; restoring it
+            # must reuse the original roots without a checkout host mutation.
+            for imported in ("README.md", "CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc"):
+                path = root / imported
+                original = path.read_bytes()
+                path.write_bytes(original + b"changed imported contents\n")
+                changed = list(pool.map(build, ("debug", "fast")))
+                assert all(now != before for now, before in zip(changed, baseline))
+                path.write_bytes(original)
+                assert list(pool.map(build, ("debug", "fast"))) == baseline
         assert (root / "test/input.roc").read_text() == "fixture input\n"
         assert (target / "libhost.a").read_text() == "stale checkout host"
         assert not (root / "test/generated-app").exists()
