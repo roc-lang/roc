@@ -655,144 +655,85 @@ pub fn init(gpa: Allocator) Allocator.Error!NodeStore {
     return try NodeStore.initCapacity(gpa, 128);
 }
 
+/// Names of `T`'s backing-list fields in declaration order, for `T` either
+/// `NodeStore` or `NodeStore.Serialized`: every field except the allocator and
+/// the scratch buffers. Construction, `clone`, `deinit`, and the `Serialized`
+/// conversions visit exactly these, so declaring a list in both structs is all
+/// it takes to enroll it.
+fn backingLists(comptime T: type) []const []const u8 {
+    comptime {
+        const fields = std.meta.fieldNames(T);
+        var names: [fields.len - 2][]const u8 = undefined;
+        var count: usize = 0;
+        for (fields) |name| {
+            if (std.mem.eql(u8, name, "gpa") or std.mem.eql(u8, name, "scratch")) continue;
+            names[count] = name;
+            count += 1;
+        }
+        const result = names;
+        return &result;
+    }
+}
+
+/// How many nodes a store holds per entry of each backing list: `initCapacity`
+/// reserves `capacity / divisor` entries. Lists not named here start empty.
+const nodes_per_list_entry = .{
+    .nodes = 1,
+    .regions = 1,
+    .int128_values = 8,
+    .literal_dispatch_plans = 8,
+    .interpolation_data = 16,
+    .span2_data = 4,
+    .span_with_node_data = 4,
+    .method_call_data = 8,
+    .match_data = 8,
+    .if_data = 8,
+    .match_branch_data = 8,
+    .closure_data = 16,
+    .zero_arg_tag_data = 16,
+    .def_data = 8,
+    .import_data = 16,
+    .type_apply_data = 16,
+    .pattern_list_data = 16,
+    .pattern_str_interpolation_data = 32,
+    .pattern_str_interpolation_steps = 16,
+    .where_clause_owners = 16,
+    .index_data = 4,
+};
+
+/// A store whose backing lists are all empty and which has no scratch buffers.
+fn initEmpty(gpa: Allocator) NodeStore {
+    var store: NodeStore = undefined;
+    store.gpa = gpa;
+    store.scratch = null;
+    inline for (comptime backingLists(NodeStore)) |name| @field(store, name) = .{};
+    return store;
+}
+
 /// Initializes the NodeStore with a specified capacity.
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
-    var nodes = try Node.List.initCapacity(gpa, capacity);
-    errdefer nodes.deinit(gpa);
-    var regions = try Region.List.initCapacity(gpa, capacity);
-    errdefer regions.deinit(gpa);
-    var int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8);
-    errdefer int128_values.deinit(gpa);
-    const literal_pattern_contexts = collections.SafeList(LiteralPatternContext){};
-    var literal_dispatch_plans = try collections.SafeList(LiteralDispatchPlan).initCapacity(gpa, capacity / 8);
-    errdefer literal_dispatch_plans.deinit(gpa);
-    var interpolation_data = try collections.SafeList(InterpolationData).initCapacity(gpa, capacity / 16);
-    errdefer interpolation_data.deinit(gpa);
-    var span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4);
-    errdefer span2_data.deinit(gpa);
-    var span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4);
-    errdefer span_with_node_data.deinit(gpa);
-    var method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8);
-    errdefer method_call_data.deinit(gpa);
-    var match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8);
-    errdefer match_data.deinit(gpa);
-    var if_data = try collections.SafeList(IfData).initCapacity(gpa, capacity / 8);
-    errdefer if_data.deinit(gpa);
-    var match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8);
-    errdefer match_branch_data.deinit(gpa);
-    var closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16);
-    errdefer closure_data.deinit(gpa);
-    var zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16);
-    errdefer zero_arg_tag_data.deinit(gpa);
-    var def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8);
-    errdefer def_data.deinit(gpa);
-    var import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16);
-    errdefer import_data.deinit(gpa);
-    var type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16);
-    errdefer type_apply_data.deinit(gpa);
-    var pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16);
-    errdefer pattern_list_data.deinit(gpa);
-    var pattern_str_interpolation_data = try collections.SafeList(PatternStrInterpolationData).initCapacity(gpa, capacity / 32);
-    errdefer pattern_str_interpolation_data.deinit(gpa);
-    var pattern_str_interpolation_steps = try collections.SafeList(PatternStrInterpolationStepData).initCapacity(gpa, capacity / 16);
-    errdefer pattern_str_interpolation_steps.deinit(gpa);
-    var where_clause_owners = try collections.SafeList(WhereClauseOwnerData).initCapacity(gpa, capacity / 16);
-    errdefer where_clause_owners.deinit(gpa);
-    var index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4);
-    errdefer index_data.deinit(gpa);
-    const scratch = try Scratch.init(gpa);
-    errdefer scratch.deinit(gpa);
-
-    return .{
-        .gpa = gpa,
-        .nodes = nodes,
-        .replaced_source_nodes = .{},
-        .regions = regions,
-        .write_occurrences = .{},
-        .int128_values = int128_values,
-        .literal_dispatch_plans = literal_dispatch_plans,
-        .literal_pattern_contexts = literal_pattern_contexts,
-        .interpolation_data = interpolation_data,
-        .span2_data = span2_data,
-        .span_with_node_data = span_with_node_data,
-        .method_call_data = method_call_data,
-        .match_data = match_data,
-        .if_data = if_data,
-        .match_branch_data = match_branch_data,
-        .closure_data = closure_data,
-        .zero_arg_tag_data = zero_arg_tag_data,
-        .def_data = def_data,
-        .import_data = import_data,
-        .type_apply_data = type_apply_data,
-        .pattern_list_data = pattern_list_data,
-        .pattern_str_interpolation_data = pattern_str_interpolation_data,
-        .pattern_str_interpolation_steps = pattern_str_interpolation_steps,
-        .where_clause_owners = where_clause_owners,
-        .index_data = index_data,
-        .scratch = scratch,
-    };
+    var store = initEmpty(gpa);
+    errdefer store.deinit();
+    inline for (comptime std.meta.fieldNames(@TypeOf(nodes_per_list_entry))) |name| {
+        @field(store, name) = try @FieldType(NodeStore, name).initCapacity(gpa, capacity / @field(nodes_per_list_entry, name));
+    }
+    store.scratch = try Scratch.init(gpa);
+    return store;
 }
 
 /// Public function `clone`.
 pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
-    var cloned = NodeStore{
-        .gpa = gpa,
-        .nodes = try self.nodes.clone(gpa),
-        .replaced_source_nodes = try self.replaced_source_nodes.clone(gpa),
-        .regions = try self.regions.clone(gpa),
-        .write_occurrences = try self.write_occurrences.clone(gpa),
-        .int128_values = try self.int128_values.clone(gpa),
-        .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
-        .literal_pattern_contexts = try self.literal_pattern_contexts.clone(gpa),
-        .interpolation_data = try self.interpolation_data.clone(gpa),
-        .span2_data = try self.span2_data.clone(gpa),
-        .span_with_node_data = try self.span_with_node_data.clone(gpa),
-        .method_call_data = try self.method_call_data.clone(gpa),
-        .match_data = try self.match_data.clone(gpa),
-        .if_data = try self.if_data.clone(gpa),
-        .match_branch_data = try self.match_branch_data.clone(gpa),
-        .closure_data = try self.closure_data.clone(gpa),
-        .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
-        .def_data = try self.def_data.clone(gpa),
-        .import_data = try self.import_data.clone(gpa),
-        .type_apply_data = try self.type_apply_data.clone(gpa),
-        .pattern_list_data = try self.pattern_list_data.clone(gpa),
-        .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.clone(gpa),
-        .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.clone(gpa),
-        .where_clause_owners = try self.where_clause_owners.clone(gpa),
-        .index_data = try self.index_data.clone(gpa),
-        .scratch = null,
-    };
+    var cloned = initEmpty(gpa);
     errdefer cloned.deinit();
+    inline for (comptime backingLists(NodeStore)) |name| {
+        @field(cloned, name) = try @field(self, name).clone(gpa);
+    }
     return cloned;
 }
 
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
-    store.nodes.deinit(store.gpa);
-    store.replaced_source_nodes.deinit(store.gpa);
-    store.regions.deinit(store.gpa);
-    store.write_occurrences.deinit(store.gpa);
-    store.int128_values.deinit(store.gpa);
-    store.literal_dispatch_plans.deinit(store.gpa);
-    store.literal_pattern_contexts.deinit(store.gpa);
-    store.interpolation_data.deinit(store.gpa);
-    store.span2_data.deinit(store.gpa);
-    store.span_with_node_data.deinit(store.gpa);
-    store.method_call_data.deinit(store.gpa);
-    store.match_data.deinit(store.gpa);
-    store.if_data.deinit(store.gpa);
-    store.match_branch_data.deinit(store.gpa);
-    store.closure_data.deinit(store.gpa);
-    store.zero_arg_tag_data.deinit(store.gpa);
-    store.def_data.deinit(store.gpa);
-    store.import_data.deinit(store.gpa);
-    store.type_apply_data.deinit(store.gpa);
-    store.pattern_list_data.deinit(store.gpa);
-    store.pattern_str_interpolation_data.deinit(store.gpa);
-    store.pattern_str_interpolation_steps.deinit(store.gpa);
-    store.where_clause_owners.deinit(store.gpa);
-    store.index_data.deinit(store.gpa);
+    inline for (comptime backingLists(NodeStore)) |name| @field(store, name).deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -6356,6 +6297,10 @@ pub const Serialized = extern struct {
     index_data: collections.SafeList(u32).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
+    comptime {
+        collections.serde_validation.assertBidirectionalFieldSet(NodeStore, Serialized, &.{}, &.{}, &.{});
+    }
+
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
     pub fn serialize(
         self: *Serialized,
@@ -6363,118 +6308,33 @@ pub const Serialized = extern struct {
         allocator: Allocator,
         writer: *CompactWriter,
     ) Allocator.Error!void {
-        // Serialize int128_values FIRST to ensure 16-byte alignment (i128 requires it)
-        try self.int128_values.serialize(&store.int128_values, allocator, writer);
-        try self.literal_dispatch_plans.serialize(&store.literal_dispatch_plans, allocator, writer);
-        try self.literal_pattern_contexts.serialize(&store.literal_pattern_contexts, allocator, writer);
-        try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
-        // Serialize nodes
-        try self.nodes.serialize(&store.nodes, allocator, writer);
-        try self.replaced_source_nodes.serialize(&store.replaced_source_nodes, allocator, writer);
-        // Serialize regions
-        try self.regions.serialize(&store.regions, allocator, writer);
-        try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
-        // Serialize span2_data
-        try self.span2_data.serialize(&store.span2_data, allocator, writer);
-        // Serialize span_with_node_data
-        try self.span_with_node_data.serialize(&store.span_with_node_data, allocator, writer);
-        // Serialize method_call_data
-        try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
-        // Serialize match_data
-        try self.match_data.serialize(&store.match_data, allocator, writer);
-        // Serialize if_data
-        try self.if_data.serialize(&store.if_data, allocator, writer);
-        // Serialize match_branch_data
-        try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
-        // Serialize closure_data
-        try self.closure_data.serialize(&store.closure_data, allocator, writer);
-        // Serialize zero_arg_tag_data
-        try self.zero_arg_tag_data.serialize(&store.zero_arg_tag_data, allocator, writer);
-        // Serialize def_data
-        try self.def_data.serialize(&store.def_data, allocator, writer);
-        // Serialize import_data
-        try self.import_data.serialize(&store.import_data, allocator, writer);
-        // Serialize type_apply_data
-        try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
-        // Serialize pattern_list_data
-        try self.pattern_list_data.serialize(&store.pattern_list_data, allocator, writer);
-        // Serialize pattern_str_interpolation_data
-        try self.pattern_str_interpolation_data.serialize(&store.pattern_str_interpolation_data, allocator, writer);
-        // Serialize pattern_str_interpolation_steps
-        try self.pattern_str_interpolation_steps.serialize(&store.pattern_str_interpolation_steps, allocator, writer);
-        // Serialize canonical where-clause ownership
-        try self.where_clause_owners.serialize(&store.where_clause_owners, allocator, writer);
-        // Serialize index_data
-        try self.index_data.serialize(&store.index_data, allocator, writer);
+        // Lists are written in this struct's field order, so int128_values
+        // goes first to ensure 16-byte alignment (i128 requires it).
+        inline for (comptime backingLists(Serialized)) |name| {
+            try @field(self, name).serialize(&@field(store, name), allocator, writer);
+        }
     }
 
     /// Deserialize into a NodeStore value (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    /// WARNING: The returned NodeStore points into the cache buffer and is read-only.
+    /// WARNING: The returned NodeStore points into the cache buffer and is read-only,
+    /// so it has no scratch memory.
     /// Use deserializeWithCopy() if the store needs to be mutable.
     pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) NodeStore {
-        return NodeStore{
-            .gpa = gpa,
-            .nodes = self.nodes.deserializeInto(base_addr),
-            .replaced_source_nodes = self.replaced_source_nodes.deserializeInto(base_addr),
-            .regions = self.regions.deserializeInto(base_addr),
-            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .int128_values = self.int128_values.deserializeInto(base_addr),
-            .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
-            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
-            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
-            .span2_data = self.span2_data.deserializeInto(base_addr),
-            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
-            .method_call_data = self.method_call_data.deserializeInto(base_addr),
-            .match_data = self.match_data.deserializeInto(base_addr),
-            .if_data = self.if_data.deserializeInto(base_addr),
-            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
-            .closure_data = self.closure_data.deserializeInto(base_addr),
-            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
-            .def_data = self.def_data.deserializeInto(base_addr),
-            .import_data = self.import_data.deserializeInto(base_addr),
-            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
-            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
-            .where_clause_owners = self.where_clause_owners.deserializeInto(base_addr),
-            .index_data = self.index_data.deserializeInto(base_addr),
-            .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
-        };
+        var store = initEmpty(gpa);
+        inline for (comptime backingLists(NodeStore)) |name| {
+            @field(store, name) = @field(self, name).deserializeInto(base_addr);
+        }
+        return store;
     }
 
     /// Deserialize into a NodeStore value with fresh memory allocation for fields that may need to grow.
     /// Use this for cache modules where regions may need to be extended during type checking.
     pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        return NodeStore{
-            .gpa = gpa,
-            .nodes = self.nodes.deserializeInto(base_addr),
-            .replaced_source_nodes = self.replaced_source_nodes.deserializeInto(base_addr),
-            // Regions needs to be mutable (grown during type checking)
-            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
-            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .int128_values = self.int128_values.deserializeInto(base_addr),
-            .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
-            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
-            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
-            .span2_data = self.span2_data.deserializeInto(base_addr),
-            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
-            .method_call_data = self.method_call_data.deserializeInto(base_addr),
-            .match_data = self.match_data.deserializeInto(base_addr),
-            .if_data = self.if_data.deserializeInto(base_addr),
-            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
-            .closure_data = self.closure_data.deserializeInto(base_addr),
-            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
-            .def_data = self.def_data.deserializeInto(base_addr),
-            .import_data = self.import_data.deserializeInto(base_addr),
-            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
-            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
-            .where_clause_owners = self.where_clause_owners.deserializeInto(base_addr),
-            .index_data = self.index_data.deserializeInto(base_addr),
-            .scratch = null,
-        };
+        var store = self.deserializeInto(base_addr, gpa);
+        // Regions needs to be mutable (grown during type checking)
+        store.regions = try self.regions.deserializeWithCopy(base_addr, gpa);
+        return store;
     }
 
     /// Deserialize into a NodeStore that owns every list it holds and carries
@@ -6482,41 +6342,65 @@ pub const Serialized = extern struct {
     /// regions, and extra data to it. `deinit` releases it exactly like a
     /// freshly constructed `NodeStore`.
     pub fn deserializeOwned(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        var store = NodeStore{
-            .gpa = gpa,
-            .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
-            .replaced_source_nodes = try self.replaced_source_nodes.deserializeWithCopy(base_addr, gpa),
-            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
-            .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
-            .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
-            .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),
-            .interpolation_data = try self.interpolation_data.deserializeWithCopy(base_addr, gpa),
-            .span2_data = try self.span2_data.deserializeWithCopy(base_addr, gpa),
-            .span_with_node_data = try self.span_with_node_data.deserializeWithCopy(base_addr, gpa),
-            .method_call_data = try self.method_call_data.deserializeWithCopy(base_addr, gpa),
-            .match_data = try self.match_data.deserializeWithCopy(base_addr, gpa),
-            .if_data = try self.if_data.deserializeWithCopy(base_addr, gpa),
-            .match_branch_data = try self.match_branch_data.deserializeWithCopy(base_addr, gpa),
-            .closure_data = try self.closure_data.deserializeWithCopy(base_addr, gpa),
-            .zero_arg_tag_data = try self.zero_arg_tag_data.deserializeWithCopy(base_addr, gpa),
-            .def_data = try self.def_data.deserializeWithCopy(base_addr, gpa),
-            .import_data = try self.import_data.deserializeWithCopy(base_addr, gpa),
-            .type_apply_data = try self.type_apply_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_list_data = try self.pattern_list_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.deserializeWithCopy(base_addr, gpa),
-            .where_clause_owners = try self.where_clause_owners.deserializeWithCopy(base_addr, gpa),
-            .index_data = try self.index_data.deserializeWithCopy(base_addr, gpa),
-            .scratch = null,
-        };
+        var store = initEmpty(gpa);
         errdefer store.deinit();
-
+        inline for (comptime backingLists(NodeStore)) |name| {
+            @field(store, name) = try @field(self, name).deserializeWithCopy(base_addr, gpa);
+        }
         try store.ensureScratch();
-
         return store;
     }
 };
+
+test "NodeStore round-trips every backing list" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    const lists = comptime backingLists(NodeStore);
+
+    // Every list gets a distinct, nonzero number of entries, so a conversion
+    // that skips a list or crosses two of them changes a length.
+    var original = initEmpty(gpa);
+    defer original.deinit();
+    inline for (lists, 1..) |name, entry_count| {
+        const Entry = @FieldType(Serialized, name).SerializedElement;
+        for (0..entry_count) |_| _ = try @field(original, name).append(gpa, std.mem.zeroes(Entry));
+    }
+
+    var cloned = try original.clone(gpa);
+    defer cloned.deinit();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, .@"16", @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const loaded: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const base_addr = @intFromPtr(buffer.ptr);
+
+    const borrowed = loaded.deserializeInto(base_addr, gpa);
+    var regions_owned = try loaded.deserializeWithCopy(base_addr, gpa);
+    defer regions_owned.regions.deinit(gpa);
+    var owned = try loaded.deserializeOwned(base_addr, gpa);
+    defer owned.deinit();
+
+    inline for (lists, 1..) |name, entry_count| {
+        inline for (.{ &cloned, &borrowed, &regions_owned, &owned }) |store| {
+            try testing.expectEqual(@as(u64, entry_count), @field(store, name).len());
+        }
+    }
+
+    // Serializing the reloaded store reproduces the original bytes.
+    var rewriter = CompactWriter.init();
+    defer rewriter.deinit(gpa);
+    const reserialized = try rewriter.appendAlloc(gpa, Serialized);
+    try reserialized.serialize(&owned, gpa, &rewriter);
+    const rebuffer = try gpa.alignedAlloc(u8, .@"16", @intCast(rewriter.total_bytes));
+    defer gpa.free(rebuffer);
+    _ = try rewriter.writeToBuffer(rebuffer);
+    try testing.expectEqualSlices(u8, buffer, rebuffer);
+}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
