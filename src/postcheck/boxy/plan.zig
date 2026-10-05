@@ -937,11 +937,13 @@ pub const ContextInput = struct {
     }
 };
 
+/// A closed representation and derived method identifying frame-local evidence.
 pub const FrameContextKey = struct {
     rep: TypeRepId,
     method: DerivedMethod,
 };
 
+/// One runtime capture belonging to a checked local procedure.
 pub const LocalProcCapture = struct {
     /// The local procedure's declaration.
     site: CheckedExprIdentity,
@@ -949,6 +951,7 @@ pub const LocalProcCapture = struct {
     index: u32,
 };
 
+/// The dictionary requirement and closed representation a worker derives locally.
 pub const StructuralContext = struct {
     requirement: DictionaryRequirementId,
     method: DerivedMethod,
@@ -968,6 +971,7 @@ pub const ContextArg = union(enum) {
     capture: LocalProcCapture,
 };
 
+/// Identity of a planned context callable construction.
 pub const ContextConstructId = enum(u32) { _ };
 
 /// A callable that one frame constructs because a worker it calls needs
@@ -21286,6 +21290,7 @@ fn directDispatchEvidence(
     };
 }
 
+/// Compare context inputs by their explicit checked identities.
 pub fn contextKeyEql(a: ContextInput.Key, b: ContextInput.Key) bool {
     return switch (a) {
         .requirement => |requirement| b == .requirement and b.requirement == requirement,

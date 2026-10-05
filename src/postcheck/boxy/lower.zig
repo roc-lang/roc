@@ -25681,7 +25681,7 @@ const ProcBodyBuilder = struct {
             return try self.beginContextDispatchCall(target, dispatch, planned, match.requirement, callable, ret_ty, next);
         }
         if (self.structuralContextFor(match.requirement)) |structural| {
-            return try self.beginStructuralContextDispatch(target, dispatch, planned, structural, ret_ty, next);
+            return try self.beginStructuralContextDispatch(target, dispatch, planned, structural, next);
         }
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");
@@ -25920,10 +25920,8 @@ const ProcBodyBuilder = struct {
         dispatch: static_dispatch.StaticDispatchCallPlan,
         planned: Plan.DictionaryDispatchPlan,
         structural: Plan.StructuralContext,
-        ret_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        _ = ret_ty;
         const operands = self.parent.plan.callOperandSlice(planned.operands);
         if (operands.len != 2) boxyLowerInvariant("structural context dispatch did not take two operands");
         const first_expr = switch (operands[0]) {
@@ -36764,11 +36762,10 @@ const ProcBodyBuilder = struct {
             const callable_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(callable_function.rep)].children);
             const arg_reps = try self.parent.allocator.alloc(Plan.TypeRepId, args.len);
             defer self.parent.allocator.free(arg_reps);
-            for (arg_reps, args, 0..) |*arg_rep, arg, index| {
+            for (arg_reps, 0..) |*arg_rep, index| {
                 // The dispatcher is this component, described by the frame;
                 // each other argument already has the callable's own type.
                 arg_rep.* = if (index == 0) component_rep else callable_children[callable_function.args_start + index].rep;
-                _ = arg;
             }
             const requirement_function = self.functionChildrenForRep(self.repForTypeRef(self.parent.plan.dictionaries.items[@intFromEnum(requirement_id)].fn_ty)) orelse
                 boxyLowerInvariant("derived method scheme requirement was not a function");
