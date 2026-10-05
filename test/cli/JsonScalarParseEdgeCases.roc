@@ -69,6 +69,13 @@ dec_parses_as = |json, expected| {
 	result == Ok(expected)
 }
 
+dec_rejects : Str -> Bool
+dec_rejects = |json| {
+	result : Try(Dec, [InvalidJson(Str)])
+	result = Json.parse(json)
+	result == Err(Json.invalid_json)
+}
+
 # --- literal spellings must be exact ---
 
 # wrong-case literals are rejected
@@ -128,6 +135,13 @@ expect f64_parses_as("0e0", 0.0)
 # sign, fraction, and exponent combined
 expect f64_parses_as("-1.5e-3", -0.0015)
 expect dec_parses_as("-1.5e-3", -0.0015)
+
+# exponents at the I64 limits are out of Dec range and must be rejected, not
+# overflow while locating the decimal point
+expect dec_rejects("1e9223372036854775807")
+expect dec_rejects("99e+9223372036854775807")
+expect dec_rejects("0.01e-9223372036854775808")
+expect dec_rejects("-0.001e-9223372036854775807")
 
 # negative zero is a valid JSON number (signed and float targets accept it;
 # unsigned targets reject any minus sign)
