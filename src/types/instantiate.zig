@@ -331,6 +331,17 @@ pub const Instantiator = struct {
     /// is not quantified, so each use must see the same node, including a
     /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
+    /// Set by a caller that knows the next scheme root it instantiates has no
+    /// monomorphic structural node from which a generalized variable is
+    /// reachable, so that root's reachability walk can be skipped. It
+    /// applies to that one root only.
+    skip_generalized_reachability: bool = false,
+    /// Whether the reachability of the scheme root being instantiated was
+    /// skipped, so no monomorphic node is copied for it.
+    reach_known_empty: bool = false,
+    /// After `instantiateTypeScheme` walked a root's reachability: whether a
+    /// monomorphic structural node reaches a generalized variable.
+    monomorphic_reach: bool = false,
     /// Source vars this instantiation must SHARE rather than copy, mapped to
     /// themselves in `var_map` before the walk starts. Used by a predeclared
     /// scheme for an annotation with `_` inference holes: a hole's type is
@@ -556,7 +567,13 @@ pub const Instantiator = struct {
         self: *Self,
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
-        try self.computeGeneralizedReachability(initial_var);
+        if (self.skip_generalized_reachability) {
+            self.skip_generalized_reachability = false;
+            self.reach_known_empty = true;
+        } else {
+            try self.computeGeneralizedReachability(initial_var);
+            self.reach_known_empty = false;
+        }
         const previous = self.copy_scheme_structure;
         self.copy_scheme_structure = true;
         defer self.copy_scheme_structure = previous;
@@ -644,6 +661,21 @@ pub const Instantiator = struct {
                     try machine.reach_stack.append(self.store.gpa, edge.parent);
                 }
                 edge_idx = edge.next;
+            }
+        }
+
+        self.monomorphic_reach = false;
+        var reached = reach_state.iterator();
+        while (reached.next()) |entry| {
+            if (!entry.value_ptr.*) continue;
+            const resolved = self.store.resolveVar(entry.key_ptr.*);
+            if (resolved.desc.rank == .generalized) continue;
+            switch (resolved.desc.content) {
+                .alias, .structure => {
+                    self.monomorphic_reach = true;
+                    break;
+                },
+                .flex, .rigid, .field_presence, .err => {},
             }
         }
     }
@@ -927,7 +959,7 @@ pub const Instantiator = struct {
         }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => machine.reach_state.?.get(resolved_var) orelse false,
+                .alias, .structure => !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false),
                 .flex, .rigid, .field_presence, .err => false,
             };
             if (!copy_structure and !is_polarity_marker) {

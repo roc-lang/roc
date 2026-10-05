@@ -959,6 +959,9 @@ dispatch_replayed_edges: std.ArrayListUnmanaged(u32) = .empty,
 use_instances: std.ArrayListUnmanaged(UseInstance) = .empty,
 use_owned_fns: std.ArrayListUnmanaged(Var) = .empty,
 use_instance_by_fn_var: collections.DenseMap(Var, u32),
+/// Scheme roots none of whose monomorphic structural nodes reaches a
+/// generalized variable; instantiating them needs no reachability walk.
+reach_free_schemes: collections.DenseMap(Var, void),
 /// Schemes one of whose uses settled as a replay source would: only their
 /// uses encode a shape.
 use_replayable_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty,
@@ -3471,6 +3474,7 @@ fn initAssumePrepared(
         .pending_tuple_accesses = .empty,
         .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
+        .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
         .external_pinnable = collections.DenseMap(Var, void).init(gpa),
@@ -3725,6 +3729,7 @@ pub fn deinit(self: *Self) void {
     self.use_replayable_schemes.deinit(self.gpa);
     self.use_owned_fns.deinit(self.gpa);
     self.use_instance_by_fn_var.deinit();
+    self.reach_free_schemes.deinit();
     {
         var sources = self.use_replay_sources.valueIterator();
         while (sources.next()) |list| list.deinit(self.gpa);
@@ -9654,10 +9659,18 @@ fn instantiateVarHelp(
     }
 
     // Then, instantiate the variable with the provided context
-    const instantiated_var = if (force_type_scheme_root)
-        try instantiator.instantiateTypeScheme(var_to_instantiate)
-    else
-        try instantiator.instantiateVar(var_to_instantiate);
+    const instantiated_var = if (force_type_scheme_root) scheme: {
+        // A scheme none of whose monomorphic nodes reaches a generalized
+        // variable keeps that property: no later unification can give a
+        // monomorphic node a generalized descendant. Its uses skip the walk.
+        const scheme_key = self.types.resolveVar(var_to_instantiate).var_;
+        instantiator.skip_generalized_reachability = self.reach_free_schemes.contains(scheme_key);
+        const copy = try instantiator.instantiateTypeScheme(var_to_instantiate);
+        if (!instantiator.reach_known_empty and !instantiator.monomorphic_reach) {
+            try self.reach_free_schemes.put(scheme_key, {});
+        }
+        break :scheme copy;
+    } else try instantiator.instantiateVar(var_to_instantiate);
 
     // A scheme is the root type plus its explicit pending dispatch
     // requirements. Copy both under this one var_map so generalized variables
