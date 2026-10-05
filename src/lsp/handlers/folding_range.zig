@@ -43,7 +43,7 @@ const FoldingRange = struct {
 /// Extract folding ranges from source code by finding matching brackets.
 fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Allocator.Error![]FoldingRange {
     // Build line offset table
-    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    const line_offsets = try pos.LineOffsets.init(allocator, source);
     defer line_offsets.deinit();
 
     // Track bracket positions for folding

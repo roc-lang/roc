@@ -131,7 +131,7 @@ fn freeSelectionRange(allocator: std.mem.Allocator, range: SelectionRange) void 
 /// Walks the AST to find all containing nodes (token, expression, statement, file).
 fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) (Allocator.Error || error{ InvalidPosition, ParseFailed, NoRangeFound })!SelectionRange {
     // Build line offset table
-    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    const line_offsets = try pos.LineOffsets.init(allocator, source);
     defer line_offsets.deinit();
 
     // Convert position to offset

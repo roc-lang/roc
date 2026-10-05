@@ -3502,7 +3502,7 @@ pub const SyntaxChecker = struct {
         const module_env = build.getModuleEnv() orelse return &[_]SymbolInformation{};
 
         // Build line offset table
-        const line_offsets = try pos.buildLineOffsets(allocator, source);
+        const line_offsets = try pos.LineOffsets.init(allocator, source);
         defer line_offsets.deinit();
 
         var symbols: std.ArrayList(SymbolInformation) = .empty;

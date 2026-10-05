@@ -16,10 +16,10 @@ const can = @import("can");
 const base = @import("base");
 const CirVisitor = @import("cir_visitor.zig").CirVisitor;
 const VisitAction = @import("cir_visitor.zig").VisitAction;
-const line_info = @import("line_info.zig");
+const position = @import("position.zig");
 
 const Token = tokenize.Token;
-const LineInfo = line_info.LineInfo;
+const LineOffsets = position.LineOffsets;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
 const CIR = can.CIR;
@@ -102,7 +102,7 @@ fn tokenSemanticTypeAt(tags: []const Token.Tag, token_index: usize) ?u32 {
 pub fn extractSemanticTokens(
     allocator: std.mem.Allocator,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
 ) Allocator.Error![]SemanticToken {
     return extractSemanticTokensWithImports(allocator, source, info, null);
 }
@@ -113,7 +113,7 @@ pub fn extractSemanticTokens(
 pub fn extractSemanticTokensWithImports(
     allocator: std.mem.Allocator,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
     imported_envs: ?[]*ModuleEnv,
 ) Allocator.Error![]SemanticToken {
     var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
@@ -159,7 +159,7 @@ pub fn extractSemanticTokensWithImports(
 pub fn extractSemanticTokensFromChecked(
     allocator: std.mem.Allocator,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
     module_env: *ModuleEnv,
 ) Allocator.Error![]SemanticToken {
     var parse_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
@@ -670,7 +670,7 @@ fn emitTokens(
     ast: *const AST,
     classes: []const Class,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
     out: *std.ArrayListUnmanaged(SemanticToken),
 ) Allocator.Error!void {
     const tags = ast.tokens.tokens.items(.tag);
@@ -728,15 +728,15 @@ fn emitTokens(
 fn appendSpan(
     allocator: Allocator,
     out: *std.ArrayListUnmanaged(SemanticToken),
-    info: *const LineInfo,
+    info: *const LineOffsets,
     start: u32,
     end: u32,
     semantic_type: u32,
     modifiers: u32,
 ) Allocator.Error!void {
     if (start >= end) return;
-    const start_pos = info.positionFromOffset(start) orelse return;
-    const end_pos = info.positionFromOffset(end) orelse return;
+    const start_pos = position.offsetToPosition(start, info);
+    const end_pos = position.offsetToPosition(end, info);
     // LSP lengths are UTF-16 code units. A token that spans lines keeps its byte
     // length, which is what clients without multiline support clip anyway.
     const length = if (end_pos.line == start_pos.line and end_pos.character > start_pos.character)

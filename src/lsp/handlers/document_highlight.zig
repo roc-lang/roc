@@ -91,7 +91,7 @@ const DocumentHighlight = struct {
 /// Used when CIR is not available (e.g., parse errors).
 fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) Allocator.Error![]DocumentHighlight {
     // Build line offset table
-    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    const line_offsets = try pos.LineOffsets.init(allocator, source);
     defer line_offsets.deinit();
 
     // Convert position to offset

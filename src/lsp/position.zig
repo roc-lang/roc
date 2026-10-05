@@ -2,16 +2,34 @@
 
 const std = @import("std");
 const document_symbol_handler = @import("handlers/document_symbol.zig");
+const base = @import("base");
 const can = @import("can");
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
-/// Dynamically-allocated table of byte offsets for line starts in a source buffer.
+/// The line-start table of a source buffer that has no `ModuleEnv`, for
+/// converting between byte offsets and LSP positions.
+///
+/// The offsets come from `base.RegionInfo.findLineStarts`, the scan that fills
+/// `ModuleEnv`'s own table, so a document being edited and a checked module
+/// agree about where every line begins.
 pub const LineOffsets = struct {
+    /// Byte offset at which each line starts. Empty for an empty source.
     offsets: []u32,
     allocator: Allocator,
     /// The text the offsets describe, needed to count UTF-16 columns.
     source: []const u8,
+
+    /// Build the table for `source`, which must outlive it.
+    pub fn init(allocator: Allocator, source: []const u8) Allocator.Error!LineOffsets {
+        var line_starts = try base.RegionInfo.findLineStarts(allocator, source);
+        errdefer line_starts.deinit(allocator);
+        return .{
+            .offsets = try line_starts.items.toOwnedSlice(allocator),
+            .allocator = allocator,
+            .source = source,
+        };
+    }
 
     pub fn deinit(self: *const LineOffsets) void {
         self.allocator.free(self.offsets);
@@ -43,33 +61,6 @@ pub const LineOffsets = struct {
         return self.offsets[line] + character;
     }
 };
-
-/// Build line-start byte offsets for a source buffer.
-pub fn buildLineOffsets(allocator: Allocator, source: []const u8) Allocator.Error!LineOffsets {
-    // Count newlines first to allocate exactly the right size.
-    var count: usize = 1; // line 0 always starts at offset 0
-    for (source) |c| {
-        if (c == '\n') count += 1;
-    }
-
-    const offsets = try allocator.alloc(u32, count);
-    errdefer allocator.free(offsets);
-
-    offsets[0] = 0;
-    var idx: usize = 1;
-    for (source, 0..) |c, i| {
-        if (c == '\n') {
-            offsets[idx] = @intCast(i + 1);
-            idx += 1;
-        }
-    }
-
-    return .{
-        .offsets = offsets,
-        .allocator = allocator,
-        .source = source,
-    };
-}
 
 /// Whether the text is plain ASCII, in which case UTF-8 bytes and UTF-16 code
 /// units count the same and no conversion is needed.
