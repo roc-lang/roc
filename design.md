@@ -6017,9 +6017,20 @@ A proven continuation returns the call's value unchanged through explicit
 returns, jumps, lexical joins, identity references, join-parameter forwarding
 writes, and Boxy moves whose explicit adapter operation is `relabel`. It contains
 no intervening effect, failure, constructor, or materializing representation
-adaptation. Calls with an additional runtime descriptor output need a proof for
-that output too; value-only forwarding does not authorize their elimination.
-Return-destination reuse metadata is not a tail-position proof.
+adaptation. A call with an additional runtime descriptor output needs a proof
+for that output too: the output must be the descriptor local of the call's own
+target, and for a direct call it must be the descriptor local the procedure
+returns. Such a direct call is never a self-tail site, even to the procedure
+being built; it returns its value directly like a call to any other
+procedure. Return-destination reuse metadata is not a tail-position proof.
+
+Boxy lowering keeps generic calls in this form. A callee that returns its
+descriptor at runtime writes the value and the descriptor straight into a
+target whose descriptor local the frame may write, when the two sides have the
+same representation or the target is a bare type variable, which is described
+only by the descriptor its value arrives with. A callable adapter does the
+same with the result of the callable it wraps. No conversion statement then
+follows the call.
 
 The producer records a linked list of proven sites in the call nodes and a
 fresh loop join identity in the procedure. Body shards relocate these statement
@@ -16480,7 +16491,9 @@ mode. Backends do not look for tail positions. They follow the flag, and on a
 flagged call the caller's frame ends before the callee's begins, the callee
 returns directly to the caller's caller, and the statement after the call is
 never emitted. A stack trace taken in the callee therefore does not contain
-the caller, exactly as a loop does not contain its earlier iterations.
+the caller, exactly as a loop does not contain its earlier iterations. When
+the two procedures return a runtime descriptor, the callee writes it to the
+address the caller was given for its own.
 
 What each backend must arrange is where the callee's arguments live once the
 caller's frame is gone.
@@ -16521,7 +16534,9 @@ call between functions of different signatures, so the LLVM backend uses the
 same driver scheme there as the WebAssembly backend: a frame-replacing call
 copies its arguments into static storage, records its callee as pending and
 returns, and every ordinary call to a tail-group member is followed by a call
-to the group's driver with the address of the call's result.
+to the group's driver with the address of the call's result. Both driver
+schemes hand the driver the descriptor address as well when the group's
+members return one.
 
 A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the
@@ -16538,8 +16553,9 @@ therefore gets constant stack another way.
 
 LIR construction proves the tail position of an erased call exactly as it
 does for a direct call, and ARC marks such a call `deferred` when its value is
-the procedure's whole result at the same layout, no descriptor comes back
-with it, and the callee does not repack the closure. A deferred call is not
+the procedure's whole result at the same layout, any descriptor that comes
+back with it is the one the procedure returns, and the callee does not repack
+the closure. A deferred call is not
 made. Everything else the frame owns is released first, the call is recorded
 as pending together with its packed arguments and one owned reference to its
 closure, and the procedure returns. Its target holds no value.
@@ -16553,9 +16569,10 @@ which runs after ARC and stamps a `PendingDrive` on each direct call whose
 callee can return with a call pending, and on each deferred call:
 
 - `none`: this procedure returns the value unchanged to a caller that makes
-  the pending call. Only reference-count statements may separate the call
-  from the return; a pending call owns its closure and every argument, so
-  running those statements first releases nothing it reads.
+  the pending call. Only reference-count statements and jumps into a join
+  body may separate the call from the return; a pending call owns its closure
+  and every argument, so running those statements first releases nothing it
+  reads.
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary

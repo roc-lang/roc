@@ -3641,15 +3641,15 @@ const Inserter = struct {
 
     /// Whether the callee of a tail call can return on the current
     /// procedure's behalf: both use the Roc procedure ABI, the callee's value
-    /// is the procedure's whole result, and neither returns a runtime
-    /// descriptor alongside it.
+    /// is the procedure's whole result, and a runtime descriptor the callee
+    /// returns alongside it is the one this procedure returns.
     fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
         const caller = self.store.getProcSpec(self.current_proc);
         const callee = self.store.getProcSpec(call.proc);
         return caller.abi == .roc and callee.abi == .roc and
             callee.hosted == null and
-            caller.runtime_ret_desc == null and callee.runtime_ret_desc == null and
-            call.out_desc == null and
+            call.out_desc == caller.runtime_ret_desc and
+            (call.out_desc != null) == (callee.runtime_ret_desc != null) and
             self.store.getLocal(call.target).layout_idx == caller.ret_layout and
             callee.ret_layout == caller.ret_layout;
     }

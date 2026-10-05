@@ -2442,7 +2442,7 @@ pub fn generateEntrypointWrapper(
         }
     }
     try self.emitCall(root_func_idx);
-    try self.emitTailDrive(self.store.getProcSpec(entry_proc));
+    try self.emitTailDrive(self.store.getProcSpec(entry_proc), null);
 
     // Marshal the proc's result back out per the C ABI.
     const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
@@ -2610,7 +2610,7 @@ pub fn generateModule(
     self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
     try self.emitCall(root_func_idx);
-    try self.emitTailDrive(self.store.getProcSpec(root_proc_id));
+    try self.emitTailDrive(self.store.getProcSpec(root_proc_id), null);
 
     // Reserve static data and the compiler stack in initial memory. The host
     // heap begins after both regions and grows memory upward, so it cannot
@@ -8268,6 +8268,9 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
 const TailDriver = struct {
     group: LIR.TailGroupId,
     result: ValType,
+    /// Members return a runtime descriptor through an address the driver is
+    /// given after the result.
+    returns_desc: bool,
     defined: index_types.DefinedFunction,
     members: std.ArrayList(LIR.LirProcSpecId) = .empty,
 };
@@ -8276,14 +8279,15 @@ const tail_area_args_offset: u32 = 16;
 
 fn isTailGroupMember(proc: LirProcSpec) bool {
     return proc.tail_group != null and proc.abi == .roc and proc.hosted == null and
-        proc.body != null and proc.runtime_ret_desc == null and !proc.is_static_initializer;
+        proc.body != null and !proc.is_static_initializer;
 }
 
 fn tailDriverFor(self: *Self, proc: LirProcSpec) Allocator.Error!?*TailDriver {
     if (!isTailGroupMember(proc)) return null;
     const result = try self.resolveValType(proc.ret_layout);
     for (self.tail_drivers.items) |*driver| {
-        if (driver.group == proc.tail_group.? and driver.result == result) return driver;
+        if (driver.group == proc.tail_group.? and driver.result == result and
+            driver.returns_desc == (proc.runtime_ret_desc != null)) return driver;
     }
     return null;
 }
@@ -8312,10 +8316,14 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
         area_size = @max(area_size, try self.tailArgOffsets(proc, null));
         const driver = try self.tailDriverFor(proc) orelse blk: {
             const result = try self.resolveValType(proc.ret_layout);
-            const type_idx = try self.internFuncType(&.{result}, &.{result});
+            const returns_desc = proc.runtime_ret_desc != null;
+            const type_idx = if (returns_desc)
+                try self.internFuncType(&.{ result, .i32 }, &.{result})
+            else
+                try self.internFuncType(&.{result}, &.{result});
             const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
             _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_tail_driver", self.tail_drivers.items.len);
-            try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .result = result, .defined = defined });
+            try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .result = result, .returns_desc = returns_desc, .defined = defined });
             break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
         };
         try driver.members.append(self.allocator, @enumFromInt(@as(u32, @intCast(i))));
@@ -8357,6 +8365,10 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
         self.current_proc_id = null;
 
         const result_local = self.storage.allocAnonymousLocal(driver.result) catch return error.OutOfMemory;
+        const desc_ptr_local: ?u32 = if (driver.returns_desc)
+            self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory
+        else
+            null;
         const pending_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         const code = self.currentCode();
         const member_count: u32 = @intCast(driver.members.items.len);
@@ -8411,6 +8423,7 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
                     try self.emitLoadOpSized(vt, valTypeByteSize(vt), 0);
                 }
             }
+            if (desc_ptr_local) |desc_ptr| try self.emitLocalGet(desc_ptr);
             try self.emitCall(self.registered_procs.get(@intFromEnum(member)) orelse unreachable);
             try self.emitLocalSet(result_local);
             self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
@@ -8438,9 +8451,14 @@ fn valTypeByteSize(vt: ValType) u32 {
 
 /// After an ordinary call to a tail-group member, run whatever
 /// frame-replacing call it left pending. The member's result is on the
-/// operand stack and the group's result replaces it.
-fn emitTailDrive(self: *Self, proc: LirProcSpec) Allocator.Error!void {
+/// operand stack and the group's result replaces it; `desc_ptr` holds the
+/// address the member was given for its runtime descriptor.
+fn emitTailDrive(self: *Self, proc: LirProcSpec, desc_ptr: ?u32) Allocator.Error!void {
     const driver = try self.tailDriverFor(proc) orelse return;
+    if (driver.returns_desc) {
+        try self.emitLocalGet(desc_ptr orelse
+            wasmInvariantFmt("WASM/codegen invariant violated: tail drive of a descriptor-returning group without a descriptor address", .{}));
+    }
     try self.emitCall(driver.defined.function.raw());
 }
 
@@ -8556,7 +8574,7 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
     }
     const proc_fn = self.registered_procs.get(@intFromEnum(proc_id)) orelse unreachable;
     try self.emitCall(proc_fn);
-    try self.emitTailDrive(proc);
+    try self.emitTailDrive(proc, if (proc.runtime_ret_desc != null) ret_desc_local else null);
 
     const ret_size = try self.layoutStorageByteSize(proc.ret_layout);
     if (ret_size == 0) {
@@ -11101,7 +11119,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitCallArgs(c.args);
     if (out_desc_ptr) |ptr| try self.emitLocalGet(ptr);
     try self.emitCall(func_idx);
-    try self.emitTailDrive(proc);
+    try self.emitTailDrive(proc, out_desc_ptr);
 
     if (c.out_desc) |desc_local| {
         try self.emitLocalGet(out_desc_ptr.?);

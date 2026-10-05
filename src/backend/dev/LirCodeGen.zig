@@ -16726,10 +16726,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (param_refs.len != arg_refs.len or
                 proc_spec.hosted != null or
                 proc_spec.abi != .roc or
-                proc_spec.runtime_ret_desc != null or
+                (proc_spec.runtime_ret_desc != null) != (self.runtime_ret_desc_ptr_slot != null) or
                 proc_spec.ret_layout != call.ret_layout or
-                self.early_return_ret_layout != call.ret_layout or
-                self.runtime_ret_desc_ptr_slot != null)
+                self.early_return_ret_layout != call.ret_layout)
             {
                 std.debug.panic(
                     "Dev/codegen invariant violated: frame-replacing call to proc {d} does not share its caller's return contract",
@@ -16749,6 +16748,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .loc = arg_loc,
                     .layout_idx = expected_layout,
                     .num_regs = self.calcArgRegCount(arg_loc, expected_layout),
+                });
+            }
+            // The callee writes its result descriptor where this procedure's
+            // caller asked for this procedure's.
+            if (self.runtime_ret_desc_ptr_slot) |pointer_slot| {
+                try self.scratch_arg_infos.append(.{
+                    .loc = self.stackLocationForLayout(.opaque_ptr, pointer_slot),
+                    .layout_idx = .opaque_ptr,
+                    .num_regs = 1,
                 });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);

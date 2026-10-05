@@ -146,12 +146,19 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;
         if (call.tail_call != null) continue;
-        // A runtime result descriptor is another call output; forwarding the
-        // value alone does not establish that descriptor's return contract.
-        if (call.out_desc != null) continue;
+        // A runtime result descriptor is another call output. It is returned
+        // with the value only when the callee writes it to the descriptor
+        // local this procedure returns, which is the value's own.
+        if (call.out_desc) |out_desc| {
+            if (store.getProcSpec(proc).runtime_ret_desc != out_desc) continue;
+            const target_desc = store.getLocal(call.target).boxy_desc orelse continue;
+            if (target_desc.localOrNull() != out_desc) continue;
+        }
         const returned = try self.returnedLocal(store, call.next) orelse continue;
         if (returned != call.target) continue;
-        if (call.proc == proc) {
+        // A self-call that returns a descriptor replaces its frame like a
+        // call to any other procedure; the loop form carries only the value.
+        if (call.proc == proc and call.out_desc == null) {
             store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
             head = id;
         } else if (store.getCFStmt(call.next) != .ret and store.getLocal(call.target).layout_idx == ret_layout) {

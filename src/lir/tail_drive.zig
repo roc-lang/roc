@@ -15,9 +15,10 @@
 //! run their own pending calls.
 //!
 //! A statement hands its pending call up when nothing but reference-count
-//! statements separates it from the return of its result. Those statements
-//! are safe to run before the pending call: a pending call owns its closure
-//! and every argument, so nothing it reads is released by them.
+//! statements and jumps into a join body separates it from the return of its
+//! result. Those statements are safe to run before the pending call: a pending
+//! call owns its closure and every argument, so nothing it reads is released
+//! by them.
 
 const std = @import("std");
 const core = @import("lir_core");
@@ -31,6 +32,9 @@ const DirectCall = struct {
     caller: u32,
     callee: u32,
     stmt: LIR.CFStmtId,
+    /// The caller returns this call's value with nothing but reference-count
+    /// statements in between.
+    returns_unchanged: bool,
 };
 
 const DeferredCall = struct {
@@ -61,19 +65,31 @@ pub fn run(
     defer seen.deinit(allocator);
     var work = std.ArrayList(LIR.CFStmtId).empty;
     defer work.deinit(allocator);
+    // The body of each join of the procedure being walked, by join id. A
+    // join encloses every jump to it, so it is recorded before they are read.
+    var join_bodies = std.ArrayList(?LIR.CFStmtId).empty;
+    defer join_bodies.deinit(allocator);
     for (0..proc_count) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
+        join_bodies.clearRetainingCapacity();
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             if (seen.isSet(@intFromEnum(stmt_id))) continue;
             seen.set(@intFromEnum(stmt_id));
             const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_call) {
+            if (stmt == .join) {
+                const join_index = @intFromEnum(stmt.join.id);
+                if (join_index >= join_bodies.items.len) {
+                    try join_bodies.appendNTimes(allocator, null, join_index + 1 - join_bodies.items.len);
+                }
+                join_bodies.items[join_index] = stmt.join.body;
+            } else if (stmt == .assign_call) {
                 try direct_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .callee = @intFromEnum(stmt.assign_call.proc),
                     .stmt = stmt_id,
+                    .returns_unchanged = returnsUnchanged(store, join_bodies.items, stmt.assign_call.target, stmt.assign_call.next),
                 });
             } else if (stmt == .assign_call_erased) {
                 if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
@@ -101,8 +117,7 @@ pub fn run(
         for (direct_calls.items) |call| {
             if (may_pend.isSet(call.caller) or !may_pend.isSet(call.callee)) continue;
             if (handsUp(store, &outside, call.caller) == .never) continue;
-            const stmt = store.getCFStmt(call.stmt).assign_call;
-            if (!returnsUnchanged(store, stmt.target, stmt.next)) continue;
+            if (!call.returns_unchanged) continue;
             may_pend.set(call.caller);
             changed = true;
         }
@@ -115,8 +130,7 @@ pub fn run(
     }
     for (direct_calls.items) |call| {
         if (!may_pend.isSet(call.callee)) continue;
-        const stmt = store.getCFStmt(call.stmt).assign_call;
-        const drive = driveAfter(store, &outside, call.caller, returnsUnchanged(store, stmt.target, stmt.next));
+        const drive = driveAfter(store, &outside, call.caller, call.returns_unchanged);
         const updated = &store.getCFStmtPtr(call.stmt).assign_call;
         updated.drive = drive;
         // A call that runs pending calls afterwards keeps its frame to do so.
@@ -151,12 +165,22 @@ fn driveAfter(
 }
 
 /// Whether the procedure returns `value` after `start` with nothing but
-/// reference-count statements in between.
-fn returnsUnchanged(store: *const LirStore, value: LIR.LocalId, start: LIR.CFStmtId) bool {
+/// reference-count statements and jumps to a join's body in between.
+fn returnsUnchanged(store: *const LirStore, join_bodies: []const ?LIR.CFStmtId, value: LIR.LocalId, start: LIR.CFStmtId) bool {
     var current = start;
+    // Each jump enters a join body, and a body that jumps back to its own
+    // join never returns, so more jumps than joins is such a cycle.
+    var jumps: usize = 0;
     while (true) {
         const stmt = store.getCFStmt(current);
         if (stmt == .ret) return stmt.ret.value == value;
+        if (stmt == .jump) {
+            const join_index = @intFromEnum(stmt.jump.target);
+            if (jumps == join_bodies.len or join_index >= join_bodies.len) return false;
+            jumps += 1;
+            current = join_bodies[join_index] orelse return false;
+            continue;
+        }
         current = if (stmt == .incref)
             stmt.incref.next
         else if (stmt == .decref)

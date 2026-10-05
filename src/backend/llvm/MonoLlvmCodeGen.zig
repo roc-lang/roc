@@ -1970,7 +1970,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn isTailDriverMember(proc: LirProcSpec) bool {
-        return proc.tail_group != null and !proc.is_static_initializer and fastAbiEligible(proc) and proc.runtime_ret_desc == null;
+        return proc.tail_group != null and !proc.is_static_initializer and fastAbiEligible(proc);
     }
 
     fn tailDriverFor(self: *MonoLlvmCodeGen, proc: LirProcSpec) ?*TailDriver {
@@ -2001,9 +2001,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Declare and define every tail driver. A driver takes the address of
-    /// the result an ordinary call into its group produced. While a member
-    /// has left a call pending, it calls that callee with the arguments in
-    /// static storage and writes the callee's result to the same address.
+    /// the result an ordinary call into its group produced, and the address
+    /// of that result's runtime descriptor when the call returned one. While
+    /// a member has left a call pending, it calls that callee with the
+    /// arguments in static storage and has it write to the same addresses.
     fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
@@ -2014,7 +2015,7 @@ pub const MonoLlvmCodeGen = struct {
             defer self.allocator.free(arg_layouts);
             area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null));
             const driver = self.tailDriverFor(proc) orelse blk: {
-                const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
+                const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
                 const name = builder.strtabStringFmt("{s}roc_tail_driver.{d}", .{ self.static_symbol_prefix, self.tail_drivers.items.len }) catch return error.OutOfMemory;
                 const function = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
                 function.setLinkage(.internal, builder);
@@ -2061,6 +2062,7 @@ pub const MonoLlvmCodeGen = struct {
         const pending_ptr = self.tail_pending_ptr.?;
         const args_ptr = self.tail_args_ptr.?;
         const result_ptr = wip.arg(0);
+        const desc_ptr = wip.arg(1);
         const i32_align = LlvmBuilder.Alignment.fromByteUnits(4);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
@@ -2127,6 +2129,10 @@ pub const MonoLlvmCodeGen = struct {
                     .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, try self.offsetPtr(args_ptr, offset), arg_layout),
                 }
             }
+            if (sig.desc_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, desc_ptr);
+            }
             const result = wip.call(.normal, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
             if (sig.lowered.ret == .registers) {
                 try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, result_ptr, proc.ret_layout);
@@ -2138,10 +2144,10 @@ pub const MonoLlvmCodeGen = struct {
 
     /// After an ordinary call to a tail-group member has written its result
     /// to `result_ptr`, run whatever frame-replacing call it left pending.
-    fn emitTailDrive(self: *MonoLlvmCodeGen, proc: LirProcSpec, result_ptr: LlvmBuilder.Value) Error!void {
+    fn emitTailDrive(self: *MonoLlvmCodeGen, proc: LirProcSpec, result_ptr: LlvmBuilder.Value, desc_ptr: ?LlvmBuilder.Value) Error!void {
         const driver = self.tailDriverFor(proc) orelse return;
         const wip = self.wip orelse return error.CompilationFailed;
-        _ = wip.call(.normal, self.fastCallConv(), .none, driver.function.typeOf(self.builder.?), driver.function.toValue(self.builder.?), &.{result_ptr}, "") catch return error.OutOfMemory;
+        _ = wip.call(.normal, self.fastCallConv(), .none, driver.function.typeOf(self.builder.?), driver.function.toValue(self.builder.?), &.{ result_ptr, desc_ptr orelse try self.boxyNullPtr() }, "") catch return error.OutOfMemory;
     }
 
     /// The WebAssembly form of a frame-replacing call: leave the callee and
@@ -2378,7 +2384,7 @@ pub const MonoLlvmCodeGen = struct {
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
         }
-        try self.emitTailDrive(proc, ret_ptr);
+        try self.emitTailDrive(proc, ret_ptr, if (sig.desc_index != null) wip.arg(2) else null);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -4683,7 +4689,7 @@ pub const MonoLlvmCodeGen = struct {
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, self.slot(target).ptr, proc.ret_layout);
         }
-        try self.emitTailDrive(proc, self.slot(target).ptr);
+        try self.emitTailDrive(proc, self.slot(target).ptr, out_desc_ptr);
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
@@ -4702,7 +4708,7 @@ pub const MonoLlvmCodeGen = struct {
         const proc = self.store.getProcSpec(proc_id);
         const fast = self.fast_registry.get(@intFromEnum(proc_id)) orelse
             llvmInvariantFmt("frame-replacing call to proc {d} has no register-passing function", .{@intFromEnum(proc_id)});
-        if (proc.runtime_ret_desc != null or self.ret_desc_ptr_arg != null or proc.ret_layout != self.current_ret_layout) {
+        if ((proc.runtime_ret_desc != null) != (self.ret_desc_ptr_arg != null) or proc.ret_layout != self.current_ret_layout) {
             llvmInvariantFmt("frame-replacing call to proc {d} does not share its caller's return contract", .{@intFromEnum(proc_id)});
         }
         const arg_locals = self.store.getLocalSpan(args);
@@ -4742,6 +4748,12 @@ pub const MonoLlvmCodeGen = struct {
                 },
                 .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
             }
+        }
+        // The callee writes its result descriptor where this procedure's
+        // caller asked for this procedure's.
+        if (sig.desc_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, self.ret_desc_ptr_arg.?);
         }
         if (sig.scratch_index != null) {
             try param_types.append(self.allocator, ptr_ty);
