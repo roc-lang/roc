@@ -39274,6 +39274,34 @@ fn findDispatchReplaySource(self: *Self, hash: u64, shape: []const u8) ?*Dispatc
 /// relation can still fix it), no error, and no invalid declaration. The
 /// roots it visits stay in `scratch_ground_seen` until the next call.
 fn varIsReplayGround(self: *Self, var_: Var) Allocator.Error!bool {
+    return self.varIsGroundWith(var_, .ground);
+}
+
+/// Whether a use's copy of its scheme root is ground for whole-use replay:
+/// a function's arguments and result hold no variable of any kind, and its
+/// effect dependencies none but open effects, which only the use's own
+/// relations reach; any other root holds no variable of any kind.
+fn useRootSettledGround(self: *Self, root: Var) Allocator.Error!bool {
+    switch (self.types.resolveVar(root).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    if (!try self.varIsGroundWith(arg, .ground)) return false;
+                }
+                if (!try self.varIsGroundWith(func.ret, .ground)) return false;
+                for (self.types.sliceVars(func.effect_deps)) |dep| {
+                    if (!try self.varIsGroundWith(dep, .unbound_effects)) return false;
+                }
+                return true;
+            },
+            .empty_record, .empty_tag_union, .tuple, .nominal_type, .record, .tag_union => {},
+        },
+        .flex, .rigid, .err, .field_presence, .alias => {},
+    }
+    return self.varIsGroundWith(root, .ground);
+}
+
+fn varIsGroundWith(self: *Self, var_: Var, functions: FreezeFunctions) Allocator.Error!bool {
     self.scratch_ground_vars.clearRetainingCapacity();
     self.scratch_ground_seen.clearRetainingCapacity();
     try self.scratch_ground_vars.append(self.gpa, var_);
@@ -39289,7 +39317,15 @@ fn varIsReplayGround(self: *Self, var_: Var) Allocator.Error!bool {
             },
             .structure => |flat| switch (flat) {
                 .empty_record, .empty_tag_union => {},
-                .fn_unbound => return false,
+                .fn_unbound => |func| {
+                    switch (functions) {
+                        .ground => return false,
+                        .unbound_effects => {},
+                    }
+                    try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try self.scratch_ground_vars.append(self.gpa, func.ret);
+                    try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
                 .fn_pure, .fn_effectful => |func| {
                     try self.scratch_ground_vars.appendSlice(self.gpa, self.types.sliceVars(func.args));
                     try self.scratch_ground_vars.append(self.gpa, func.ret);
@@ -39871,12 +39907,7 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
             if (!try self.dispatchReplaySourceReady(edge)) return;
         }
     }
-    var parts: std.ArrayListUnmanaged(Var) = .empty;
-    defer parts.deinit(self.gpa);
-    try self.appendUseInstanceParts(use.instance_root, &parts);
-    for (parts.items) |part| {
-        if (!try self.varIsReplayGround(part)) return;
-    }
+    if (!try self.useRootSettledGround(use.instance_root)) return;
     if (!use.has_shape) {
         try self.use_replayable_schemes.put(self.gpa, self.types.resolveVar(use.scheme_root).var_, {});
         return;
@@ -41714,7 +41745,10 @@ inline fn processDeferredDispatchEntry(
                     break :fn_result probed_result;
                 };
                 switch (fn_result) {
-                    .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                    .unified => {
+                        try self.recordSuccessfulStaticDispatch(constraint);
+                        if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
+                    },
                     .suppressed_by_error, .problem, .mismatch => {
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
@@ -42044,7 +42078,10 @@ inline fn processDeferredDispatchEntry(
                     },
                 });
                 switch (fn_result) {
-                    .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                    .unified => {
+                        try self.recordSuccessfulStaticDispatch(constraint);
+                        if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
+                    },
                     .suppressed_by_error, .problem, .mismatch => {
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);

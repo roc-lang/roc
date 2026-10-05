@@ -8844,7 +8844,8 @@ Whole-use replay is a mechanism built on that rule. A use settles as a
 source would when its relations settled processing only its own relations,
 with none of them touched before its first was processed, every one of them
 and every requirement they selected settled without rejection, and its
-root's arguments, result and effect dependencies ground. The first such use
+root's arguments and result ground and its effect dependencies ground except
+for effects still open, which only its own relations reach. The first such use
 of a scheme makes the scheme replayable; until then no use of it computes a
 shape. When the first relation of a later use of a replayable scheme is
 processed, its shape—the scheme and the use's copy of its root, encoded like
