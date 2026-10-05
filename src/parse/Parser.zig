@@ -3464,9 +3464,7 @@ fn runExprStatementKernel(
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = switch (root) {
         .statement, .associated_block => root_statement_type,
-        .expr => StatementType.in_body,
-        .pattern => StatementType.in_body,
-        .type_anno => StatementType.in_body,
+        .expr, .pattern, .type_anno => StatementType.in_body,
     };
     var last_statement: ?AST.Statement.Idx = null;
     const associated_blocks = &expr_scratch.associated_blocks;

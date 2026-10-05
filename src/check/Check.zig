@@ -3699,9 +3699,7 @@ fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.
 
 fn typeDeclHeaderArgs(self: *const Self, decl_idx: CIR.Statement.Idx) []const CIR.TypeAnno.Idx {
     const header = switch (self.cir.store.getStatement(decl_idx)) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -12442,10 +12440,7 @@ const StoredConstScan = struct {
             .statement => |statement| {
                 const module = statement.module;
                 switch (module.store.getStatement(statement.statement)) {
-                    .s_decl => |decl| try addExpr(items, module, decl.expr),
-                    .s_var => |var_stmt| try addExpr(items, module, var_stmt.expr),
-                    .s_reassign => |reassign| try addExpr(items, module, reassign.expr),
-                    .s_expr => |expr_stmt| try addExpr(items, module, expr_stmt.expr),
+                    inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try addExpr(items, module, decl.expr),
                     .s_dbg,
                     .s_expect,
                     => return .{ .value = false },
@@ -13165,9 +13160,7 @@ fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(owner));
     const pattern = switch (self.cir.store.getStatement(stmt_idx)) {
         .s_decl => |decl| decl.pattern,
-        .s_var => |var_| var_.pattern_idx,
-        .s_var_uninitialized => |var_| var_.pattern_idx,
-        .s_reassign => |reassign| reassign.pattern_idx,
+        inline .s_var, .s_var_uninitialized, .s_reassign => |var_| var_.pattern_idx,
         .s_for => |for_| for_.patt,
         .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
     };
@@ -22481,9 +22474,7 @@ fn stepPatternCheck(
 fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
-        .assign => |assign| return assign.ident,
-        .var_assign => |assign| return assign.ident,
-        .as => |as_pattern| return as_pattern.ident,
+        inline .assign, .var_assign, .as => |assign| return assign.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -22781,9 +22772,7 @@ fn collectPatternBindings(
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern_idx| {
         switch (self.cir.store.getPattern(pattern_idx)) {
-            .assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
-            .var_assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
-            .as => |as_pat| try out.append(self.gpa, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx }),
+            inline .assign, .var_assign, .as => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
             .tuple,
             .applied_tag,
             .record_destructure,
@@ -26205,9 +26194,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
                 switch (self.types.resolveVar(var_).desc.content) {
                     .structure => |flat_type| {
                         switch (flat_type) {
-                            .fn_pure => |func| break :blk func,
-                            .fn_unbound => |func| break :blk func,
-                            .fn_effectful => |func| break :blk func,
+                            inline .fn_pure, .fn_unbound, .fn_effectful => |func| break :blk func,
                             .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => break :blk null,
                         }
                     },
@@ -28416,9 +28403,7 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
         return null;
     const pattern = module_env.store.getPattern(pattern_idx);
     return switch (pattern) {
-        .assign => |assign| assign.ident,
-        .var_assign => |assign| assign.ident,
-        .as => |as_pattern| as_pattern.ident,
+        inline .assign, .var_assign, .as => |assign| assign.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -29711,9 +29696,7 @@ fn reportDefinitelyInvalidNumericBinopOperand(
         .add => .plus,
         .sub => .minus,
         .mul => .times,
-        .div => .div,
-        .rem => .div,
-        .div_trunc => .div,
+        .div, .rem, .div_trunc => .div,
         .lt,
         .gt,
         .le,
@@ -33070,11 +33053,7 @@ fn appendDefaultWalkStmtExprs(
 ) std.mem.Allocator.Error!void {
     try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
     switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| try expr_work.append(self.gpa, decl.expr),
-        .s_var => |var_stmt| try expr_work.append(self.gpa, var_stmt.expr),
-        .s_reassign => |reassign| try expr_work.append(self.gpa, reassign.expr),
-        .s_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
-        .s_expr => |expr_stmt| try expr_work.append(self.gpa, expr_stmt.expr),
+        inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |decl| try expr_work.append(self.gpa, decl.expr),
         .s_expect => |expect| try expr_work.append(self.gpa, expect.body),
         .s_return => |ret| try expr_work.append(self.gpa, ret.expr),
         .s_for => |for_stmt| {
@@ -45650,7 +45629,7 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
-fn parseSpecDeclForNumKind(num_kind: CIR.NumKind) BuiltinParseSpecDecl {
+fn specDeclForNumKind(comptime SpecDecl: type, num_kind: CIR.NumKind) SpecDecl {
     return switch (num_kind) {
         .u8 => .u8,
         .i8 => .i8,
@@ -45675,69 +45654,29 @@ fn protocolMethodName(self: *Self, comptime text: []const u8) Allocator.Error!Id
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
-fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
+/// The Dict key method name for `key_var` in the `direction` ("parse" or
+/// "encode") half of the format protocol, or null when the key type has none.
+fn dictKeyMethodText(self: *Self, key_var: Var, comptime direction: []const u8) Allocator.Error!?[]const u8 {
     return switch (self.resolveThroughAliases(key_var).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| {
-                if (self.nominalIsBuiltinBoolType(nominal)) return "parse_key_bool";
-                if (self.nominalIsBuiltinStrType(nominal)) return "parse_key_str";
+                if (self.nominalIsBuiltinBoolType(nominal)) return direction ++ "_key_bool";
+                if (self.nominalIsBuiltinStrType(nominal)) return direction ++ "_key_str";
                 if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
                     return switch (num_kind) {
-                        .u8 => "parse_key_u8",
-                        .i8 => "parse_key_i8",
-                        .u16 => "parse_key_u16",
-                        .i16 => "parse_key_i16",
-                        .u32 => "parse_key_u32",
-                        .i32 => "parse_key_i32",
-                        .u64 => "parse_key_u64",
-                        .i64 => "parse_key_i64",
-                        .u128 => "parse_key_u128",
-                        .i128 => "parse_key_i128",
-                        .dec => "parse_key_dec",
-                        .f32 => "parse_key_f32",
-                        .f64 => "parse_key_f64",
-                        .num_unbound, .int_unbound => unreachable,
-                    };
-                }
-                return null;
-            },
-            .record,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => null,
-        },
-        .alias => unreachable,
-        .err => null,
-        .flex, .rigid, .field_presence => null,
-    };
-}
-
-fn encodeDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
-    return switch (self.resolveThroughAliases(key_var).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| {
-                if (self.nominalIsBuiltinBoolType(nominal)) return "encode_key_bool";
-                if (self.nominalIsBuiltinStrType(nominal)) return "encode_key_str";
-                if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-                    return switch (num_kind) {
-                        .u8 => "encode_key_u8",
-                        .i8 => "encode_key_i8",
-                        .u16 => "encode_key_u16",
-                        .i16 => "encode_key_i16",
-                        .u32 => "encode_key_u32",
-                        .i32 => "encode_key_i32",
-                        .u64 => "encode_key_u64",
-                        .i64 => "encode_key_i64",
-                        .u128 => "encode_key_u128",
-                        .i128 => "encode_key_i128",
-                        .dec => "encode_key_dec",
-                        .f32 => "encode_key_f32",
-                        .f64 => "encode_key_f64",
+                        .u8 => direction ++ "_key_u8",
+                        .i8 => direction ++ "_key_i8",
+                        .u16 => direction ++ "_key_u16",
+                        .i16 => direction ++ "_key_i16",
+                        .u32 => direction ++ "_key_u32",
+                        .i32 => direction ++ "_key_i32",
+                        .u64 => direction ++ "_key_u64",
+                        .i64 => direction ++ "_key_i64",
+                        .u128 => direction ++ "_key_u128",
+                        .i128 => direction ++ "_key_i128",
+                        .dec => direction ++ "_key_dec",
+                        .f32 => direction ++ "_key_f32",
+                        .f64 => direction ++ "_key_f64",
                         .num_unbound, .int_unbound => unreachable,
                     };
                 }
@@ -45784,25 +45723,6 @@ fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Er
         .dict => "encode_dict",
     };
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
-}
-
-fn encodeSpecDeclForNumKind(num_kind: CIR.NumKind) BuiltinEncodeSpecDecl {
-    return switch (num_kind) {
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .dec => .dec,
-        .f32 => .f32,
-        .f64 => .f64,
-        .num_unbound, .int_unbound => unreachable,
-    };
 }
 
 fn parseFormatMethodVarForEncoding(
@@ -46196,7 +46116,7 @@ fn beginParseKeyMethod(
     const env = inputs.env;
     const region = inputs.region;
     const failure_expr = inputs.failure_expr;
-    const method_text = try self.parseDictKeyMethodText(key_var) orelse return .{ .done = .ok };
+    const method_text = try self.dictKeyMethodText(key_var, "parse") orelse return .{ .done = .ok };
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
@@ -46239,7 +46159,7 @@ fn validateEncodeKeyMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_text = try self.encodeDictKeyMethodText(key_var) orelse return .ok;
+    const method_text = try self.dictKeyMethodText(key_var, "encode") orelse return .ok;
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
@@ -47669,7 +47589,7 @@ fn stepDerivedParseNominal(
         return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = .str } } } };
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = parseSpecDeclForNumKind(num_kind) } } } };
+        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = specDeclForNumKind(BuiltinParseSpecDecl, num_kind) } } } };
     }
     if (self.nominalListPayloadVar(nominal)) |payload_var| {
         frame.then_var = payload_var;
@@ -48314,7 +48234,7 @@ fn stepDerivedEncodeNominal(
         return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region) };
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-        return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, encodeSpecDeclForNumKind(num_kind), err_var, constraint, env, region) };
+        return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, specDeclForNumKind(BuiltinEncodeSpecDecl, num_kind), err_var, constraint, env, region) };
     }
     // A user opaque over a builtin scalar (`Money := F64`, `Username := Str`) validates its derived
     // encoder through the backing scalar, threading the same err_var: error-row unification then

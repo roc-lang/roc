@@ -270,9 +270,7 @@ pub const Content = union(enum(u8)) {
         switch (content) {
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .fn_pure => |func| return func,
-                    .fn_effectful => |func| return func,
-                    .fn_unbound => |func| return func,
+                    inline .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
                     .record,
                     .tuple,
                     .nominal_type,

@@ -1345,19 +1345,12 @@ pub const Statement = union(enum) {
         return switch (self) {
             .decl => |s| s.region,
             .@"var" => |s| s.region,
-            .expr => |s| s.region,
-            .import => |s| s.region,
-            .type_decl => |s| s.region,
-            .crash => |s| s.region,
-            .dbg => |s| s.region,
-            .expect => |s| s.region,
+            inline .expr, .import, .type_decl, .crash, .dbg, .expect => |s| s.region,
             .@"for" => |s| s.region,
             .@"while" => |s| s.region,
             .@"return" => |s| s.region,
             .@"break" => |s| s.region,
-            .type_anno => |s| s.region,
-            .malformed => |m| m.region,
-            .file_import => |fi| fi.region,
+            inline .type_anno, .malformed, .file_import => |s| s.region,
         };
     }
 };
@@ -2150,14 +2143,7 @@ pub const Header = union(enum) {
     /// Extract the region from any Header variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .app => |a| a.region,
-            .module => |m| m.region,
-            .package => |p| p.region,
-            .platform => |p| p.region,
-            .hosted => |h| h.region,
-            .type_module => |t| t.region,
-            .default_app => |d| d.region,
-            .malformed => |m| m.region,
+            inline .app, .module, .package, .platform, .hosted, .type_module, .default_app, .malformed => |a| a.region,
         };
     }
 };
@@ -2266,10 +2252,7 @@ pub const ExposedItem = union(enum) {
     /// Extract the region from any ExposedItem variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .lower_ident => |i| i.region,
-            .upper_ident => |i| i.region,
-            .upper_ident_star => |i| i.region,
-            .malformed => |m| m.region,
+            inline .lower_ident, .upper_ident, .upper_ident_star, .malformed => |i| i.region,
         };
     }
 };
@@ -2479,14 +2462,7 @@ pub const TypeAnno = union(enum) {
     /// Extract the region from any TypeAnno variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         switch (self) {
-            .apply => |a| return a.region,
-            .ty_var => |tv| return tv.region,
-            .underscore_type_var => |utv| return utv.region,
-            .underscore => |u| return u.region,
-            .ty => |t| return t.region,
-            .tag_union => |tu| return tu.region,
-            .tuple => |t| return t.region,
-            .record => |r| return r.region,
+            inline .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record => |a| return a.region,
             .@"fn" => |f| return f.region,
             .parens => |p| return p.region,
             .malformed => |m| return m.region,
@@ -2746,9 +2722,7 @@ pub const WhereClause = union(enum) {
     /// Extract the region from any WhereClause variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         switch (self) {
-            .mod_method => |m| return m.region,
-            .mod_alias => |a| return a.region,
-            .malformed => |m| return m.region,
+            inline .mod_method, .mod_alias, .malformed => |m| return m.region,
         }
     }
 
@@ -2970,10 +2944,7 @@ pub const Expr = union(enum) {
             .ellipsis => |e| e.region,
             .@"break" => |e| e.region,
             .@"return" => |e| e.region,
-            .for_expr => |e| e.region,
-            .malformed => |e| e.region,
-            .string_part => |e| e.region,
-            .single_quote => |e| e.region,
+            inline .for_expr, .malformed, .string_part, .single_quote => |e| e.region,
         };
     }
 

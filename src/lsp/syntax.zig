@@ -101,9 +101,7 @@ fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CI
         .s_decl => |decl| if (decl.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
         .s_var => |var_stmt| if (var_stmt.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
         .s_var_uninitialized => |var_stmt| if (var_stmt.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
-        .s_type_anno => |type_anno| type_anno.anno,
-        .s_alias_decl => |alias| alias.anno,
-        .s_nominal_decl => |nominal| nominal.anno,
+        inline .s_type_anno, .s_alias_decl, .s_nominal_decl => |type_anno| type_anno.anno,
         .s_reassign,
         .s_crash,
         .s_dbg,
@@ -1054,9 +1052,7 @@ pub const SyntaxChecker = struct {
         switch (element) {
             .text => |t| return textHasAny(t, needles),
             .annotated => |a| return textHasAny(a.content, needles),
-            .raw => |r| return textHasAny(r, needles),
-            .reflowing_text => |t| return textHasAny(t, needles),
-            .link => |l| return textHasAny(l, needles),
+            inline .raw, .reflowing_text, .link => |r| return textHasAny(r, needles),
             .vertical_stack => |stack| {
                 for (stack) |el| if (elementContainsAny(el, needles)) return true;
             },

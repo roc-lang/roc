@@ -1315,9 +1315,7 @@ fn appendChildPatterns(
                 try out.append(allocator, arg);
             }
         },
-        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .deferred_import_ref => |deferred| try out.append(allocator, deferred.backing_pattern),
+        inline .nominal, .nominal_external, .deferred_import_ref => |nominal| try out.append(allocator, nominal.backing_pattern),
         .record_destructure => |record| {
             for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                 const destruct = cir.store.getRecordDestruct(destruct_idx);
@@ -1645,9 +1643,7 @@ pub fn collectNameReferences(
                         .s_decl => |decl| try scratch_stack.append(allocator, decl.expr),
                         .s_var => |var_stmt| try scratch_stack.append(allocator, var_stmt.expr),
                         .s_var_uninitialized => {},
-                        .s_reassign => |reassign| try scratch_stack.append(allocator, reassign.expr),
-                        .s_dbg => |dbg| try scratch_stack.append(allocator, dbg.expr),
-                        .s_expr => |expr_stmt| try scratch_stack.append(allocator, expr_stmt.expr),
+                        inline .s_reassign, .s_dbg, .s_expr => |reassign| try scratch_stack.append(allocator, reassign.expr),
                         .s_expect => |expect| try scratch_stack.append(allocator, expect.body),
                         .s_for => |for_stmt| {
                             try scratch_stack.append(allocator, for_stmt.expr);

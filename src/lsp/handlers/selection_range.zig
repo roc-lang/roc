@@ -332,18 +332,12 @@ fn getStatementRegion(stmt: AST.Statement) ?TokenizedRegion {
     return switch (stmt) {
         .decl => |d| d.region,
         .@"var" => |v| v.region,
-        .expr => |e| e.region,
-        .crash => |c| c.region,
-        .dbg => |d| d.region,
-        .expect => |e| e.region,
+        inline .expr, .crash, .dbg, .expect => |e| e.region,
         .@"for" => |f| f.region,
         .@"while" => |w| w.region,
         .@"return" => |r| r.region,
         .@"break" => |b| b.region,
-        .import => |i| i.region,
-        .type_decl => |t| t.region,
-        .malformed => |m| m.region,
-        .file_import => |fi| fi.region,
+        inline .import, .type_decl, .malformed, .file_import => |i| i.region,
         .type_anno => null, // Type annotations don't have a simple region
     };
 }

@@ -292,10 +292,7 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
 /// Return the statement behind a local type binding, if it has one.
 pub fn typeBindingStatement(binding: TypeBinding) ?CIR.Statement.Idx {
     return switch (binding) {
-        .local_nominal => |stmt| stmt,
-        .local_alias => |stmt| stmt,
-        .local_where_alias => |stmt| stmt,
-        .associated_nominal => |stmt| stmt,
+        inline .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt| stmt,
         .external_nominal => null,
     };
 }
@@ -313,10 +310,7 @@ pub fn inputToBinding(input: TypeBindingInput) TypeBinding {
 
 fn inputStatement(input: TypeBindingInput) ?CIR.Statement.Idx {
     return switch (input) {
-        .local_nominal => |stmt| stmt,
-        .local_alias => |stmt| stmt,
-        .local_where_alias => |stmt| stmt,
-        .associated_nominal => |stmt| stmt,
+        inline .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt| stmt,
         .external_nominal => null,
     };
 }

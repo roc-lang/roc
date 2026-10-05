@@ -328,9 +328,7 @@ fn hashExplicitRootRequestInput(
 fn hashRootSource(hasher: *base.Sha256, source: RootSource) void {
     hashByteSlice(hasher, @tagName(source));
     switch (source) {
-        .def => |idx| hashU32(hasher, @intFromEnum(idx)),
-        .expr => |idx| hashU32(hasher, @intFromEnum(idx)),
-        .statement => |idx| hashU32(hasher, @intFromEnum(idx)),
+        inline .def, .expr, .statement => |idx| hashU32(hasher, @intFromEnum(idx)),
         .required_binding => |idx| hashU32(hasher, idx),
         .hoisted => |hoisted| {
             hashU32(hasher, hoisted.index);
@@ -14067,9 +14065,7 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 .record_destructure => |destructs| {
                     for (destructs) |destruct| {
                         try self.pushPattern(switch (destruct.kind) {
-                            .required => |child_pattern| child_pattern,
-                            .sub_pattern => |child_pattern| child_pattern,
-                            .rest => |child_pattern| child_pattern,
+                            inline .required, .sub_pattern, .rest => |child_pattern| child_pattern,
                         });
                     }
                 },
@@ -15937,9 +15933,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .return_,
         .for_,
         => {},
-        .str => |items| allocator.free(items),
-        .list => |items| allocator.free(items),
-        .tuple => |items| allocator.free(items),
+        inline .str, .list, .tuple => |items| allocator.free(items),
         // `branches` is an owned array of range-form branches; the patterns and
         // binder remaps they reference live in the copier's match-branch pools.
         .match_ => |match| allocator.free(match.branches),
@@ -16024,9 +16018,7 @@ fn verifyCheckedExprDataComplete(
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked expression payload was not filled", .{}),
         .lookup_local => |lookup| std.debug.assert(lookup.resolved != null),
-        .lookup_external => |ref| std.debug.assert(ref != null),
-        .lookup_required => |ref| std.debug.assert(ref != null),
-        .dispatch_call => |plan| std.debug.assert(plan != null),
+        inline .lookup_external, .lookup_required, .dispatch_call => |ref| std.debug.assert(ref != null),
         .interpolation => |interpolation| std.debug.assert(interpolation.plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
@@ -21822,9 +21814,7 @@ const CheckedTemplateRefCollector = struct {
             .nominal => |nominal| try self.pushChild(.{ .pattern = nominal.backing_pattern }),
             .record_destructure => |destructs| {
                 for (destructs) |destruct| switch (destruct.kind) {
-                    .required => |child| try self.pushChild(.{ .pattern = child }),
-                    .sub_pattern => |child| try self.pushChild(.{ .pattern = child }),
-                    .rest => |child| try self.pushChild(.{ .pattern = child }),
+                    inline .required, .sub_pattern, .rest => |child| try self.pushChild(.{ .pattern = child }),
                 };
             },
             .list => |list| {
@@ -21876,9 +21866,7 @@ const CheckedTemplateRefCollector = struct {
                 try self.pushChild(.{ .pattern = reassign.pattern });
                 try self.pushChild(.{ .expr = reassign.expr });
             },
-            .dbg => |child| try self.pushChild(.{ .expr = child }),
-            .expr => |child| try self.pushChild(.{ .expr = child }),
-            .expect => |child| try self.pushChild(.{ .expr = child }),
+            inline .dbg, .expr, .expect => |child| try self.pushChild(.{ .expr = child }),
             .return_ => |ret| {
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
@@ -23322,9 +23310,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(binop.lhs, owner);
                 try self.pushExpr(binop.rhs, owner);
             },
-            .unary_minus => |child| try self.pushExpr(child, owner),
-            .unary_not => |child| try self.pushExpr(child, owner),
-            .dbg => |child| try self.pushExpr(child, owner),
+            inline .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child, owner),
             .expect_err => |expect_err| try self.pushExpr(expect_err.expr, owner),
             .expect => |child| try self.pushExpr(child, owner),
             .break_ => {},
@@ -23455,9 +23441,7 @@ const NestedProcSiteBuilder = struct {
             .nominal => |nominal| try self.pushPattern(nominal.backing_pattern, owner),
             .record_destructure => |destructs| {
                 for (destructs) |destruct| switch (destruct.kind) {
-                    .required => |child| try self.pushPattern(child, owner),
-                    .sub_pattern => |child| try self.pushPattern(child, owner),
-                    .rest => |child| try self.pushPattern(child, owner),
+                    inline .required, .sub_pattern, .rest => |child| try self.pushPattern(child, owner),
                 };
             },
             .list => |list| {
@@ -23513,9 +23497,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushPattern(reassign.pattern, owner);
                 try self.pushExpr(reassign.expr, owner);
             },
-            .dbg => |child| try self.pushExpr(child, owner),
-            .expr => |child| try self.pushExpr(child, owner),
-            .expect => |child| try self.pushExpr(child, owner),
+            inline .dbg, .expr, .expect => |child| try self.pushExpr(child, owner),
             .return_ => |ret| {
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
@@ -28955,9 +28937,7 @@ fn checkedExprContains(
                 .nominal => |nominal| try pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
                 .record_destructure => |destructs| for (destructs) |destruct| {
                     try pending.append(allocator, .{ .pattern = switch (destruct.kind) {
-                        .required => |required| required,
-                        .sub_pattern => |sub_pattern| sub_pattern,
-                        .rest => |rest| rest,
+                        inline .required, .sub_pattern, .rest => |required| required,
                     } });
                 },
                 .list => |list| {
@@ -36165,9 +36145,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             => {
                 const expr = store.getExpr(@enumFromInt(raw_node_idx));
                 switch (expr) {
-                    .e_typed_int => |typed| try visitor.typeName(typed.type_name),
-                    .e_typed_frac => |typed| try visitor.typeName(typed.type_name),
-                    .e_typed_num_from_numeral => |typed| try visitor.typeName(typed.type_name),
+                    inline .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => |typed| try visitor.typeName(typed.type_name),
                     .e_tag => |tag_expr| try visitor.tag(tag_expr.name),
                     .e_zero_argument_tag => |tag_expr| {
                         try visitor.tag(tag_expr.name);

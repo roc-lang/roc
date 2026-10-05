@@ -498,12 +498,7 @@ fn parseCommand(alloc: mem.Allocator, std_io: std.Io, all_args: []const []const 
     // behavior. The name check above already rejected everything else, so
     // the remaining arms only keep this switch exhaustive.
     switch (parsed) {
-        .run => |*run| run.resolve_limits.replace_deps = extraction.replace_deps,
-        .check => |*check| check.resolve_limits.replace_deps = extraction.replace_deps,
-        .build => |*build| build.resolve_limits.replace_deps = extraction.replace_deps,
-        .test_cmd => |*test_cmd| test_cmd.resolve_limits.replace_deps = extraction.replace_deps,
-        .docs => |*docs| docs.resolve_limits.replace_deps = extraction.replace_deps,
-        .deps => |*deps| deps.resolve_limits.replace_deps = extraction.replace_deps,
+        inline .run, .check, .build, .test_cmd, .docs, .deps => |*run| run.resolve_limits.replace_deps = extraction.replace_deps,
         .help, .problem => {},
         .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => {
             const cmd = all_args[0];

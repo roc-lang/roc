@@ -2046,9 +2046,7 @@ fn parserTypeDeclStatement(
 
 fn parserTypeDeclStateStatement(state: ParserTypeDeclState) ?Statement.Idx {
     return switch (state) {
-        .prepared => |stmt_idx| stmt_idx,
-        .registered => |stmt_idx| stmt_idx,
-        .redeclared => |stmt_idx| stmt_idx,
+        inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => null,
     };
 }
@@ -3307,9 +3305,7 @@ fn ensureParserTypeDeclBinding(
     const region = self.parserDeclRegion(decl);
 
     const stmt_idx = if (self.parser_type_decl_states.get(ast_stmt_idx)) |state| switch (state) {
-        .prepared => |stmt_idx| stmt_idx,
-        .registered => |stmt_idx| stmt_idx,
-        .redeclared => |stmt_idx| stmt_idx,
+        inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => return null,
     } else blk: {
         const type_path = decl.type_path;
@@ -5982,9 +5978,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                     i -= 1;
                     const destruct = self.env.store.getRecordDestruct(destructs[i]);
                     const sub_pattern_idx = switch (destruct.kind) {
-                        .Required => |idx| idx,
-                        .SubPattern => |idx| idx,
-                        .Rest => |idx| idx,
+                        inline .Required, .SubPattern, .Rest => |idx| idx,
                     };
                     try pending.append(stack_allocator, sub_pattern_idx);
                 }

@@ -1066,9 +1066,7 @@ pub const ConstStore = struct {
             // A node's nested vector precedes its callable contracts, so the
             // contracts wait beneath it on the stack.
             const contracts = switch (node) {
-                .target => |target| target.callable_contracts,
-                .structural => |structural| structural.callable_contracts,
-                .from_callable => |use| use.callable_contracts,
+                inline .target, .structural, .from_callable => |target| target.callable_contracts,
                 .from_scheme, .unreachable_value, .checked_error => 0,
             };
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });

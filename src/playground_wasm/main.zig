@@ -983,9 +983,7 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
         const def = module_env.store.getDef(def_idx);
         const pattern = module_env.store.getPattern(def.pattern);
         const ident = switch (pattern) {
-            .assign => |assign| assign.ident,
-            .var_assign => |var_assign| var_assign.ident,
-            .as => |as_pattern| as_pattern.ident,
+            inline .assign, .var_assign, .as => |assign| assign.ident,
             .applied_tag,
             .nominal,
             .nominal_external,

@@ -267,11 +267,7 @@ pub const Document = struct {
             switch (element) {
                 .text => |text| self.allocator.free(text),
                 .annotated => |annotated| self.allocator.free(annotated.content),
-                .raw => |raw| self.allocator.free(raw),
-                .reflowing_text => |text| self.allocator.free(text),
-                .link => |url| self.allocator.free(url),
-                .vertical_stack => |stack| self.allocator.free(stack),
-                .horizontal_concat => |concat| self.allocator.free(concat),
+                inline .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat => |raw| self.allocator.free(raw),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
                 .source_code_region => |region| {
                     self.allocator.free(region.line_text);

@@ -571,11 +571,7 @@ const Pass = struct {
 
     fn appendStmtExprs(self: *Pass, stmt_idx: CIR.Statement.Idx) Allocator.Error!void {
         switch (self.env.store.getStatement(stmt_idx)) {
-            .s_decl => |decl| try self.walk.append(self.gpa, decl.expr),
-            .s_var => |var_stmt| try self.walk.append(self.gpa, var_stmt.expr),
-            .s_reassign => |reassign| try self.walk.append(self.gpa, reassign.expr),
-            .s_dbg => |dbg| try self.walk.append(self.gpa, dbg.expr),
-            .s_expr => |expr_stmt| try self.walk.append(self.gpa, expr_stmt.expr),
+            inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |decl| try self.walk.append(self.gpa, decl.expr),
             .s_expect => |expect| try self.walk.append(self.gpa, expect.body),
             .s_for => |for_stmt| {
                 try self.walk.append(self.gpa, for_stmt.expr);

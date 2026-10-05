@@ -418,9 +418,7 @@ const Resolver = struct {
 
         for (other.store.sliceStatements(other.all_statements)) |stmt_idx| {
             const header_idx = switch (other.store.getStatement(stmt_idx)) {
-                .s_nominal_decl => |decl| decl.header,
-                .s_alias_decl => |decl| decl.header,
-                .s_where_alias_decl => |decl| decl.header,
+                inline .s_nominal_decl, .s_alias_decl, .s_where_alias_decl => |decl| decl.header,
                 .s_decl,
                 .s_var,
                 .s_var_uninitialized,
@@ -1309,9 +1307,7 @@ const Resolver = struct {
 fn selectedPrefix(other: *const ModuleEnv, selected: ?Statement.Idx) ?[]const u8 {
     const stmt_idx = selected orelse return null;
     const header_idx = switch (other.store.getStatement(stmt_idx)) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,

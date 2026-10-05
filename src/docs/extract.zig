@@ -616,9 +616,7 @@ fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjec
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: CIR.Statement.Idx) ?[]const u8 {
     const statement = module_env.store.getStatement(statement_idx);
     const header_idx = switch (statement) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,

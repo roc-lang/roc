@@ -574,9 +574,7 @@ pub const Diagnostic = union(enum) {
             .type_parameter_conflict => |d| d.region,
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
-            .duplicate_record_field => |d| d.duplicate_region,
-            .duplicate_pattern_binder => |d| d.duplicate_region,
-            .duplicate_tag => |d| d.duplicate_region,
+            inline .duplicate_record_field, .duplicate_pattern_binder, .duplicate_tag => |d| d.duplicate_region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
             .type_var_starting_with_dollar => |d| d.region,
@@ -683,14 +681,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("This may make the builtin type inaccessible in this scope.");
         try report.document.addLineBreak();
 
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            new_region_info,
-            .warning_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
+        try addOwnedSourceRegion(&report, new_region_info, .warning_highlight, filename, source, line_starts);
 
         return report;
     }
@@ -810,14 +801,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Make sure the file exists relative to your source file.");
         try report.document.addLineBreak();
 
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
+        try addOwnedSourceRegion(&report, region_info, .error_highlight, filename, source, line_starts);
 
         return report;
     }
@@ -841,14 +825,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("An IO error occurred while trying to read this file:");
         try report.document.addLineBreak();
 
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
+        try addOwnedSourceRegion(&report, region_info, .error_highlight, filename, source, line_starts);
 
         return report;
     }
@@ -872,14 +849,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Use a path relative to the source file instead.");
         try report.document.addLineBreak();
 
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
+        try addOwnedSourceRegion(&report, region_info, .error_highlight, filename, source, line_starts);
 
         return report;
     }
@@ -903,14 +873,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("To import binary files, use `List(U8)` instead of `Str`.");
         try report.document.addLineBreak();
 
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
+        try addOwnedSourceRegion(&report, region_info, .error_highlight, filename, source, line_starts);
 
         return report;
     }
@@ -935,14 +898,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addInlineCode("$");
         try report.headline.addReflowingText(".");
 
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
+        try addOwnedSourceRegion(&report, region_info, .error_highlight, filename, source, line_starts);
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("The ");
@@ -956,3 +912,17 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 };
+
+/// Appends a source excerpt for `region_info` to `report`, which takes its own
+/// copy of `filename`.
+fn addOwnedSourceRegion(
+    report: *Report,
+    region_info: base.RegionInfo,
+    annotation: reporting.Annotation,
+    filename: []const u8,
+    source: []const u8,
+    line_starts: []const u32,
+) Allocator.Error!void {
+    const owned_filename = try report.addOwnedString(filename);
+    try report.document.addSourceRegion(region_info, annotation, owned_filename, source, line_starts);
+}

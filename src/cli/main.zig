@@ -7689,35 +7689,8 @@ fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const 
     try shim_file.writeStreamingAll(ctx.io.std_io, shimLibraryBytes(kind, target));
 }
 
-/// Format a bundle path validation reason into a user-friendly error message
-fn formatBundlePathValidationReason(reason: bundle.PathValidationReason) []const u8 {
-    return switch (reason) {
-        .empty_path => "Path cannot be empty",
-        .path_too_long => "Path exceeds maximum length of 255 characters",
-        .windows_reserved_char => |char| switch (char) {
-            0 => "Path contains NUL byte (\\0)",
-            ':' => "Path contains colon (:) which is reserved on Windows",
-            '*' => "Path contains asterisk (*) which is a wildcard on Windows",
-            '?' => "Path contains question mark (?) which is a wildcard on Windows",
-            '"' => "Path contains quote (\") which is reserved on Windows",
-            '<' => "Path contains less-than (<) which is reserved on Windows",
-            '>' => "Path contains greater-than (>) which is reserved on Windows",
-            '|' => "Path contains pipe (|) which is reserved on Windows",
-            '\\' => "Path contains backslash (\\). Use forward slashes (/) for all paths",
-            else => "Path contains reserved character",
-        },
-        .absolute_path => "Absolute paths are not allowed",
-        .path_traversal => "Path traversal (..) is not allowed",
-        .current_directory_reference => "Current directory reference (.) is not allowed",
-        .contained_backslash_on_unix => "Path contains a backslash, which is a directory separator on Windows.",
-        .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
-        .component_ends_with_space => "Path components cannot end with space",
-        .component_ends_with_period => "Path components cannot end with period",
-    };
-}
-
-/// Format an unbundle path validation reason into a user-friendly error message
-fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
+/// Format a bundle or unbundle path validation reason into a user-friendly error message
+fn formatPathValidationReason(reason: anytype) []const u8 {
     return switch (reason) {
         .empty_path => "Path cannot be empty",
         .path_too_long => "Path exceeds maximum length of 255 characters",
@@ -8061,7 +8034,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     ) catch |err| {
         switch (err) {
             error.InvalidPath => {
-                try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
+                try stderr.print("Error: Invalid file path - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
                 try stderr.print("Path: {s}\n", .{error_ctx.path});
             },
             error.AccessDenied,
@@ -8203,7 +8176,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
                     had_errors = true;
                 },
                 error.InvalidPath => {
-                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatUnbundlePathValidationReason(error_ctx.reason)});
+                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
                     try stderr.print("Path: {s}\n", .{error_ctx.path});
                     try stderr.print("Archive: {s}\n", .{archive_path});
                     had_errors = true;
@@ -12274,10 +12247,7 @@ fn collectExpectBindingPatterns(
                 for (0..block.stmts.span.len) |stmt_offset| {
                     const stmt_idx = env.store.statementAt(block.stmts, stmt_offset);
                     switch (env.store.getStatement(stmt_idx)) {
-                        .s_decl => |decl| try stack.append(allocator, decl.expr),
-                        .s_var => |decl| try stack.append(allocator, decl.expr),
-                        .s_reassign => |assign| try stack.append(allocator, assign.expr),
-                        .s_expr => |stmt| try stack.append(allocator, stmt.expr),
+                        inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try stack.append(allocator, decl.expr),
                         .s_expect => |stmt| try stack.append(allocator, stmt.body),
                         .s_dbg => |stmt| try stack.append(allocator, stmt.expr),
                         .s_return => |stmt| try stack.append(allocator, stmt.expr),
@@ -13985,9 +13955,7 @@ const WatchChildArgv = struct {
 
 fn watchCommandPath(command: WatchCommand) []const u8 {
     return switch (command) {
-        .check => |args| args.path,
-        .test_cmd => |args| args.path,
-        .build => |args| args.path,
+        inline .check, .test_cmd, .build => |args| args.path,
     };
 }
 

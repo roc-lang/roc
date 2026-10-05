@@ -26,9 +26,7 @@ const module_lookup = @import("module_lookup.zig");
 
 fn statementAnnotation(statement: CIR.Statement) ?CIR.Annotation.Idx {
     return switch (statement) {
-        .s_decl => |decl| decl.anno,
-        .s_var => |var_stmt| var_stmt.anno,
-        .s_var_uninitialized => |var_stmt| var_stmt.anno,
+        inline .s_decl, .s_var, .s_var_uninitialized => |decl| decl.anno,
         .s_reassign,
         .s_crash,
         .s_dbg,

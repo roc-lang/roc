@@ -587,9 +587,7 @@ const CheckedClassifier = struct {
     fn visitPattern(self: *CheckedClassifier, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
         const region = self.module_env.store.getPatternRegion(pattern_idx);
         switch (pattern) {
-            .assign => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
-            .var_assign => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
-            .as => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
+            inline .assign, .var_assign, .as => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
             .applied_tag => |tag| self.setIdent(region, tag.name, .enum_member),
             .record_destructure => |record| {
                 for (self.module_env.store.sliceRecordDestructs(record.destructs)) |field_idx| {
@@ -896,9 +894,7 @@ const Classifier = struct {
                 if (v.body) |body| try self.walkExpr(body);
                 try self.bind(v.name, .variable);
             },
-            .expr => |e| try self.walkExpr(e.expr),
-            .crash => |e| try self.walkExpr(e.expr),
-            .dbg => |e| try self.walkExpr(e.expr),
+            inline .expr, .crash, .dbg => |e| try self.walkExpr(e.expr),
             .expect => |e| try self.walkExpr(e.body),
             .@"return" => |e| try self.walkExpr(e.expr),
             .@"for" => |f| try self.walkFor(f.patt, f.expr, f.body),

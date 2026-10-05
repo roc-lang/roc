@@ -205,27 +205,21 @@ pub const WorkerTask = union(enum) {
 
     pub fn getPackageName(self: WorkerTask) ?[]const u8 {
         return switch (self) {
-            .parse => |t| t.package_name,
-            .canonicalize => |t| t.package_name,
-            .type_check => |t| t.package_name,
+            inline .parse, .canonicalize, .type_check => |t| t.package_name,
             .post_check => null,
         };
     }
 
     pub fn getModuleId(self: WorkerTask) ?ModuleId {
         return switch (self) {
-            .parse => |t| t.module_id,
-            .canonicalize => |t| t.module_id,
-            .type_check => |t| t.module_id,
+            inline .parse, .canonicalize, .type_check => |t| t.module_id,
             .post_check => null,
         };
     }
 
     pub fn getModuleName(self: WorkerTask) ?[]const u8 {
         return switch (self) {
-            .parse => |t| t.module_name,
-            .canonicalize => |t| t.module_name,
-            .type_check => |t| t.module_name,
+            inline .parse, .canonicalize, .type_check => |t| t.module_name,
             .post_check => null,
         };
     }

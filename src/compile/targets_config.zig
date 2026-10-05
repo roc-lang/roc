@@ -819,16 +819,8 @@ fn constUnsigned(
 
 fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReason) ?usize {
     const value: u128 = switch (scalar) {
-        .u8 => |v| v,
-        .u16 => |v| v,
-        .u32 => |v| v,
-        .u64 => |v| v,
-        .u128 => |v| v,
-        .i8 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i16 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i32 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i64 => |v| signedScalarUnsigned(v, reason) orelse return null,
-        .i128 => |v| signedScalarUnsigned(v, reason) orelse return null,
+        inline .u8, .u16, .u32, .u64, .u128 => |v| v,
+        inline .i8, .i16, .i32, .i64, .i128 => |v| signedScalarUnsigned(v, reason) orelse return null,
         .dec_bits => |v| decScalarUnsigned(v, reason) orelse return null,
         .f32_bits, .f64_bits => {
             reason.* = .expected_unsigned_integer;

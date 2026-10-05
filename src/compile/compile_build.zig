@@ -3512,10 +3512,7 @@ pub const BuildEnv = struct {
         statement_idx: CIR.Statement.Idx,
     ) Allocator.Error!void {
         switch (env.store.getStatement(statement_idx)) {
-            .s_decl => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_var => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_reassign => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            inline .s_decl, .s_var, .s_reassign, .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
             .s_expect => {},
             .s_dbg => |stmt| {
                 try regions.append(allocator, env.store.getStatementRegion(statement_idx));

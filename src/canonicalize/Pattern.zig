@@ -302,9 +302,7 @@ pub const Pattern = union(enum) {
 
             pub fn toPatternIdx(kind: Kind) Pattern.Idx {
                 switch (kind) {
-                    .Required => |p_idx| return p_idx,
-                    .SubPattern => |p_idx| return p_idx,
-                    .Rest => |p_idx| return p_idx,
+                    inline .Required, .SubPattern, .Rest => |p_idx| return p_idx,
                 }
             }
 

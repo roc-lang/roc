@@ -3747,9 +3747,7 @@ const Formatter = struct {
     fn plannedRocVersionUpgrade(fmt: *Formatter, header: AST.Header) ?RocVersionUpgrade {
         const current = fmt.options.compiler_version orelse return null;
         const field_idx = switch (header) {
-            .app => |h| h.roc_version,
-            .package => |h| h.roc_version,
-            .platform => |h| h.roc_version,
+            inline .app, .package, .platform => |h| h.roc_version,
             .module, .hosted, .type_module, .default_app, .malformed => null,
         } orelse return null;
         const pinned = fmt.ast.rocVersionText(field_idx) orelse return null;
@@ -3960,9 +3958,7 @@ const Formatter = struct {
                     try fmt.formatTargetsSection(targets_idx);
                 }
             },
-            .type_module => {},
-            .default_app => {},
-            .malformed => {},
+            .type_module, .default_app, .malformed => {},
         }
     }
 
@@ -5229,9 +5225,7 @@ const Formatter = struct {
             .record_builder => |rb| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 try fmt.itemsLayout(sink, AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields)),
             .nominal_record => |nr| try fmt.groupedExprChild(sink, nr.mapper) or try fmt.groupedExprChild(sink, nr.backing),
-            .suffix_single_question => |s| fmt.groupedExprChild(sink, s.expr),
-            .tuple_access => |t| fmt.groupedExprChild(sink, t.expr),
-            .unary_op => |u| fmt.groupedExprChild(sink, u.expr),
+            inline .suffix_single_question, .tuple_access, .unary_op => |s| fmt.groupedExprChild(sink, s.expr),
             .field_access => |f| (fmt.ast.store.getExpr(f.receiver) == .arrow_call and try fmt.exprChild(sink, f.receiver)) or
                 try fmt.groupedExprChild(sink, f.receiver),
             .method_call => |m| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or

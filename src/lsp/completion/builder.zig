@@ -37,9 +37,7 @@ const MethodOwnerLookup = struct {
 
 fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
     return switch (pattern) {
-        .assign => |p| p.ident,
-        .var_assign => |p| p.ident,
-        .as => |p| p.ident,
+        inline .assign, .var_assign, .as => |p| p.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -63,9 +61,7 @@ fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
 
 fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
     return switch (statement) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
