@@ -7848,6 +7848,16 @@ pub const Interpreter = struct {
     const ShiftOp = enum { shl, shr, shr_zf };
     const BitwiseOp = enum { @"and", @"or", xor, not };
     const BitCountOp = enum { count_ones, count_leading_zeros, count_trailing_zeros };
+    /// The unsigned integer type a numeric operand of `bits` bits is read as.
+    fn UInt(comptime bits: u16) type {
+        return std.meta.Int(.unsigned, bits);
+    }
+
+    /// The signed integer type a numeric operand of `bits` bits is read as.
+    fn SInt(comptime bits: u16) type {
+        return std.meta.Int(.signed, bits);
+    }
+
     const NumericOperandKind = union(enum) {
         unsigned_int: u16,
         signed_int: u16,
@@ -7999,19 +8009,11 @@ pub const Interpreter = struct {
         if (checked_op != null and is_division_like) {
             switch (kind) {
                 .unsigned_int => |bits| switch (bits) {
-                    8 => if (b.read(u8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    16 => if (b.read(u16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    32 => if (b.read(u32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    64 => if (b.read(u64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    128 => if (b.read(u128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    inline 8, 16, 32, 64, 128 => |w| if (b.read(UInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
                 },
                 .signed_int => |bits| switch (bits) {
-                    8 => if (b.read(i8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    16 => if (b.read(i16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    32 => if (b.read(i32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    64 => if (b.read(i64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    128 => if (b.read(i128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    inline 8, 16, 32, 64, 128 => |w| if (b.read(SInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
                 },
                 .dec, .float => return self.invariantFailedError(
@@ -8023,19 +8025,11 @@ pub const Interpreter = struct {
 
         switch (kind) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, try self.intBinOp(u8, a.read(u8), b.read(u8), op, checked_op)),
-                16 => val.write(u16, try self.intBinOp(u16, a.read(u16), b.read(u16), op, checked_op)),
-                32 => val.write(u32, try self.intBinOp(u32, a.read(u32), b.read(u32), op, checked_op)),
-                64 => val.write(u64, try self.intBinOp(u64, a.read(u64), b.read(u64), op, checked_op)),
-                128 => val.write(u128, try self.intBinOp(u128, a.read(u128), b.read(u128), op, checked_op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), try self.intBinOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, try self.intBinOp(i8, a.read(i8), b.read(i8), op, checked_op)),
-                16 => val.write(i16, try self.intBinOp(i16, a.read(i16), b.read(i16), op, checked_op)),
-                32 => val.write(i32, try self.intBinOp(i32, a.read(i32), b.read(i32), op, checked_op)),
-                64 => val.write(i64, try self.intBinOp(i64, a.read(i64), b.read(i64), op, checked_op)),
-                128 => val.write(i128, try self.intBinOp(i128, a.read(i128), b.read(i128), op, checked_op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), try self.intBinOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8098,19 +8092,11 @@ pub const Interpreter = struct {
     ) Error!bool {
         return switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => intBinOverflows(u8, a.read(u8), b.read(u8), operation),
-                16 => intBinOverflows(u16, a.read(u16), b.read(u16), operation),
-                32 => intBinOverflows(u32, a.read(u32), b.read(u32), operation),
-                64 => intBinOverflows(u64, a.read(u64), b.read(u64), operation),
-                128 => intBinOverflows(u128, a.read(u128), b.read(u128), operation),
+                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(UInt(w), a.read(UInt(w)), b.read(UInt(w)), operation),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => intBinOverflows(i8, a.read(i8), b.read(i8), operation),
-                16 => intBinOverflows(i16, a.read(i16), b.read(i16), operation),
-                32 => intBinOverflows(i32, a.read(i32), b.read(i32), operation),
-                64 => intBinOverflows(i64, a.read(i64), b.read(i64), operation),
-                128 => intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(SInt(w), a.read(SInt(w)), b.read(SInt(w)), operation),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .dec => if (operation == .mul)
@@ -8140,19 +8126,11 @@ pub const Interpreter = struct {
 
         const result: bool = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => cmpOp(u8, a.read(u8), b.read(u8), op),
-                16 => cmpOp(u16, a.read(u16), b.read(u16), op),
-                32 => cmpOp(u32, a.read(u32), b.read(u32), op),
-                64 => cmpOp(u64, a.read(u64), b.read(u64), op),
-                128 => cmpOp(u128, a.read(u128), b.read(u128), op),
+                inline 8, 16, 32, 64, 128 => |w| cmpOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => cmpOp(i8, a.read(i8), b.read(i8), op),
-                16 => cmpOp(i16, a.read(i16), b.read(i16), op),
-                32 => cmpOp(i32, a.read(i32), b.read(i32), op),
-                64 => cmpOp(i64, a.read(i64), b.read(i64), op),
-                128 => cmpOp(i128, a.read(i128), b.read(i128), op),
+                inline 8, 16, 32, 64, 128 => |w| cmpOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8175,19 +8153,11 @@ pub const Interpreter = struct {
         // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => cmpOrder(u8, a.read(u8), b.read(u8)),
-                16 => cmpOrder(u16, a.read(u16), b.read(u16)),
-                32 => cmpOrder(u32, a.read(u32), b.read(u32)),
-                64 => cmpOrder(u64, a.read(u64), b.read(u64)),
-                128 => cmpOrder(u128, a.read(u128), b.read(u128)),
+                inline 8, 16, 32, 64, 128 => |w| cmpOrder(UInt(w), a.read(UInt(w)), b.read(UInt(w))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => cmpOrder(i8, a.read(i8), b.read(i8)),
-                16 => cmpOrder(i16, a.read(i16), b.read(i16)),
-                32 => cmpOrder(i32, a.read(i32), b.read(i32)),
-                64 => cmpOrder(i64, a.read(i64), b.read(i64)),
-                128 => cmpOrder(i128, a.read(i128), b.read(i128)),
+                inline 8, 16, 32, 64, 128 => |w| cmpOrder(SInt(w), a.read(SInt(w)), b.read(SInt(w))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8205,19 +8175,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, shiftOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, shiftOp(u16, a.read(u16), b.read(u8), op)),
-                32 => val.write(u32, shiftOp(u32, a.read(u32), b.read(u8), op)),
-                64 => val.write(u64, shiftOp(u64, a.read(u64), b.read(u8), op)),
-                128 => val.write(u128, shiftOp(u128, a.read(u128), b.read(u8), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), shiftOp(UInt(w), a.read(UInt(w)), b.read(u8), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer shift width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, shiftOp(i8, a.read(i8), b.read(u8), op)),
-                16 => val.write(i16, shiftOp(i16, a.read(i16), b.read(u8), op)),
-                32 => val.write(i32, shiftOp(i32, a.read(i32), b.read(u8), op)),
-                64 => val.write(i64, shiftOp(i64, a.read(i64), b.read(u8), op)),
-                128 => val.write(i128, shiftOp(i128, a.read(i128), b.read(u8), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), shiftOp(SInt(w), a.read(SInt(w)), b.read(u8), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer shift width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
@@ -8232,19 +8194,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, bitwiseOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, bitwiseOp(u16, a.read(u16), b.read(u16), op)),
-                32 => val.write(u32, bitwiseOp(u32, a.read(u32), b.read(u32), op)),
-                64 => val.write(u64, bitwiseOp(u64, a.read(u64), b.read(u64), op)),
-                128 => val.write(u128, bitwiseOp(u128, a.read(u128), b.read(u128), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), bitwiseOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer bitwise width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, bitwiseOp(i8, a.read(i8), b.read(i8), op)),
-                16 => val.write(i16, bitwiseOp(i16, a.read(i16), b.read(i16), op)),
-                32 => val.write(i32, bitwiseOp(i32, a.read(i32), b.read(i32), op)),
-                64 => val.write(i64, bitwiseOp(i64, a.read(i64), b.read(i64), op)),
-                128 => val.write(i128, bitwiseOp(i128, a.read(i128), b.read(i128), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), bitwiseOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer bitwise width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
@@ -8266,11 +8220,7 @@ pub const Interpreter = struct {
             // operand's signedness does not affect the result; read each width
             // as its unsigned counterpart.
             .unsigned_int, .signed_int => |bits| switch (bits) {
-                8 => bitCount(u8, a.read(u8), op),
-                16 => bitCount(u16, a.read(u16), op),
-                32 => bitCount(u32, a.read(u32), op),
-                64 => bitCount(u64, a.read(u64), op),
-                128 => bitCount(u128, a.read(u128), op),
+                inline 8, 16, 32, 64, 128 => |w| bitCount(UInt(w), a.read(UInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported integer bit-count width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
