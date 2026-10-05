@@ -456,8 +456,8 @@ const QueryBest = struct {
     assumed: u64 = 0,
     /// On the `relaxFrom` worklist already.
     queued: bool = false,
-    /// Times the slack improved after the root was first reached.
-    improvements: u8 = 0,
+    /// Times the root has come off the `relaxFrom` worklist.
+    visits: u32 = 0,
 };
 
 /// Index links of one path fact, see `Pass.fact_links`.
@@ -1631,10 +1631,13 @@ const Pass = struct {
     /// are reached, nearest first and through the path's older facts
     /// first, so the roots a region's seeded facts relate are reached
     /// ahead of the ones its own branches add and the bounds persisted
-    /// from them come back the same round after round. A root's slack
-    /// improving `query_visit_cap` times after it was reached means the
-    /// facts hold a negative cycle (no execution satisfies them
-    /// together), and the walk ends there with the slacks it has.
+    /// from them come back the same round after round. The worklist is
+    /// first in, first out, so a root comes off it at most once per pass
+    /// over the roots reached so far, and without a negative cycle among
+    /// them its slack settles within as many passes as there are roots: a
+    /// root coming off more times than that means the facts hold a
+    /// negative cycle (no execution satisfies them together), and the
+    /// walk ends there with the slacks it has.
     fn relaxFrom(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
         self.query_best.clearRetainingCapacity();
         self.query_queue.clearRetainingCapacity();
@@ -1646,6 +1649,8 @@ const Pass = struct {
             const node = self.query_queue.items[next];
             const acc = self.query_best.getPtr(node).?;
             acc.queued = false;
+            acc.visits += 1;
+            if (acc.visits > self.query_best.count()) return;
             const acc_c = acc.c;
             const acc_assumed = acc.assumed;
             if (node >= self.fwd_heads.items.len) continue;
@@ -1674,8 +1679,6 @@ const Pass = struct {
                 const next_acc = clampSlack(acc_c + fact.c);
                 if (self.query_best.getPtr(other)) |known| {
                     if (next_acc >= known.c) continue;
-                    if (known.improvements >= query_visit_cap) return;
-                    known.improvements += 1;
                     known.c = next_acc;
                     known.assumed = acc_assumed | fact.assumed;
                     self.query_used |= fact.assumed;
