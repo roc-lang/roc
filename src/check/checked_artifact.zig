@@ -5647,13 +5647,9 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
         .empty_record,
         .empty_tag_union,
         => {},
-        .flex => |flex| {
+        inline .flex, .rigid => |flex| {
             if (flex.name) |name| allocator.free(name);
             allocator.free(flex.constraints);
-        },
-        .rigid => |rigid| {
-            if (rigid.name) |name| allocator.free(name);
-            allocator.free(rigid.constraints);
         },
         .alias => |alias| allocator.free(alias.args),
         .record => |record| allocator.free(record.fields),
@@ -11629,11 +11625,7 @@ const CheckedSourceNodes = struct {
             },
             .e_unary_minus => |unary| try self.markExpr(unary.expr, work),
             .e_field_access => |field| try self.markExpr(field.receiver, work),
-            .e_method_call => |call| {
-                try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
                 try self.markExprSpan(module, call.args, work);
             },
@@ -11787,17 +11779,9 @@ const CheckedSourceNodes = struct {
                 try self.markExpr(for_.expr, work);
                 try self.markExpr(for_.body, work);
             },
-            .s_while => |while_| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_| {
                 try self.markExpr(while_.cond, work);
                 try self.markExpr(while_.body, work);
-            },
-            .s_infinite_loop => |loop| {
-                try self.markExpr(loop.cond, work);
-                try self.markExpr(loop.body, work);
-            },
-            .s_breakable_loop => |loop| {
-                try self.markExpr(loop.cond, work);
-                try self.markExpr(loop.body, work);
             },
             .s_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -14117,17 +14101,9 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                     try self.pushExpr(for_.expr);
                     try self.pushExpr(for_.body);
                 },
-                .while_ => |while_| {
+                inline .while_, .infinite_loop, .breakable_loop => |while_| {
                     try self.pushExpr(while_.cond);
                     try self.pushExpr(while_.body);
-                },
-                .infinite_loop => |loop| {
-                    try self.pushExpr(loop.cond);
-                    try self.pushExpr(loop.body);
-                },
-                .breakable_loop => |loop| {
-                    try self.pushExpr(loop.cond);
-                    try self.pushExpr(loop.body);
                 },
                 .return_ => |ret| try self.pushExpr(ret.expr),
                 .crash,
@@ -17189,11 +17165,7 @@ fn attachUseTypePayload(
     checked_ty: CheckedTypeId,
 ) Allocator.Error!void {
     switch (ref.*) {
-        .top_level_const => |*use| {
-            use.requested_source_ty_template = key;
-            use.requested_source_ty_payload = checked_ty;
-        },
-        .imported_const => |*use| {
+        inline .top_level_const, .imported_const => |*use| {
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
         },
@@ -17206,15 +17178,7 @@ fn attachUseTypePayload(
                 checkedArtifactInvariant("platform-required const use missing relation-owned requested payload", .{});
             }
         },
-        .top_level_proc => |*use| {
-            use.source_fn_ty_template = key;
-            use.source_fn_ty_payload = checked_ty;
-        },
-        .imported_proc => |*use| {
-            use.source_fn_ty_template = key;
-            use.source_fn_ty_payload = checked_ty;
-        },
-        .hosted_proc => |*use| {
+        inline .top_level_proc, .imported_proc, .hosted_proc => |*use| {
             use.source_fn_ty_template = key;
             use.source_fn_ty_payload = checked_ty;
         },
@@ -21585,10 +21549,7 @@ const CheckedTemplateRefCollector = struct {
             .lookup_local => |lookup| {
                 if (lookup.resolved) |ref_id| try self.appendValueRef(ref_id);
             },
-            .lookup_external => |ref_id| {
-                if (ref_id) |id| try self.appendValueRef(id);
-            },
-            .lookup_required => |ref_id| {
+            inline .lookup_external, .lookup_required => |ref_id| {
                 if (ref_id) |id| try self.appendValueRef(id);
             },
             .dispatch_call,
@@ -21879,17 +21840,9 @@ const CheckedTemplateRefCollector = struct {
                 try self.pushChild(.{ .expr = for_.expr });
                 try self.pushChild(.{ .expr = for_.body });
             },
-            .while_ => |while_| {
+            inline .while_, .infinite_loop, .breakable_loop => |while_| {
                 try self.pushChild(.{ .expr = while_.cond });
                 try self.pushChild(.{ .expr = while_.body });
-            },
-            .infinite_loop => |loop| {
-                try self.pushChild(.{ .expr = loop.cond });
-                try self.pushChild(.{ .expr = loop.body });
-            },
-            .breakable_loop => |loop| {
-                try self.pushChild(.{ .expr = loop.cond });
-                try self.pushChild(.{ .expr = loop.body });
             },
             .pending,
             .crash,
@@ -23508,17 +23461,9 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(for_.expr, owner);
                 try self.pushExpr(for_.body, owner);
             },
-            .while_ => |while_| {
+            inline .while_, .infinite_loop, .breakable_loop => |while_| {
                 try self.pushExpr(while_.cond, owner);
                 try self.pushExpr(while_.body, owner);
-            },
-            .infinite_loop => |loop| {
-                try self.pushExpr(loop.cond, owner);
-                try self.pushExpr(loop.body, owner);
-            },
-            .breakable_loop => |loop| {
-                try self.pushExpr(loop.cond, owner);
-                try self.pushExpr(loop.body, owner);
             },
             .alias_decl,
             .where_alias_decl,

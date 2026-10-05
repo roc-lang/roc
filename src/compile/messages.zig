@@ -499,26 +499,7 @@ pub const WorkerResult = union(enum) {
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
             .post_check => {},
-            .parsed => |*r| {
-                for (r.discovered_local_imports.items) |imp| {
-                    gpa.free(imp.import_name);
-                    switch (imp.target) {
-                        .resolved => |resolved| {
-                            gpa.free(resolved.module_name);
-                            gpa.free(resolved.path);
-                        },
-                        .rejected => {},
-                    }
-                }
-                r.discovered_local_imports.deinit(gpa);
-                for (r.discovered_external_imports.items) |imp| {
-                    gpa.free(imp.import_name);
-                }
-                r.discovered_external_imports.deinit(gpa);
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
-            .canonicalized => |*r| {
+            inline .parsed, .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
                     switch (imp.target) {

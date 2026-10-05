@@ -1053,11 +1053,8 @@ pub const SyntaxChecker = struct {
             .text => |t| return textHasAny(t, needles),
             .annotated => |a| return textHasAny(a.content, needles),
             inline .raw, .reflowing_text, .link => |r| return textHasAny(r, needles),
-            .vertical_stack => |stack| {
+            inline .vertical_stack, .horizontal_concat => |stack| {
                 for (stack) |el| if (elementContainsAny(el, needles)) return true;
-            },
-            .horizontal_concat => |concat| {
-                for (concat) |el| if (elementContainsAny(el, needles)) return true;
             },
             .source_code_region => |region| return textHasAny(region.line_text, needles),
             .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
@@ -2452,17 +2449,8 @@ pub const SyntaxChecker = struct {
                     .range = range,
                 };
             },
-            .external => |ext| {
+            inline .external, .pending => |ext| {
                 const import_idx_int = @intFromEnum(ext.module_idx);
-                if (import_idx_int < module_env.imports.imports.len()) {
-                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                    const module_name = module_env.common.getString(string_idx);
-                    return self.findDefinitionInModule(build_env, doc_path, module_name, type_name, oom);
-                }
-                return self.findModuleByName(build_env, doc_path, type_name, oom);
-            },
-            .pending => |pend| {
-                const import_idx_int = @intFromEnum(pend.module_idx);
                 if (import_idx_int < module_env.imports.imports.len()) {
                     const string_idx = module_env.imports.imports.items.items[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);

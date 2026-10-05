@@ -2430,15 +2430,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
             try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
-        .package => {
-            const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
-        },
-        .platform => {
-            const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
-        },
-        .app => {
+        .package, .platform, .app => {
             const file = parse_ast.store.getFile();
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
@@ -2507,13 +2499,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
             try fmt.formatStatement(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
         },
-        .package => {
-            try fmt.formatAst(parse_ast.*, &formatted.writer);
-        },
-        .platform => {
-            try fmt.formatAst(parse_ast.*, &formatted.writer);
-        },
-        .app => {
+        .package, .platform, .app => {
             try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .repl => {

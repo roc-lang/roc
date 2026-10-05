@@ -2586,11 +2586,7 @@ const HoistSelectionTransaction = struct {
                 try self.pushStageExprs(run, store.sliceExpr(call.args));
                 try self.pushStageExpr(run, call.func);
             },
-            .e_method_call => |call| {
-                try self.pushStageExprs(run, store.sliceExpr(call.args));
-                try self.pushStageExpr(run, call.receiver);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.pushStageExprs(run, store.sliceExpr(call.args));
                 try self.pushStageExpr(run, call.receiver);
             },
@@ -5544,17 +5540,9 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
             try visitor.expr(for_.expr);
             try visitor.expr(for_.body);
         },
-        .s_while => |while_| {
+        inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_| {
             try visitor.expr(while_.cond);
             try visitor.expr(while_.body);
-        },
-        .s_infinite_loop => |loop| {
-            try visitor.expr(loop.cond);
-            try visitor.expr(loop.body);
-        },
-        .s_breakable_loop => |loop| {
-            try visitor.expr(loop.cond);
-            try visitor.expr(loop.body);
         },
         .s_return => |ret| {
             try visitor.expr(ret.expr);
@@ -5627,11 +5615,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
         },
         .e_unary_minus => |unary| try visitor.expr(unary.expr),
         .e_field_access => |field| try visitor.expr(field.receiver),
-        .e_method_call => |call| {
-            try visitor.expr(call.receiver);
-            for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
-        },
-        .e_dispatch_call => |call| {
+        inline .e_method_call, .e_dispatch_call => |call| {
             try visitor.expr(call.receiver);
             for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
@@ -12543,11 +12527,7 @@ const StoredConstScan = struct {
                 try addExpr(items, module, call.func);
                 try addExprSpan(items, module, call.args);
             },
-            .e_method_call => |call| {
-                try addExpr(items, module, call.receiver);
-                try addExprSpan(items, module, call.args);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try addExpr(items, module, call.receiver);
                 try addExprSpan(items, module, call.args);
             },
@@ -23834,17 +23814,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
             }
         },
-        .e_dec => |frac| {
-            if (frac.has_suffix) {
-                const literal = self.recordedNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx));
-                const num_literal_info = try self.exactNumeralInfoForLiteral(literal, expr_region);
-                _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
-            } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
-            }
-        },
-        .e_dec_small => |frac| {
+        inline .e_dec, .e_dec_small => |frac| {
             if (frac.has_suffix) {
                 const literal = self.recordedNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx));
                 const num_literal_info = try self.exactNumeralInfoForLiteral(literal, expr_region);
@@ -24257,10 +24227,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 try self.markErroneous(expr_var);
             }
         },
-        .e_crash => {
-            try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
-        },
-        .e_ellipsis => {
+        .e_crash, .e_ellipsis => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_anno_only => |anno| {

@@ -789,23 +789,13 @@ pub const ReportBuilder = struct {
                         }
                     }
                 },
-                .field_typo => |ft| {
+                inline .field_typo, .tag_typo => |ft| {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
                         D.bytes("Maybe"),
                         D.ident(ft.typo).withAnnotation(.inline_code),
                         D.bytes("should be"),
                         D.ident(ft.suggestion).withAnnotation(.inline_code),
-                        D.bytes("?").withNoPrecedingSpace(),
-                    }, self, report);
-                },
-                .tag_typo => |tt| {
-                    try D.renderSlice(&.{
-                        D.bytes("Hint:").withAnnotation(.emphasized),
-                        D.bytes("Maybe"),
-                        D.ident(tt.typo).withAnnotation(.inline_code),
-                        D.bytes("should be"),
-                        D.ident(tt.suggestion).withAnnotation(.inline_code),
                         D.bytes("?").withNoPrecedingSpace(),
                     }, self, report);
                 },

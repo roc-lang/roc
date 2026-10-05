@@ -3044,10 +3044,7 @@ fn handleTypeBindingDecision(
                 try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
             }
         },
-        .rejected_current_conflict => |existing| {
-            try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
-        },
-        .redeclared_current => |existing| {
+        inline .rejected_current_conflict, .redeclared_current => |existing| {
             try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
         },
     }
@@ -6016,14 +6013,8 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                     try pending.append(stack_allocator, elems[i]);
                 }
             },
-            .nominal => |nom| {
+            inline .nominal, .nominal_external, .deferred_import_ref => |nom| {
                 try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .nominal_external => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .deferred_import_ref => |deferred| {
-                try pending.append(stack_allocator, deferred.backing_pattern);
             },
             .str_interpolation => |str| {
                 var i: u32 = str.steps.span.len;
@@ -9658,13 +9649,9 @@ const DefiniteInitAnalyzer = struct {
                 if (sc.skipped) |box| self.destroyState(box);
                 if (sc.rhs_state) |box| self.destroyState(box);
             },
-            .if_ => |*if_| {
+            inline .if_, .match => |*if_| {
                 if (if_.branch_state) |box| self.destroyState(box);
                 self.deinitStates(&if_.normal);
-            },
-            .match => |*match| {
-                if (match.branch_state) |box| self.destroyState(box);
-                self.deinitStates(&match.normal);
             },
             .expr, .stmt, .forward, .seq, .record, .block => {},
         }

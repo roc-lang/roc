@@ -932,17 +932,9 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit_pattern = for_stmt.patt });
                 try walk.push(self.allocator, .{ .visit = for_stmt.expr });
             },
-            .s_while => |while_stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
                 try walk.push(self.allocator, .{ .visit = while_stmt.body });
                 try walk.push(self.allocator, .{ .visit = while_stmt.cond });
-            },
-            .s_infinite_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
-            },
-            .s_breakable_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
             },
             .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
             .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
@@ -1022,11 +1014,7 @@ const DemandAnalyzer = struct {
                 if (record.ext) |ext_idx| try walk.push(self.allocator, .{ .visit = ext_idx });
             },
             .e_field_access => |access| try walk.push(self.allocator, .{ .visit = access.receiver }),
-            .e_method_call => |call| {
-                try self.pushExprSpanReversed(walk, call.args);
-                try walk.push(self.allocator, .{ .visit = call.receiver });
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.pushExprSpanReversed(walk, call.args);
                 try walk.push(self.allocator, .{ .visit = call.receiver });
             },
@@ -1604,11 +1592,7 @@ pub fn collectNameReferences(
                 }
             },
             .e_field_access => |access| try scratch_stack.append(allocator, access.receiver),
-            .e_method_call => |call| {
-                try scratch_stack.append(allocator, call.receiver);
-                for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try scratch_stack.append(allocator, call.receiver);
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },

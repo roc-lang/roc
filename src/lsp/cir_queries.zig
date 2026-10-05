@@ -739,18 +739,10 @@ const FindTagAtOffsetContext = struct {
             .e_field_access => |fa| {
                 ctx.walkExpr(fa.receiver, null, null);
             },
-            .e_method_call => |mc| {
+            inline .e_method_call, .e_dispatch_call => |mc| {
                 ctx.walkExpr(mc.receiver, null, null);
                 if (ctx.result != null) return;
                 for (ctx.store.sliceExpr(mc.args)) |arg| {
-                    ctx.walkExpr(arg, null, null);
-                    if (ctx.result != null) return;
-                }
-            },
-            .e_dispatch_call => |dc| {
-                ctx.walkExpr(dc.receiver, null, null);
-                if (ctx.result != null) return;
-                for (ctx.store.sliceExpr(dc.args)) |arg| {
                     ctx.walkExpr(arg, null, null);
                     if (ctx.result != null) return;
                 }
@@ -778,14 +770,8 @@ const FindTagAtOffsetContext = struct {
                 if (ctx.result != null) return;
                 ctx.walkExpr(eq.rhs, null, null);
             },
-            .e_type_method_call => |tmc| {
+            inline .e_type_method_call, .e_type_dispatch_call => |tmc| {
                 for (ctx.store.sliceExpr(tmc.args)) |arg| {
-                    ctx.walkExpr(arg, null, null);
-                    if (ctx.result != null) return;
-                }
-            },
-            .e_type_dispatch_call => |tdc| {
-                for (ctx.store.sliceExpr(tdc.args)) |arg| {
                     ctx.walkExpr(arg, null, null);
                     if (ctx.result != null) return;
                 }
@@ -793,14 +779,8 @@ const FindTagAtOffsetContext = struct {
             .e_tuple_access => |ta| {
                 ctx.walkExpr(ta.tuple, null, null);
             },
-            .e_list => |list| {
+            inline .e_list, .e_tuple => |list| {
                 for (ctx.store.sliceExpr(list.elems)) |elem| {
-                    ctx.walkExpr(elem, null, null);
-                    if (ctx.result != null) return;
-                }
-            },
-            .e_tuple => |tuple| {
-                for (ctx.store.sliceExpr(tuple.elems)) |elem| {
                     ctx.walkExpr(elem, null, null);
                     if (ctx.result != null) return;
                 }
@@ -821,11 +801,8 @@ const FindTagAtOffsetContext = struct {
                     if (ctx.result != null) return;
                 }
             },
-            .e_dbg => |dbg| {
+            inline .e_dbg, .e_expect_err => |dbg| {
                 ctx.walkExpr(dbg.expr, null, null);
-            },
-            .e_expect_err => |expect_err| {
-                ctx.walkExpr(expect_err.expr, null, null);
             },
             .e_expect => |exp| {
                 ctx.walkExpr(exp.body, null, null);
@@ -981,11 +958,8 @@ const FindTagAtOffsetContext = struct {
                 if (ctx.result != null) return;
                 ctx.walkExpr(r.expr, null, null);
             },
-            .s_expr => |e| {
+            inline .s_expr, .s_dbg => |e| {
                 ctx.walkExpr(e.expr, null, null);
-            },
-            .s_dbg => |dbg| {
-                ctx.walkExpr(dbg.expr, null, null);
             },
             .s_expect => |exp| {
                 ctx.walkExpr(exp.body, null, null);
@@ -1000,20 +974,10 @@ const FindTagAtOffsetContext = struct {
                 if (ctx.result != null) return;
                 ctx.walkExpr(for_stmt.body, null, null);
             },
-            .s_while => |w| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |w| {
                 ctx.walkExpr(w.cond, null, null);
                 if (ctx.result != null) return;
                 ctx.walkExpr(w.body, null, null);
-            },
-            .s_infinite_loop => |loop| {
-                ctx.walkExpr(loop.cond, null, null);
-                if (ctx.result != null) return;
-                ctx.walkExpr(loop.body, null, null);
-            },
-            .s_breakable_loop => |loop| {
-                ctx.walkExpr(loop.cond, null, null);
-                if (ctx.result != null) return;
-                ctx.walkExpr(loop.body, null, null);
             },
             .s_crash,
             .s_break,

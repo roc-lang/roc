@@ -2391,22 +2391,13 @@ const Formatter = struct {
                 },
                 else => return fmt.finishExpr(f),
             },
-            .int => |i| {
+            inline .int, .frac => |i| {
                 try fmt.pushTokenText(i.token);
                 return fmt.finishExpr(f);
             },
-            .frac => |fr| {
-                try fmt.pushTokenText(fr.token);
-                return fmt.finishExpr(f);
-            },
-            .typed_int => |ti| {
+            inline .typed_int, .typed_frac => |ti| {
                 try fmt.pushTokenText(ti.token);
                 try fmt.formatLiteralTypeSuffix(ti.type_suffix);
-                return fmt.finishExpr(f);
-            },
-            .typed_frac => |tf| {
-                try fmt.pushTokenText(tf.token);
-                try fmt.formatLiteralTypeSuffix(tf.type_suffix);
                 return fmt.finishExpr(f);
             },
             .list => |l| switch (f.phase) {
@@ -3360,20 +3351,11 @@ const Formatter = struct {
                 }
                 return done;
             },
-            .int => |n| {
+            inline .int, .frac => |n| {
                 try fmt.formatIdent(n.number_tok, null);
                 return done;
             },
-            .frac => |n| {
-                try fmt.formatIdent(n.number_tok, null);
-                return done;
-            },
-            .typed_int => |n| {
-                try fmt.formatIdent(n.number_tok, null);
-                try fmt.formatLiteralTypeSuffix(n.type_suffix);
-                return done;
-            },
-            .typed_frac => |n| {
+            inline .typed_int, .typed_frac => |n| {
                 try fmt.formatIdent(n.number_tok, null);
                 try fmt.formatLiteralTypeSuffix(n.type_suffix);
                 return done;
@@ -3484,21 +3466,7 @@ const Formatter = struct {
         const item = fmt.ast.store.getExposedItem(idx);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         switch (item) {
-            .lower_ident => |i| {
-                region = i.region;
-                for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
-                    try fmt.pushTokenText(qualifier);
-                    try fmt.push('.');
-                }
-                try fmt.pushTokenText(i.ident);
-                if (i.as) |a| {
-                    try fmt.commentBoundary(a - 1, true);
-                    try fmt.pushAll("as");
-                    try fmt.commentBoundary(a, true);
-                    try fmt.pushTokenText(a);
-                }
-            },
-            .upper_ident => |i| {
+            inline .lower_ident, .upper_ident => |i| {
                 region = i.region;
                 for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
                     try fmt.pushTokenText(qualifier);
@@ -4205,12 +4173,8 @@ const Formatter = struct {
                     else => return done,
                 }
             },
-            .ty_var => |v| {
+            inline .ty_var, .underscore_type_var => |v| {
                 try fmt.pushTokenText(v.tok);
-                return done;
-            },
-            .underscore_type_var => |utv| {
-                try fmt.pushTokenText(utv.tok);
                 return done;
             },
             .ty => |t| {
@@ -5335,14 +5299,8 @@ const Formatter = struct {
 
                 return fmt.exprChild(sink, nr.backing);
             },
-            .suffix_single_question => |s| {
+            inline .suffix_single_question, .tuple_access, .unary_op => |s| {
                 return fmt.exprChild(sink, s.expr);
-            },
-            .tuple_access => |t| {
-                return fmt.exprChild(sink, t.expr);
-            },
-            .unary_op => |u| {
-                return fmt.exprChild(sink, u.expr);
             },
             .field_access => |f| {
                 return fmt.exprChild(sink, f.receiver);

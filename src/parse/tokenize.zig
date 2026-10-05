@@ -2392,11 +2392,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 1);
                 try buf2.append('=');
             },
-            .OpBinaryMinus => {
-                std.debug.assert(length == 1);
-                try buf2.append('-');
-            },
-            .OpUnaryMinus => {
+            .OpBinaryMinus, .OpUnaryMinus => {
                 std.debug.assert(length == 1);
                 try buf2.append('-');
             },

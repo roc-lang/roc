@@ -456,11 +456,7 @@ const Pass = struct {
                 // (resolution needs solved types), but the argument rule is
                 // uniform across every call form—each argument walks as
                 // invoked. Receivers are operands, not arguments.
-                .e_method_call => |call| {
-                    try self.walk.append(self.gpa, call.receiver);
-                    try self.appendSpanInvoked(call.args);
-                },
-                .e_dispatch_call => |call| {
+                inline .e_method_call, .e_dispatch_call => |call| {
                     try self.walk.append(self.gpa, call.receiver);
                     try self.appendSpanInvoked(call.args);
                 },
@@ -478,13 +474,9 @@ const Pass = struct {
                     try self.walk.append(self.gpa, h.value);
                     try self.walk.append(self.gpa, h.hasher);
                 },
-                .e_method_eq => |eq| {
+                inline .e_method_eq, .e_binop => |eq| {
                     try self.walk.append(self.gpa, eq.lhs);
                     try self.walk.append(self.gpa, eq.rhs);
-                },
-                .e_binop => |binop| {
-                    try self.walk.append(self.gpa, binop.lhs);
-                    try self.walk.append(self.gpa, binop.rhs);
                 },
                 .e_unary_minus => |unop| try self.walk.append(self.gpa, unop.expr),
                 .e_block => |block| {

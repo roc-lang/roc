@@ -3439,10 +3439,7 @@ const Unifier = struct {
         while (true) {
             guard.tick();
             switch (self.types_store.resolveVar(ext_var).desc.content) {
-                .flex => {
-                    return .{ .ext = ext_var, .range = range };
-                },
-                .rigid => {
+                .flex, .rigid => {
                     return .{ .ext = ext_var, .range = range };
                 },
                 .alias => |alias| {

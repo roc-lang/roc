@@ -12298,11 +12298,7 @@ fn collectExpectBindingPatterns(
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
-            .e_method_call => |call| {
-                try stack.append(allocator, call.receiver);
-                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try stack.append(allocator, call.receiver);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },

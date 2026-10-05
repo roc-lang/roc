@@ -3522,15 +3522,7 @@ pub const BuildEnv = struct {
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
             },
-            .s_while => |stmt| {
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
-            },
-            .s_infinite_loop => |stmt| {
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
-            },
-            .s_breakable_loop => |stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |stmt| {
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
             },
@@ -3613,11 +3605,7 @@ pub const BuildEnv = struct {
             },
             .e_unary_minus => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
             .e_field_access => |field| try collectDbgRegionsInExpr(allocator, env, regions, field.receiver),
-            .e_method_call => |call| {
-                try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
-                try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
                 try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
             },

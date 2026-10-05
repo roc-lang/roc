@@ -274,14 +274,8 @@ fn collectContainingRegionsFromStatement(
                 try collectContainingRegionsFromExpr(allocator, ast, body, target_offset, regions);
             }
         },
-        .expr => |e| {
+        inline .expr, .crash, .dbg => |e| {
             try collectContainingRegionsFromExpr(allocator, ast, e.expr, target_offset, regions);
-        },
-        .crash => |c| {
-            try collectContainingRegionsFromExpr(allocator, ast, c.expr, target_offset, regions);
-        },
-        .dbg => |d| {
-            try collectContainingRegionsFromExpr(allocator, ast, d.expr, target_offset, regions);
         },
         .expect => |e| {
             try collectContainingRegionsFromExpr(allocator, ast, e.body, target_offset, regions);
@@ -338,14 +332,8 @@ fn collectContainingRegionsFromExpr(
 
     // Recurse into child expressions
     switch (expr) {
-        .list => |l| {
+        inline .list, .tuple => |l| {
             const items = ast.store.exprSlice(l.items);
-            for (items) |item| {
-                try collectContainingRegionsFromExpr(allocator, ast, item, target_offset, regions);
-            }
-        },
-        .tuple => |t| {
-            const items = ast.store.exprSlice(t.items);
             for (items) |item| {
                 try collectContainingRegionsFromExpr(allocator, ast, item, target_offset, regions);
             }
@@ -415,11 +403,8 @@ fn collectContainingRegionsFromExpr(
         .arrow_call => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.left, target_offset, regions);
         },
-        .unary_op => |u| {
+        inline .unary_op, .suffix_single_question => |u| {
             try collectContainingRegionsFromExpr(allocator, ast, u.expr, target_offset, regions);
-        },
-        .suffix_single_question => |s| {
-            try collectContainingRegionsFromExpr(allocator, ast, s.expr, target_offset, regions);
         },
         .if_then_else => |i| {
             try collectContainingRegionsFromExpr(allocator, ast, i.condition, target_offset, regions);
@@ -447,11 +432,8 @@ fn collectContainingRegionsFromExpr(
                 try collectContainingRegionsFromStatement(allocator, ast, stmt_idx, target_offset, regions);
             }
         },
-        .dbg => |d| {
+        inline .dbg, .crash => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.expr, target_offset, regions);
-        },
-        .crash => |c| {
-            try collectContainingRegionsFromExpr(allocator, ast, c.expr, target_offset, regions);
         },
         .record_builder => |rb| {
             try collectContainingRegionsFromExpr(allocator, ast, rb.mapper, target_offset, regions);

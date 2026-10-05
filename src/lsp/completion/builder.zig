@@ -1116,16 +1116,10 @@ pub const CompletionBuilder = struct {
             }
 
             switch (content) {
-                .flex => |flex| {
+                inline .flex, .rigid => |flex| {
                     self.logDebug("addMethodsFromTypeVar: flex constraints", .{});
                     // Extract method names from flex constraints
                     try self.addMethodsFromConstraints(module_env, flex.constraints);
-                    break;
-                },
-                .rigid => |rigid| {
-                    self.logDebug("addMethodsFromTypeVar: rigid constraints", .{});
-                    // Extract method names from rigid constraints
-                    try self.addMethodsFromConstraints(module_env, rigid.constraints);
                     break;
                 },
                 .alias => |alias| {

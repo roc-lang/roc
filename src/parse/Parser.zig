@@ -715,10 +715,7 @@ fn recordDestructuredValueNames(
             .tag => |p| {
                 for (self.store.patternSlice(p.args)) |arg| try pending.append(self.gpa, arg);
             },
-            .list => |p| {
-                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
-            },
-            .tuple => |p| {
+            inline .list, .tuple => |p| {
                 for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
             },
             // A `var` binder is rejected outside a block, where names are not
