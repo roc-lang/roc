@@ -38713,6 +38713,11 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
         }
     }
     if (std.debug.runtime_safety) try self.verifyUseReplay(relations.items);
+    // The use's own substitution range is no longer named by any record, but
+    // every pair is still a type root of the module; it names the frozen
+    // nodes too, so it adds no types of its own.
+    const pairs = self.cir.scheme_use_pairs.items.items;
+    @memcpy(pairs[record.pairs_start..][0..record.pairs_len], pairs[source.pairs_start..][0..source.pairs_len]);
     const replayed = &self.cir.scheme_uses.items.items[use.record];
     replayed.pairs_start = source.pairs_start;
     replayed.pairs_len = source.pairs_len;

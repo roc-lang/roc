@@ -19341,16 +19341,21 @@ const EvidencePass = struct {
             }
             entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(index)));
         }
+        // Records replayed from one source name the same substitution range,
+        // whose pairs are indexed once.
+        var indexed_ranges = std.AutoHashMap(struct { start: u32, len: u32 }, void).init(self.allocator);
+        defer indexed_ranges.deinit();
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-            for (pairs) |pair| {
+            const range_seen = (try indexed_ranges.getOrPut(.{ .start = record.pairs_start, .len = record.pairs_len })).found_existing;
+            if (!range_seen) for (pairs) |pair| {
                 const entry = try self.fresh_by_pair_root.getOrPut(self.allocator, .{
                     .pairs_start = record.pairs_start,
                     .pairs_len = record.pairs_len,
                     .old_root = self.types.resolveVar(@enumFromInt(pair.old_var)).var_,
                 });
                 if (!entry.found_existing) entry.value_ptr.* = @enumFromInt(pair.fresh_var);
-            }
+            };
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
                     // Re-checks can record the same binding use twice. A
