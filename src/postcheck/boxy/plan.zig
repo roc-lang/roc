@@ -6112,12 +6112,13 @@ const Builder = struct {
             .block => try actions.append(self.allocator, .{ .block_statement = .{ .view = view, .block = expr_id, .index = 0 } }),
             .tag => |tag| for (tag.args) |arg| try actions.append(self.allocator, exprAction(view, arg)),
             .nominal => |nominal| try actions.append(self.allocator, exprAction(view, nominal.backing_expr)),
-            .closure => |closure| {
+            .closure => {
                 try actions.append(self.allocator, .{ .nested_callable_expr_use = site });
-                for (closure.captures) |capture| try actions.append(self.allocator, patternAction(view, capture.pattern));
+                for (nestedCallableRuntimeCaptures(view, expr_id)) |capture| try actions.append(self.allocator, patternAction(view, capture.pattern));
             },
             .lambda => {
                 try actions.append(self.allocator, .{ .nested_callable_expr_use = site });
+                for (nestedCallableRuntimeCaptures(view, expr_id)) |capture| try actions.append(self.allocator, patternAction(view, capture.pattern));
                 try actions.append(self.allocator, .{ .lambda_args = site });
             },
             .binop => |binop| {
@@ -6495,6 +6496,31 @@ const Builder = struct {
             selected.target,
             typeRef(view, dispatch.dispatcher_ty),
         );
+        if (lookup.source == .nested_expr and !self.nestedCallableHasNoCaptures(lookup.source.nested_expr)) {
+            // A local procedure that needs values of its declaration context
+            // is constructed from this frame, as a lookup of its binding
+            // would construct it, and the dispatch calls that callable. The
+            // use is the dispatch itself, so its evidence edge supplies the
+            // procedure's instantiation and nested evidence.
+            const caller = self.active_worker orelse
+                boxyPlanInvariant("boxy local procedure dispatch was analyzed outside a worker body");
+            const callable_ty = selectedDispatchCallableType(view, lookup.view, selected);
+            _ = try self.analyzeType(self.moduleForId(callable_ty.module), callable_ty.ty);
+            try self.pushPlanActions(actions, &.{
+                .{ .ensure_worker = .{
+                    .source = lookup.source,
+                    .checked_type = self.workerCheckedTypeForSource(lookup.source, callable_ty),
+                    .root_request = null,
+                } },
+                .{ .nested_callable_use_record = .{
+                    .view = view,
+                    .expr = site.call_expr,
+                    .callable_ty = callable_ty,
+                    .caller = caller,
+                } },
+            });
+            return;
+        }
         // The worker is the target's generalized declaration; the call
         // boundary is this edge's instantiation of it. They are separate
         // checked identities and neither substitutes for the other.
@@ -6629,6 +6655,9 @@ const Builder = struct {
             selected.target,
             typeRef(view, site.call.dispatcher_ty),
         );
+        if (lookup.source == .nested_expr and !self.nestedCallableHasNoCaptures(lookup.source.nested_expr)) {
+            boxyPlanInvariant("iterator protocol dispatch selected a local procedure that needs values of its declaration context");
+        }
         // As in ordinary dispatch planning, the worker is the protocol
         // method's generalized declaration while the call boundary is this
         // edge's instantiation of it.
@@ -11189,6 +11218,11 @@ const Builder = struct {
                 }
             }
         }
+        // A dispatch that uses a local procedure as a callable instantiates
+        // it at the evidence edge its plan selected.
+        if (dispatchPlanOfExpr(view, use.expr)) |plan| {
+            return .{ .view = view, .entries = self.nestedEvidenceForDirectDispatch(view, plan) };
+        }
         return .{ .view = view, .entries = view.static_dispatch_plans.siteEvidence(use.expr) };
     }
 
@@ -12087,6 +12121,12 @@ const Builder = struct {
     /// applied to its worker's scheme, when checking instantiated one there.
     fn useSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) ?SchemeCallSubstitution {
         const site_view = self.moduleForId(use.module);
+        if (dispatchPlanOfExpr(site_view, use.expr)) |plan| {
+            return self.evidenceEdgeSchemeSubstitution(worker_id, .{
+                .module = use.module,
+                .node = directDispatchEvidenceNode(site_view, plan),
+            });
+        }
         const site_types = site_view.static_dispatch_plans.siteSubstitution(use.expr) orelse return null;
         if (site_types.len == 0) return null;
         const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return null;
@@ -12410,19 +12450,16 @@ const Builder = struct {
             switch (worker.source) {
                 .nested_expr => |expr_ref| {
                     const view = self.moduleForId(expr_ref.module);
-                    const expr = view.checked_bodies.expr(expr_ref.expr);
-                    if (expr.data == .closure) {
-                        for (expr.data.closure.captures) |capture| {
-                            const pattern = view.checked_bodies.pattern(capture.pattern);
-                            const rep = self.plan.repForSourceType(typeRef(view, pattern.ty)) orelse
-                                boxyPlanInvariant("boxy erased capture pattern type was not analyzed");
-                            try pending.append(self.allocator, .{
-                                .kind = .captured_value,
-                                .source_type = typeRef(view, pattern.ty),
-                                .rep = rep,
-                                .capture_id = capture.capture_id,
-                            });
-                        }
+                    for (nestedCallableRuntimeCaptures(view, expr_ref.expr)) |capture| {
+                        const pattern = view.checked_bodies.pattern(capture.pattern);
+                        const rep = self.plan.repForSourceType(typeRef(view, pattern.ty)) orelse
+                            boxyPlanInvariant("boxy erased capture pattern type was not analyzed");
+                        try pending.append(self.allocator, .{
+                            .kind = .captured_value,
+                            .source_type = typeRef(view, pattern.ty),
+                            .rep = rep,
+                            .capture_id = capture.capture_id,
+                        });
                     }
                 },
                 .procedure_template,
@@ -17881,8 +17918,16 @@ const Builder = struct {
             .procedure => |procedure| .{ .procedure_template = procedure.template },
             .local_proc => |local| if (self.topLevelProcedureBindingForExpr(lookup.view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
-            else
-                .{ .nested_expr = .{ .module = lookup.view.key, .expr = self.nestedCallableSiteExprForExpr(lookup.view, local.expr) orelse local.expr } },
+            else blk: {
+                const site_expr = self.nestedCallableSiteExprForExpr(lookup.view, local.expr) orelse local.expr;
+                // A dictionary slot, generated codec, or derived method calls
+                // its worker without a frame of the procedure's declaring
+                // body, so it can supply no value of that body.
+                if (nestedCallableRuntimeCaptures(lookup.view, site_expr).len != 0) {
+                    boxyPlanInvariant("method evidence selected a local procedure that needs values of its declaration context");
+                }
+                break :blk .{ .nested_expr = .{ .module = lookup.view.key, .expr = site_expr } };
+            },
             .structural => |kind| switch (kind) {
                 .parser => .{ .generated_codec = .{
                     .kind = .parser_constructor,
@@ -18907,7 +18952,15 @@ const Builder = struct {
                 .view = self.moduleForCheckedModuleId(procedure.template.artifact),
                 .source = .{ .procedure_template = procedure.template },
             },
-            .local_proc => boxyPlanInvariant("local procedure dispatch target reached boxy planning before nested procedure worker planning"),
+            // A method of a type declared in a function body is registered
+            // only by the module declaring it, which owns the dispatch.
+            .local_proc => |local| .{
+                .view = dispatch_view,
+                .source = if (self.topLevelProcedureBindingForExpr(dispatch_view, local.expr)) |binding|
+                    .{ .procedure_binding = binding }
+                else
+                    .{ .nested_expr = .{ .module = dispatch_view.key, .expr = self.nestedCallableSiteExprForExpr(dispatch_view, local.expr) orelse local.expr } },
+            },
             .structural => |kind| .{
                 .view = dispatch_view,
                 .source = .{ .generated_codec = .{
@@ -18943,9 +18996,10 @@ const Builder = struct {
     fn nestedCallableHasNoCaptures(self: *Builder, expr_ref: CheckedExprIdentity) bool {
         const view = self.moduleForId(expr_ref.module);
         const expr = view.checked_bodies.expr(expr_ref.expr);
-        if (expr.data == .lambda) return true;
-        if (expr.data == .closure) return expr.data.closure.captures.len == 0;
-        boxyPlanInvariant("nested callable capture lookup did not reference a lambda or closure");
+        if (expr.data != .lambda and expr.data != .closure) {
+            boxyPlanInvariant("nested callable capture lookup did not reference a lambda or closure");
+        }
+        return nestedCallableRuntimeCaptures(view, expr_ref.expr).len == 0;
     }
 
     fn directCallInstantiationSourceFnType(
@@ -20584,6 +20638,17 @@ fn directDispatchEvidence(
     };
 }
 
+/// The dispatch plan a dispatch-bearing checked expression owns.
+fn dispatchPlanOfExpr(view: ModuleView, expr_id: checked.CheckedExprId) ?static_dispatch.StaticDispatchPlanId {
+    return switch (view.checked_bodies.expr(expr_id).data) {
+        .dispatch_call, .type_dispatch_call, .method_eq => |plan| plan,
+        .str_from_quote => |quote| quote.plan,
+        .interpolation => |interpolation| interpolation.plan,
+        .numeral => |numeral| numeral.plan,
+        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+    };
+}
+
 /// The exact checked callable relation one selected dispatch edge instantiated.
 ///
 /// `site_view` owns the edge (its plan table interned the evidence node), so an
@@ -20660,6 +20725,21 @@ pub fn nestedCallableSiteExprFor(module: anytype, expr: checked.CheckedExprId) ?
     return null;
 }
 
+/// The binders of enclosing frames whose values the nested procedure that
+/// `expr` constructs (its lambda, or the closure wrapping it) needs at
+/// runtime: its checked `NestedProcSite.runtime_captures`.
+pub fn nestedCallableRuntimeCaptures(module: anytype, expr: checked.CheckedExprId) []const checked.CheckedCapture {
+    for (module.nested_proc_sites.sites) |site| {
+        const site_expr_id = site.checked_expr orelse continue;
+        if (site_expr_id != expr) {
+            const site_expr = module.checked_bodies.expr(site_expr_id);
+            if (site_expr.data != .closure or site_expr.data.closure.lambda != expr) continue;
+        }
+        return module.nested_proc_sites.runtimeCaptures(site);
+    }
+    boxyPlanInvariant("nested callable expression had no checked nested procedure site");
+}
+
 /// Whether a declaration binds no runtime value in its enclosing body. A
 /// scheme alias instantiates its target at each typed use. A nested callable
 /// declaration is constructed at each instantiated procedure lookup instead,
@@ -20688,18 +20768,8 @@ pub fn declarationOmitsRuntimeBinding(
 fn binderCapturedByNestedCallable(allocator: Allocator, module: anytype, binder: checked.PatternBinderId) Allocator.Error!bool {
     var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
     defer pending.deinit(allocator);
-    var expr_index: usize = 0;
-    while (expr_index < module.checked_bodies.exprCount()) : (expr_index += 1) {
-        const expr_id: checked.CheckedExprId = @enumFromInt(@as(u32, @intCast(expr_index)));
-        const expr = module.checked_bodies.expr(expr_id);
-        switch (expr.data) {
-            .closure => |closure| {
-                for (closure.captures) |capture| {
-                    if (try patternBindsCapture(allocator, module, capture.pattern, binder, &pending)) return true;
-                }
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
+    for (module.nested_proc_sites.runtime_captures) |capture| {
+        if (try patternBindsCapture(allocator, module, capture.pattern, binder, &pending)) return true;
     }
     return false;
 }

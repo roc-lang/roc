@@ -10598,6 +10598,34 @@ must not request descriptors for uninstantiated scheme parameters. Declarations
 whose binders are captured still provide the runtime value required by those
 explicit capture edges.
 
+Constructing a nested callable at a use reads its checked
+`NestedProcSite.runtime_captures`, not the closure's source captures alone.
+Canonicalization leaves local functions out of a closure's captures, so a
+closure that calls, looks up, or dispatches to a capturing local procedure
+declared outside it names only that procedure; constructing the procedure
+inside the closure needs the procedure's own captured values. The runtime
+captures list the closure's source captures followed by every binder of an
+enclosing frame that constructing the local procedures its body selects
+requires, transitively and through the nested procedures inside it. A lambda
+with runtime captures is therefore an erased callable with captures exactly
+like a closure, and the frame constructing it supplies every binder from its
+own locals. `CheckedModule` publication computes the inventory once, as the
+least fixpoint of that relation over the nested-site walk, so Boxy never scans
+bodies for free variables.
+
+A dispatch whose checked plan selects a local procedure with runtime captures
+uses that procedure exactly as a lookup of its binding would: the frame
+constructs the procedure's erased callable, at the instantiation the dispatch's
+evidence edge selected and with the edge's nested evidence supplying its hidden
+descriptors and dictionaries, and calls it with the dispatch operands. The
+escape rule for capturing local types guarantees the dispatch runs in a frame
+that holds those binders. A local procedure with no runtime captures is called
+directly as its nested worker. A method dictionary slot, a derived method, or a
+generated codec calls its worker from no frame of the declaring body, so it
+cannot supply runtime captures; Boxy planning rejects method evidence that
+selects a capturing local procedure there as an invariant failure rather than
+calling the worker without its values.
+
 A closure's captures are the values its captured binders hold at the closure's
 declaration. Constructing the callable at a later use reads the same values only
 for immutable binders. For every capture whose checked binder is `reassignable`,
@@ -11839,6 +11867,14 @@ type, lexical dispatch scope, and substitution slot. The existing nested-site
 walk produces this inventory from checked expression, pattern, and dispatch
 interfaces; it does not add a second body scan. Type visitation is cycle-safe,
 and nested sites propagate their required bindings to their lexical parents.
+The same walk records each site's runtime captures: the binders of enclosing
+frames whose values the site needs, which are its source captures plus the
+runtime captures of every local procedure its body selects (a lookup resolved
+to a local procedure, or a dispatch plan whose direct target is one), less the
+binders the site itself binds. A site's needs propagate to its lexical parent
+the same way, and the walk records which site binds each binder so the
+subtraction is exact. Recursive selections make this a least fixpoint, solved
+after the walk over the recorded selections.
 Before instantiating a nested body, Monotype installs these exact bindings from
 its selected lexical evidence frames. Locally quantified variables consume that
 nested specialization's own substitution; they never share another request's
