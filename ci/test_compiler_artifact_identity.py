@@ -174,6 +174,8 @@ def main():
     parser.add_argument("zig")
     parser.add_argument("--work-dir", type=Path)
     args, options = parser.parse_known_args()
+    if options[:1] == ["--"]:
+        options = options[1:]
     work = (args.work_dir or Path(tempfile.mkdtemp(prefix="roc-artifact-identity-"))).resolve()
     work.mkdir(parents=True, exist_ok=True)
     assert not (work / "results.json").exists(), "Use a new work directory to retain evidence"
