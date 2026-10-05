@@ -573,7 +573,7 @@ ZIG_EXTERN_C void ZigLLVMFreeEmittedObject(char *bytes) {
 
 void ZigLLVMSetOptBisectLimit(LLVMContextRef context_ref, int limit) {
     static OptBisect opt_bisect;
-    opt_bisect.setLimit(limit);
+    opt_bisect.setIntervals({0, limit});
     unwrap(context_ref)->setOptPassGate(opt_bisect);
 }
 
@@ -738,13 +738,19 @@ bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size
     for (size_t i = 0; i < file_name_count; i += 1) {
         Expected<NewArchiveMember> new_member = NewArchiveMember::getFile(file_names[i], true);
         Error err = new_member.takeError();
-        if (err) return true;
+        if (err) {
+            consumeError(std::move(err));
+            return true;
+        }
         new_members.push_back(std::move(*new_member));
     }
     Error err = writeArchive(archive_name, new_members,
         SymtabWritingMode::NormalSymtab, static_cast<object::Archive::Kind>(archive_kind), true, false, nullptr);
 
-    if (err) return true;
+    if (err) {
+        consumeError(std::move(err));
+        return true;
+    }
     return false;
 }
 

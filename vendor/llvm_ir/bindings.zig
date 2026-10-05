@@ -18,7 +18,7 @@ pub const Bool = enum(c_int) {
     _,
 
     pub fn fromBool(b: bool) Bool {
-        return @enumFromInt(@intFromBool(b));
+        return @as(Bool, @fromBackingInt(@intCast(@intFromBool(b))));
     }
 
     pub fn toBool(self: Bool) bool {
@@ -399,6 +399,8 @@ pub extern fn LLVMInitializeWebAssemblyAsmPrinter() void;
 pub extern fn LLVMInitializeX86AsmPrinter() void;
 /// Initialize assembly printer for XCore architecture.
 pub extern fn LLVMInitializeXCoreAsmPrinter() void;
+/// Initialize assembly printer for Xtensa architecture.
+pub extern fn LLVMInitializeXtensaAsmPrinter() void;
 /// Initialize assembly printer for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchAsmPrinter() void;
 
