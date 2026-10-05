@@ -1311,19 +1311,20 @@ pub const Resolver = struct {
     /// versions group by major, 0.X.Y versions group by 0.X (a 0.minor bump
     /// signals a breaking change), and versionless URLs only ever match
     /// themselves exactly. The url id is the prefix and suffix around the
-    /// version, so URLs that only differ in version share a key.
+    /// version, separated by NUL so a different version position cannot
+    /// produce the same key. URL validation rejects NUL before this point.
     fn urlGroupKey(self: *Resolver, parsed: base.url.ParsedUrl, spec: []const u8) Allocator.Error![]const u8 {
         if (!parsed.version.isPresent()) {
             return try std.fmt.allocPrint(self.arena(), "u@{s}", .{spec});
         }
         if (parsed.version.major == 0) {
-            return try std.fmt.allocPrint(self.arena(), "v0.{d}@{s}{s}", .{
+            return try std.fmt.allocPrint(self.arena(), "v0.{d}@{s}\x00{s}", .{
                 parsed.version.minor,
                 parsed.urlIdPrefix(spec),
                 parsed.urlIdSuffix(spec),
             });
         }
-        return try std.fmt.allocPrint(self.arena(), "v{d}@{s}{s}", .{
+        return try std.fmt.allocPrint(self.arena(), "v{d}@{s}\x00{s}", .{
             parsed.version.major,
             parsed.urlIdPrefix(spec),
             parsed.urlIdSuffix(spec),
@@ -2732,6 +2733,64 @@ test "selects the highest minor.patch within a major version" {
     }
 }
 
+test "URL group keys distinguish where the version was removed" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    const good = "https://good.com/p/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+    const other_host = "https://1.2.9good.com/p/5ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXg.tar.zst";
+    const good_key = try resolver.urlGroupKey(try base.url.parseUrlPath(good), good);
+    const other_key = try resolver.urlGroupKey(try base.url.parseUrlPath(other_host), other_host);
+    try std.testing.expectEqualStrings("v1@good.com/p\x00", good_key);
+    try std.testing.expectEqualStrings("v1@\x00good.com/p", other_key);
+
+    const good_zero = "https://good.com/p/0.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+    const other_zero = "https://0.2.9good.com/p/5ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXg.tar.zst";
+    const good_zero_key = try resolver.urlGroupKey(try base.url.parseUrlPath(good_zero), good_zero);
+    const other_zero_key = try resolver.urlGroupKey(try base.url.parseUrlPath(other_zero), other_zero);
+    try std.testing.expectEqualStrings("v0.2@good.com/p\x00", good_zero_key);
+    try std.testing.expectEqualStrings("v0.2@\x00good.com/p", other_zero_key);
+}
+
+test "transitive mention on another host does not replace a package" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_url = "https://example.com/a/1.0.0/hashA.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const good = "https://good.com/p/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+    const other_host = "https://1.2.9good.com/p/5ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXg.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_url, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_url, .{ .deps = &.{.{ .alias = "p", .spec = good, .is_platform = false }} });
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "other", .spec = other_host, .is_platform = false }} });
+    try registry.urls.put(good, .{});
+    try registry.urls.put(other_host, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 5), resolved.packages.len);
+    const a = testFindPackage(&resolved, a_url).?;
+    const b = testFindPackage(&resolved, b_url).?;
+    try std.testing.expectEqualStrings(good, resolved.packages[a.deps[0].target].identity);
+    try std.testing.expectEqualStrings(other_host, resolved.packages[b.deps[0].target].identity);
+}
+
 test "different major versions coexist as separate packages" {
     const gpa = std.testing.allocator;
     var registry = TestRegistry.init(gpa);
@@ -3664,6 +3723,26 @@ test "insecure URLs are rejected" {
         .kind = .package,
         .deps = &.{.{ .alias = "a", .spec = "http://example.com/a/1.0.0/hashA.tar.zst", .is_platform = false }},
     });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Insecure Package URL", resolver.diagnostics.items[0].title);
+}
+
+test "URLs containing the group-key separator are rejected before download" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const invalid_url = "https://example.com/p\x00q/1.0.0/hashA.tar.zst";
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = invalid_url, .is_platform = false }},
+    });
+    // This would resolve if the invalid URL were allowed into the download queue.
+    try registry.urls.put(invalid_url, .{});
 
     var resolver = Resolver.init(gpa, registry.fetcher(), .{});
     defer resolver.deinit();
