@@ -7856,8 +7856,11 @@ fn addMainExe(
         // (gets compiler-rt via the dedicated merged object below) and macOS
         // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
         // crashes the Zig compiler for macOS targets under --listen). BSD is
-        // also excluded because Zig 0.16.0 segfaults when compiling compiler_rt
-        // for x86_64-*-bsd-none targets.
+        // also excluded because Zig 0.16.0 segfaults when bundling compiler-rt
+        // (`-fcompiler-rt`) for x86_64-*-bsd-none targets; there the calls
+        // resolve against the platform's C library, or against the default
+        // platform's compiler-rt carrier below when that platform is
+        // freestanding.
         const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
         const cross_is_macos = cross_target.query.os_tag == .macos;
         const cross_os = roc_target.classifyOs(cross_target.query.os_tag orelse .freestanding);
@@ -7965,6 +7968,12 @@ fn addMainExe(
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
         cross_builtins_extern_obj.bundle_compiler_rt = cross_bundle_compiler_rt;
+        // This object links into -nostdlib executables, and a freestanding
+        // default-platform program has no libc at all, so nothing in the link
+        // defines the stack protector's `__stack_chk_fail` and
+        // `__stack_chk_guard`. Zig turns the protector on in safe build modes
+        // for the targets it assumes always link libc, the BSDs among them.
+        cross_builtins_extern_obj.root_module.stack_protector = false;
         configureBackend(cross_builtins_extern_obj, cross_resolved_target);
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
@@ -8044,19 +8053,20 @@ fn addMainExe(
             embedded_digests.addArg(b.fmt("default_runtime_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(default_platform_runtime_obj.getEmittedBin());
 
-            // The synthetic Linux default platform links no libc and has no
-            // external platform host, so nothing else in its links is certain
-            // to provide compiler-rt or the C math and memory routines code
-            // generation calls. Keep that carrier explicit and
-            // default-platform-owned instead of hiding it in the machine-code
-            // shim, which is also linked with user hosts. A shared-memory run
-            // and a standalone link of an LLVM app object both consume it.
-            // Each routine gets its own section so a link keeps only the ones
-            // it references, and the object carries no debug info: a linker
-            // keeps an input's debug sections even when it discards all of
-            // that input's code, so they would be copied into every
-            // executable whether or not it calls anything here.
-            if (default_platform_os == .linux) {
+            // The synthetic default platform is freestanding on Linux, FreeBSD
+            // and NetBSD: it links no libc and has no external platform host,
+            // so nothing else in its links is certain to provide compiler-rt
+            // or the C math and memory routines code generation calls. Keep
+            // that carrier explicit and default-platform-owned instead of
+            // hiding it in the machine-code shim, which is also linked with
+            // user hosts. A shared-memory run and every standalone
+            // default-platform link consume it. Each routine gets its own
+            // section so a link keeps only the ones it references, and the
+            // object carries no debug info: a linker keeps an input's debug
+            // sections even when it discards all of that input's code, so
+            // they would be copied into every executable whether or not it
+            // calls anything here.
+            if (default_platform_os == .linux or default_platform_os == .freebsd or default_platform_os == .netbsd) {
                 const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
                 const default_platform_compiler_rt_obj = b.addObject(.{
                     .name = b.fmt("roc_default_compiler_rt_{s}", .{cross_target.name}),

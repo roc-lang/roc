@@ -828,7 +828,13 @@ fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
 /// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
 fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
     return switch (requested.defaultCpuTarget()) {
-        inline .x64musl, .arm64musl, .x64glibc, .arm64glibc => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
+        inline .x64musl,
+        .arm64musl,
+        .x64glibc,
+        .arm64glibc,
+        .x64freebsd,
+        .x64netbsd,
+        => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
         .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
         .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
         .x64mac,
@@ -837,9 +843,7 @@ fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
         .arm64win,
         .x64mingw,
         .arm64mingw,
-        .x64freebsd,
         .x64openbsd,
-        .x64netbsd,
         .x64elf,
         .x64v1mac,
         .x64v1win,
@@ -865,7 +869,7 @@ fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
 }
 
 /// The default platform's compiler-rt carrier: compiler-rt and the C math and
-/// memory routines code generation calls, for the Linux targets, whose default
+/// memory routines code generation calls, for the targets whose default
 /// platform is freestanding and so has no platform runtime library to provide
 /// them. Every other default platform links its target's C runtime, which
 /// does, and has no carrier.
@@ -874,6 +878,8 @@ const DefaultPlatformCompilerRtObjects = struct {
     const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_compiler_rt.o");
     const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_compiler_rt.o");
     const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_compiler_rt.o");
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_default_compiler_rt.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_default_compiler_rt.o");
 
     pub fn forTarget(requested: RocTarget) ?[]const u8 {
         return switch (requested.defaultCpuTarget()) {
@@ -881,15 +887,15 @@ const DefaultPlatformCompilerRtObjects = struct {
             .arm64musl => arm64musl,
             .x64glibc, .x64linux => x64glibc,
             .arm64glibc, .arm64linux => arm64glibc,
+            .x64freebsd => x64freebsd,
+            .x64netbsd => x64netbsd,
             .x64mac,
             .arm64mac,
             .x64win,
             .arm64win,
             .x64mingw,
             .arm64mingw,
-            .x64freebsd,
             .x64openbsd,
-            .x64netbsd,
             .x64elf,
             .x64v1mac,
             .x64v1win,
@@ -9449,6 +9455,35 @@ fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, 
     return runtime_path;
 }
 
+/// Add the default platform's own inputs to a standalone link: its process
+/// startup object and, where the platform is freestanding, its compiler-rt
+/// carrier.
+///
+/// The carrier defines the routines code generation calls for operations the
+/// target has no instruction for (`fmod` for a float remainder, `floor` on a
+/// baseline x86-64 CPU, the stack probe, ...). Nothing else in the link is
+/// certain to: an LLVM app object comes from target-independent builtin
+/// bitcode and bundles no compiler-rt, and neither does the dev backend's
+/// builtins object on the BSDs. Every definition in the carrier is weak, and
+/// it is added after the startup object and the objects holding the Roc
+/// code and builtins, so their definitions of the same routines take
+/// precedence and the carrier only supplies what they lack. A default
+/// platform that links a C runtime gets these routines from it and has no
+/// carrier.
+fn appendDefaultPlatformLinkInputs(
+    ctx: *CliCtx,
+    object_files: *std.array_list.Managed([]const u8),
+    artifact_dir: []const u8,
+    target: RocTarget,
+) CliMainError!void {
+    const runtime_path = (try writeDefaultPlatformExecutableObject(ctx, artifact_dir, target)) orelse
+        return error.UnsupportedTarget;
+    try object_files.append(runtime_path);
+    if (try writeDefaultPlatformCompilerRtObject(ctx, artifact_dir, target)) |compiler_rt_path| {
+        try object_files.append(compiler_rt_path);
+    }
+}
+
 /// The host inputs of a link, in link order.
 fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
     var paths = try std.array_list.Managed([]const u8).initCapacity(
@@ -10648,20 +10683,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformExecutableObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
-                try object_files.append(runtime_path);
-            } else {
-                return error.UnsupportedTarget;
-            }
-            // The app object comes from target-independent builtin bitcode
-            // and bundles no compiler-rt, so it leaves undefined the routines
-            // instruction selection calls for operations the target has no
-            // instruction for (`fmod` for a float remainder, `floor` on a
-            // baseline x86-64 CPU, ...). A default platform that links no C
-            // runtime defines them in its compiler-rt carrier.
-            if (try writeDefaultPlatformCompilerRtObject(ctx, app_object.artifact_dir, target)) |compiler_rt_path| {
-                try object_files.append(compiler_rt_path);
-            }
+            try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
         }
         if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
             try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result);
@@ -11086,11 +11108,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
-            try object_files.append(runtime_path);
-        } else {
-            return error.UnsupportedTarget;
-        }
+        try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
     }
     // Boxy programs reference the `roc_boxy_*` runtime and, in their
     // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
@@ -11415,11 +11433,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         try object_files.append(path);
     }
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
-            try object_files.append(runtime_path);
-        } else {
-            return error.UnsupportedTarget;
-        }
+        try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
     }
     reporter.end();
 

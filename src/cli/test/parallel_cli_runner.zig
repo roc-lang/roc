@@ -409,6 +409,8 @@ const CustomCase = enum {
     default_platform_float_libcalls_x64glibc,
     default_platform_float_libcalls_arm64glibc,
     default_platform_float_libcalls_x64v1musl,
+    default_platform_float_libcalls_x64freebsd,
+    default_platform_float_libcalls_x64netbsd,
     default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
@@ -2081,6 +2083,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64glibc links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_arm64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64v1musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64v1musl } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64freebsd links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64freebsd } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64netbsd links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64netbsd } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64openbsd explains unsupported cross-link", .body = .{ .custom = .default_platform_build_x64openbsd_rejected } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
@@ -3894,6 +3898,8 @@ fn runCustomCase(
         .default_platform_float_libcalls_x64glibc => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64glibc),
         .default_platform_float_libcalls_arm64glibc => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
         .default_platform_float_libcalls_x64v1musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64v1musl),
+        .default_platform_float_libcalls_x64freebsd => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64freebsd),
+        .default_platform_float_libcalls_x64netbsd => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64netbsd),
         .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -6493,11 +6499,11 @@ fn customDefaultPlatformBuild(
 const default_platform_float_libcalls_app = "test/echo/runtime_float_libcalls.roc";
 const default_platform_float_libcalls_stdout = "rem: 1.5 1.5 -1.5, div_trunc: 3 3, floor: Ok(7) Ok(7), ceiling: Ok(8) Ok(8)";
 
-/// The Linux default platform links no libc, so every routine the compiled
-/// program calls for a float operation its target has no instruction for has
-/// to be defined inside the link. Builds the float program for `target` with
-/// each backend that can cross-compile, which fails at link time when one is
-/// left undefined, and runs the result where the host can.
+/// A freestanding default platform links no libc, so every routine the
+/// compiled program calls for a float operation its target has no instruction
+/// for has to be defined inside the link. Builds the float program for
+/// `target` with each backend that can cross-compile, which fails at link
+/// time when one is left undefined, and runs the result where the host can.
 fn customDefaultPlatformFloatLibcallsBuild(
     io: std.Io,
     allocator: Allocator,
