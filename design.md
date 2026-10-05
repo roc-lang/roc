@@ -67,6 +67,49 @@ second stored expression, pattern, and statement tree. In `.boxy`, checked CIR
 is consumed directly with explicit boxy representation plans owned by that
 lowerer.
 
+## UTF-16 and UTF-32 decoding primitives
+
+`Str.from_utf16_le`, `Str.from_utf16_be`, `Str.from_utf16_bom`, and their
+UTF-32 equivalents consume `List(U8)`. Each has a `_lossy` variant. Byte order
+is explicit and independent of the target. The BOM variants require and consume
+one leading encoding-specific byte order mark; missing or incomplete markers
+return `MissingByteOrderMark`, including for lossy decoding. Explicit LE/BE
+variants preserve U+FEFF as text and never change byte order based on input.
+
+Strict decoding reports the first malformed sequence's zero-based byte offset
+in the original input, including the consumed BOM. `UnexpectedEndOfSequence`
+means a trailing partial code unit. Earlier malformed units take precedence.
+Lossy decoding replaces each unpaired UTF-16 surrogate, invalid UTF-32 unit,
+or trailing partial unit with U+FFFD. A high surrogate consumes a following
+unit only for a valid pair; a high surrogate followed by one remaining byte
+therefore produces two replacements. Noncharacters are preserved.
+
+Checked Roc code borrows the bytes and makes two forward passes: sizing, then
+encoding. Full ASCII blocks use existing byte-list `U16x8`/`U32x4` SIMD loads,
+which read little-endian bytes on every target. On wasm32v1, the loads, splats,
+bitwise operations, lane shifts, comparisons, bitmasks, and wrapping narrows
+used here lower to scalar instructions over sixteen-byte stack slots; list
+appends use the existing explicit LIR uniqueness data. BE lanes are byte-swapped with explicit
+shifts and masks before classification and narrowing. Bounds are checked before
+each full block; partial blocks use scalar decoding. Typed `load_units` APIs
+remain available independently and do not implement byte decoding.
+
+The private Roc helpers return `{ index : U64, status : U8, string : Str }`;
+public wrappers construct nominal error values. No backend knows the wide-UTF
+error representation. BOM wrappers borrow the payload slice and add the marker
+width to error offsets. Backends consume ordinary LIR operations and explicit
+ARC statements, with no encoding or ownership policy of their own.
+
+Sizing validates and computes exact UTF-8 length without allocating, so strict
+failure allocates nothing. Output of at most 23 bytes is built from a stack
+buffer by `str_from_utf16_le_short`, `str_from_utf16_be_short`, or the analogous
+UTF-32 primitives. These borrow bytes, read with fixed byte order, and contain
+only scalar code. Inline-sized results allocate nothing; on 32-bit targets a
+result above inline capacity allocates once. Longer output uses one exact-capacity
+byte list and `str_from_utf8_validated`, without a validation rescan. Successful
+decoding allocates at most once and leaves input unchanged. Output encoders
+(`to_utf16`/`to_utf32`) remain a separate API addition.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,
@@ -914,6 +957,18 @@ opaque declarations may use an underscore-prefixed name such as `_a` for an
 intentionally phantom parameter; aliases and where aliases reject those names.
 This keeps every valid declaration formal's identity explicit through checking and
 `CheckedModule` construction.
+
+A declaration body binds every type variable it mentions: an undeclared
+variable or a written `_` there is an error. A bare reference to a type
+constructor that takes arguments would leave its formals unbound just the
+same, so inside a type declaration body it is an arity mismatch (`Too Few
+Args`), whether the constructor declares the formals itself or is an alias
+re-exporting one (an alias whose whole body is a bare reference to a
+parameterized type, the one bare reference a declaration body may hold).
+Checking reads a re-export's arity by following its solved alias backing to
+the re-exported application, whose unbound arguments are exactly its
+unapplied formals. A value annotation is not a declaration body: a bare
+reference there instantiates the missing formals fresh, as `_` would.
 
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
@@ -8278,8 +8333,11 @@ unconstrained flexible extension after all of those uses have been checked.
 Once codec dispatch has deferred that record through constraint quiescence and
 no pending literal can add information, the checker closes that flexible
 extension to the empty record through ordinary unification and validates the
-codec against the complete closed row. Parser and encoder derivation use the
-same rule.
+codec against the complete closed row. The rule applies to every record the
+codec's value shape reaches as data, not only the outermost one: a record
+nested in a field, a tuple, a tag payload, or a type argument (`rec.person.name`,
+`List.map(rec.people, |p| p.name)`) closes the same way. Parser and encoder
+derivation use the same rule.
 
 Eligibility follows every concrete record extension and remains unresolved at
 a flexible tail, so generated-codec evidence is never frozen against a partial
@@ -8287,6 +8345,29 @@ row. The rule does not close a bare flexible shape before a record exists, an
 extension with a pending literal, or a rigid named extension. A polymorphic
 open record can contain fields for which no codec was checked, so its derived
 codec dispatch is rejected.
+
+A generalization boundary that owns such an extension closes it before
+generalizing, when no boundary root's interface reaches the extension. Such a
+row is invisible to every caller: nothing outside the definition can name its
+extension, so no later use can add a field, and the closed row is exactly the
+row module finalization would close. Closing at the boundary lets the codec
+produce its constraints, including its error row, before the definition's type
+is output. A row whose extension is still open when the definition
+generalizes would otherwise close at module finalization and add errors (such
+as `MissingRequiredField(Str)`) to a scheme that callers have already
+instantiated, so callers' exhaustiveness and annotation checks would run
+against an incomplete error row. An extension owned by an enclosing scope or
+by a non-generalized value binding waits for its owner.
+
+A row whose extension the boundary owns and an interface does reach (a record
+parameter, or a returned record) rejects the derived codec with a "Record
+Fields Not Known" report at the codec call. Callers could use such a record
+with more fields than the definition's own uses name, so the codec's field
+set is not known, and closing the row would narrow the definition's type
+merely because it called a function whose type only requires a method. No
+`where` clause can carry the codec requirement instead: a requirement names a
+type variable, and the record's unknown part is a row. The program
+destructures the record, which closes it, or annotates it.
 
 Both sides are pinned by tests: accepted—
 test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
@@ -8296,7 +8377,16 @@ known field use), and test/cli/issue_10824_generated_codec_contract/app.roc (an
 encoder contract waits for a platform model row to close before freezing all
 of its field calls); rejected—the issue #10824 tests in
 src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
-named rigid record extension).
+named rigid record extension). Boundary closure is pinned by
+src/check/test/derived_codec_local_record_row_test.zig and
+test/cli/JsonParseInferredRecordFieldAccess.roc: accepted—a parsed record
+used only through field access outputs its required-field error, and its
+field types stay generic; rejected—a caller's match or annotation that omits
+that error, and a parameter or returned record used only through field access
+(including a nested one), which reports "Record Fields Not Known"; the issue
+#10824 tests pin the same rejection for an encoded parameter. The same files pin
+nested records closing both at a boundary and outside any function, and that a
+shared value binding's record still collects fields from other definitions.
 
 ### Derived Parser Required-Field Error Composition
 
@@ -10058,9 +10148,17 @@ Other solved-graph mutations:
   `test/cli/platform_requirement_wider_error_row/`.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
-  dispatch reaches quiescence, a record inferred from use sites closes its
-  unconstrained flexible extension to the empty record through ordinary
-  unification; rigid extensions remain rejected.
+  dispatch reaches quiescence, every record the codec's value shape reaches
+  as data that was inferred from use sites closes its unconstrained flexible
+  extension to the empty record through ordinary unification; rigid
+  extensions remain rejected.
+- `closeBoundaryLocalDerivedCodecRecordRows`—policy: Derived Structural
+  Codec Record-Row Closure (above). At a generalization boundary, each record
+  row in a pending derived codec relation's value shape whose flexible
+  extension the boundary owns and no boundary interface reaches closes to the
+  empty record through ordinary unification before scheme capture. A row
+  whose extension an interface reaches is rejected instead
+  (`reportDerivedCodecOpenRecord`), never closed.
 - `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
@@ -11577,6 +11675,18 @@ application, it must build that application from the arguments translated in
 the current declaration's formal scope. Reusing the original annotation's
 nominal instance would retain the alias declaration's independent parameters
 inside an otherwise correctly substituted outer backing template.
+
+Declaration output expands every local alias reference, applied or bare, by
+walking the alias body syntax; a bare reference is an application with no
+arguments, since checking rejects one that leaves formals unapplied (Type
+Declaration Template Validity). An expansion depends only on the alias and the
+roots bound to its formals, so a module outputs it once and every later
+reference shares that root. A nominal backing has no use-site polarity, so
+every extensionless tag union it reaches closes as written, exactly as the
+checker closes it. The alias declaration's own root is never the backing's
+content: it keeps its output rows' polarity markers deferred for the alias's
+use sites, and a marker in a backing template would leave every instantiation
+of the nominal with an open row that no use can close.
 
 Monotype must use the declaration backing template for ordinary local nominal
 declarations. For local declarations, the `backing` root on a nominal-use
@@ -17789,10 +17899,15 @@ suffix that several paths reach into one copy per path, so the procedure the
 certifier reads binds such a target once on each path. A join
 result cell—the parameter a conditional's arms assign directly before
 jumping to the join, often declared by several nested joins—keeps a
-tracked origin when every definition is a birth, a join declaration, or an
-alias, each alias being one of the cell's incoming edges alongside its
-explicit initializations; whichever arm ran, the cell's value is accounted
-for, and the use order stops at each redefinition. A solved-borrowed alias
+tracked origin when every definition is a birth, a join declaration, an
+alias, or a committed field take, each alias or take being one of the cell's
+incoming edges alongside its explicit initializations; whichever arm ran,
+the cell's value is accounted for, and the use order stops at each
+redefinition. A take carries the field's stored unit into the cell exactly
+as it would into a single-definition target, so an arm such as the default
+of `List.set(rec.field, i, x) ?? rec.field` keeps the field's origin; when
+the use order rejects any take into a cell, that definition is foreign and
+the cell has no tracked origin. A solved-borrowed alias
 is a view of its source rather than a holder: a view that is only read is a
 read of the source, and a view that some statement consumes is retained
 there and hands the retained unit on, so it follows the alias rule. A
@@ -20524,6 +20639,18 @@ generated Zig and C declarations for x86-64 and AArch64 Linux/macOS/Windows plus
 wasm, compiles Rust for native and wasm, and the native/wasm glue runtime matrix
 calls the generated contracts in both directions.
 
+### WebAssembly 1.0 SIMD legalization
+
+The `wasm32v1` target has no SIMD instructions or `v128` value type. Its dev
+backend represents a Roc SIMD value as a pointer to its sixteen-byte lane
+storage, using the same explicit indirect-value conventions as scalar U128.
+The target's CPU level selects this representation before local, procedure,
+and memory emission. Each SIMD operation lowers to exact scalar integer
+instructions over its committed lane width and signedness. This is ordinary
+instruction legalization: there is no runtime operation descriptor, evaluator
+call, or alternate source decoder. The default Wasm target continues to use
+native `v128` values and SIMD instructions.
+
 ### Doc comments name the instructions
 
 Every operation's doc comment states the instruction (or short sequence)
@@ -20582,8 +20709,9 @@ the pass/fail bar while the language is 128-bit-only.
 - Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
-- Typed-item loads (`List(U16)` → `U16x8`, etc.)—deferred until a
-  kernel wants them; byte buffers are the codec substrate.
+- Additional typed-item loads beyond `U16x8.load_units` and
+  `U32x4.load_units` remain demand-driven. Wide-UTF decoding and other
+  byte-buffer codecs use the existing byte loads.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later

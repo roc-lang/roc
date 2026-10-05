@@ -304,6 +304,27 @@ const cases = [_]Case{
         ,
     },
     .{
+        // Short output takes the scalar inline primitive; long output is
+        // encoded into a byte list whose storage the validated string retains.
+        .name = "wide UTF decoding: short inline and long validated output",
+        .source =
+        \\{
+        \\    short16 = Str.from_utf16_le_lossy([82, 0, 111, 0, 99, 0, 61, 216, 38, 220])
+        \\    short32 = Str.from_utf32_le_lossy([38, 244, 1, 0])
+        \\    short16be = Str.from_utf16_be_lossy([0, 82, 0, 111, 0, 99])
+        \\    short32be = Str.from_utf32_be_lossy([0, 1, 244, 38])
+        \\    bom16 = Str.from_utf16_bom([255, 254, 65, 0]).ok_or("")
+        \\    bom32 = Str.from_utf32_bom_lossy([0, 0, 254, 255, 0, 0, 0, 65]).ok_or("")
+        \\    long16 = Str.from_utf16_le(List.repeat(65.U8, 80)).ok_or("")
+        \\    long32 = Str.from_utf32_be(List.repeat(0.U8, 160)).ok_or("")
+        \\    Str.count_utf8_bytes(short16) + Str.count_utf8_bytes(short32)
+        \\        + Str.count_utf8_bytes(short16be) + Str.count_utf8_bytes(short32be)
+        \\        + Str.count_utf8_bytes(bom16) + Str.count_utf8_bytes(bom32)
+        \\        + Str.count_utf8_bytes(long16) + Str.count_utf8_bytes(long32)
+        \\}
+        ,
+    },
+    .{
         .name = "numeric prefix parsers return the rest as a slice of a shared input",
         .source =
         \\{

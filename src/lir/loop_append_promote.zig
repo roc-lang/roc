@@ -248,21 +248,33 @@ const Edge = struct {
 /// reachable edge, rather than one whole-graph pass per propagation step.
 const EdgeIndex = struct {
     heads: collections.DenseMap(LocalId, usize),
+    /// Storage for the chains; the live prefix covers the indexed edges.
     next: []usize,
     const end = std.math.maxInt(usize);
 
     fn init(allocator: Allocator, edges: []const Edge) ResourceError!EdgeIndex {
         var self = EdgeIndex{
             .heads = collections.DenseMap(LocalId, usize).init(allocator),
-            .next = try allocator.alloc(usize, edges.len),
+            .next = &.{},
         };
         errdefer self.deinit(allocator);
+        try self.rebuild(allocator, edges);
+        return self;
+    }
+
+    /// Index another edge list, keeping the storage already held.
+    fn rebuild(self: *EdgeIndex, allocator: Allocator, edges: []const Edge) ResourceError!void {
+        self.heads.clearRetainingCapacity();
+        if (self.next.len < edges.len) {
+            allocator.free(self.next);
+            self.next = &.{};
+            self.next = try allocator.alloc(usize, edges.len);
+        }
         for (edges, 0..) |edge, i| {
             const entry = try self.heads.getOrPut(edge.source);
             self.next[i] = if (entry.found_existing) entry.value_ptr.* else end;
             entry.value_ptr.* = i;
         }
-        return self;
     }
 
     fn deinit(self: *EdgeIndex, allocator: Allocator) void {
@@ -314,6 +326,15 @@ const Pass = struct {
     /// Promoted loops of the current proc, keyed by their join statement,
     /// with what slack versioning needs to know about each.
     slack_loops: collections.DenseMap(CFStmtId, SlackLoop),
+    /// Scratch of `classifyMetadataTransfers`, kept across the rounds of a
+    /// procedure: the alias families' union-find parents, their members
+    /// sorted by root, the split families, and a family's consuming
+    /// statements with their occurrence counts.
+    family_parents: collections.DenseMap(LocalId, LocalId),
+    family_members: std.ArrayList(FamilyMember),
+    family_split: collections.DenseMap(LocalId, void),
+    family_consumes: collections.DenseMap(CFStmtId, void),
+    family_occurrences: collections.DenseMap(CFStmtId, usize),
 
     analysis: *body_clone.AnalysisScratch,
 
@@ -333,6 +354,11 @@ const Pass = struct {
             .loop_versions = collections.DenseMap(CFStmtId, LoopVersion).init(allocator),
             .append_sites = collections.DenseMap(CFStmtId, AppendSite).init(allocator),
             .slack_loops = collections.DenseMap(CFStmtId, SlackLoop).init(allocator),
+            .family_parents = collections.DenseMap(LocalId, LocalId).init(allocator),
+            .family_members = .empty,
+            .family_split = collections.DenseMap(LocalId, void).init(allocator),
+            .family_consumes = collections.DenseMap(CFStmtId, void).init(allocator),
+            .family_occurrences = collections.DenseMap(CFStmtId, usize).init(allocator),
         };
     }
 
@@ -344,6 +370,11 @@ const Pass = struct {
         self.loop_versions.deinit();
         self.append_sites.deinit();
         self.slack_loops.deinit();
+        self.family_parents.deinit();
+        self.family_members.deinit(self.allocator);
+        self.family_split.deinit();
+        self.family_consumes.deinit();
+        self.family_occurrences.deinit();
     }
 
     fn resetProcState(self: *Pass) void {
@@ -694,6 +725,21 @@ const Pass = struct {
         /// converge without a join parameter, leaving the other path's slack
         /// never computed.
         assigned_targets: collections.DenseMap(LocalId, u32),
+
+        /// Empty the scan for another pass over the procedure, keeping its
+        /// storage.
+        fn clear(self: *Scan) void {
+            self.edges.clearRetainingCapacity();
+            self.total_uses.clearRetainingCapacity();
+            self.tracked_uses.clearRetainingCapacity();
+            self.param_join.clearRetainingCapacity();
+            self.joins.clearRetainingCapacity();
+            self.max_join_id = 0;
+            self.statement_visits = 0;
+            self.jump_visits = 0;
+            self.dirty_targets.clearRetainingCapacity();
+            self.assigned_targets.clearRetainingCapacity();
+        }
 
         fn deinit(self: *Scan, allocator: Allocator) void {
             self.edges.deinit(allocator);
@@ -1087,8 +1133,8 @@ const Pass = struct {
     /// essential: an old view can outlive a redefinition of its source.
     fn classifyMetadataTransfers(self: *Pass, scan: *Scan, proc_id: LIR.LirProcSpecId) ResourceError!void {
         const allocator = self.allocator;
-        var parents = collections.DenseMap(LocalId, LocalId).init(allocator);
-        defer parents.deinit();
+        const parents = &self.family_parents;
+        parents.clearRetainingCapacity();
         for (scan.edges.items) |edge| {
             if (!parents.contains(edge.source)) try parents.put(edge.source, edge.source);
             if (!parents.contains(edge.target)) try parents.put(edge.target, edge.target);
@@ -1109,37 +1155,37 @@ const Pass = struct {
         for (scan.edges.items) |edge| {
             if (edge.kind != .alias or scan.param_join.contains(edge.target) or
                 (scan.assigned_targets.get(edge.target) orelse 0) != 1) continue;
-            const source = Family.root(&parents, edge.source);
-            const target = Family.root(&parents, edge.target);
+            const source = Family.root(parents, edge.source);
+            const target = Family.root(parents, edge.target);
             parents.getPtr(target).?.* = source;
         }
-        var families = collections.DenseMap(LocalId, std.ArrayList(LocalId)).init(allocator);
-        defer {
-            var it = families.valueIterator();
-            while (it.next()) |members| members.deinit(allocator);
-            families.deinit();
-        }
-        // Resolve before iterating so path compression cannot invalidate keys.
+        // Resolve before iterating so path compression cannot invalidate
+        // keys; the members of a family are then contiguous once sorted by
+        // root.
+        const members_by_root = &self.family_members;
+        members_by_root.clearRetainingCapacity();
         var locals = parents.keyIterator();
         while (locals.next()) |local| {
-            const root = Family.root(&parents, local.*);
-            const entry = try families.getOrPut(root);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(allocator, local.*);
+            try members_by_root.append(allocator, .{ .root = Family.root(parents, local.*), .local = local.* });
         }
+        std.mem.sortUnstable(FamilyMember, members_by_root.items, {}, FamilyMember.lessThan);
         var order = try UseOrder.initFromStore(allocator, self.store, proc_id);
         defer order.deinit();
-        var split = collections.DenseMap(LocalId, void).init(allocator);
-        defer split.deinit();
-        var consumes = collections.DenseMap(CFStmtId, void).init(allocator);
-        defer consumes.deinit();
-        var occurrences = collections.DenseMap(CFStmtId, usize).init(allocator);
-        defer occurrences.deinit();
-        var groups = families.iterator();
-        while (groups.next()) |group| {
+        const split = &self.family_split;
+        split.clearRetainingCapacity();
+        const consumes = &self.family_consumes;
+        const occurrences = &self.family_occurrences;
+        var group_start: usize = 0;
+        while (group_start < members_by_root.items.len) {
+            var group_end = group_start + 1;
+            while (group_end < members_by_root.items.len and members_by_root.items[group_end].root == members_by_root.items[group_start].root) group_end += 1;
+            const group_root = members_by_root.items[group_start].root;
+            const group_members = members_by_root.items[group_start..group_end];
+            group_start = group_end;
             consumes.clearRetainingCapacity();
             occurrences.clearRetainingCapacity();
-            for (group.value_ptr.items) |member| {
+            for (group_members) |member_entry| {
+                const member = member_entry.local;
                 for (order.topology.reads_of.row(member)) |raw| {
                     const stmt_id: CFStmtId = @fromBackingInt(@intCast(raw));
                     const stmt = self.store.getCFStmt(stmt_id);
@@ -1147,7 +1193,7 @@ const Pass = struct {
                     // its actual uses, including ones after its source dies.
                     if (stmt == .assign_ref and stmt.assign_ref.op == .local and
                         parents.contains(stmt.assign_ref.target) and
-                        Family.root(&parents, stmt.assign_ref.target) == group.key_ptr.*) continue;
+                        Family.root(parents, stmt.assign_ref.target) == group_root) continue;
                     const occurrence = try occurrences.getOrPut(stmt_id);
                     if (!occurrence.found_existing) occurrence.value_ptr.* = 0;
                     occurrence.value_ptr.* += 1;
@@ -1169,24 +1215,34 @@ const Pass = struct {
             }
             // Group by member so the backward reachability marks are built
             // once per local, then reused for all its consumption queries.
-            outer: for (group.value_ptr.items) |member| {
+            outer: for (group_members) |member_entry| {
                 if (shared) break;
                 consume_it = consumes.keyIterator();
                 while (consume_it.next()) |stmt| {
-                    if (try order.usesAfter(@backingInt(stmt.*), member)) {
+                    if (try order.usesAfter(@backingInt(stmt.*), member_entry.local)) {
                         shared = true;
                         break :outer;
                     }
                 }
             }
-            if (shared) try split.put(group.key_ptr.*, {});
+            if (shared) try split.put(group_root, {});
         }
         for (scan.edges.items) |*edge| {
-            const root = Family.root(&parents, edge.source);
-            const same_value_alias = edge.kind == .alias and Family.root(&parents, edge.target) == root;
+            const root = Family.root(parents, edge.source);
+            const same_value_alias = edge.kind == .alias and Family.root(parents, edge.target) == root;
             edge.preserves_metadata = same_value_alias or !split.contains(root);
         }
     }
+
+    const FamilyMember = struct {
+        root: LocalId,
+        local: LocalId,
+
+        fn lessThan(_: void, a: FamilyMember, b: FamilyMember) bool {
+            if (a.root != b.root) return @backingInt(a.root) < @backingInt(b.root);
+            return @backingInt(a.local) < @backingInt(b.local);
+        }
+    };
 
     // Per-parameter qualification and rewrite
 
@@ -1214,22 +1270,27 @@ const Pass = struct {
 
         var max_join_id: u32 = 0;
         var promoting = true;
+        // The scan and its index are emptied and refilled per round rather
+        // than remade: a procedure may promote hundreds of parameters, and
+        // on an arena every round's fresh tables would stay allocated.
+        var scan = Scan{
+            .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
+            .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
+            .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+            .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
+            .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
+        };
+        defer scan.deinit(allocator);
+        var edge_index = try EdgeIndex.init(allocator, &.{});
+        defer edge_index.deinit(allocator);
         while (promoting) {
             promoting = false;
-            var scan = Scan{
-                .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
-                .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
-                .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
-                .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
-                .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
-            };
-            defer scan.deinit(allocator);
+            scan.clear();
             try self.scanProc(self.store.getProcSpec(proc_id).body.?, &scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
             try self.classifyMetadataTransfers(&scan, proc_id);
-            var edge_index = try EdgeIndex.init(allocator, scan.edges.items);
-            defer edge_index.deinit(allocator);
+            try edge_index.rebuild(allocator, scan.edges.items);
             outer: for (scan.joins.items) |info| {
                 if (!info.has_back_edge) continue;
                 const join = self.store.getCFStmt(info.stmt).join;

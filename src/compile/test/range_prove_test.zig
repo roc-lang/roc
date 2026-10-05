@@ -1323,6 +1323,48 @@ test "a guard on one sum bounds every read whose index is a sum sharing its oper
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
 }
 
+// The read's index is the sum `a + b`, and `b`'s bound comes through
+// another sum, `b + k`: the first guard caps that sum, which states its
+// facts while `k` is unbounded, the second guard then bounds `k`, and the
+// read proves only if the sum's facts are restated with `k`'s bound.
+test "a guard on a sum bounds the operand of another sum whose index it shares" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\read : List(U8), U64, U64, U64 -> U64
+        \\read = |input, a, b, k| {
+        \\    capped = b + k
+        \\    if capped > 100 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    if k < 5 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    if a + 103 > List.len(input) {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    U64.from_le_bytes(input, a.plus_wrap(b)) ?? 0
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(read(bytes, args.len(), 1, 7)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.unchecked_reads);
+    // The read's length test folded; only the guards' own comparisons remain.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.is_gt);
+}
+
 // The table grows by one per iteration and is read `len` back from its end
 // for every candidate length from three up to a bound of at most 258: the
 // entry guard makes `258 <= length` an invariant the append preserves, and

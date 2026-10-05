@@ -100,7 +100,7 @@ EndOfFile,
 		(e-num (value "42")))
 	(s-let
 		(p-assign (ident "a"))
-		(e-call (constraint-fn-var 232)
+		(e-call (constraint-fn-var 236)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local

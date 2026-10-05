@@ -34,7 +34,7 @@ pub const WasmRepr = union(enum) {
 /// Map a layout.Idx to its wasm representation.
 /// For composite types (records, tuples, tags), returns stack_memory with size 0.
 /// Use wasmReprWithStore for accurate composite sizes.
-pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
+pub fn wasmRepr(layout_idx: layout.Idx, simd_enabled: bool) WasmRepr {
     if (layout_idx == .u8 or layout_idx == .i8 or layout_idx == .u16 or layout_idx == .i16 or layout_idx == .u32 or layout_idx == .i32) {
         return .{ .primitive = .i32 };
     }
@@ -42,7 +42,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
     if (layout_idx == .f32) return .{ .primitive = .f32 };
     if (layout_idx == .f64) return .{ .primitive = .f64 };
     if (layout_idx == .u8x16 or layout_idx == .i8x16 or layout_idx == .u16x8 or layout_idx == .i16x8 or layout_idx == .u32x4 or layout_idx == .i32x4 or layout_idx == .u64x2 or layout_idx == .i64x2) {
-        return .{ .primitive = .v128 };
+        return if (simd_enabled) .{ .primitive = .v128 } else .{ .stack_memory = 16 };
     }
     if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return .{ .stack_memory = 16 };
     if (layout_idx == .str) return .{ .stack_memory = 12 }; // wasm32: ptr(4) + encoded cap(4) + len(4)
@@ -51,7 +51,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
 
 /// Map a layout.Idx to its wasm representation using the layout store for
 /// composite types (records, tuples, tags).
-pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!WasmRepr {
+pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store, simd_enabled: bool) Error!WasmRepr {
     // For unwrapped_capture closures, the runtime value IS the capture value
     // itself, so a closure's representation is its captures' representation—
     // except that a stack_memory captures makes the closure live in stack memory
@@ -61,7 +61,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
     var outer_closure: ?layout.Layout = null;
     while (true) {
         // Try the scalar fast-path first; named scalar idxs are not valid for getLayout.
-        const basic = wasmRepr(idx);
+        const basic = wasmRepr(idx, simd_enabled);
         switch (basic) {
             .primitive => return basic, // a primitive captures makes the closure that primitive
             .stack_memory => |size| {
@@ -78,7 +78,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
                     continue;
                 }
                 const repr: WasmRepr = switch (l.tag) {
-                    .scalar => .{ .primitive = scalarValType(l) },
+                    .scalar => if (!simd_enabled and l.getScalar().tag == .vector) .{ .stack_memory = 16 } else .{ .primitive = scalarValType(l) },
                     .struct_ => .{ .stack_memory = ls.sizeAt(l, wasm_target) },
                     .tag_union => blk: {
                         const tu_layout = try tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
@@ -155,16 +155,16 @@ fn scalarValType(l: layout.Layout) ValType {
 /// Get the wasm ValType for a result that is returned directly from a function.
 /// For primitives, this is the value type itself.
 /// For composites, the function returns an i32 pointer to linear memory.
-pub fn resultValType(layout_idx: layout.Idx) ValType {
-    return switch (wasmRepr(layout_idx)) {
+pub fn resultValType(layout_idx: layout.Idx, simd_enabled: bool) ValType {
+    return switch (wasmRepr(layout_idx, simd_enabled)) {
         .primitive => |vt| vt,
         .stack_memory => .i32,
     };
 }
 
 /// Get the wasm ValType for a result, using the layout store for composites.
-pub fn resultValTypeWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!ValType {
-    return switch (try wasmReprWithStore(layout_idx, ls)) {
+pub fn resultValTypeWithStore(layout_idx: layout.Idx, ls: *const layout.Store, simd_enabled: bool) Error!ValType {
+    return switch (try wasmReprWithStore(layout_idx, ls, simd_enabled)) {
         .primitive => |vt| vt,
         .stack_memory => .i32,
     };

@@ -148,7 +148,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "lines"))
 				(p-assign (ident "functions")))
-			(e-dispatch-call (method "join_map") (constraint-fn-var 268)
+			(e-dispatch-call (method "join_map") (constraint-fn-var 272)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "lines"))))
@@ -184,10 +184,10 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Str") (builtin))))))
 	(s-expect
-		(e-call (constraint-fn-var 361)
+		(e-call (constraint-fn-var 365)
 			(e-lookup-external
 				(builtin))
-			(e-call (constraint-fn-var 319)
+			(e-call (constraint-fn-var 323)
 				(e-lookup-local
 					(p-assign (ident "apply")))
 				(e-list

@@ -4462,14 +4462,15 @@ fn settleUniqueOrigins(
             meet.fromLocal(born, conds, source);
             orOriginWords(origin_scratch, origins, origin_words, source);
             dead = dead or destroyed.isSet(source);
-        } else if (join_inputs.row(local).len != 0) {
+        } else if (join_inputs.row(local).len != 0 or read_inputs.row(local).len != 0) {
             for (join_inputs.row(local)) |edge_index| {
                 const source = join_incoming[edge_index].source;
                 meet.fromLocal(born, conds, source);
                 orOriginWords(origin_scratch, origins, origin_words, source);
                 dead = dead or destroyed.isSet(source);
             }
-        } else if (read_inputs.row(local).len != 0) {
+            // A join result cell's field takes are incoming edges alongside
+            // its join edges.
             for (read_inputs.row(local)) |edge_index| {
                 const read = field_edges.reads[edge_index];
                 meet.fromSlot(masks, field_conds, read.container, read.field);
@@ -6262,7 +6263,13 @@ fn computeUniquenessDetailed(
     // every definition is a birth or, for a join result cell, an incoming
     // edge (the joins declaring the cell counted as well): whichever ran,
     // the cell's value is accounted for. Any other definition among
-    // several leaves the origin untracked.
+    // several leaves the origin untracked. A field take assigned into a cell
+    // is one of its incoming edges, carrying the container's stored unit
+    // exactly as an alias carries its source's; a take the use order later
+    // rejects leaves the cell's definition foreign.
+    for (field_reads.items) |read| {
+        if (read.take and join_targets.isSet(read.target)) cell_edge_counts[read.target] += 1;
+    }
     var multi_ok = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer multi_ok.deinit(allocator);
     var multi_ok_iter = multi_def.iterator(.{});
@@ -6490,8 +6497,19 @@ fn computeUniquenessDetailed(
                 }
             }
         }
+        // Takes into one join result cell stand or fall together: a cell
+        // with any rejected take keeps that definition foreign.
+        var rejected_cells = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        defer rejected_cells.deinit(allocator);
         for (field_reads.items, 0..) |read, index| {
-            if (!read.take or killed.isSet(index) or multi_def.isSet(read.target) or read.field >= 64) continue;
+            if (!read.take or !join_targets.isSet(read.target)) continue;
+            if (killed.isSet(index) or read.field >= 64) rejected_cells.set(read.target);
+        }
+        for (field_reads.items, 0..) |read, index| {
+            if (!read.take or killed.isSet(index) or read.field >= 64) continue;
+            if (join_targets.isSet(read.target)) {
+                if (rejected_cells.isSet(read.target)) continue;
+            } else if (multi_def.isSet(read.target)) continue;
             foreign_def.unset(read.target);
             try eligible_reads.append(allocator, read);
         }

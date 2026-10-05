@@ -99,7 +99,7 @@ const query_visit_cap: usize = 64;
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var analysis = BodyClone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(store, layouts, store.allocator, &analysis);
+    var pass = try Pass.init(store, layouts, store.allocator, &analysis);
     defer pass.deinit();
 
     const proc_count = store.procSpecCount();
@@ -118,7 +118,7 @@ pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.
 
 /// Retain counting and traversal capacity across procedures and proof rounds.
 pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
+    var pass = try Pass.init(store, layouts, scratch_allocator, analysis);
     defer pass.deinit();
     try pass.transformProc(proc_id);
 }
@@ -366,10 +366,6 @@ const Fact = struct {
 /// it can verify this round.
 const unknown_assumption_bit: u64 = 1 << 63;
 
-fn sameStableFact(a: StableFact, b: StableFact) bool {
-    return std.meta.eql(a.a, b.a) and std.meta.eql(a.b, b.b) and a.c == b.c;
-}
-
 const EdgeFact = union(enum) {
     ordering: Fact,
     no_overflow: NoOverflowFact,
@@ -391,6 +387,22 @@ const SumRoot = struct {
     root: NodeId,
     a: NodeId,
     b: NodeId,
+    /// The previous sum touching this sum's root, `a`, and `b`, in that
+    /// order, under `Pass.sum_heads`; `no_sum` ends each chain.
+    prev: [3]u32 = .{ no_sum, no_sum, no_sum },
+    /// `Pass.fact_epoch` when this sum's facts were last stated on the
+    /// path; another value means they may be missing or stale.
+    fresh: u32 = 0,
+};
+const no_sum: u32 = std.math.maxInt(u32);
+
+/// Constant bounds of a root under the path facts, with the assumptions
+/// each bound's derivation touched.
+const RootBounds = struct {
+    lo: i128,
+    hi: i128,
+    lo_assumed: u64,
+    hi_assumed: u64,
 };
 
 /// Saved path-environment entry for backtracking.
@@ -442,7 +454,18 @@ const MeetBound = struct {
 const QueryBest = struct {
     c: i128,
     assumed: u64 = 0,
+    /// On the `relaxFrom` worklist already.
+    queued: bool = false,
+    /// Times the slack improved after the root was first reached.
+    improvements: u8 = 0,
 };
+
+/// Index links of one path fact, see `Pass.fact_links`.
+const FactLink = struct {
+    fwd_prev: u32,
+    bwd_prev: u32,
+};
+const no_fact: u32 = std.math.maxInt(u32);
 
 /// Bound on synthesized upper bounds per met local.
 const meet_bound_cap: usize = 6;
@@ -494,17 +517,56 @@ const LenInvariant = struct {
     died_epoch: u32 = 0,
 };
 
-/// Cross-round bounds of one loop parameter, complete once every jump into
-/// its join was captured in a single round.
+/// Cross-round bounds of one loop parameter: the bounds every jump into its
+/// join proved in a round, and the invariants assumed and verified across
+/// rounds. Each list holds up to `meet_bound_cap`; storage follows use,
+/// since a procedure persists one of these per loop parameter.
 const LoopBounds = struct {
-    items: [meet_bound_cap]StableBound = undefined,
+    items: []StableBound = &.{},
     len: usize = 0,
     /// Lower bounds `base <= value + c` of an integer parameter.
-    lower_items: [meet_bound_cap]StableBound = undefined,
+    lower_items: []StableBound = &.{},
     lower_len: usize = 0,
-    len_items: [meet_bound_cap]LenInvariant = undefined,
+    len_items: []LenInvariant = &.{},
     len_count: usize = 0,
-    complete: bool = false,
+
+    fn ensureCapacity(self: *LoopBounds, allocator: Allocator, bounds: usize, lower: usize, invariants: usize) ResourceError!void {
+        if (self.items.len < bounds) {
+            const grown = try allocator.alloc(StableBound, bounds);
+            @memcpy(grown[0..self.len], self.items[0..self.len]);
+            allocator.free(self.items);
+            self.items = grown;
+        }
+        if (self.lower_items.len < lower) {
+            const grown = try allocator.alloc(StableBound, lower);
+            @memcpy(grown[0..self.lower_len], self.lower_items[0..self.lower_len]);
+            allocator.free(self.lower_items);
+            self.lower_items = grown;
+        }
+        if (self.len_items.len < invariants) {
+            const grown = try allocator.alloc(LenInvariant, invariants);
+            @memcpy(grown[0..self.len_count], self.len_items[0..self.len_count]);
+            allocator.free(self.len_items);
+            self.len_items = grown;
+        }
+    }
+
+    fn deinit(self: *LoopBounds, allocator: Allocator) void {
+        allocator.free(self.items);
+        allocator.free(self.lower_items);
+        allocator.free(self.len_items);
+    }
+
+    /// Copy the live prefixes.
+    fn assign(dst: *LoopBounds, allocator: Allocator, src: *const LoopBounds) ResourceError!void {
+        try dst.ensureCapacity(allocator, src.len, src.lower_len, src.len_count);
+        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
+        dst.len = src.len;
+        @memcpy(dst.lower_items[0..src.lower_len], src.lower_items[0..src.lower_len]);
+        dst.lower_len = src.lower_len;
+        @memcpy(dst.len_items[0..src.len_count], src.len_items[0..src.len_count]);
+        dst.len_count = src.len_count;
+    }
 };
 
 /// Fixed-capacity list of synthesized bounds.
@@ -587,6 +649,10 @@ const max_struct_meet_fields: u32 = 16;
 /// captured, so a missing edge (a loop back edge captured mid-walk, say)
 /// keeps the merge at bottom for the round.
 const MergeState = struct {
+    /// Captured this round. A state from an earlier round keeps its lists'
+    /// memory: the pass runs on an arena, where a freed list returns
+    /// nothing, so the lists are cleared and refilled rather than remade.
+    live: bool,
     captures: u32,
     facts: std.ArrayList(Fact),
     /// The all-edge meet of the facts in round-stable form, for persisting
@@ -630,10 +696,45 @@ const StableFact = struct {
 /// Bound on persisted facts per loop join.
 const loop_fact_cap: usize = 256;
 
+/// A list of stable facts with room for `loop_fact_cap`; `items` is the
+/// storage held, `len` the live prefix. Thousands of merge heads each
+/// persist one, most well under the cap, so storage follows use: it grows
+/// by half at least, which bounds the copies an arena keeps.
 const LoopFacts = struct {
-    items: [loop_fact_cap]StableFact = undefined,
+    items: []StableFact = &.{},
     len: usize = 0,
+
+    fn ensureCapacity(self: *LoopFacts, allocator: Allocator, needed: usize) ResourceError!void {
+        if (self.items.len >= needed) return;
+        const grown = try allocator.alloc(StableFact, @min(loop_fact_cap, @max(needed, self.items.len + self.items.len / 2)));
+        @memcpy(grown[0..self.len], self.items[0..self.len]);
+        allocator.free(self.items);
+        self.items = grown;
+    }
+
+    fn deinit(self: *LoopFacts, allocator: Allocator) void {
+        allocator.free(self.items);
+    }
+
+    /// Copy the live prefix.
+    fn assign(dst: *LoopFacts, allocator: Allocator, src: *const LoopFacts) ResourceError!void {
+        try dst.ensureCapacity(allocator, src.len);
+        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
+        dst.len = src.len;
+    }
 };
+
+/// Identity of a stable fact without its bookkeeping, for the sets the
+/// stabilizations and meets dedupe and intersect through.
+const StableFactKey = struct {
+    a: StableTerm,
+    b: StableTerm,
+    c: i128,
+};
+
+fn stableFactKey(fact: StableFact) StableFactKey {
+    return .{ .a = fact.a, .b = fact.b, .c = fact.c };
+}
 
 /// Bound on persisted per-merge env locals.
 const merge_env_persist_cap: usize = 128;
@@ -651,9 +752,67 @@ const StoredEnvBound = struct {
 /// Last round's stabilized env meet of one merge head, seeded when the
 /// region must walk before its captures complete.
 const MergeEnvBounds = struct {
-    items: [merge_env_persist_cap]StoredEnvBound = undefined,
+    items: []StoredEnvBound = &.{},
     len: usize = 0,
+
+    /// Storage follows use, as for `LoopFacts`.
+    fn ensureCapacity(self: *MergeEnvBounds, allocator: Allocator, needed: usize) ResourceError!void {
+        if (self.items.len >= needed) return;
+        const grown = try allocator.alloc(StoredEnvBound, @min(merge_env_persist_cap, @max(needed, self.items.len + self.items.len / 2)));
+        @memcpy(grown[0..self.len], self.items[0..self.len]);
+        allocator.free(self.items);
+        self.items = grown;
+    }
+
+    fn deinit(self: *MergeEnvBounds, allocator: Allocator) void {
+        allocator.free(self.items);
+    }
+
+    /// Copy the live prefix.
+    fn assign(dst: *MergeEnvBounds, allocator: Allocator, src: *const MergeEnvBounds) ResourceError!void {
+        try dst.ensureCapacity(allocator, src.len);
+        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
+        dst.len = src.len;
+    }
+
+    /// Whether two meets persist the same bounds for the same locals. The
+    /// entries and the bounds within one are compared as sets: their order
+    /// follows the walk that produced them, which a seeded fact's position
+    /// can shift from round to round without any bound changing.
+    fn sameBounds(previous: *const MergeEnvBounds, current: *const MergeEnvBounds) bool {
+        if (previous.len != current.len) return false;
+        for (current.items[0..current.len]) |new| {
+            var matched = false;
+            for (previous.items[0..previous.len]) |old| {
+                if (old.local != new.local) continue;
+                matched = sameBoundSet(old.bounds[0..old.len], new.bounds[0..new.len]) and
+                    sameBoundSet(old.lower[0..old.lower_len], new.lower[0..new.lower_len]);
+                break;
+            }
+            if (!matched) return false;
+        }
+        return true;
+    }
 };
+
+/// Whether two short bound lists hold the same bounds in any order.
+fn sameBoundSet(previous: []const StableBound, current: []const StableBound) bool {
+    return previous.len == current.len and boundsWithin(current, previous) and boundsWithin(previous, current);
+}
+
+fn boundsWithin(inner: []const StableBound, outer: []const StableBound) bool {
+    for (inner) |bound| {
+        var found = false;
+        for (outer) |other| {
+            if (std.meta.eql(bound, other)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
 
 const Pass = struct {
     store: *LirStore,
@@ -727,9 +886,25 @@ const Pass = struct {
     /// values shares one root for the round.
     sum_roots: std.AutoHashMap(u64, NodeId),
     sums: std.ArrayList(SumRoot),
-    /// A fact was added or rewound since the sums' operand facts were last
-    /// derived, so a query first re-derives them from the current path.
-    sums_dirty: bool = false,
+    /// Per root, the most recent sum whose root or operand it is this
+    /// round, or `no_sum`: the sums' derived facts touch only these roots,
+    /// so a query reaching none of them cannot be changed by deriving
+    /// them. Indexed by root; grown as sums appear.
+    sum_heads: std.ArrayList(u32),
+    /// Sums whose facts the current query needs stated, by index.
+    refresh_set: std.ArrayList(u32),
+    /// Per sum, the `refresh_stamp` under which it joined `refresh_set`.
+    refresh_marks: std.ArrayList(u32),
+    refresh_stamp: u32 = 0,
+    /// Counts the changes to the path's facts (a fact added outside a
+    /// refresh, or the path rewound) that can date a sum's stated facts.
+    fact_epoch: u32 = 1,
+    /// Per root in the sums' closure, its bounds from `boundSumRoots`.
+    root_bounds: collections.DenseMap(NodeId, RootBounds),
+    /// Per path fact, whether `boundSumRoots` has gathered it.
+    edge_gathered: std.ArrayList(bool),
+    /// Whether the last `relaxFrom` reached a root `sum_heads` lists.
+    reached_sum_end: bool = false,
     refreshing_sums: bool = false,
     /// Reassignable locals bound to a root (their value, or their list's
     /// length term) this round. A loop whose body never assigns such a
@@ -754,10 +929,12 @@ const Pass = struct {
     /// For each join declared inside another join's body, that outer join.
     join_parent: collections.DenseMap(JoinPointId, JoinPointId),
     new_loop_bounds: bool,
-    /// An unverified length invariant was seeded this round: every fact-based
-    /// rewrite is deferred until the assumption is promoted or discarded.
+    /// An unverified invariant was seeded this round: nothing is persisted
+    /// from the round, and a rewrite whose proof rests on an assumption
+    /// (see `proof_assumed`) waits until the assumption is promoted or
+    /// discarded.
     live_pending: bool,
-    /// A provable rewrite was deferred by `live_pending`; forces another round.
+    /// A provable rewrite waited on an assumption; forces another round.
     deferred_rewrites: bool,
     /// Counts the rounds of this procedure that rewrote a statement or
     /// persisted new bounds, so a failed invariant can tell whether the
@@ -768,11 +945,52 @@ const Pass = struct {
     /// Reachable statements and predecessors for the loop-cycle scans.
     loop_scan: LoopScan,
     query_best: collections.DenseMap(NodeId, QueryBest),
-    /// Scratch for `dedupeFacts`.
+    /// Worklist of `relaxFrom`: roots whose best slack improved and whose
+    /// edges are still to be relaxed.
+    query_queue: std.ArrayList(NodeId),
+    /// The facts under the root `relaxFrom` is relaxing, oldest last.
+    query_edges: std.ArrayList(u32),
+    /// Per path fact, the previous fact with the same left root and the
+    /// previous with the same right root, so a query walks only the facts
+    /// touching the roots it reaches. Parallel to `facts`.
+    fact_links: std.ArrayList(FactLink),
+    /// Per root, the most recent path fact whose left root (`fwd_heads`)
+    /// or right root (`bwd_heads`) it is, or `no_fact`. Indexed by root;
+    /// grown as roots appear.
+    fwd_heads: std.ArrayList(u32),
+    bwd_heads: std.ArrayList(u32),
+    /// The facts seeded into the region so far, while `seeding`.
     fact_seen: std.AutoHashMap(FactKey, void),
+    seeding: bool = false,
+    /// Positions of stable facts by identity, for the stabilizations and
+    /// the merge meets. Scratch, cleared by each user.
+    stable_index: std.AutoHashMap(StableFactKey, u32),
+    /// A stabilization's qualifying facts before the cap applies.
+    stable_candidates: std.ArrayList(StableFact),
+    /// The identities a head persisted last round, while a stabilization
+    /// over the cap keeps them first.
+    previous_keys: std.AutoHashMap(StableFactKey, void),
+    /// `dropImpliedCandidates` scratch: the candidates' indices sorted by
+    /// endpoints and constant, and which candidates another implies.
+    candidate_order: std.ArrayList(u32),
+    candidate_implied: std.ArrayList(bool),
+    /// Stable-form scratch for a captured edge's facts, its entry facts,
+    /// and a persisted meet under construction; heap-allocated once, as
+    /// each is sized for its cap.
+    stable_scratch: *LoopFacts,
+    entry_scratch: *LoopFacts,
+    persist_scratch: *LoopFacts,
+    env_scratch: *MergeEnvBounds,
+    /// A loop parameter's bounds under construction, sized for the caps.
+    bounds_scratch: LoopBounds,
     /// Assumption bits of the facts the current fact-graph query relaxed
     /// through; reset by each top-level query.
     query_used: u64 = 0,
+    /// Assumption bits every `proveLe` since the last reset relaxed
+    /// through: a rewrite's proof rests on an unverified assumption
+    /// exactly when this is nonzero after its queries, and only such a
+    /// rewrite waits for the assumption's verification.
+    proof_assumed: u64 = 0,
     /// Pending assumptions seeded so far this round.
     assumption_count: u8 = 0,
     rewrites: u32,
@@ -783,7 +1001,30 @@ const Pass = struct {
     read_counts: ?BodyClone.ReadCounts,
     analysis: *BodyClone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) Pass {
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!Pass {
+        const stable_scratch = try allocator.create(LoopFacts);
+        errdefer allocator.destroy(stable_scratch);
+        stable_scratch.* = .{};
+        try stable_scratch.ensureCapacity(allocator, loop_fact_cap);
+        errdefer stable_scratch.deinit(allocator);
+        const entry_scratch = try allocator.create(LoopFacts);
+        errdefer allocator.destroy(entry_scratch);
+        entry_scratch.* = .{};
+        try entry_scratch.ensureCapacity(allocator, loop_fact_cap);
+        errdefer entry_scratch.deinit(allocator);
+        const persist_scratch = try allocator.create(LoopFacts);
+        errdefer allocator.destroy(persist_scratch);
+        persist_scratch.* = .{};
+        try persist_scratch.ensureCapacity(allocator, loop_fact_cap);
+        errdefer persist_scratch.deinit(allocator);
+        const env_scratch = try allocator.create(MergeEnvBounds);
+        errdefer allocator.destroy(env_scratch);
+        env_scratch.* = .{};
+        try env_scratch.ensureCapacity(allocator, merge_env_persist_cap);
+        errdefer env_scratch.deinit(allocator);
+        var bounds_scratch = LoopBounds{};
+        errdefer bounds_scratch.deinit(allocator);
+        try bounds_scratch.ensureCapacity(allocator, meet_bound_cap, meet_bound_cap, meet_bound_cap);
         return .{
             .store = store,
             .layouts = layouts,
@@ -821,6 +1062,11 @@ const Pass = struct {
             .seeded_param_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
+            .sum_heads = .empty,
+            .refresh_set = .empty,
+            .refresh_marks = .empty,
+            .root_bounds = collections.DenseMap(NodeId, RootBounds).init(allocator),
+            .edge_gathered = .empty,
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .path_len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -837,7 +1083,22 @@ const Pass = struct {
             .scratch = .empty,
             .loop_scan = LoopScan.init(allocator),
             .query_best = collections.DenseMap(NodeId, QueryBest).init(allocator),
+            .query_queue = .empty,
+            .query_edges = .empty,
+            .fact_links = .empty,
+            .fwd_heads = .empty,
+            .bwd_heads = .empty,
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
+            .stable_index = std.AutoHashMap(StableFactKey, u32).init(allocator),
+            .stable_candidates = .empty,
+            .previous_keys = std.AutoHashMap(StableFactKey, void).init(allocator),
+            .candidate_order = .empty,
+            .candidate_implied = .empty,
+            .stable_scratch = stable_scratch,
+            .entry_scratch = entry_scratch,
+            .persist_scratch = persist_scratch,
+            .env_scratch = env_scratch,
+            .bounds_scratch = bounds_scratch,
             .rewrites = 0,
             .proof_records = .empty,
             .proof_facts = .empty,
@@ -866,11 +1127,12 @@ const Pass = struct {
         self.frames.deinit(self.allocator);
         self.joins_in_order.deinit(self.allocator);
         self.jump_records.deinit(self.allocator);
-        self.clearMergeStates();
+        self.freeMergeStates();
         self.merge_states.deinit();
         self.body_joins.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
+        self.freePersisted();
         self.loop_bounds.deinit();
         self.loop_facts.deinit();
         self.merge_facts.deinit();
@@ -882,6 +1144,11 @@ const Pass = struct {
         self.seeded_param_roots.deinit();
         self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
+        self.sum_heads.deinit(self.allocator);
+        self.refresh_set.deinit(self.allocator);
+        self.refresh_marks.deinit(self.allocator);
+        self.root_bounds.deinit();
+        self.edge_gathered.deinit(self.allocator);
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
         self.path_len_roots.deinit();
@@ -892,7 +1159,26 @@ const Pass = struct {
         self.scratch.deinit(self.allocator);
         self.loop_scan.deinit(self.allocator);
         self.query_best.deinit();
+        self.query_queue.deinit(self.allocator);
+        self.query_edges.deinit(self.allocator);
+        self.fact_links.deinit(self.allocator);
+        self.fwd_heads.deinit(self.allocator);
+        self.bwd_heads.deinit(self.allocator);
         self.fact_seen.deinit();
+        self.stable_index.deinit();
+        self.stable_candidates.deinit(self.allocator);
+        self.previous_keys.deinit();
+        self.candidate_order.deinit(self.allocator);
+        self.candidate_implied.deinit(self.allocator);
+        self.stable_scratch.deinit(self.allocator);
+        self.allocator.destroy(self.stable_scratch);
+        self.entry_scratch.deinit(self.allocator);
+        self.allocator.destroy(self.entry_scratch);
+        self.persist_scratch.deinit(self.allocator);
+        self.allocator.destroy(self.persist_scratch);
+        self.env_scratch.deinit(self.allocator);
+        self.allocator.destroy(self.env_scratch);
+        self.bounds_scratch.deinit(self.allocator);
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
         if (self.read_counts) |*counts| counts.deinit();
@@ -903,7 +1189,7 @@ const Pass = struct {
         self.query_used = 0;
         self.nodes.clearRetainingCapacity();
         self.zero_node = null;
-        self.facts.clearRetainingCapacity();
+        self.truncateFacts(0);
         self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
         self.field_values.clearRetainingCapacity();
@@ -913,6 +1199,8 @@ const Pass = struct {
         self.seeded_param_root_set.clearRetainingCapacity();
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
+        self.refresh_marks.clearRetainingCapacity();
+        @memset(self.sum_heads.items, no_sum);
         self.path_value_roots.clearRetainingCapacity();
         self.path_len_roots.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -930,7 +1218,7 @@ const Pass = struct {
         self.frames.clearRetainingCapacity();
         self.joins_in_order.clearRetainingCapacity();
         self.jump_records.clearRetainingCapacity();
-        self.clearMergeStates();
+        self.retireMergeStates();
         self.body_joins.clearRetainingCapacity();
         self.enclosing_join.clearRetainingCapacity();
         self.join_parent.clearRetainingCapacity();
@@ -1053,52 +1341,217 @@ const Pass = struct {
         return @max(-slack_limit, @min(slack_limit, x));
     }
 
-    /// Drop repeats among the facts a region starts with. The same fact
-    /// arrives from several seeds (global facts, the raw meet, the stable
-    /// meet, persisted loop facts), and repeats would only spend the fact
-    /// cap and slow every query.
-    fn dedupeFacts(self: *Pass) ResourceError!void {
-        self.fact_seen.clearRetainingCapacity();
-        var keep: usize = 0;
-        for (self.facts.items) |fact| {
-            const gop = try self.fact_seen.getOrPut(.{ .a = fact.a, .b = fact.b, .c = fact.c, .assumed = fact.assumed });
-            if (gop.found_existing) continue;
-            self.facts.items[keep] = fact;
-            keep += 1;
-        }
-        self.facts.shrinkRetainingCapacity(keep);
-    }
-
-    fn addFact(self: *Pass, fact: Fact) ResourceError!void {
-        if (self.facts.items.len >= max_facts) return;
-        try self.facts.append(self.allocator, fact);
-        if (self.sums.items.len > 0 and !self.refreshing_sums) self.sums_dirty = true;
-    }
-
-    /// Relate every sum root to its operands under the current path's facts:
-    /// each operand sits below the sum by the other operand's proven floor
-    /// and above it by the other's proven ceiling. A guard `pos + span <=
-    /// len` followed by `span >= 5` thereby puts `pos` five below the length.
-    fn refreshSumOperandFacts(self: *Pass) ResourceError!void {
-        self.sums_dirty = false;
+    /// State the facts of the sums in `refresh_set` on the path: each
+    /// operand sits below the sum by the other operand's proven floor and
+    /// above it by the other's proven ceiling. A guard `pos + span <= len`
+    /// followed by `span >= 5` thereby puts `pos` five below the length.
+    ///
+    /// The floors and ceilings are the fixpoint of the facts around these
+    /// sums together with their own relations (a sum's ceiling is its
+    /// operands' ceilings added, an operand's ceiling the sum's less the
+    /// other operand's floor), found by `boundSumRoots`, so one derivation
+    /// states each sum's facts at their tightest. Only the sums a query
+    /// reaches are stated: a round's sums come from every region walked,
+    /// and most touch nothing on the current path.
+    fn refreshSums(self: *Pass) ResourceError!void {
         self.refreshing_sums = true;
         defer self.refreshing_sums = false;
-        var i: usize = 0;
-        while (i < self.sums.items.len) : (i += 1) {
-            const sum = self.sums.items[i];
-            self.query_used = 0;
-            const lo_b = try self.loConstOfRoot(sum.b);
-            try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -lo_b, .origin = .meet, .assumed = self.query_used });
-            self.query_used = 0;
-            const lo_a = try self.loConstOfRoot(sum.a);
-            try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -lo_a, .origin = .meet, .assumed = self.query_used });
-            self.query_used = 0;
-            const hi_b = try self.hiConstOfRoot(sum.b);
-            try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = hi_b, .origin = .meet, .assumed = self.query_used });
-            self.query_used = 0;
-            const hi_a = try self.hiConstOfRoot(sum.a);
-            try self.addFactOnce(.{ .a = sum.root, .b = sum.b, .c = hi_a, .origin = .meet, .assumed = self.query_used });
+        try self.boundSumRoots();
+        for (self.refresh_set.items) |index| {
+            const sum = &self.sums.items[index];
+            const a = self.root_bounds.get(sum.a).?;
+            const b = self.root_bounds.get(sum.b).?;
+            _ = try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -b.lo, .origin = .meet, .assumed = b.lo_assumed });
+            _ = try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -a.lo, .origin = .meet, .assumed = a.lo_assumed });
+            _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = b.hi, .origin = .meet, .assumed = b.hi_assumed });
+            _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.b, .c = a.hi, .origin = .meet, .assumed = a.hi_assumed });
+            sum.fresh = self.fact_epoch;
         }
+    }
+
+    /// Begin gathering sums into `refresh_set`.
+    fn beginRefreshSet(self: *Pass) ResourceError!void {
+        self.refresh_set.clearRetainingCapacity();
+        self.refresh_stamp +%= 1;
+        if (self.refresh_marks.items.len < self.sums.items.len) {
+            try self.refresh_marks.appendNTimes(self.allocator, 0, self.sums.items.len - self.refresh_marks.items.len);
+        }
+    }
+
+    /// Gather the sums touching `root` whose facts are not current.
+    fn gatherStaleSums(self: *Pass, root: NodeId) ResourceError!void {
+        if (root >= self.sum_heads.items.len) return;
+        var index = self.sum_heads.items[root];
+        while (index != no_sum) {
+            const sum = self.sums.items[index];
+            if (sum.fresh != self.fact_epoch and self.refresh_marks.items[index] != self.refresh_stamp) {
+                self.refresh_marks.items[index] = self.refresh_stamp;
+                try self.refresh_set.append(self.allocator, index);
+            }
+            index = sum.prev[sumSlot(sum, root)];
+        }
+    }
+
+    /// Which of a sum's three roots `root` is, as an index into `prev`.
+    fn sumSlot(sum: SumRoot, root: NodeId) usize {
+        if (sum.root == root) return 0;
+        if (sum.a == root) return 1;
+        return 2;
+    }
+
+    /// State the facts of the stale sums touching any of `roots`.
+    fn refreshSumsTouching(self: *Pass, roots: []const NodeId) ResourceError!void {
+        try self.beginRefreshSet();
+        for (roots) |root| try self.gatherStaleSums(root);
+        if (self.refresh_set.items.len != 0) try self.refreshSums();
+    }
+
+    /// Tightest constant bounds of the `refresh_set` sums' roots, their
+    /// operands, and the roots those rest on, into `root_bounds`. The roots
+    /// are the closure of the sums' roots over the fact links in both
+    /// directions, each
+    /// fact relaxed both ways: from `a <= b + c`, `a`'s ceiling is at most
+    /// `b`'s plus `c` and `b`'s floor at least `a`'s less `c`. A constant
+    /// root ends the closure: its bound is its value, and a fact onward
+    /// from it could only tighten that into a contradiction. The sums'
+    /// relations relax alongside the facts, and everything repeats until
+    /// nothing moves, at most `query_visit_cap` times, which ends it on a
+    /// negative cycle. Each bound carries the assumptions of the facts
+    /// that produced it.
+    fn boundSumRoots(self: *Pass) ResourceError!void {
+        self.root_bounds.clearRetainingCapacity();
+        self.query_queue.clearRetainingCapacity();
+        self.query_edges.clearRetainingCapacity();
+        self.edge_gathered.clearRetainingCapacity();
+        try self.edge_gathered.appendNTimes(self.allocator, false, self.facts.items.len);
+        for (self.refresh_set.items) |index| {
+            const sum = self.sums.items[index];
+            for ([_]NodeId{ sum.root, sum.a, sum.b }) |root| {
+                if (try self.ensureRootBounds(root)) try self.query_queue.append(self.allocator, root);
+            }
+        }
+        var next: usize = 0;
+        while (next < self.query_queue.items.len) : (next += 1) {
+            const node = self.query_queue.items[next];
+            const own = self.nodes.items[node];
+            if (own.lo == own.hi) continue;
+            if (node >= self.fwd_heads.items.len) continue;
+            for ([_]Direction{ .forward, .backward }) |direction| {
+                var index = switch (direction) {
+                    .forward => self.fwd_heads.items[node],
+                    .backward => self.bwd_heads.items[node],
+                };
+                while (index != no_fact) {
+                    const fact_index = index;
+                    const fact = self.facts.items[fact_index];
+                    const link = self.fact_links.items[fact_index];
+                    const other = switch (direction) {
+                        .forward => fact.b,
+                        .backward => fact.a,
+                    };
+                    index = switch (direction) {
+                        .forward => link.fwd_prev,
+                        .backward => link.bwd_prev,
+                    };
+                    if (try self.ensureRootBounds(other)) try self.query_queue.append(self.allocator, other);
+                    // A fact between two closure roots is met from both
+                    // ends and gathered once.
+                    if (!self.edge_gathered.items[fact_index]) {
+                        self.edge_gathered.items[fact_index] = true;
+                        try self.query_edges.append(self.allocator, fact_index);
+                    }
+                }
+            }
+        }
+        var passes: usize = 0;
+        var changed = true;
+        while (changed and passes < query_visit_cap) : (passes += 1) {
+            changed = false;
+            for (self.query_edges.items) |index| {
+                const fact = self.facts.items[index];
+                const b_bounds = self.root_bounds.get(fact.b).?;
+                const a_bounds = self.root_bounds.get(fact.a).?;
+                const hi_through = clampSlack(b_bounds.hi + fact.c);
+                if (hi_through < a_bounds.hi) {
+                    const a = self.root_bounds.getPtr(fact.a).?;
+                    a.hi = hi_through;
+                    a.hi_assumed = b_bounds.hi_assumed | fact.assumed;
+                    changed = true;
+                }
+                const lo_through = clampSlack(a_bounds.lo - fact.c);
+                if (lo_through > b_bounds.lo) {
+                    const b = self.root_bounds.getPtr(fact.b).?;
+                    b.lo = lo_through;
+                    b.lo_assumed = a_bounds.lo_assumed | fact.assumed;
+                    changed = true;
+                }
+            }
+            for (self.refresh_set.items) |index| {
+                if (try self.relaxSum(self.sums.items[index])) changed = true;
+            }
+        }
+    }
+
+    /// Relax one sum's relations between its root and operands; whether a
+    /// bound moved.
+    fn relaxSum(self: *Pass, sum: SumRoot) ResourceError!bool {
+        const a = self.root_bounds.get(sum.a).?;
+        const b = self.root_bounds.get(sum.b).?;
+        const root = self.root_bounds.get(sum.root).?;
+        var moved = false;
+        const root_hi = clampSlack(a.hi + b.hi);
+        if (root_hi < root.hi) {
+            const r = self.root_bounds.getPtr(sum.root).?;
+            r.hi = root_hi;
+            r.hi_assumed = a.hi_assumed | b.hi_assumed;
+            moved = true;
+        }
+        const root_lo = clampSlack(a.lo + b.lo);
+        if (root_lo > root.lo) {
+            const r = self.root_bounds.getPtr(sum.root).?;
+            r.lo = root_lo;
+            r.lo_assumed = a.lo_assumed | b.lo_assumed;
+            moved = true;
+        }
+        const after = self.root_bounds.get(sum.root).?;
+        const a_hi = clampSlack(after.hi - b.lo);
+        if (a_hi < a.hi) {
+            const p = self.root_bounds.getPtr(sum.a).?;
+            p.hi = a_hi;
+            p.hi_assumed = after.hi_assumed | b.lo_assumed;
+            moved = true;
+        }
+        const b_hi = clampSlack(after.hi - a.lo);
+        if (b_hi < b.hi) {
+            const p = self.root_bounds.getPtr(sum.b).?;
+            p.hi = b_hi;
+            p.hi_assumed = after.hi_assumed | a.lo_assumed;
+            moved = true;
+        }
+        const a_lo = clampSlack(after.lo - b.hi);
+        if (a_lo > a.lo) {
+            const p = self.root_bounds.getPtr(sum.a).?;
+            p.lo = a_lo;
+            p.lo_assumed = after.lo_assumed | b.hi_assumed;
+            moved = true;
+        }
+        const b_lo = clampSlack(after.lo - a.hi);
+        if (b_lo > b.lo) {
+            const p = self.root_bounds.getPtr(sum.b).?;
+            p.lo = b_lo;
+            p.lo_assumed = after.lo_assumed | a.hi_assumed;
+            moved = true;
+        }
+        return moved;
+    }
+
+    /// Enter a root into the closure at its own window; whether it was new.
+    fn ensureRootBounds(self: *Pass, root: NodeId) ResourceError!bool {
+        const gop = try self.root_bounds.getOrPut(root);
+        if (gop.found_existing) return false;
+        const node = self.nodes.items[root];
+        gop.value_ptr.* = .{ .lo = node.lo, .hi = node.hi, .lo_assumed = 0, .hi_assumed = 0 };
+        return true;
     }
 
     /// Fact form of `value(a) <= value(b) + k`, normalized to roots. The
@@ -1113,29 +1566,160 @@ const Pass = struct {
         };
     }
 
-    /// Tightest provable constant upper bound of a root node, following fact
-    /// edges forward: from `r <= x + c` and a bound on `x`, `r` is bounded.
-    fn hiConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
+    /// Begin seeding a region's facts: the same fact arrives from several
+    /// seeds (global facts, the raw meet, the stable meet, persisted loop
+    /// facts), and a repeat would spend the fact cap and slow the merge
+    /// meets, so seeds are deduplicated as they arrive.
+    fn beginSeeding(self: *Pass) void {
+        self.fact_seen.clearRetainingCapacity();
+        self.seeding = true;
+    }
+
+    fn endSeeding(self: *Pass) void {
+        self.seeding = false;
+    }
+
+    fn addFact(self: *Pass, fact: Fact) ResourceError!void {
+        if (self.seeding) {
+            const gop = try self.fact_seen.getOrPut(.{ .a = fact.a, .b = fact.b, .c = fact.c, .assumed = fact.assumed });
+            if (gop.found_existing) return;
+        }
+        if (self.facts.items.len >= max_facts) return;
+        try self.pushFact(fact);
+        if (!self.refreshing_sums) self.fact_epoch +%= 1;
+    }
+
+    /// Append a fact to the path and link it under both of its roots.
+    fn pushFact(self: *Pass, fact: Fact) ResourceError!void {
+        const index: u32 = @intCast(self.facts.items.len);
+        const top = @max(fact.a, fact.b);
+        if (top >= self.fwd_heads.items.len) {
+            try self.fwd_heads.appendNTimes(self.allocator, no_fact, top + 1 - self.fwd_heads.items.len);
+            try self.bwd_heads.appendNTimes(self.allocator, no_fact, top + 1 - self.bwd_heads.items.len);
+        }
+        try self.facts.append(self.allocator, fact);
+        try self.fact_links.append(self.allocator, .{
+            .fwd_prev = self.fwd_heads.items[fact.a],
+            .bwd_prev = self.bwd_heads.items[fact.b],
+        });
+        self.fwd_heads.items[fact.a] = index;
+        self.bwd_heads.items[fact.b] = index;
+    }
+
+    /// Drop the facts above `len`, unlinking each from its roots.
+    fn truncateFacts(self: *Pass, len: usize) void {
+        if (self.facts.items.len > len) self.fact_epoch +%= 1;
+        while (self.facts.items.len > len) {
+            const fact = self.facts.pop().?;
+            const link = self.fact_links.pop().?;
+            self.fwd_heads.items[fact.a] = link.fwd_prev;
+            self.bwd_heads.items[fact.b] = link.bwd_prev;
+        }
+    }
+
+    /// Whether any path fact mentions a root.
+    fn rootHasFacts(self: *const Pass, root: NodeId) bool {
+        if (root >= self.fwd_heads.items.len) return false;
+        return self.fwd_heads.items[root] != no_fact or self.bwd_heads.items[root] != no_fact;
+    }
+
+    const Direction = enum { forward, backward };
+
+    /// Shortest slack from `start` to every root the path's facts reach
+    /// from it, into `query_best`: forward along `a <= b + c` from `a` to
+    /// `b`, or backward from `b` to `a`. At most `query_visit_cap` roots
+    /// are reached, nearest first and through the path's older facts
+    /// first, so the roots a region's seeded facts relate are reached
+    /// ahead of the ones its own branches add and the bounds persisted
+    /// from them come back the same round after round. A root's slack
+    /// improving `query_visit_cap` times after it was reached means the
+    /// facts hold a negative cycle (no execution satisfies them
+    /// together), and the walk ends there with the slacks it has.
+    fn relaxFrom(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(start, .{ .c = 0 });
-        var best: i128 = self.nodes.items[start].hi;
-        var steps: usize = 0;
-        var changed = true;
-        while (changed and steps < query_visit_cap) : (steps += 1) {
-            changed = false;
-            for (self.facts.items) |fact| {
-                const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc.c + fact.c);
-                const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?.c) {
-                    if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
-                    self.query_used |= fact.assumed;
-                    const through = clampSlack(self.nodes.items[fact.b].hi + next_acc);
-                    if (through < best) best = through;
-                    changed = true;
-                }
+        self.query_queue.clearRetainingCapacity();
+        try self.query_best.put(start, .{ .c = 0, .queued = true });
+        try self.query_queue.append(self.allocator, start);
+        self.reached_sum_end = self.isSumEnd(start);
+        var next: usize = 0;
+        while (next < self.query_queue.items.len) : (next += 1) {
+            const node = self.query_queue.items[next];
+            const acc = self.query_best.getPtr(node).?;
+            acc.queued = false;
+            const acc_c = acc.c;
+            const acc_assumed = acc.assumed;
+            if (node >= self.fwd_heads.items.len) continue;
+            // The links run newest first; gather them to walk oldest first.
+            self.query_edges.clearRetainingCapacity();
+            var index = switch (direction) {
+                .forward => self.fwd_heads.items[node],
+                .backward => self.bwd_heads.items[node],
+            };
+            while (index != no_fact) {
+                try self.query_edges.append(self.allocator, index);
+                const link = self.fact_links.items[index];
+                index = switch (direction) {
+                    .forward => link.fwd_prev,
+                    .backward => link.bwd_prev,
+                };
             }
+            var edge = self.query_edges.items.len;
+            while (edge > 0) {
+                edge -= 1;
+                const fact = self.facts.items[self.query_edges.items[edge]];
+                const other = switch (direction) {
+                    .forward => fact.b,
+                    .backward => fact.a,
+                };
+                const next_acc = clampSlack(acc_c + fact.c);
+                if (self.query_best.getPtr(other)) |known| {
+                    if (next_acc >= known.c) continue;
+                    if (known.improvements >= query_visit_cap) return;
+                    known.improvements += 1;
+                    known.c = next_acc;
+                    known.assumed = acc_assumed | fact.assumed;
+                    self.query_used |= fact.assumed;
+                    if (known.queued) continue;
+                    known.queued = true;
+                } else {
+                    if (self.query_best.count() >= query_visit_cap) continue;
+                    try self.query_best.put(other, .{ .c = next_acc, .assumed = acc_assumed | fact.assumed, .queued = true });
+                    self.query_used |= fact.assumed;
+                    if (self.isSumEnd(other)) self.reached_sum_end = true;
+                }
+                try self.query_queue.append(self.allocator, other);
+            }
+        }
+    }
+
+    /// `relaxFrom` with the facts of the sums it touches stated on the
+    /// path: the walk is redone after stating the stale sums among the
+    /// roots it reached, until it reaches none, since a sum's facts cannot
+    /// extend a walk that reaches no root of it. The sums touching the
+    /// start are stated before the first walk.
+    fn relaxFresh(self: *Pass, start: NodeId, direction: Direction) ResourceError!void {
+        if (!self.refreshing_sums) try self.refreshSumsTouching(&.{start});
+        const used_before = self.query_used;
+        while (true) {
+            try self.relaxFrom(start, direction);
+            if (self.refreshing_sums or !self.reached_sum_end) return;
+            try self.beginRefreshSet();
+            var it = self.query_best.iterator();
+            while (it.next()) |entry| try self.gatherStaleSums(entry.key_ptr.*);
+            if (self.refresh_set.items.len == 0) return;
+            try self.refreshSums();
+            self.query_used = used_before;
+        }
+    }
+
+    /// Tightest constant upper bound of a root from the roots a forward
+    /// walk reached: the least window ceiling plus slack.
+    fn hiConstReached(self: *Pass, start: NodeId) i128 {
+        var best: i128 = self.nodes.items[start].hi;
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            const through = clampSlack(self.nodes.items[entry.key_ptr.*].hi + entry.value_ptr.c);
+            if (through < best) best = through;
         }
         return best;
     }
@@ -1143,26 +1727,12 @@ const Pass = struct {
     /// Tightest provable constant lower bound of a root node, following fact
     /// edges backward: from `x <= r + c` and a bound on `x`, `r` is bounded.
     fn loConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
-        self.query_best.clearRetainingCapacity();
-        try self.query_best.put(start, .{ .c = 0 });
+        try self.relaxFresh(start, .backward);
         var best: i128 = self.nodes.items[start].lo;
-        var steps: usize = 0;
-        var changed = true;
-        while (changed and steps < query_visit_cap) : (steps += 1) {
-            changed = false;
-            for (self.facts.items) |fact| {
-                const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = clampSlack(acc.c + fact.c);
-                const known = self.query_best.get(fact.a);
-                if (known == null or next_acc < known.?.c) {
-                    if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.a, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
-                    self.query_used |= fact.assumed;
-                    const through = clampSlack(self.nodes.items[fact.a].lo - next_acc);
-                    if (through > best) best = through;
-                    changed = true;
-                }
-            }
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            const through = clampSlack(self.nodes.items[entry.key_ptr.*].lo - entry.value_ptr.c);
+            if (through > best) best = through;
         }
         return best;
     }
@@ -1171,7 +1741,12 @@ const Pass = struct {
     /// The narrowest offsets make the root-level goal imply the node-level
     /// one for any value in either node's window.
     fn proveLe(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
-        if (self.sums_dirty) try self.refreshSumOperandFacts();
+        const proven = try self.proveLeQuery(a, b, k);
+        self.proof_assumed |= self.query_used;
+        return proven;
+    }
+
+    fn proveLeQuery(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
@@ -1180,71 +1755,57 @@ const Pass = struct {
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
-        self.query_best.clearRetainingCapacity();
-        try self.query_best.put(ra, .{ .c = 0 });
-        var steps: usize = 0;
-        var changed = true;
-        while (changed and steps < query_visit_cap) : (steps += 1) {
-            changed = false;
-            for (self.facts.items) |fact| {
-                const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc.c + fact.c);
-                const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?.c) {
-                    if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
-                    self.query_used |= fact.assumed;
-                    changed = true;
-                }
-            }
-        }
+        try self.relaxFresh(ra, .forward);
         if (self.query_best.get(rb)) |acc| {
             if (acc.c <= m) return true;
         }
 
         // Constant route: every value of ra is at most every value of rb + m.
-        const hi_a = try self.hiConstOfRoot(ra);
+        const hi_a = self.hiConstReached(ra);
         const lo_b = try self.loConstOfRoot(rb);
         return hi_a <= lo_b + m;
     }
 
-    /// Add an ordering fact the current path does not already hold.
-    fn addFactOnce(self: *Pass, fact: Fact) ResourceError!void {
-        for (self.facts.items) |have| {
-            if (have.a == fact.a and have.b == fact.b and have.c <= fact.c) return;
+    /// Add an ordering fact the current path does not already hold; whether
+    /// it was added.
+    fn addFactOnce(self: *Pass, fact: Fact) ResourceError!bool {
+        if (fact.a < self.fwd_heads.items.len) {
+            var index = self.fwd_heads.items[fact.a];
+            while (index != no_fact) {
+                const have = self.facts.items[index];
+                if (have.b == fact.b and have.c <= fact.c) return false;
+                index = self.fact_links.items[index].fwd_prev;
+            }
         }
+        const before = self.facts.items.len;
         try self.addFact(fact);
+        return self.facts.items.len != before;
     }
 
     /// Least `c` with `value(a) <= value(b) + c` provable through fact
     /// edges, or null when no fact path relates the two roots.
     fn slackLe(self: *Pass, a: NodeId, b: NodeId) ResourceError!?i128 {
-        if (self.sums_dirty) try self.refreshSumOperandFacts();
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const shift = self.offHiOf(a) - self.offLoOf(b);
         if (ra == rb) return shift;
-        self.query_best.clearRetainingCapacity();
-        try self.query_best.put(ra, .{ .c = 0 });
-        var steps: usize = 0;
-        var changed = true;
-        while (changed and steps < query_visit_cap) : (steps += 1) {
-            changed = false;
-            for (self.facts.items) |fact| {
-                const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc.c + fact.c);
-                const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?.c) {
-                    if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
-                    self.query_used |= fact.assumed;
-                    changed = true;
-                }
-            }
-        }
+        try self.relaxFresh(ra, .forward);
         const acc = self.query_best.get(rb) orelse return null;
         return acc.c + shift;
+    }
+
+    /// Link the sum at `index` under one of its roots.
+    fn linkSum(self: *Pass, index: u32, slot: usize, root: NodeId) ResourceError!void {
+        if (root >= self.sum_heads.items.len) {
+            try self.sum_heads.appendNTimes(self.allocator, no_sum, root + 1 - self.sum_heads.items.len);
+        }
+        self.sums.items[index].prev[slot] = self.sum_heads.items[root];
+        self.sum_heads.items[root] = index;
+    }
+
+    fn isSumEnd(self: *const Pass, root: NodeId) bool {
+        return root < self.sum_heads.items.len and self.sum_heads.items[root] != no_sum;
     }
 
     /// Node for the mathematical sum of two dynamic values, or null when they
@@ -1263,27 +1824,36 @@ const Pass = struct {
         const root = self.sum_roots.get(key) orelse blk: {
             const root = (try self.freshRoot(na.lo + nb.lo, na.hi + nb.hi)) orelse return null;
             try self.sum_roots.put(key, root);
+            const index: u32 = @intCast(self.sums.items.len);
             try self.sums.append(self.allocator, .{ .root = root, .a = ra, .b = rb });
+            try self.linkSum(index, 0, root);
+            try self.linkSum(index, 1, ra);
+            try self.linkSum(index, 2, rb);
             break :blk root;
         };
-        try self.refreshSumOperandFacts();
-        for (self.sums.items) |other| {
-            if (other.root == root) continue;
-            const pair: [2]NodeId = if (other.a == ra)
-                .{ rb, other.b }
-            else if (other.b == ra)
-                .{ rb, other.a }
-            else if (other.a == rb)
-                .{ ra, other.b }
-            else if (other.b == rb)
-                .{ ra, other.a }
-            else
-                continue;
-            if (try self.slackLe(pair[0], pair[1])) |c| {
-                try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
-            }
-            if (try self.slackLe(pair[1], pair[0])) |c| {
-                try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
+        try self.refreshSumsTouching(&.{ root, ra, rb });
+        // The sums sharing an operand are the ones chained under `ra` or
+        // `rb` as an operand; one chained under both is this sum itself.
+        for ([_]NodeId{ ra, rb }) |shared| {
+            var index = self.sum_heads.items[shared];
+            while (index != no_sum) {
+                const other = self.sums.items[index];
+                index = other.prev[sumSlot(other, shared)];
+                if (other.root == root or other.root == shared) continue;
+                const pair: [2]NodeId = if (other.a == ra)
+                    .{ rb, other.b }
+                else if (other.b == ra)
+                    .{ rb, other.a }
+                else if (other.a == rb)
+                    .{ ra, other.b }
+                else
+                    .{ ra, other.a };
+                if (try self.slackLe(pair[0], pair[1])) |c| {
+                    _ = try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
+                }
+                if (try self.slackLe(pair[1], pair[0])) |c| {
+                    _ = try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
+                }
             }
         }
         const off_lo = self.offLoOf(lhs) + self.offLoOf(rhs);
@@ -1408,8 +1978,7 @@ const Pass = struct {
     }
 
     fn rewindTo(self: *Pass, facts_len: usize, no_overflow_facts_len: usize, undo_len: usize) ResourceError!void {
-        if (self.sums.items.len > 0) self.sums_dirty = true;
-        self.facts.shrinkRetainingCapacity(facts_len);
+        self.truncateFacts(facts_len);
         self.no_overflow_facts.shrinkRetainingCapacity(no_overflow_facts_len);
         while (self.undo.items.len > undo_len) {
             const entry = self.undo.pop().?;
@@ -1422,6 +1991,36 @@ const Pass = struct {
     }
 
     // Pre-scan: predecessor counts, jump counts, and assignment counts.
+
+    /// Free the storage of every persisted list, before the maps that hold
+    /// them are cleared or dropped.
+    fn freePersisted(self: *Pass) void {
+        var bounds_it = self.loop_bounds.valueIterator();
+        while (bounds_it.next()) |bounds| bounds.deinit(self.allocator);
+        var loop_facts_it = self.loop_facts.valueIterator();
+        while (loop_facts_it.next()) |facts| facts.deinit(self.allocator);
+        var merge_facts_it = self.merge_facts.valueIterator();
+        while (merge_facts_it.next()) |facts| facts.deinit(self.allocator);
+        var merge_env_it = self.merge_env.valueIterator();
+        while (merge_env_it.next()) |env| env.deinit(self.allocator);
+    }
+
+    /// Reserve the per-merge-head maps for every head the procedure has,
+    /// so they never grow during the rounds: the pass runs on an arena,
+    /// where a map that grows by doubling leaves every earlier copy
+    /// allocated.
+    fn reserveMergeStorage(self: *Pass) ResourceError!void {
+        var heads: usize = 0;
+        var it = self.pred_counts.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* > 1) heads += 1;
+        }
+        const joins = self.join_stmts.count();
+        try self.merge_states.ensureTotalCapacity(heads + joins);
+        try self.merge_facts.ensureTotalCapacity(heads + joins);
+        try self.merge_env.ensureTotalCapacity(heads + joins);
+        try self.loop_facts.ensureTotalCapacity(joins);
+    }
 
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
         if (self.read_counts) |*counts| counts.deinit();
@@ -1632,13 +2231,33 @@ const Pass = struct {
         return self.pred_counts.get(stmt) orelse 0;
     }
 
-    fn clearMergeStates(self: *Pass) void {
+    /// End the round's merge states, keeping each state's lists for the
+    /// next round's captures of the same head.
+    fn retireMergeStates(self: *Pass) void {
+        var it = self.merge_states.valueIterator();
+        while (it.next()) |state| {
+            state.live = false;
+            state.facts.clearRetainingCapacity();
+            state.env.clearRetainingCapacity();
+        }
+    }
+
+    fn freeMergeStates(self: *Pass) void {
         var it = self.merge_states.valueIterator();
         while (it.next()) |state| {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
+            state.stable.deinit(self.allocator);
+            state.entry_stable.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
+    }
+
+    /// This round's state for a merge head, if any edge into it was
+    /// captured this round.
+    fn liveMergeState(self: *Pass, head: CFStmtId) ?*MergeState {
+        const state = self.merge_states.getPtr(head) orelse return null;
+        return if (state.live) state else null;
     }
 
     /// A binding is worth carrying through a merge when it says something a
@@ -1656,10 +2275,7 @@ const Pass = struct {
         // A loop parameter's value keeps its identity through merges so a
         // back edge carrying it unchanged is recognized.
         if (self.seeded_param_root_set.contains(node.root)) return true;
-        for (self.facts.items) |fact| {
-            if (fact.a == node.root or fact.b == node.root) return true;
-        }
-        return false;
+        return self.rootHasFacts(node.root);
     }
 
     /// Whether the edge being captured into `head` comes from outside the
@@ -1787,6 +2403,22 @@ const Pass = struct {
             };
         }
 
+        /// Empty the scan for another build, keeping its memory.
+        fn clear(self: *LoopScan) void {
+            self.stmts.clearRetainingCapacity();
+            self.index_of.clearRetainingCapacity();
+            self.successors.clearRetainingCapacity();
+            self.edges.clearRetainingCapacity();
+            self.pred_start.clearRetainingCapacity();
+            self.preds.clearRetainingCapacity();
+            var jumps = self.jumps_to.iterator();
+            while (jumps.next()) |entry| entry.value_ptr.clearRetainingCapacity();
+            self.join_order.clearRetainingCapacity();
+            self.mark.clearRetainingCapacity();
+            self.pending.clearRetainingCapacity();
+            self.cycle.clearRetainingCapacity();
+        }
+
         fn deinit(self: *LoopScan, allocator: Allocator) void {
             self.stmts.deinit(allocator);
             self.index_of.deinit();
@@ -1825,6 +2457,7 @@ const Pass = struct {
         const scan = &self.loop_scan;
         const gpa = self.allocator;
         const successors = &scan.successors;
+        scan.clear();
         _ = try scan.node(gpa, body);
         var cursor: u32 = 0;
         while (cursor < scan.stmts.items.len) : (cursor += 1) {
@@ -2126,28 +2759,191 @@ const Pass = struct {
         return self.stabilizeTermFor(root, join_id);
     }
 
-    /// Stabilize the facts an entry edge carries into loop `join_id`.
-    fn stabilizeLoopFacts(self: *const Pass, facts: []const Fact, join_id: JoinPointId) LoopFacts {
-        var stable = LoopFacts{};
+    /// Stabilize the facts an entry edge carries into loop `join_id`,
+    /// keeping the facts the loop persisted last round ahead of new ones
+    /// when the cap bites.
+    fn stabilizeLoopFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact, join_id: JoinPointId) ResourceError!void {
+        try self.stabilizeInto(stable, facts, .{ .loop = join_id }, self.loop_facts.getPtrConst(join_id));
+    }
+
+    const StabilizeScope = union(enum) {
+        /// Terms stable anywhere on the path.
+        path,
+        /// Terms stable throughout this loop.
+        loop: JoinPointId,
+    };
+
+    /// Stabilize a fact list into round-stable form, keeping facts whose
+    /// endpoints all denote something stable. When more qualify than the
+    /// cap holds, the facts `previous` persisted for the same head come
+    /// first: a persisted set then changes only when a member stops
+    /// holding or room opens, rather than with the order the walk happens
+    /// to put the facts in, which a seed's position can shift from round
+    /// to round without any fact changing.
+    fn stabilizeInto(self: *Pass, stable: *LoopFacts, facts: []const Fact, scope: StabilizeScope, previous: ?*const LoopFacts) ResourceError!void {
+        stable.len = 0;
+        self.stable_index.clearRetainingCapacity();
+        self.stable_candidates.clearRetainingCapacity();
         for (facts) |fact| {
-            if (stable.len >= loop_fact_cap) break;
-            const a = self.stabilizeLoopTerm(fact.a, join_id) orelse continue;
-            const b = self.stabilizeLoopTerm(fact.b, join_id) orelse continue;
+            const a = (switch (scope) {
+                .path => self.stabilizeTerm(fact.a),
+                .loop => |join_id| self.stabilizeLoopTerm(fact.a, join_id),
+            }) orelse continue;
+            const b = (switch (scope) {
+                .path => self.stabilizeTerm(fact.b),
+                .loop => |join_id| self.stabilizeLoopTerm(fact.b, join_id),
+            }) orelse continue;
             if (a == .constant and b == .constant) continue;
             const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
-            var known = false;
-            for (stable.items[0..stable.len]) |*have| {
-                if (sameStableFact(have.*, candidate)) {
-                    have.assumed |= candidate.assumed;
-                    known = true;
-                    break;
-                }
+            const gop = try self.stable_index.getOrPut(stableFactKey(candidate));
+            if (gop.found_existing) {
+                self.stable_candidates.items[gop.value_ptr.*].assumed |= candidate.assumed;
+                continue;
             }
-            if (known) continue;
+            gop.value_ptr.* = @intCast(self.stable_candidates.items.len);
+            try self.stable_candidates.append(self.allocator, candidate);
+        }
+        // Under the cap every candidate persists, implied or not; over it,
+        // an implied candidate must not take a slot from one that implies
+        // it.
+        if (self.stable_candidates.items.len > loop_fact_cap) try self.dropImpliedCandidates();
+        const candidates = self.stable_candidates.items;
+        if (candidates.len <= loop_fact_cap or previous == null) {
+            const take = @min(candidates.len, loop_fact_cap);
+            @memcpy(stable.items[0..take], candidates[0..take]);
+            stable.len = take;
+            return;
+        }
+        // Over the cap: the previously persisted members first, in
+        // candidate order, then the rest until the cap.
+        self.previous_keys.clearRetainingCapacity();
+        for (previous.?.items[0..previous.?.len]) |fact| try self.previous_keys.put(stableFactKey(fact), {});
+        for (candidates) |candidate| {
+            if (stable.len >= loop_fact_cap) break;
+            if (!self.previous_keys.contains(stableFactKey(candidate))) continue;
             stable.items[stable.len] = candidate;
             stable.len += 1;
         }
-        return stable;
+        for (candidates) |candidate| {
+            if (stable.len >= loop_fact_cap) break;
+            if (self.previous_keys.contains(stableFactKey(candidate))) continue;
+            stable.items[stable.len] = candidate;
+            stable.len += 1;
+        }
+    }
+
+    /// Drop every candidate another candidate implies: the same endpoints,
+    /// a constant no larger, and no assumption the implied one lacks. The
+    /// survivors keep their order.
+    fn dropImpliedCandidates(self: *Pass) ResourceError!void {
+        const candidates = self.stable_candidates.items;
+        self.candidate_order.clearRetainingCapacity();
+        try self.candidate_order.ensureTotalCapacity(self.allocator, candidates.len);
+        for (0..candidates.len) |i| self.candidate_order.appendAssumeCapacity(@intCast(i));
+        std.mem.sortUnstable(u32, self.candidate_order.items, candidates, candidateBefore);
+        self.candidate_implied.clearRetainingCapacity();
+        try self.candidate_implied.appendNTimes(self.allocator, false, candidates.len);
+        var any_implied = false;
+        var group_start: usize = 0;
+        const order = self.candidate_order.items;
+        while (group_start < order.len) {
+            var group_end = group_start + 1;
+            while (group_end < order.len and sameEndpoints(candidates[order[group_start]], candidates[order[group_end]])) group_end += 1;
+            // Within a group the constants ascend, so only earlier members
+            // can imply a later one.
+            for (group_start + 1..group_end) |later| {
+                const implied = candidates[order[later]];
+                for (group_start..later) |earlier| {
+                    if (self.candidate_implied.items[order[earlier]]) continue;
+                    const by = candidates[order[earlier]];
+                    if (by.assumed & ~implied.assumed == 0) {
+                        self.candidate_implied.items[order[later]] = true;
+                        any_implied = true;
+                        break;
+                    }
+                }
+            }
+            group_start = group_end;
+        }
+        if (!any_implied) return;
+        var kept: usize = 0;
+        for (candidates, 0..) |candidate, i| {
+            if (self.candidate_implied.items[i]) continue;
+            candidates[kept] = candidate;
+            kept += 1;
+        }
+        self.stable_candidates.items.len = kept;
+    }
+
+    fn sameEndpoints(a: StableFact, b: StableFact) bool {
+        return std.meta.eql(a.a, b.a) and std.meta.eql(a.b, b.b);
+    }
+
+    /// Candidates ordered by endpoints, then by constant ascending.
+    fn candidateBefore(candidates: []const StableFact, x: u32, y: u32) bool {
+        const a = candidates[x];
+        const b = candidates[y];
+        switch (stableTermOrder(a.a, b.a)) {
+            .lt => return true,
+            .gt => return false,
+            .eq => {},
+        }
+        switch (stableTermOrder(a.b, b.b)) {
+            .lt => return true,
+            .gt => return false,
+            .eq => {},
+        }
+        return a.c < b.c;
+    }
+
+    fn stableTermOrder(a: StableTerm, b: StableTerm) std.math.Order {
+        const tag_a = @backingInt(std.meta.activeTag(a));
+        const tag_b = @backingInt(std.meta.activeTag(b));
+        if (tag_a != tag_b) return std.math.order(tag_a, tag_b);
+        return switch (a) {
+            .value_of, .len_of => |local| std.math.order(@backingInt(local), @backingInt(switch (b) {
+                .value_of, .len_of => |other| other,
+                .constant => unreachable,
+            })),
+            .constant => |value| std.math.order(value, b.constant),
+        };
+    }
+
+    /// Whether two persisted fact lists hold the same facts, with the same
+    /// assumptions and growth, in any order. A list's order follows the
+    /// walk that captured it, and a merge seeded from another merge's
+    /// persisted facts inherits that order a round late, so along a chain
+    /// of joins the order keeps shifting while the facts stand still.
+    fn sameStableFacts(self: *Pass, previous: *const LoopFacts, current: *const LoopFacts) ResourceError!bool {
+        if (previous.len != current.len) return false;
+        self.stable_index.clearRetainingCapacity();
+        for (previous.items[0..previous.len], 0..) |fact, i| {
+            const gop = try self.stable_index.getOrPut(stableFactKey(fact));
+            if (!gop.found_existing) gop.value_ptr.* = @intCast(i);
+        }
+        for (current.items[0..current.len]) |fact| {
+            const at = self.stable_index.get(stableFactKey(fact)) orelse return false;
+            if (!std.meta.eql(previous.items[at], fact)) return false;
+        }
+        return true;
+    }
+
+    /// Keep in `kept` only the facts `other` also holds, each with both
+    /// sides' assumptions.
+    fn intersectStableFacts(self: *Pass, kept: *LoopFacts, other: *const LoopFacts) ResourceError!void {
+        self.stable_index.clearRetainingCapacity();
+        for (other.items[0..other.len], 0..) |fact, i| {
+            const gop = try self.stable_index.getOrPut(stableFactKey(fact));
+            if (!gop.found_existing) gop.value_ptr.* = @intCast(i);
+        }
+        var keep: usize = 0;
+        for (kept.items[0..kept.len]) |fact| {
+            const match = self.stable_index.get(stableFactKey(fact)) orelse continue;
+            kept.items[keep] = fact;
+            kept.items[keep].assumed |= other.items[match].assumed;
+            keep += 1;
+        }
+        kept.len = keep;
     }
 
     /// Capture the current path state into a merge head's meet: facts keep
@@ -2156,59 +2952,49 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+            entry.value_ptr.* = .{ .live = true, .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+        } else if (!entry.value_ptr.live) {
+            entry.value_ptr.live = true;
+            entry.value_ptr.captures = 0;
+            entry.value_ptr.entry_captures = 0;
+            entry.value_ptr.stable.len = 0;
+            entry.value_ptr.entry_stable.len = 0;
         }
         const state = entry.value_ptr;
 
         // An edge arriving from outside the loop is an entry edge; its facts
         // meet separately so loop-invariant relations survive the back
         // edge's inability to derive them before its region is seeded.
-        const mine_stable = self.stabilizeFacts(self.facts.items);
+        const mine_stable = self.stable_scratch;
+        try self.stabilizeFacts(mine_stable, self.facts.items, head);
         if (state.captures == 0) {
-            state.stable = mine_stable;
+            try state.stable.assign(self.allocator, mine_stable);
         } else {
-            var keep_stable: usize = 0;
-            for (state.stable.items[0..state.stable.len]) |fact| {
-                for (mine_stable.items[0..mine_stable.len]) |candidate| {
-                    if (sameStableFact(fact, candidate)) {
-                        state.stable.items[keep_stable] = fact;
-                        state.stable.items[keep_stable].assumed |= candidate.assumed;
-                        keep_stable += 1;
-                        break;
-                    }
-                }
-            }
-            state.stable.len = keep_stable;
+            try self.intersectStableFacts(&state.stable, mine_stable);
         }
         if (self.edgeEntersLoop(head)) {
-            const entry_mine = if (self.body_joins.get(head)) |join_id| self.stabilizeLoopFacts(self.facts.items, join_id) else mine_stable;
+            const entry_mine = if (self.body_joins.get(head)) |join_id| blk: {
+                try self.stabilizeLoopFacts(self.entry_scratch, self.facts.items, join_id);
+                break :blk self.entry_scratch;
+            } else mine_stable;
             if (state.entry_captures == 0) {
-                state.entry_stable = entry_mine;
+                try state.entry_stable.assign(self.allocator, entry_mine);
             } else {
-                var keep_entry: usize = 0;
-                for (state.entry_stable.items[0..state.entry_stable.len]) |fact| {
-                    for (entry_mine.items[0..entry_mine.len]) |candidate| {
-                        if (sameStableFact(fact, candidate)) {
-                            state.entry_stable.items[keep_entry] = fact;
-                            state.entry_stable.items[keep_entry].assumed |= candidate.assumed;
-                            keep_entry += 1;
-                            break;
-                        }
-                    }
-                }
-                state.entry_stable.len = keep_entry;
+                try self.intersectStableFacts(&state.entry_stable, entry_mine);
             }
             state.entry_captures += 1;
         }
 
         if (state.captures == 0) {
-            try state.facts.appendSlice(self.allocator, self.facts.items);
+            try state.facts.ensureTotalCapacityPrecise(self.allocator, self.facts.items.len);
+            state.facts.appendSliceAssumeCapacity(self.facts.items);
             var it = self.path_env.iterator();
             while (it.next()) |kv| {
                 if (state.env.items.len >= merge_env_cap) break;
                 if (!self.captureWorthy(kv.value_ptr.node)) continue;
                 const node = self.nodes.items[kv.value_ptr.node];
                 const len_bounds = try self.localLenBounds(kv.value_ptr.node);
+                const local_lower = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node);
                 try state.env.append(self.allocator, .{
                     .local = kv.key_ptr.*,
                     .root = node.root,
@@ -2216,8 +3002,8 @@ const Pass = struct {
                     .off_hi = node.off_hi,
                     .valid = true,
                     .bounds = try self.reachableBounds(kv.value_ptr.node),
-                    .lower = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node),
-                    .lower_any = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node),
+                    .lower = local_lower,
+                    .lower_any = local_lower,
                     .len_bounds = len_bounds,
                     .len_bounds_any = len_bounds,
                 });
@@ -2256,11 +3042,14 @@ const Pass = struct {
             for (state.facts.items) |fact| {
                 var present = false;
                 var same_origin = false;
-                for (self.facts.items) |mine| {
-                    if (mine.a == fact.a and mine.b == fact.b and mine.c == fact.c) {
+                // The earliest matching path fact decides the origin.
+                var index = if (fact.a < self.fwd_heads.items.len) self.fwd_heads.items[fact.a] else no_fact;
+                while (index != no_fact) {
+                    const mine = self.facts.items[index];
+                    index = self.fact_links.items[index].fwd_prev;
+                    if (mine.b == fact.b and mine.c == fact.c) {
                         present = true;
                         same_origin = std.meta.eql(mine.origin, fact.origin);
-                        break;
                     }
                 }
                 if (present) {
@@ -2388,11 +3177,12 @@ const Pass = struct {
     fn mergeIncomplete(self: *const Pass, head: CFStmtId) bool {
         const expected = self.mergeExpected(head);
         if (expected <= 1) return false;
-        const state = self.merge_states.get(head) orelse return true;
+        const state = self.merge_states.getPtrConst(head) orelse return true;
+        if (!state.live) return true;
         if (self.body_joins.get(head)) |join_id| {
             // A loop body can never see its back edges before it walks; it
             // waits only for its entry edges, whose common facts seed it.
-            if (state.captures < expected) return !self.entryEdgesComplete(join_id, &state);
+            if (state.captures < expected) return !self.entryEdgesComplete(join_id, state);
         }
         return state.captures < expected;
     }
@@ -2405,7 +3195,7 @@ const Pass = struct {
         // in-round meet never completes; bounds persisted by an earlier
         // round stand in for it.
         if (self.body_joins.get(head)) |join_id| {
-            const state = self.merge_states.get(head);
+            const state = self.liveMergeState(head);
             const captures = if (state) |st| st.captures else 0;
             // Values bind before facts materialize against them, so a fact
             // about a local's length or value lands on the node the region
@@ -2430,15 +3220,15 @@ const Pass = struct {
                 // Facts every entry edge captured this round carries about
                 // values the loop never assigns hold throughout the body.
                 if (state) |st| {
-                    if (self.entryEdgesComplete(join_id, &st)) {
-                        try self.seedEnvFromMeet(&st, join_id);
+                    if (self.entryEdgesComplete(join_id, st)) {
+                        try self.seedEnvFromMeet(st, join_id);
                         try self.seedStableFacts(&st.entry_stable);
                     }
                 }
                 return;
             }
         }
-        const state = self.merge_states.getPtr(head) orelse {
+        const state = self.liveMergeState(head) orelse {
             try self.seedMergeEnv(head);
             try self.seedMergeFacts(head);
             return;
@@ -2454,7 +3244,7 @@ const Pass = struct {
         // captured in the head's own region; the stable meet is what edges
         // from other regions agree on. Values bind first so the stable facts
         // materialize against the nodes the region reads.
-        try self.facts.appendSlice(self.allocator, state.facts.items);
+        for (state.facts.items) |fact| try self.addFact(fact);
         try self.seedEnvFromMeet(state, null);
         try self.seedStableFacts(&state.stable);
     }
@@ -2679,18 +3469,19 @@ const Pass = struct {
     /// every entry edge makes it hold throughout the loop.
     fn persistLoopFacts(self: *Pass, join_id: JoinPointId, state: *const MergeState) ResourceError!void {
         if (state.entry_captures == 0) return;
-        const stable = state.entry_stable;
+        const stable = &state.entry_stable;
         if (stable.len == 0) return;
-        const previous = self.loop_facts.get(join_id);
-        if (previous == null or previous.?.len != stable.len) self.new_loop_bounds = true;
-        try self.loop_facts.put(join_id, stable);
+        const entry = try self.loop_facts.getOrPut(join_id);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        if (!entry.found_existing or entry.value_ptr.len != stable.len) self.new_loop_bounds = true;
+        try entry.value_ptr.assign(self.allocator, stable);
     }
 
     /// Seed a loop body region with its persisted entry-invariant facts,
     /// materialized against this round's nodes.
     fn seedLoopFacts(self: *Pass, join_id: JoinPointId) ResourceError!void {
-        const stored = self.loop_facts.get(join_id) orelse return;
-        try self.seedStableFacts(&stored);
+        const stored = self.loop_facts.getPtr(join_id) orelse return;
+        try self.seedStableFacts(stored);
     }
 
     /// This round's node for a stable term: the local's value, the list
@@ -2717,34 +3508,16 @@ const Pass = struct {
 
     /// Stabilize a fact list into round-stable form, keeping facts whose
     /// endpoints all denote something stable.
-    fn stabilizeFacts(self: *const Pass, facts: []const Fact) LoopFacts {
-        var stable = LoopFacts{};
-        for (facts) |fact| {
-            if (stable.len >= loop_fact_cap) break;
-            const a = self.stabilizeTerm(fact.a) orelse continue;
-            const b = self.stabilizeTerm(fact.b) orelse continue;
-            if (a == .constant and b == .constant) continue;
-            const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
-            var known = false;
-            for (stable.items[0..stable.len]) |*have| {
-                if (sameStableFact(have.*, candidate)) {
-                    have.assumed |= candidate.assumed;
-                    known = true;
-                    break;
-                }
-            }
-            if (known) continue;
-            stable.items[stable.len] = candidate;
-            stable.len += 1;
-        }
-        return stable;
+    fn stabilizeFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact, head: CFStmtId) ResourceError!void {
+        try self.stabilizeInto(stable, facts, .path, self.merge_facts.getPtrConst(head));
     }
 
     /// Persist a fully-captured merge's all-edge fact intersection for
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        var stable = state.stable;
-        if (self.merge_facts.get(head)) |previous| {
+        const stable = self.persist_scratch;
+        try stable.assign(self.allocator, &state.stable);
+        if (self.merge_facts.getPtr(head)) |previous| {
             // A fact that comes back weaker round after round is widened
             // away rather than iterated, like a persisted bound.
             for (stable.items[0..stable.len]) |*fact| {
@@ -2762,24 +3535,21 @@ const Pass = struct {
             }
         }
         if (stable.len == 0) return;
-        if (self.merge_facts.get(head)) |previous| {
-            if (previous.len != stable.len) {
-                self.new_loop_bounds = true;
-            } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
-                if (!std.meta.eql(old, new)) {
-                    self.new_loop_bounds = true;
-                    break;
-                }
-            }
-        } else self.new_loop_bounds = true;
-        try self.merge_facts.put(head, stable);
+        const entry = try self.merge_facts.getOrPut(head);
+        if (entry.found_existing) {
+            if (!try self.sameStableFacts(entry.value_ptr, stable)) self.new_loop_bounds = true;
+        } else {
+            entry.value_ptr.* = .{};
+            self.new_loop_bounds = true;
+        }
+        try entry.value_ptr.assign(self.allocator, stable);
     }
 
     /// Seed a region walked before its captures complete with the facts
     /// every edge carried last round.
     fn seedMergeFacts(self: *Pass, head: CFStmtId) ResourceError!void {
-        const stored = self.merge_facts.get(head) orelse return;
-        try self.seedStableFacts(&stored);
+        const stored = self.merge_facts.getPtr(head) orelse return;
+        try self.seedStableFacts(stored);
     }
 
     /// Add round-stable facts to the current path, materialized against
@@ -2798,8 +3568,9 @@ const Pass = struct {
 
     /// Persist a fully-captured merge's env meet in round-stable form.
     fn persistMergeEnv(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        var stable = MergeEnvBounds{};
-        const previous_env = self.merge_env.get(head);
+        const stable = self.env_scratch;
+        stable.len = 0;
+        const previous_env = self.merge_env.getPtr(head);
         for (state.env.items) |meet| {
             if (meet.field != null) continue;
             if (stable.len >= merge_env_persist_cap) break;
@@ -2835,37 +3606,22 @@ const Pass = struct {
             stable.len += 1;
         }
         if (stable.len == 0) return;
-        if (self.merge_env.get(head)) |previous| {
-            if (previous.len != stable.len) {
-                self.new_loop_bounds = true;
-            } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
-                if (old.local != new.local or old.len != new.len or old.lower_len != new.lower_len) {
-                    self.new_loop_bounds = true;
-                    break;
-                }
-                for (old.bounds[0..old.len], new.bounds[0..new.len]) |ob, nb| {
-                    if (!std.meta.eql(ob, nb)) {
-                        self.new_loop_bounds = true;
-                        break;
-                    }
-                }
-                for (old.lower[0..old.lower_len], new.lower[0..new.lower_len]) |ob, nb| {
-                    if (!std.meta.eql(ob, nb)) {
-                        self.new_loop_bounds = true;
-                        break;
-                    }
-                }
-            }
-        } else self.new_loop_bounds = true;
-        try self.merge_env.put(head, stable);
+        const entry = try self.merge_env.getOrPut(head);
+        if (entry.found_existing) {
+            if (!entry.value_ptr.sameBounds(stable)) self.new_loop_bounds = true;
+        } else {
+            entry.value_ptr.* = .{};
+            self.new_loop_bounds = true;
+        }
+        try entry.value_ptr.assign(self.allocator, stable);
     }
 
     /// Seed the env of a region walked before its captures complete from
     /// last round's stabilized meet: each local binds to a fresh value
     /// carrying the upper bounds every edge proved.
     fn seedMergeEnv(self: *Pass, head: CFStmtId) ResourceError!void {
-        const stored = self.merge_env.get(head) orelse return;
-        for (stored.items[0..stored.len]) |entry| {
+        const stored = self.merge_env.getPtr(head) orelse return;
+        for (stored.items[0..stored.len]) |*entry| {
             const node = (try self.metValueNode(entry.local, entry.bounds[0..entry.len], entry.lower[0..entry.lower_len])) orelse continue;
             var used = false;
             used = try self.seedLowerBounds(node, entry.lower[0..entry.lower_len]) or used;
@@ -2939,6 +3695,7 @@ const Pass = struct {
         while (it.next()) |entry| {
             const head = entry.key_ptr.*;
             const state = entry.value_ptr;
+            if (!state.live) continue;
             if (!self.live_pending and state.captures == self.mergeExpected(head) and state.captures >= 2) {
                 try self.persistMergeFacts(head, state);
                 try self.persistMergeEnv(head, state);
@@ -2946,8 +3703,22 @@ const Pass = struct {
             const join_id = self.body_joins.get(head) orelse continue;
             if (!self.live_pending) try self.persistLoopFacts(join_id, state);
             if (state.captures != self.jumpCount(join_id) or state.captures < 2) continue;
+            // Only the join's parameters are seeded from these bounds, so
+            // only theirs are persisted; a candidate for any other local
+            // would sit pending, never assumed, and its admission would
+            // ask for another round for nothing.
+            const join_stmt = self.join_stmts.get(join_id) orelse continue;
+            const params = self.store.getLocalSpan(self.store.getCFStmt(join_stmt).join.params);
             for (state.env.items) |meet| {
                 if (meet.field != null) continue;
+                var is_param = false;
+                for (0..GuardedList.borrowLen(params)) |i| {
+                    if (GuardedList.at(params, i) == meet.local) {
+                        is_param = true;
+                        break;
+                    }
+                }
+                if (!is_param) continue;
                 const key = loopBoundKey(join_id, meet.local);
                 if (self.live_pending) {
                     // Assumption round: the walk ran under unverified seeds,
@@ -2970,8 +3741,11 @@ const Pass = struct {
                     continue;
                 }
 
-                var stable = LoopBounds{ .complete = true };
-                const previous_bounds = self.loop_bounds.get(key);
+                const stable = &self.bounds_scratch;
+                stable.len = 0;
+                stable.lower_len = 0;
+                stable.len_count = 0;
+                const previous_bounds = self.loop_bounds.getPtr(key);
                 const old_items: []const StableBound = if (previous_bounds) |prev| prev.items[0..prev.len] else &.{};
                 const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
                 for (meet.bounds.slice()) |bound| {
@@ -2993,43 +3767,51 @@ const Pass = struct {
                 // Carry the invariant list forward, admitting new length
                 // candidates as pending. A base that already failed
                 // verification is listed as dead rather than re-admitted.
-                if (self.loop_bounds.get(key)) |previous| {
-                    stable.len_items = previous.len_items;
+                if (previous_bounds) |previous| {
+                    @memcpy(stable.len_items[0..previous.len_count], previous.len_items[0..previous.len_count]);
                     stable.len_count = previous.len_count;
                 }
-                const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
-                const any_bounds = if (is_int) meet.lower_any.slice() else meet.len_bounds_any.slice();
-                for (any_bounds) |bound| {
-                    const candidate = self.lenStable(bound) orelse continue;
-                    // A constant bound below one is what any length already
-                    // satisfies, as is a bound slack enough to hold for any
-                    // pair of values; assuming either would cost a round for
-                    // nothing.
-                    if (candidate.base == .constant and candidate.c >= 0) continue;
-                    if (candidate.c >= std.math.maxInt(i64)) continue;
-                    var known = false;
-                    for (stable.len_items[0..stable.len_count]) |item| {
-                        if (sameLenBase(candidate.base, item.base)) {
-                            known = true;
-                            break;
-                        }
-                    }
-                    if (!known and stable.len_count < meet_bound_cap) {
-                        stable.len_items[stable.len_count] = .{
-                            .base = candidate.base,
-                            .c = candidate.c,
-                            .kind = if (is_int) .value else .length,
-                            .status = .pending,
-                            .hit = false,
-                        };
-                        stable.len_count += 1;
-                        self.new_loop_bounds = true;
-                    }
-                }
+                self.admitLenCandidates(&meet, stable);
                 if (stable.len == 0 and stable.lower_len == 0 and stable.len_count == 0) continue;
-                const previous = self.loop_bounds.get(key);
-                if (previous == null or previous.?.len != stable.len or previous.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
-                try self.loop_bounds.put(key, stable);
+                if (previous_bounds == null or previous_bounds.?.len != stable.len or previous_bounds.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
+                const slot = try self.loop_bounds.getOrPut(key);
+                if (!slot.found_existing) slot.value_ptr.* = .{};
+                try slot.value_ptr.assign(self.allocator, stable);
+            }
+        }
+    }
+
+    /// Admit the bounds some captured edge proves for a parameter as pending
+    /// invariants of its loop, into `stored`, whose invariant list has room
+    /// for `meet_bound_cap`; back edges have not re-derived a candidate
+    /// yet, so the bounds every edge proves would miss it. A constant bound
+    /// below one is what any length already satisfies, as is a bound slack
+    /// enough to hold for any pair of values; assuming either would cost a
+    /// round for nothing.
+    fn admitLenCandidates(self: *Pass, meet: *const EnvMeet, stored: *LoopBounds) void {
+        const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
+        const bounds = if (is_int) meet.lower_any.slice() else meet.len_bounds_any.slice();
+        for (bounds) |bound| {
+            const candidate = self.lenStable(bound) orelse continue;
+            if (candidate.base == .constant and candidate.c >= 0) continue;
+            if (candidate.c >= std.math.maxInt(i64)) continue;
+            var known = false;
+            for (stored.len_items[0..stored.len_count]) |item| {
+                if (sameLenBase(candidate.base, item.base)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known and stored.len_count < meet_bound_cap) {
+                stored.len_items[stored.len_count] = .{
+                    .base = candidate.base,
+                    .c = candidate.c,
+                    .kind = if (is_int) .value else .length,
+                    .status = .pending,
+                    .hit = false,
+                };
+                stored.len_count += 1;
+                self.new_loop_bounds = true;
             }
         }
     }
@@ -3132,7 +3914,6 @@ const Pass = struct {
     /// materialized against this round's nodes.
     fn seedLoopParam(self: *Pass, join_id: JoinPointId, local: LocalId) ResourceError!void {
         const stored = self.loop_bounds.getPtr(loopBoundKey(join_id, local)) orelse return;
-        if (!stored.complete) return;
         if (stored.len_count > 0 and trackedIntMax(self.localLayout(local)) == null) {
             try self.seedLenInvariants(stored, local);
             return;
@@ -3266,24 +4047,7 @@ const Pass = struct {
     fn reachableBounds(self: *Pass, node_id: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
         const node = self.nodes.items[node_id];
-        self.query_best.clearRetainingCapacity();
-        try self.query_best.put(node.root, .{ .c = 0 });
-        var steps: usize = 0;
-        var changed = true;
-        while (changed and steps < query_visit_cap) : (steps += 1) {
-            changed = false;
-            for (self.facts.items) |fact| {
-                const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc.c + fact.c);
-                const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?.c) {
-                    if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
-                    self.query_used |= fact.assumed;
-                    changed = true;
-                }
-            }
-        }
+        try self.relaxFresh(node.root, .forward);
         // One bound per reached root, at the tightest slack the walk found.
         var bounds: QueryBounds = .{};
         var it = self.query_best.iterator();
@@ -3382,29 +4146,12 @@ const Pass = struct {
     fn lenLowerBounds(self: *Pass, len_node: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
         const node = self.nodes.items[len_node];
-        self.query_best.clearRetainingCapacity();
-        try self.query_best.put(node.root, .{ .c = -node.off_lo });
-        var steps: usize = 0;
-        var changed = true;
-        while (changed and steps < query_visit_cap) : (steps += 1) {
-            changed = false;
-            for (self.facts.items) |fact| {
-                const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = clampSlack(acc.c + fact.c);
-                const known = self.query_best.get(fact.a);
-                if (known == null or next_acc < known.?.c) {
-                    if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.a, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
-                    self.query_used |= fact.assumed;
-                    changed = true;
-                }
-            }
-        }
+        try self.relaxFresh(node.root, .backward);
         // One bound per reached root, at the tightest slack the walk found.
         var bounds: QueryBounds = .{};
         var it = self.query_best.iterator();
         while (it.next()) |entry| {
-            bounds.append(.{ .root = entry.key_ptr.*, .c = entry.value_ptr.c, .assumed = entry.value_ptr.assumed });
+            bounds.append(.{ .root = entry.key_ptr.*, .c = entry.value_ptr.c - node.off_lo, .assumed = entry.value_ptr.assumed });
         }
         return try self.normalizeLowerBounds(bounds, node);
     }
@@ -3761,6 +4508,7 @@ const Pass = struct {
         const proc = self.store.getProcSpec(proc_id);
         if (proc.body == null or proc.hosted != null) return;
 
+        self.freePersisted();
         self.loop_bounds.clearRetainingCapacity();
         self.progress_epoch = 0;
         self.loop_facts.clearRetainingCapacity();
@@ -3770,6 +4518,7 @@ const Pass = struct {
         while (round < max_rounds) : (round += 1) {
             self.resetRound();
             try self.prescanProc(proc);
+            if (round == 0) try self.reserveMergeStorage();
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.new_loop_bounds = false;
@@ -3812,12 +4561,13 @@ const Pass = struct {
             self.current_region = head;
             self.path_env.clearRetainingCapacity();
             self.undo.clearRetainingCapacity();
-            self.facts.clearRetainingCapacity();
+            self.truncateFacts(0);
             self.no_overflow_facts.clearRetainingCapacity();
             self.frames.clearRetainingCapacity();
-            try self.facts.appendSlice(self.allocator, self.global_facts.items);
+            self.beginSeeding();
+            for (self.global_facts.items) |fact| try self.addFact(fact);
             try self.seedFromMerge(head);
-            try self.dedupeFacts();
+            self.endSeeding();
             try self.frames.append(self.allocator, .{
                 .stmt = head,
                 .facts_len = self.facts.items.len,
@@ -4289,12 +5039,10 @@ const Pass = struct {
                         if (self.constValueOf(node)) |count| {
                             // Unreachable invalid-count arms can still be in
                             // LIR before their guarding switch is eliminated.
+                            // A node's window never rests on an assumption,
+                            // so the count needs no verification round.
                             if (count >= 0 and count <= 16) {
-                                if (self.live_pending) {
-                                    self.deferred_rewrites = true;
-                                } else {
-                                    self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
-                                }
+                                self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
                             }
                         }
                     }
@@ -4625,6 +5373,11 @@ const Pass = struct {
             .str_release_excess_capacity,
             .str_to_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
@@ -5097,6 +5850,7 @@ const Pass = struct {
 
         // `a < b` holds when `a <= b - 1`; it fails when `b <= a`. The
         // remaining kinds reduce to those two shapes.
+        self.proof_assumed = 0;
         const holds = switch (op) {
             .lt => try self.proveLe(a, b, -1),
             .lte => try self.proveLe(a, b, 0),
@@ -5114,9 +5868,9 @@ const Pass = struct {
             .ne => try self.proveLe(a, b, 0) and try self.proveLe(b, a, 0),
         };
 
-        if ((holds or fails) and self.live_pending) {
-            // The proof may rest on an unverified length assumption; defer
-            // the fold and model the compare as undecided this round.
+        if ((holds or fails) and self.proof_assumed != 0) {
+            // The proof rests on an unverified assumption; defer the fold
+            // and model the compare as undecided this round.
             self.deferred_rewrites = true;
         } else if (holds or fails) {
             try self.recordProof(stmt);
@@ -5168,6 +5922,7 @@ const Pass = struct {
 
         if (try self.foldSameSignConstantChain(stmt, s, args, entry, lhs, rhs, operand_layout, max.?)) return;
 
+        self.proof_assumed = 0;
         var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
         if (!proof.proven) {
             if (self.pathNoOverflowFact(entry.operation, lhs, rhs, operand_layout)) |fact| {
@@ -5186,7 +5941,7 @@ const Pass = struct {
         }
 
         if (entry.mode == .overflows) {
-            if ((proof.proven or always_overflows) and self.live_pending) {
+            if ((proof.proven or always_overflows) and self.proof_assumed != 0) {
                 self.deferred_rewrites = true;
             } else if (proof.proven or always_overflows) {
                 const truth: u16 = @intFromBool(always_overflows);
@@ -5218,7 +5973,7 @@ const Pass = struct {
         }
 
         if (proof.proven and entry.mode != .proven_cannot_overflow) {
-            if (self.live_pending) {
+            if (self.proof_assumed != 0) {
                 self.deferred_rewrites = true;
             } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);

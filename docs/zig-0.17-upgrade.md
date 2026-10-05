@@ -9,6 +9,45 @@ steps, and the native, generated Zig glue, and small WASM gates below pass.
 A published roc-bootstrap release is still pending. ReleaseFast measurements
 and their source checkpoint are recorded below.
 
+## Current upstream integration
+
+The integration of upstream `1665a944c27f1be90dc8928d37d64cd4be8ae977`
+into migration checkpoint `693d526824` preserves the new UTF decoding,
+codec row closure, LIR optimization, and Windows SIMD shard changes.
+Both WASM host variants remain declared cached outputs, with explicit
+producer steps for `wasm32` and `wasm32v1`. The loop promoter keeps the
+upstream member grouping and Zig 0.17's canonical integer conversion.
+
+This merged source passes the following x86_64 Linux correctness gates:
+
+| Gate | Result |
+| --- | --- |
+| Build graph, source formatting, actionlint | passed |
+| MiniCI workflow shard inventory | all 12 shards named exactly once |
+| ReleaseSafe LIR promoter tests | 20 passed |
+| ReleaseSafe short wide-UTF tests | 2 passed |
+| ReleaseSafe derived parser/encoder and issue 10824 tests | 14 passed |
+| ReleaseSafe cached WASM fixture preparation | 22/22 steps; both host variants; all 3,069 source fixture files unchanged |
+| Debug Roc compiler and runtime assets | 152/152 steps |
+| New codec CLI fixtures, LSS and Boxy interpreter strategies | four commands; 22 expects passed |
+| Wide-UTF interpreter endian, surrogate, and BOM controls | seven expects passed |
+| Complete Unicode-scalar echo fixture, dev and speed binaries | both build and execute; exact `ok` output |
+| Cached wasm32v1 builtin-routing fixture consumer | build and Bytebox execution pass; `ok` output and balanced allocations |
+
+Exact build commands and logs are retained under
+`/tmp/roc-017-main-integration-validation/`; `commands.json` records the
+toolchain, compatible bundle, cache paths, and selected test filters.
+`runtime/results.json` records all 11 CLI/build/execute controls. The
+Bytebox runner is the previously validated ReleaseSafe binary, whose
+runner, VM, and shim sources are unchanged by this integration.
+
+The full module, parallel evaluator, and performance measurements below
+retain their earlier source checkpoints. This latest-main integration has
+targeted validation and a Debug compiler build; its full parallel evaluator
+and broader platform CI remain pending. The next evaluator run will use the
+complete bootstrap bundle with the corrected host triples. No performance
+comparison was repeated for this merge.
+
 ## Source and compiler correctness
 
 The following module suites passed in ReleaseSafe on x86_64 Linux. Counts
