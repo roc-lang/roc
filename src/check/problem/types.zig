@@ -193,6 +193,16 @@ pub const CapturingLocalTypeEscape = struct {
     type_name: Ident.Idx,
     method_name: Ident.Idx,
     region: base.Region,
+    kind: Kind,
+
+    /// How the type leaves its block.
+    pub const Kind = enum {
+        /// A value of the type leaves the block.
+        value,
+        /// A use outside the block instantiates a generalized definition at
+        /// the type, selecting the type's methods from outside the block.
+        instantiation,
+    };
 };
 
 /// A bare underscore requested compiler generation for an unsupported associated method.

@@ -19594,7 +19594,11 @@ const ProcBodyBuilder = struct {
             return exprDone(try self.lowerCheckedRuntimeError());
         };
         return switch (statement.data) {
-            .decl => |decl| if (decl.recursive and !try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.beginRecursiveValueDecl(decl.pattern, decl.expr, next) else try self.beginDeclPattern(decl.pattern, decl.expr, next),
+            // A dangling annotation, such as a derived method marker of a
+            // type declared in this body, has no runtime value to bind.
+            .decl => |decl| if (self.module.checked_bodies.expr(decl.expr).data == .anno_only)
+                exprDone(next)
+            else if (decl.recursive and !try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.beginRecursiveValueDecl(decl.pattern, decl.expr, next) else try self.beginDeclPattern(decl.pattern, decl.expr, next),
             // A promoted procedure is declared by its own template.
             .promoted_proc => exprDone(next),
             .var_ => |decl| blk: {
@@ -20793,7 +20797,7 @@ const ProcBodyBuilder = struct {
             }
         }
 
-        const continuation = try self.lowerWorkerCallLocalsInto(
+        const continuation = try self.lowerContextWorkerCallLocalsInto(
             task.target,
             call_plan.ret_type,
             operand_types,
@@ -20805,6 +20809,7 @@ const ProcBodyBuilder = struct {
             call_plan.worker,
             hidden_desc_args,
             hidden_dict_args,
+            self.parent.plan.contextArgSlice(call_plan.context_args),
             task.next,
         );
         var chain_items = std.ArrayList(ExprChainItem).empty;
@@ -21450,6 +21455,9 @@ const ProcBodyBuilder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
+        if (self.parent.plan.convertsInPlace(.{ .module = self.module.key, .expr = expr_id })) {
+            return try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next);
+        }
         const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
             boxyLowerInvariant("checked from_quote expression had no compile-time conversion root"));
         return switch (root.payload) {
@@ -21753,6 +21761,9 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         if (try self.lowerPlannedLiteralInto(target, expr_id, checked_ty, next)) |body| return exprDone(body);
+        if (self.parent.plan.convertsInPlace(.{ .module = self.module.key, .expr = expr_id })) {
+            return try self.beginPendingNumeralConversion(target, expr_id, checked_ty, maybe_plan, next);
+        }
         const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
             return exprDone(try self.lowerNumFromNumeralInto(target, maybe_plan, next)));
         return switch (root.payload) {
@@ -31914,11 +31925,6 @@ const ProcBodyBuilder = struct {
         const dispatcher_rep = self.repForType(call.dispatcher_ty);
         const match = self.dictionaryMethodForRep(dispatcher_rep, call.method) orelse
             boxyLowerInvariant("unresolved iterator dispatch reached boxy lowering without a matching dictionary requirement");
-        const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
-            boxyLowerInvariant("unresolved iterator dispatch reached boxy lowering without a bound dictionary local");
-        if (!self.dictionaryBindingIsBound(match.requirement)) {
-            boxyLowerInvariant("unresolved iterator dispatch reached boxy lowering with an unbound dictionary local");
-        }
         const required_method = self.parent.plan.dictionaries.items[@intFromEnum(match.requirement)].fn_name;
 
         const operands = call.argsSlice(self.module.static_dispatch_plans);
@@ -31960,6 +31966,23 @@ const ProcBodyBuilder = struct {
             .iter => plan.iterator_ty,
             .next => plan.step_ty,
         } };
+        if (self.contextLocalForRequirement(match.requirement)) |callable| {
+            // The worker received this protocol method as a context input:
+            // the dispatch calls that callable.
+            const input_index = self.parent.plan.workerContextInput(self.worker_layout.worker, .{ .requirement = match.requirement }) orelse
+                boxyLowerInvariant("boxy iterator context dispatch had no context input in its worker");
+            const input = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)].context)[input_index];
+            const callable_rep = self.repForTypeRef(input.callable_type.?);
+            const callable_function = self.functionChildrenForRep(callable_rep) orelse
+                boxyLowerInvariant("boxy iterator context input was not callable");
+            const continuation = try self.lowerErasedCallWithLocalsInto(target, self.repForTypeRef(ret_type), callable, callable_function, arg_locals, arg_reps, next);
+            return try self.iteratorOperandChain(operands, arg_locals, continuation);
+        }
+        const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
+            boxyLowerInvariant("unresolved iterator dispatch reached boxy lowering without a bound dictionary local");
+        if (!self.dictionaryBindingIsBound(match.requirement)) {
+            boxyLowerInvariant("unresolved iterator dispatch reached boxy lowering with an unbound dictionary local");
+        }
         const method_function_rep = self.dictionaryMethodFunctionRepForCall(call.callable_ty);
         const method_function = self.functionChildrenForRep(method_function_rep) orelse
             boxyLowerInvariant("iterator dictionary dispatch method representation was not a function");
@@ -32025,6 +32048,17 @@ const ProcBodyBuilder = struct {
         continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
         continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
+        return try self.iteratorOperandChain(operands, arg_locals, continuation);
+    }
+
+    /// Lower an iterator dispatch's checked operands into their locals, then
+    /// run `continuation`.
+    fn iteratorOperandChain(
+        self: *ProcBodyBuilder,
+        operands: []const static_dispatch.IteratorDispatchOperand,
+        arg_locals: []const LIR.LocalId,
+        continuation: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
         var chain_items = std.ArrayList(ExprChainItem).empty;
         errdefer chain_items.deinit(self.parent.allocator);
         var index = operands.len;

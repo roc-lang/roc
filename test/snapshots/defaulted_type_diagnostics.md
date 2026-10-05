@@ -391,12 +391,12 @@ written_method = written.foo()
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-dispatch-call (method "encode") (constraint-fn-var 307)
+				(e-dispatch-call (method "encode") (constraint-fn-var 311)
 					(receiver
-						(e-call (constraint-fn-var 306)
+						(e-call (constraint-fn-var 310)
 							(e-lookup-local
 								(p-assign (ident "f")))
-							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 302)
+							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 306)
 								(args
 									(e-num (value "41"))))))
 					(args))))
@@ -418,12 +418,12 @@ written_method = written.foo()
 						(ty-lookup (name "I64") (builtin)))))))
 	(d-let
 		(p-assign (ident "materialized"))
-		(e-call (constraint-fn-var 327)
+		(e-call (constraint-fn-var 331)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
 					(p-assign (ident "n")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 325)
+				(e-dispatch-call (method "plus") (constraint-fn-var 329)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))
@@ -431,13 +431,13 @@ written_method = written.foo()
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "literal_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 335)
+		(e-dispatch-call (method "foo") (constraint-fn-var 339)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args)))
 	(d-let
 		(p-assign (ident "literal_signature"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 352)
+		(e-dispatch-call (method "plus") (constraint-fn-var 356)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
@@ -454,14 +454,14 @@ written_method = written.foo()
 				(e-runtime-error (tag "erroneous_value_expr")))))
 	(d-let
 		(p-assign (ident "string_compare"))
-		(e-dispatch-call (method "is_gt") (constraint-fn-var 391)
+		(e-dispatch-call (method "is_gt") (constraint-fn-var 395)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
 				(e-runtime-error (tag "erroneous_value_expr")))))
 	(d-let
 		(p-assign (ident "string_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 401)
+		(e-dispatch-call (method "foo") (constraint-fn-var 405)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args)))

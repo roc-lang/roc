@@ -4110,6 +4110,11 @@ fn finalizeContextualLocalDispatches(self: *Self) Allocator.Error!void {
             break;
         }
     }
+    // Likewise for a literal conversion the lookup copied out of a scheme.
+    for (self.instantiated_literal_conversion_uses.items) |copied| {
+        if (!self.contextual_local_dispatch_fn_vars.contains(copied.fn_var)) continue;
+        try self.contextual_local_dispatch_exprs.put(self.gpa, copied.use_expr, {});
+    }
 }
 
 /// The dispatch this constraint callable's dispatch was derived from: the
@@ -4232,18 +4237,38 @@ fn rejectEscapingCapturingLocalTypes(self: *Self) Allocator.Error!void {
         // unreachable, and so is every use of its methods.
         const block = local_type.block orelse continue;
         try self.collectLexicalScope(block, &inside);
-        if (try self.findCapturingLocalTypeEscape(local_type.decl, block, &inside)) |escape| {
-            const nominal = self.cir.store.getStatement(local_type.decl).s_nominal_decl;
+        const nominal = self.cir.store.getStatement(local_type.decl).s_nominal_decl;
+        const type_name = self.cir.store.getTypeHeader(nominal.header).relative_name;
+        const escape = try self.findCapturingLocalTypeEscape(local_type.decl, block, &inside);
+        if (escape) |escaping| {
             _ = try self.problems.appendProblem(self.gpa, .{ .capturing_local_type_escape = .{
-                .type_name = self.cir.store.getTypeHeader(nominal.header).relative_name,
+                .type_name = type_name,
                 .method_name = local_type.method,
-                .region = self.cir.store.getExprRegion(escape),
+                .region = self.cir.store.getExprRegion(escaping),
+                .kind = .value,
             } });
-            try self.poisonCapturingLocalTypeSite(escape);
-            try self.poisonCapturingLocalTypeUsesOutside(local_type.decl, block, &inside, true);
-        } else {
-            try self.poisonCapturingLocalTypeUsesOutside(local_type.decl, block, &inside, false);
+            try self.poisonCapturingLocalTypeSite(escaping);
         }
+        var outside_sites: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+        defer outside_sites.deinit(self.gpa);
+        try self.collectCapturingLocalTypeUsesOutside(local_type.decl, block, &inside, &outside_sites);
+        // With no value leaving the block, a use outside it can select one
+        // of the type's methods only by instantiating a generalized
+        // definition at the type: the type leaves its block through that
+        // instantiation, reported at the first such use.
+        if (escape == null and outside_sites.items.len != 0) {
+            var first = outside_sites.items[0];
+            for (outside_sites.items[1..]) |site| {
+                if (self.cir.store.getExprRegion(site).start.offset < self.cir.store.getExprRegion(first).start.offset) first = site;
+            }
+            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_local_type_escape = .{
+                .type_name = type_name,
+                .method_name = local_type.method,
+                .region = self.cir.store.getExprRegion(first),
+                .kind = .instantiation,
+            } });
+        }
+        for (outside_sites.items) |site| try self.poisonCapturingLocalTypeSite(site);
     }
 }
 
@@ -4584,14 +4609,20 @@ fn isModuleTypeDecl(self: *Self, decl: CIR.Statement.Idx) Allocator.Error!bool {
     return self.module_type_decls.contains(decl);
 }
 
-/// Turn into a runtime error every dispatch outside the declaring block whose
-/// lineage selects a capturing method of `decl`. A lineage's evaluation site
-/// is its outermost dispatch with a site: a target's introducing expression,
-/// or the lookup that instantiated the requirement. Inner sites belong to the
-/// generic bodies the outer site supplies with evidence. Only an escape puts a
-/// value of the type outside its block, so such a site exists only when that
-/// escape was reported.
-fn poisonCapturingLocalTypeUsesOutside(self: *Self, decl: CIR.Statement.Idx, block: CIR.Expr.Idx, inside: *const LexicalScope, escaped: bool) Allocator.Error!void {
+/// Collect every live dispatch site outside the declaring block whose lineage
+/// selects a capturing method of `decl`. A lineage's evaluation site is its
+/// outermost dispatch with a site: a target's introducing expression, or the
+/// lookup that instantiated the requirement. Inner sites belong to the generic
+/// bodies the outer site supplies with evidence, so an outer site outside the
+/// block supplies the method from where its declaration context does not
+/// exist.
+fn collectCapturingLocalTypeUsesOutside(
+    self: *Self,
+    decl: CIR.Statement.Idx,
+    block: CIR.Expr.Idx,
+    inside: *const LexicalScope,
+    out: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
     var instantiation_site_by_fn_var: std.AutoHashMapUnmanaged(Var, CIR.Expr.Idx) = .empty;
     defer instantiation_site_by_fn_var.deinit(self.gpa);
     for (self.instantiation_dispatchers.items) |dispatcher| {
@@ -4599,6 +4630,9 @@ fn poisonCapturingLocalTypeUsesOutside(self: *Self, decl: CIR.Statement.Idx, blo
         for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
             try instantiation_site_by_fn_var.put(self.gpa, constraint.fn_var, expr);
         }
+    }
+    for (self.instantiated_literal_conversion_uses.items) |copied| {
+        try instantiation_site_by_fn_var.put(self.gpa, copied.fn_var, copied.use_expr);
     }
 
     var sites: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
@@ -4639,10 +4673,7 @@ fn poisonCapturingLocalTypeUsesOutside(self: *Self, decl: CIR.Statement.Idx, blo
     }
     for (sites.items) |expr| {
         if (!outside.contains(expr)) continue;
-        if (!escaped) {
-            base.invariant("check invariant violated: a capturing local method was dispatched outside its block without a reported escape", .{});
-        }
-        try self.poisonCapturingLocalTypeSite(expr);
+        try out.append(self.gpa, expr);
     }
 }
 

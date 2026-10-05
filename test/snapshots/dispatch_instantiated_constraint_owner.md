@@ -114,7 +114,7 @@ expect f([1].first())
 		(e-lambda
 			(args
 				(p-assign (ident "r")))
-			(e-dispatch-call (method "is_ok") (constraint-fn-var 222)
+			(e-dispatch-call (method "is_ok") (constraint-fn-var 226)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "r"))))
@@ -126,7 +126,7 @@ expect f([1].first())
 				(p-assign (ident "a")))
 			(e-field-access
 				(receiver
-					(e-call (constraint-fn-var 228)
+					(e-call (constraint-fn-var 232)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -134,9 +134,9 @@ expect f([1].first())
 				(segments
 					(segment (name "x") (mode "required"))))))
 	(s-expect
-		(e-call (constraint-fn-var 260)
+		(e-call (constraint-fn-var 264)
 			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-dispatch-call (method "first") (constraint-fn-var 246)
+			(e-dispatch-call (method "first") (constraint-fn-var 250)
 				(receiver
 					(e-list
 						(elems

@@ -1241,6 +1241,8 @@ pub const IteratorCallPlan = struct {
     ret_substitution: CallTypeSubstitution,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
+    /// `ContextArg`s for a context-specialized `worker`, in its input order.
+    context_args: Span = .{},
 };
 
 /// Worker and return substitution for one compile-time-evaluated call.
@@ -1302,6 +1304,10 @@ pub const ProgramPlan = struct {
     allocator: Allocator,
     literal_sites: std.ArrayList(LiteralSite) = .empty,
     literal_evidence: ?LiteralEvidencePlan = null,
+    /// Literals whose direct conversion reaches a local procedure with
+    /// runtime captures: they convert in place at runtime, in the frame
+    /// holding those captures, and have no compile-time conversion.
+    in_place_conversions: std.ArrayList(CheckedExprIdentity) = .empty,
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
     direct_calls: std.ArrayList(DirectCallPlan),
@@ -1469,12 +1475,20 @@ pub const ProgramPlan = struct {
         return null;
     }
 
+    pub fn convertsInPlace(self: *const ProgramPlan, expr: CheckedExprIdentity) bool {
+        for (self.in_place_conversions.items) |candidate| {
+            if (exprRefEql(candidate, expr)) return true;
+        }
+        return false;
+    }
+
     pub fn sortComparatorAbiRep(self: *const ProgramPlan, comparator_rep: TypeRepId) TypeRepId {
         return self.sort_comparator_abis.get(comparator_rep) orelse boxyPlanInvariant("missing planned sort comparator ABI");
     }
 
     pub fn deinit(self: *ProgramPlan) void {
         self.literal_sites.deinit(self.allocator);
+        self.in_place_conversions.deinit(self.allocator);
         if (self.literal_evidence) |*evidence| evidence.deinit(self.allocator);
         self.static_fns.deinit(self.allocator);
         self.recursive_slot_reps.deinit(self.allocator);
@@ -3809,6 +3823,7 @@ pub fn analyzeProgram(
     builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
 
+    try builder.separateContextLiteralSites();
     if (builder.plan.literal_sites.items.len != 0) {
         var literals = LiteralPlanner.init(&builder);
         defer literals.deinit();
@@ -6488,6 +6503,12 @@ const Builder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyPlanInvariant("string literal conversion had an invalid checked dispatch resolution"),
         }
+        // A conversion reaching a local procedure that needs its declaration
+        // context runs where that context exists: in place, at runtime.
+        if (self.conversionNeedsFrameContext(view, plan_id)) {
+            try self.recordInPlaceConversion(view, expr_id);
+            return try actions.append(self.allocator, dispatch_action);
+        }
         const root_id = view.checked_bodies.literalConversionRoot(expr_id) orelse {
             try self.recordLiteralSite(view, expr_id, plan_id);
             return try actions.append(self.allocator, dispatch_action);
@@ -6515,6 +6536,79 @@ const Builder = struct {
         }
     }
 
+    /// Whether a literal's direct conversion selects a local procedure with
+    /// runtime captures, as its target or in that target's nested evidence.
+    fn conversionNeedsFrameContext(self: *Builder, view: ModuleView, plan_id: static_dispatch.StaticDispatchPlanId) bool {
+        if (!self.has_capturing_local_methods) return false;
+        const plans = view.static_dispatch_plans;
+        const node_id = switch (plans.plans[@intFromEnum(plan_id)].resolution) {
+            .direct_closed, .direct_parametric => |direct| direct.evidence,
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return false,
+        };
+        return self.evidenceNodeNeedsFrameContext(view, node_id);
+    }
+
+    /// A literal whose worker received its conversion method as a context
+    /// input converts through that input where it runs, in place, rather
+    /// than through compile-time literal evaluation, which has no frame to
+    /// construct the input from.
+    fn separateContextLiteralSites(self: *Builder) Allocator.Error!void {
+        if (!self.has_capturing_local_methods) return;
+        var kept: usize = 0;
+        for (self.plan.literal_sites.items) |site| {
+            if (self.literalSiteUsesContext(site)) {
+                const expr = site.source;
+                if (!self.plan.convertsInPlace(expr)) try self.plan.in_place_conversions.append(self.allocator, expr);
+                continue;
+            }
+            self.plan.literal_sites.items[kept] = site;
+            kept += 1;
+        }
+        self.plan.literal_sites.shrinkRetainingCapacity(kept);
+    }
+
+    fn literalSiteUsesContext(self: *Builder, site: LiteralSite) bool {
+        const worker = self.plan.workers.items[@intFromEnum(site.worker)];
+        if (worker.context.len == 0) return false;
+        const dispatch = self.plan.dictionaryDispatchPlanForCall(site.source, site.worker) orelse return false;
+        const requirement = dispatch.scheme_requirement orelse blk: {
+            const view = self.moduleForId(site.source.module);
+            const dictionaries = self.plan.representations.items[@intFromEnum(dispatch.dispatcher_rep)].dictionaries;
+            const name = view.canonical_names.?.methodNameText(dispatch.method);
+            for (self.plan.dictionarySlice(dictionaries), 0..) |candidate, offset| {
+                const candidate_view = self.moduleForId(candidate.source_type.module);
+                if (std.mem.eql(u8, name, candidate_view.canonical_names.?.methodNameText(candidate.fn_name)))
+                    break :blk @as(DictionaryRequirementId, @enumFromInt(dictionaries.start + offset));
+            }
+            return false;
+        };
+        return self.plan.workerContextInput(site.worker, .{ .requirement = requirement }) != null;
+    }
+
+    fn recordInPlaceConversion(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        const expr = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
+        if (self.plan.convertsInPlace(expr)) return;
+        try self.plan.in_place_conversions.append(self.allocator, expr);
+    }
+
+    fn evidenceNodeNeedsFrameContext(self: *Builder, view: ModuleView, node_id: static_dispatch.EvidenceNodeId) bool {
+        const plans = view.static_dispatch_plans;
+        const node = plans.evidenceNode(node_id);
+        switch (node.target.kind) {
+            .local_proc => |local| if (!self.nestedCallableHasNoCaptures(.{ .module = view.key, .expr = local.expr })) return true,
+            .procedure, .structural => {},
+        }
+        const nested = switch (node.nested) {
+            .resolved => plans.nestedEvidence(node),
+            .from_callable => return false,
+        };
+        for (nested) |evidence| switch (evidence.resolution) {
+            .direct => |child| if (self.evidenceNodeNeedsFrameContext(view, child)) return true,
+            .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        };
+        return false;
+    }
+
     fn stepNumeralConversion(self: *Builder, actions: *std.ArrayList(PlanAction), site: ConversionSite) Allocator.Error!void {
         const view = site.view;
         const expr_id = site.expr;
@@ -6531,7 +6625,10 @@ const Builder = struct {
                     const owner = methodOwnerForModuleType(view, dispatch.dispatcher_ty) orelse
                         boxyPlanInvariant("direct numeral conversion omitted its checked owner");
                     if (owner == .builtin) return;
-                    try self.recordLiteralSite(view, expr_id, plan_id);
+                    if (self.conversionNeedsFrameContext(view, plan_id))
+                        try self.recordInPlaceConversion(view, expr_id)
+                    else
+                        try self.recordLiteralSite(view, expr_id, plan_id);
                     return try actions.append(self.allocator, .{ .dispatch_call_target = .{ .view = view, .call_expr = expr_id, .plan = plan_id } });
                 },
                 .evidence_dependent => {
@@ -6919,12 +7016,11 @@ const Builder = struct {
             selected.target,
             typeRef(view, site.call.dispatcher_ty),
         );
-        if (lookup.source == .nested_expr and !self.nestedCallableHasNoCaptures(lookup.source.nested_expr)) {
-            boxyPlanInvariant("iterator protocol dispatch selected a local procedure that needs values of its declaration context");
-        }
         // As in ordinary dispatch planning, the worker is the protocol
         // method's generalized declaration while the call boundary is this
-        // edge's instantiation of it.
+        // edge's instantiation of it. A local procedure that needs values of
+        // its declaration context is reached through its specialization
+        // receiving its runtime captures from the calling frame.
         try self.pushPlanActions(actions, &.{
             .{ .ensure_worker = .{
                 .source = lookup.source,
@@ -6953,7 +7049,8 @@ const Builder = struct {
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy iterator call was analyzed outside a worker body");
         if (self.plan.iteratorCallPlanFor(view.key, site.plan_id, site.kind, caller)) |existing| {
-            if (existing.worker != worker or !typeRefEql(existing.source_fn_type, source_fn_type)) {
+            const existing_base = self.plan.workers.items[@intFromEnum(existing.worker)].context_base orelse existing.worker;
+            if (existing_base != worker or !typeRefEql(existing.source_fn_type, source_fn_type)) {
                 boxyPlanInvariant("boxy iterator dispatch plan tried to bind a checked iterator call to two workers");
             }
             return;
@@ -15150,11 +15247,16 @@ const Builder = struct {
     }
 
     fn materializeIteratorCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
-        for (self.plan.iterator_calls.items, 0..) |call, call_index| {
+        var call_index: usize = 0;
+        while (call_index < self.plan.iterator_calls.items.len) : (call_index += 1) {
+            const call = self.plan.iterator_calls.items[call_index];
             const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
             defer self.allocator.free(arg_types);
-            const planned_hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.caller, arg_types, call.ret_type);
-            self.plan.iterator_calls.items[call_index].hidden_dict_args = planned_hidden_dict_args;
+            const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.caller, arg_types, call.ret_type);
+            self.plan.iterator_calls.items[call_index].hidden_dict_args = hidden_dict_args;
+            const context = try self.contextualizeDirectLocalProcCall(call.worker, call.caller, hidden_dict_args);
+            self.plan.iterator_calls.items[call_index].worker = context.worker;
+            self.plan.iterator_calls.items[call_index].context_args = context.args;
         }
     }
 
