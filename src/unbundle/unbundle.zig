@@ -138,15 +138,82 @@ pub const DirExtractWriter = struct {
         .makeDir = makeDir,
     };
 
+    fn isWithinRoot(root: []const u8, resolved: []const u8) bool {
+        if (pathEqual(root, resolved)) return true;
+        if (resolved.len <= root.len) return false;
+        if (!pathEqual(root, resolved[0..root.len])) return false;
+        return std.fs.path.isSep(root[root.len - 1]) or std.fs.path.isSep(resolved[root.len]);
+    }
+
+    fn pathEqual(a: []const u8, b: []const u8) bool {
+        return if (builtin.os.tag == .windows)
+            std.ascii.eqlIgnoreCase(a, b)
+        else
+            std.mem.eql(u8, a, b);
+    }
+
+    /// Walk one component at a time from the extraction handle. Opening each
+    /// component without following links prevents an existing directory link
+    /// from redirecting a later create outside the extraction root.
+    fn openContainedDir(self: *DirExtractWriter, path: []const u8) !std.Io.Dir {
+        var root_buf: [MAX_PATH_BYTES]u8 = undefined;
+        const root_len = try self.dir.realPath(self.io, &root_buf);
+        const root = root_buf[0..root_len];
+
+        var current = try self.dir.openDir(self.io, ".", .{ .follow_symlinks = false });
+        errdefer current.close(self.io);
+
+        var iter = std.mem.tokenizeAny(u8, path, if (builtin.os.tag == .windows) "/\\" else "/");
+        while (iter.next()) |component| {
+            const next = try current.createDirPathOpen(self.io, component, .{
+                .open_options = .{ .follow_symlinks = false },
+            });
+            current.close(self.io);
+            current = next;
+
+            var resolved_buf: [MAX_PATH_BYTES]u8 = undefined;
+            const resolved_len = try current.realPath(self.io, &resolved_buf);
+            if (!isWithinRoot(root, resolved_buf[0..resolved_len])) return error.AccessDenied;
+            const stat = try current.stat(self.io);
+            if (stat.kind != .directory) return error.NotDir;
+        }
+        return current;
+    }
+
     fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
 
-        // Ensure parent directories exist
-        if (std.fs.path.dirname(path)) |parent| {
-            self.dir.createDirPath(self.io, parent) catch return error.FileCreateFailed;
-        }
+        // Keep the filesystem writer safe even if a caller bypasses the tar
+        // entry validator.
+        if (pathHasUnbundleErr(path) != null) return error.FileCreateFailed;
 
-        const file = self.dir.createFile(self.io, path, .{}) catch return error.FileCreateFailed;
+        const parent_path = std.fs.path.dirname(path) orelse "";
+        const parent = self.openContainedDir(parent_path) catch return error.FileCreateFailed;
+        defer parent.close(self.io);
+
+        const name = std.fs.path.basename(path);
+        const file = parent.openFile(self.io, name, .{
+            .mode = .write_only,
+            .follow_symlinks = false,
+            .resolve_beneath = true,
+        }) catch |err| switch (err) {
+            error.FileNotFound => parent.createFile(self.io, name, .{
+                .exclusive = true,
+                .truncate = false,
+                .resolve_beneath = true,
+            }) catch return error.FileCreateFailed,
+            else => return error.FileCreateFailed,
+        };
+        errdefer file.close(self.io);
+
+        var root_buf: [MAX_PATH_BYTES]u8 = undefined;
+        const root_len = self.dir.realPath(self.io, &root_buf) catch return error.FileCreateFailed;
+        var file_buf: [MAX_PATH_BYTES]u8 = undefined;
+        const file_len = file.realPath(self.io, &file_buf) catch return error.FileCreateFailed;
+        if (!isWithinRoot(root_buf[0..root_len], file_buf[0..file_len])) return error.FileCreateFailed;
+        const stat = file.stat(self.io) catch return error.FileCreateFailed;
+        if (stat.kind != .file) return error.FileCreateFailed;
+        file.setLength(self.io, 0) catch return error.FileCreateFailed;
 
         // Append entry first to get stable memory in the array list.
         // We must initialize the writer AFTER appending, because the writer
@@ -156,10 +223,7 @@ pub const DirExtractWriter = struct {
             .file = file,
             .buffer = undefined,
             .writer = undefined,
-        }) catch {
-            file.close(self.io);
-            return error.OutOfMemory;
-        };
+        }) catch return error.OutOfMemory;
 
         // Now initialize the writer with the buffer in the array (stable memory)
         const entry = &self.open_files.items[self.open_files.items.len - 1];
@@ -182,7 +246,9 @@ pub const DirExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
-        self.dir.createDirPath(self.io, path) catch return error.DirectoryCreateFailed;
+        if (pathHasUnbundleErr(path) != null) return error.DirectoryCreateFailed;
+        const dir = self.openContainedDir(path) catch return error.DirectoryCreateFailed;
+        dir.close(self.io);
     }
 };
 
@@ -322,7 +388,9 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         };
     }
 
-    var iter = std.mem.tokenizeScalar(u8, path, '/');
+    // Windows treats both separators as path boundaries. Unix does not treat
+    // backslash as a separator (and rejects it below).
+    var iter = std.mem.tokenizeAny(u8, path, if (builtin.os.tag == .windows) "/\\" else "/");
     while (iter.next()) |component| {
         if (std.mem.eql(u8, component, "..")) {
             return PathValidationError{
@@ -394,6 +462,35 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     }
 
     return null;
+}
+
+fn linkTargetUnbundleErr(target: []const u8) ?PathValidationReason {
+    if (target.len > 0 and (target[0] == '/' or (builtin.os.tag == .windows and target[0] == '\\'))) {
+        return .absolute_path;
+    }
+    if (builtin.os.tag == .windows and target.len >= 2 and target[1] == ':') {
+        return .absolute_path;
+    }
+
+    var iter = std.mem.tokenizeAny(u8, target, if (builtin.os.tag == .windows) "/\\" else "/");
+    while (iter.next()) |component| {
+        if (std.mem.eql(u8, component, "..")) return .path_traversal;
+        if (std.mem.eql(u8, component, ".")) return .current_directory_reference;
+    }
+    return null;
+}
+
+test "symlink targets use native path separators" {
+    const testing = std.testing;
+    if (builtin.os.tag == .windows) {
+        try testing.expect(linkTargetUnbundleErr("a\\..\\x").? == .path_traversal);
+        try testing.expect(linkTargetUnbundleErr("a\\.\\x").? == .current_directory_reference);
+        try testing.expect(linkTargetUnbundleErr("\\outside").? == .absolute_path);
+        try testing.expect(linkTargetUnbundleErr("C:outside").? == .absolute_path);
+    } else {
+        try testing.expect(linkTargetUnbundleErr("a\\..\\x") == null);
+        try testing.expect(linkTargetUnbundleErr("a\\.\\x") == null);
+    }
 }
 
 /// A reader wrapper that hashes all data as it passes through
@@ -730,31 +827,12 @@ pub fn unbundleStream(
             },
             .sym_link => {
                 const link_target = entry.link_name;
-
-                if (link_target.len > 0 and link_target[0] == '/') {
+                if (linkTargetUnbundleErr(link_target)) |reason| {
                     if (error_context) |ctx| {
                         ctx.path = file_path;
-                        ctx.reason = .absolute_path;
+                        ctx.reason = reason;
                     }
                     return error.InvalidPath;
-                }
-
-                var iter = std.mem.tokenizeScalar(u8, link_target, '/');
-                while (iter.next()) |component| {
-                    if (std.mem.eql(u8, component, "..")) {
-                        if (error_context) |ctx| {
-                            ctx.path = file_path;
-                            ctx.reason = .path_traversal;
-                        }
-                        return error.InvalidPath;
-                    }
-                    if (std.mem.eql(u8, component, ".")) {
-                        if (error_context) |ctx| {
-                            ctx.path = file_path;
-                            ctx.reason = .current_directory_reference;
-                        }
-                        return error.InvalidPath;
-                    }
                 }
 
                 // TODO: Add symlink support to ExtractWriter interface

@@ -94,12 +94,68 @@ test "pathHasUnbundleErr - Windows reserved names" {
 }
 
 test "pathHasUnbundleErr - backslash handling" {
-    // On non-Windows, backslash should be rejected
-    if (@import("builtin").os.tag != .windows) {
-        const err = unbundle.pathHasUnbundleErr("path\\with\\backslash");
-        try testing.expect(err != null);
-        try testing.expect(err.?.reason == .contained_backslash_on_unix);
+    const builtin = @import("builtin");
+    const attacks = [_]struct { path: []const u8, windows_reason: unbundle.PathValidationReason }{
+        .{ .path = "..\\x", .windows_reason = .path_traversal },
+        .{ .path = "a\\..\\..\\x", .windows_reason = .path_traversal },
+        .{ .path = "a\\.\\x", .windows_reason = .current_directory_reference },
+        .{ .path = "a/..\\x", .windows_reason = .path_traversal },
+    };
+    for (attacks) |attack| {
+        const err = unbundle.pathHasUnbundleErr(attack.path).?;
+        if (builtin.os.tag == .windows) {
+            try testing.expectEqual(attack.windows_reason, err.reason);
+        } else {
+            try testing.expect(err.reason == .contained_backslash_on_unix);
+        }
     }
+
+    const ordinary = unbundle.pathHasUnbundleErr("path\\with\\backslash");
+    if (builtin.os.tag == .windows) {
+        try testing.expect(ordinary == null);
+    } else {
+        try testing.expect(ordinary.?.reason == .contained_backslash_on_unix);
+    }
+}
+
+test "DirExtractWriter rejects traversal before creating a file or directory" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, io, testing.allocator);
+    defer writer.deinit();
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("../outside.txt"));
+    try testing.expectError(error.DirectoryCreateFailed, writer.extractWriter().makeDir("../outside"));
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("..\\outside.txt"));
+}
+
+test "DirExtractWriter does not follow links outside its root" {
+    if (@import("builtin").os.tag == .windows) return;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "extract");
+    try tmp.dir.createDirPath(io, "outside");
+    const outside_file = try tmp.dir.createFile(io, "outside/secret.txt", .{});
+    try outside_file.writeStreamingAll(io, "unchanged");
+    outside_file.close(io);
+
+    var extract_dir = try tmp.dir.openDir(io, "extract", .{});
+    defer extract_dir.close(io);
+    try extract_dir.symLink(io, "../outside", "linked_dir", .{ .is_directory = true });
+    try extract_dir.symLink(io, "../outside/secret.txt", "linked_file", .{});
+
+    var writer = unbundle.DirExtractWriter.init(extract_dir, io, testing.allocator);
+    defer writer.deinit();
+    try testing.expectError(error.DirectoryCreateFailed, writer.extractWriter().makeDir("linked_dir/nested"));
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("linked_dir/new.txt"));
+    try testing.expectError(error.FileCreateFailed, writer.extractWriter().createFile("linked_file"));
+
+    const content = try tmp.dir.readFileAlloc(io, "outside/secret.txt", testing.allocator, .limited(100));
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("unchanged", content);
 }
 
 test "validateBase58Hash - valid and invalid hashes" {
@@ -195,6 +251,13 @@ test "DirExtractWriter - basic functionality" {
     const content = try tmp.dir.readFileAlloc(io, "test.txt", testing.allocator, .limited(1024));
     defer testing.allocator.free(content);
     try testing.expectEqualStrings("Test content", content);
+
+    const replacement_writer = try writer.extractWriter().createFile("test.txt");
+    try replacement_writer.writeAll("New");
+    try writer.extractWriter().finishFile();
+    const replaced = try tmp.dir.readFileAlloc(io, "test.txt", testing.allocator, .limited(1024));
+    defer testing.allocator.free(replaced);
+    try testing.expectEqualStrings("New", replaced);
 
     // Create a file in a subdirectory (should create parent dirs)
     const file_writer2 = try writer.extractWriter().createFile("deep/nested/file.txt");
