@@ -5479,7 +5479,7 @@ pub fn build(b: *std.Build) void {
         );
     }
 
-    test_fixtures.addUpdateStep();
+    test_fixtures.addUpdateStep(&.{build_test_hosts_step});
 
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.

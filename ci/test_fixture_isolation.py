@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const second = b.addWriteFiles();
     plan.copy(first, generated.add("first.a", tag), "test/first/platform/targets/native/libhost.a");
     plan.copy(second, generated.add("second.a", tag), "test/second/platform/targets/native/libhost.a");
+    plan.addUpdateStep(&.{&first.step});
     const verify = b.step("verify", "Check private fixture roots");
     for ([_]*std.Build.Step{ &first.step, &second.step }, 0..) |host, index| {
         const deps = &.{host};
@@ -122,6 +123,13 @@ def main() -> None:
         assert (root / "test/input.roc").read_text() == "fixture input\n"
         assert (target / "libhost.a").read_text() == "stale checkout host"
         assert not (root / "test/generated-app").exists()
+        publication = subprocess.run(
+            [zig, "build", "update-test-fixtures", "-Dtag=published", "--cache-poison=disallowed"],
+            cwd=root, capture_output=True, text=True)
+        assert publication.returncode == 0, publication.stdout + publication.stderr
+        assert (target / "libhost.a").read_text() == "published"
+        assert not (root / "test/second/platform/targets/native/libhost.a").exists()
+        assert (root / "test/input.roc").read_text() == "fixture input\n"
     print("Concurrent fixture graph isolation checks passed.")
 
 
