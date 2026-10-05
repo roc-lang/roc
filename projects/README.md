@@ -72,9 +72,6 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/nodestore-serde-enrollment.md](small/nodestore-serde-enrollment.md)—
-  comptime-drive NodeStore's eight hand-enumerated field lists;
-  derive the parse-side node counts.
 - [small/frontend-name-and-sentinel-single-sourcing.md](small/frontend-name-and-sentinel-single-sourcing.md)—
   six frontend seams: duplicate NumKind map, hardcoded Bool
   discriminant, method-name literals, hand-written builtin-name maps,
