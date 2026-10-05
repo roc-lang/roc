@@ -258,7 +258,7 @@ pub const SyntaxChecker = struct {
         defer self.allocator.free(path);
 
         const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch
-            try self.allocator.dupeZ(u8, path);
+            try self.allocator.dupeSentinel(u8, path, 0);
 
         return .{
             .absolute_path = absolute_path,
@@ -1331,7 +1331,7 @@ pub const SyntaxChecker = struct {
         if (std.meta.activeTag(content) == .alias) {
             const source_decl = content.alias.source_decl.toOptional() orelse return null;
             return .{
-                .owner = @enumFromInt(source_decl),
+                .owner = @fromBackingInt(@intCast(source_decl)),
                 .type_ident = content.alias.ident.ident_idx,
                 .origin_module = content.alias.origin_module,
                 .builtin_origin = content.alias.source_decl.originIsBuiltin(),
@@ -1341,7 +1341,7 @@ pub const SyntaxChecker = struct {
         const nominal = content.structure.nominal_type;
         const source_decl = nominal.sourceDeclOptional() orelse return null;
         return .{
-            .owner = @enumFromInt(source_decl),
+            .owner = @fromBackingInt(@intCast(source_decl)),
             .type_ident = nominal.ident.ident_idx,
             .origin_module = nominal.origin_module,
             .builtin_origin = nominal.originIsBuiltin(),
@@ -1588,7 +1588,7 @@ pub const SyntaxChecker = struct {
             }
 
             const expr_idx = def.expr;
-            const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+            const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
             const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
             if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
@@ -1642,7 +1642,7 @@ pub const SyntaxChecker = struct {
             // Handle import statements specially - navigate to the imported module or exposed item
             if (stmt == .s_import) {
                 const import_stmt = stmt.s_import;
-                const import_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+                const import_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(stmt_idx)));
                 const import_region = module_env.store.getRegionAt(import_node_idx);
 
                 if (cir_queries.regionContainsOffset(import_region, target_offset)) {
@@ -1661,7 +1661,7 @@ pub const SyntaxChecker = struct {
                     // Check if the click is on one of the exposed items
                     const exposed_slice = module_env.store.sliceExposedItems(import_stmt.exposes);
                     for (exposed_slice) |exposed_item_idx| {
-                        const exposed_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(exposed_item_idx));
+                        const exposed_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(exposed_item_idx)));
                         const item_region = module_env.store.getRegionAt(exposed_node_idx);
                         if (cir_queries.regionContainsOffset(item_region, target_offset)) {
                             const exposed_item = module_env.store.getExposedItem(exposed_item_idx);
@@ -1700,7 +1700,7 @@ pub const SyntaxChecker = struct {
             const stmt_parts = module_lookup.getStatementParts(stmt);
 
             if (stmt_parts.expr) |expr_idx| {
-                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
                 const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
@@ -1711,7 +1711,7 @@ pub const SyntaxChecker = struct {
             }
 
             if (stmt_parts.expr2) |expr_idx| {
-                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
                 const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
@@ -1733,7 +1733,7 @@ pub const SyntaxChecker = struct {
             if (expr_tag == .e_lookup_local) {
                 const lookup = expr.e_lookup_local;
                 // Get the pattern's region - that's where it's defined
-                const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
+                const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(lookup.pattern_idx)));
                 const def_region = module_env.store.getRegionAt(pattern_node_idx);
                 const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
                 const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
@@ -1747,7 +1747,7 @@ pub const SyntaxChecker = struct {
             }
             if (expr_tag == .e_lookup_external) {
                 const lookup = expr.e_lookup_external;
-                const import_idx_int = @intFromEnum(lookup.module_idx);
+                const import_idx_int = @backingInt(lookup.module_idx);
                 if (import_idx_int >= module_env.imports.imports.len()) return null;
 
                 const string_idx = module_env.imports.imports.items.items[import_idx_int];
@@ -1775,11 +1775,11 @@ pub const SyntaxChecker = struct {
             if (expr_tag == .e_lookup_associated) {
                 const lookup = expr.e_lookup_associated;
                 const member_name = module_env.getIdentText(lookup.item_ident);
-                const import_idx_int = @intFromEnum(lookup.module_idx);
+                const import_idx_int = @backingInt(lookup.module_idx);
                 if (import_idx_int < module_env.imports.imports.len()) {
                     const string_idx = module_env.imports.imports.items.items[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);
-                    const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                    const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
                     const expr_region = module_env.store.getRegionAt(expr_node_idx);
                     const region_text = module_env.getSource(expr_region);
                     if (std.mem.find(u8, region_text, ".")) |dot_pos| {
@@ -2028,7 +2028,7 @@ pub const SyntaxChecker = struct {
         // 1. If the tag reference carries an explicit external nominal import identity,
         // navigate directly to that imported module and declaration.
         if (tag_ref.nominal_external) |nom_ext| {
-            const import_idx_int = @intFromEnum(nom_ext.module_idx);
+            const import_idx_int = @backingInt(nom_ext.module_idx);
             if (import_idx_int < module_env.imports.imports.len()) {
                 const string_idx = module_env.imports.imports.items.items[import_idx_int];
                 const module_name = module_env.common.getString(string_idx);
@@ -2040,10 +2040,10 @@ pub const SyntaxChecker = struct {
                     env.findModuleByNameInPackage(importing_pkg, module_name);
                 if (mod_state_opt) |mod_state| {
                     if (mod_state.moduleEnv()) |target_mod_env| {
-                        const target_node_idx: CIR.Node.Idx = @enumFromInt(nom_ext.target_node_idx);
+                        const target_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(nom_ext.target_node_idx));
                         const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
                         if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
-                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(@intFromEnum(target_node_idx)));
+                            const stmt = target_mod_env.store.getSourceStatement(@fromBackingInt(@intCast(@backingInt(target_node_idx))));
                             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                                 .s_alias_decl => |a| a.anno,
                                 .s_nominal_decl => |n| n.anno,
@@ -2149,7 +2149,7 @@ pub const SyntaxChecker = struct {
             if (origin_info.origin_module == module_env.selfModuleIdentity()) {
                 // Defined in current module
                 if (origin_info.source_decl.toOptional()) |stmt_num| {
-                    const stmt = module_env.store.getSourceStatement(@enumFromInt(stmt_num));
+                    const stmt = module_env.store.getSourceStatement(@fromBackingInt(@intCast(stmt_num)));
                     const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                         .s_alias_decl => |a| a.anno,
                         .s_nominal_decl => |n| n.anno,
@@ -2205,7 +2205,7 @@ pub const SyntaxChecker = struct {
                 if (findModuleByContentIdentity(build_env, origin_hash)) |target_mod_state| {
                     if (target_mod_state.moduleEnv()) |target_mod_env| {
                         if (origin_info.source_decl.toOptional()) |stmt_num| {
-                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(stmt_num));
+                            const stmt = target_mod_env.store.getSourceStatement(@fromBackingInt(@intCast(stmt_num)));
                             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                                 .s_alias_decl => |a| a.anno,
                                 .s_nominal_decl => |n| n.anno,
@@ -2413,7 +2413,7 @@ pub const SyntaxChecker = struct {
         const maybe_def = module_lookup.findDefinitionByName(mod_env, member);
 
         if (maybe_def) |def_info| {
-            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_info.pattern_idx));
+            const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(def_info.pattern_idx)));
             const def_region = mod_env.store.getRegionAt(pattern_node_idx);
             return cir_queries.regionToRange(mod_env, def_region);
         }
@@ -2589,7 +2589,7 @@ pub const SyntaxChecker = struct {
                 };
             },
             .external => |ext| {
-                const import_idx_int = @intFromEnum(ext.module_idx);
+                const import_idx_int = @backingInt(ext.module_idx);
                 if (import_idx_int < module_env.imports.imports.len()) {
                     const string_idx = module_env.imports.imports.items.items[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);
@@ -2598,7 +2598,7 @@ pub const SyntaxChecker = struct {
                 return self.findModuleByName(build_env, doc_path, type_name, oom);
             },
             .pending => |pend| {
-                const import_idx_int = @intFromEnum(pend.module_idx);
+                const import_idx_int = @backingInt(pend.module_idx);
                 if (import_idx_int < module_env.imports.imports.len()) {
                     const string_idx = module_env.imports.imports.items.items[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);
@@ -3450,7 +3450,7 @@ pub const SyntaxChecker = struct {
 
         var target_binding: ?scope_map.Binding = null;
         for (scopes.bindings.items) |binding| {
-            if (@intFromEnum(binding.pattern_idx) == @intFromEnum(target_pattern)) {
+            if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) {
                 target_binding = binding;
                 break;
             }
@@ -3465,7 +3465,7 @@ pub const SyntaxChecker = struct {
         const target = target_binding orelse return .scope_unavailable;
 
         for (scopes.bindings.items) |binding| {
-            if (@intFromEnum(binding.pattern_idx) == @intFromEnum(target_pattern)) continue;
+            if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) continue;
             if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
             if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
                 return .taken;

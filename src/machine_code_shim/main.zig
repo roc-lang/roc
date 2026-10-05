@@ -616,8 +616,8 @@ fn resolveHostedSymbol(name: []const u8) ?usize {
 
 /// Resolve a Boxy runtime wrapper to the linked in-process implementation.
 fn resolveBoxyShimFunction(name: []const u8) ?usize {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
         const symbol_name = comptime boxy_fn.symbolName();
         if (std.mem.eql(u8, name, symbol_name)) {
             return @intFromPtr(&@field(eval.boxy_abi, symbol_name));
@@ -714,7 +714,7 @@ fn executeDevEntrypoint(
     arg_ptr: ?*anyopaque,
 ) void {
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.panic("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;
@@ -759,14 +759,14 @@ fn acquireDevProgramRef(program: *DevProgram) void {
         hot_reload.retainDescriptor(descriptor);
         return;
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
         }
         unreachable;
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
-    if (builtin.mode == .Debug and previous == 0) {
+    if (builtin.mode == .debug and previous == 0) {
         std.debug.panic("machine-code shim invariant violated: acquired unreferenced dev program", .{});
     }
 }
@@ -775,13 +775,13 @@ fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
         }
         unreachable;
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
-        if (builtin.mode == .Debug and previous == 0) {
+        if (builtin.mode == .debug and previous == 0) {
             std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
         }
     }
@@ -795,13 +795,13 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
         }
         unreachable;
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
-        if (builtin.mode == .Debug and previous == 0) {
+        if (builtin.mode == .debug and previous == 0) {
             std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
         }
     }
@@ -1054,8 +1054,8 @@ test "loaded dev program borrows direct shared image metadata" {
 }
 
 test "shim resolves every Boxy runtime wrapper" {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
         const symbol_name = comptime boxy_fn.symbolName();
         try std.testing.expectEqual(
             @intFromPtr(&@field(eval.boxy_abi, symbol_name)),
@@ -1065,7 +1065,7 @@ test "shim resolves every Boxy runtime wrapper" {
 }
 
 test "data relocations patch data pointers" {
-    var data = [_]u8{0} ** (@sizeOf(usize) + 4);
+    var data = @as([(@sizeOf(usize) + 4)]u8, @splat(0));
     const source_name = "roc__source";
     const target_name = "roc__target";
     const symbol_names = source_name ++ target_name;
@@ -1090,7 +1090,7 @@ test "data relocations patch data pointers" {
             .data_offset = 0,
             .symbol = .{ .offset = source_name.len, .len = target_name.len },
             .addend = 2,
-            .target_kind = @intFromEnum(RunImage.StaticDataTargetKind.address),
+            .target_kind = @backingInt(RunImage.StaticDataTargetKind.address),
         },
     };
     const view = RunImage.ProgramView{
@@ -1122,7 +1122,7 @@ test "data relocations patch data pointers" {
 
 test "function-pointer data relocations patch generated Roc code pointers" {
     var code = [_]u8{ 0, 0, 0, 0 };
-    var data = [_]u8{0} ** @sizeOf(usize);
+    var data = @as([@sizeOf(usize)]u8, @splat(0));
     const proc_name = "roc__p2a";
     const code_symbols = [_]RunImage.CodeSymbol{
         .{
@@ -1135,7 +1135,7 @@ test "function-pointer data relocations patch generated Roc code pointers" {
             .data_offset = 0,
             .symbol = .{ .offset = 0, .len = proc_name.len },
             .addend = 0,
-            .target_kind = @intFromEnum(RunImage.StaticDataTargetKind.function_pointer),
+            .target_kind = @backingInt(RunImage.StaticDataTargetKind.function_pointer),
         },
     };
     const view = RunImage.ProgramView{

@@ -15,7 +15,7 @@ pub const max_roc_alignment: std.mem.Alignment = .@"16";
 /// Helper for creating an Io.Writer.Allocating from a deprecated Managed(u8).
 /// Zig 0.16 removed Managed.writer(); this bridges the gap.
 pub fn managedWriter(managed: *std.array_list.Managed(u8)) std.Io.Writer.Allocating {
-    var unmanaged: std.ArrayList(u8) = .{ .items = managed.items, .capacity = managed.capacity };
+    var unmanaged: std.ArrayList(u8) = .{ .items = managed.items, .capacity = managed.capacity, .pointer_stability = .{} };
     return std.Io.Writer.Allocating.fromArrayList(managed.allocator, &unmanaged);
 }
 
@@ -82,7 +82,7 @@ pub const NonEmptyRange = struct {
     pub fn toRange(self: NonEmptyRange, comptime Idx: type) SafeRange(Idx) {
         std.debug.assert(self.count > 0);
         return .{
-            .start = @enumFromInt(self.start),
+            .start = @fromBackingInt(@intCast(self.start)),
             .count = self.count,
         };
     }
@@ -109,7 +109,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn get(self: Self, key: K) ?V {
-            const idx = @intFromEnum(key);
+            const idx = @backingInt(key);
             if (idx >= self.entries.len) return null;
 
             const value = self.entries[idx];
@@ -128,7 +128,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) Allocator.Error!void {
-            const idx = @intFromEnum(key);
+            const idx = @backingInt(key);
 
             // Grow if necessary
             if (idx >= self.entries.len) {

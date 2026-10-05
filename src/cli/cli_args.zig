@@ -116,7 +116,12 @@ pub const ReplaceDepArg = struct {
 /// The `--replace-dep` occurrences of one invocation. Held by value so
 /// argument structs stay copyable without owning an allocation.
 pub const ReplaceDepArgs = struct {
-    items: [max]ReplaceDepArg = [_]ReplaceDepArg{.{ .old = "", .new = "" }} ** max,
+    items: [max]ReplaceDepArg = repeated: {
+        const pattern = [_]ReplaceDepArg{.{ .old = "", .new = "" }};
+        var result: [pattern.len * (max)]@TypeOf(pattern[0]) = undefined;
+        for (0..(max)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    },
     len: usize = 0,
 
     pub const max: usize = 32;

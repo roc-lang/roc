@@ -15,19 +15,19 @@ const LIR = @import("lir_core").LIR;
 const names = check.CheckedNames;
 
 fn unionFieldCount(comptime T: type) comptime_int {
-    return @typeInfo(T).@"union".fields.len;
+    return @typeInfo(T).@"union".field_names.len;
 }
 
 fn structFieldType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
+    inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, name)) return field_type;
     }
     @compileError("missing struct field: " ++ name);
 }
 
 fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"union".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
+    inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, name)) return field_type;
     }
     @compileError("missing union field: " ++ name);
 }
@@ -304,6 +304,7 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
         .@"anyframe",
         .vector,
         .enum_literal,
+        .spirv,
         => {},
     }
 }
@@ -1601,8 +1602,8 @@ test "each primitive mapping has exactly one definition" {
         try expectNotContains(source, "fn builtinOwnerFromPrimitive(");
     }
     const owner_fn = @typeInfo(@TypeOf(check.CheckedModule.builtinOwnerForPrimitive)).@"fn";
-    try std.testing.expect(owner_fn.params.len == 1);
-    try std.testing.expect(owner_fn.params[0].type.? == check.CheckedModule.CheckedPrimitive);
+    try std.testing.expect(owner_fn.param_types.len == 1);
+    try std.testing.expect(owner_fn.param_types[0].? == check.CheckedModule.CheckedPrimitive);
     try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
 }
 

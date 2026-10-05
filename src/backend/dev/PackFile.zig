@@ -153,13 +153,13 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 },
                 .data => |data_kind| {
                     try writer.byte(1);
-                    try writer.byte(@intFromEnum(data_kind));
+                    try writer.byte(@backingInt(data_kind));
                 },
             }
             try writer.str(names.of(relocation.name));
             // A reference to carried program data now names it by content.
             const scope: ProcArtifact.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
-            try writer.byte(@intFromEnum(scope));
+            try writer.byte(@backingInt(scope));
         }
         try writer.word(@intCast(artifact.data.len));
         for (artifact.data) |item| {
@@ -515,7 +515,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
                 .{ .name = try a.dupe(u8, "roc__hab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
                 .{
                     .name = try a.dupe(u8, "roc__hcd"),
-                    .bytes = try a.dupe(u8, "\x00" ** 16),
+                    .bytes = try a.dupe(u8, @as([16]u8, @splat('\x00'))),
                     .alignment = 8,
                     .symbol_offset = 0,
                     .relocations = try a.dupe(ProcArtifact.DataRelocation, &.{
@@ -540,7 +540,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
     defer set.deinit();
     const specs = [_]SpecEntry{
         .{
-            .key = [_]u8{0xab} ** 32,
+            .key = @as([32]u8, @splat(0xab)),
             .artifact = 0,
             .rc_borrowed_params = 0b101,
             .rc_ret_borrowed = true,
@@ -626,7 +626,7 @@ test "pack writes program-local constants and every reference to them under cont
                 .data = &.{
                     .{
                         .name = "roc__d1",
-                        .bytes = "\x00" ** 8,
+                        .bytes = @as([8]u8, @splat('\x00')),
                         .alignment = 8,
                         .symbol_offset = 0,
                         .relocations = &.{.{ .offset = 0, .name = "roc__d1_1", .addend = 16, .function = false }},

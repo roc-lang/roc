@@ -275,7 +275,7 @@ const Policy = struct {
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
 
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         std.debug.panic("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;

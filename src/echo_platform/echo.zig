@@ -97,7 +97,7 @@ const ExtraFileSlot = struct {
     }
 };
 
-var extra_files: [MAX_FILES]ExtraFileSlot = [_]ExtraFileSlot{.{}} ** MAX_FILES;
+var extra_files: [MAX_FILES]ExtraFileSlot = @as([MAX_FILES]ExtraFileSlot, @splat(.{}));
 var extra_file_count: usize = 0;
 
 // Static buffer for copying source before FBA reset (avoids 64KB stack allocation in WASM).

@@ -123,7 +123,7 @@ pub const Store = struct {
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
     pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.Idx {
-        const idx: Problem.Idx = @enumFromInt(self.problems.items.len);
+        const idx: Problem.Idx = @fromBackingInt(@intCast(self.problems.items.len));
         try self.problems.append(gpa, problem);
         return idx;
     }
@@ -156,7 +156,7 @@ pub const Store = struct {
             pending.site = site;
             return;
         }
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
         }
         unreachable;
@@ -174,7 +174,7 @@ pub const Store = struct {
             pending.mode = .empirical;
             return;
         }
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
         }
         unreachable;
@@ -331,7 +331,7 @@ pub const Store = struct {
     }
 
     pub fn get(self: *Self, idx: Problem.Idx) Problem {
-        return self.problems.items[@intFromEnum(idx)];
+        return self.problems.items[@backingInt(idx)];
     }
 
     pub fn len(self: *Self) usize {

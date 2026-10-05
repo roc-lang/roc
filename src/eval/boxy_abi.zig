@@ -60,10 +60,10 @@ pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 /// Build the explicit function table consumed by in-process machine code.
 pub fn nativeFnTable() BoxyNativeFnTable {
     var table: BoxyNativeFnTable = undefined;
-    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
-        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
+        const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
         const name = comptime boxy_fn.symbolName();
-        table[field.value] = @intFromPtr(&@field(@This(), name));
+        table[field_value] = @intFromPtr(&@field(@This(), name));
     }
     return table;
 }
@@ -404,7 +404,7 @@ const AbiHooks = struct {
             },
             .local => |local| blk: {
                 for (self.g.capture_ids, self.g.capture_descs) |capture_id, capture_desc| {
-                    if (capture_id == @intFromEnum(local)) {
+                    if (capture_id == @backingInt(local)) {
                         break :blk capture_desc orelse abiCrashMissingDescriptorCapture(self.g, local, true);
                     }
                 }
@@ -435,7 +435,7 @@ const AbiHooks = struct {
             // binds their values while it materializes the template.
             .local => |local| blk: {
                 for (self.g.capture_ids, self.g.capture_descs) |capture_id, capture_value| {
-                    if (capture_id == @intFromEnum(local)) {
+                    if (capture_id == @backingInt(local)) {
                         const value = capture_value orelse abiCrash(self.g, "template dictionary capture was null");
                         break :blk @ptrCast(@alignCast(value));
                     }
@@ -459,7 +459,7 @@ const AbiHooks = struct {
             method,
             .{ .value = value, .layout = value_layout, .source_desc = desc },
         );
-        const registered = self.g.procs.get(@intFromEnum(prepared.proc)) orelse return error.RuntimeError;
+        const registered = self.g.procs.get(@backingInt(prepared.proc)) orelse return error.RuntimeError;
         if (prepared.arg_values.len == 0) return error.RuntimeError;
         const argument_is_borrowed = (prepared.borrowed_args & 1) != 0;
         const worker_borrows_argument = (registered.borrowed_params & 1) != 0;
@@ -636,7 +636,7 @@ fn abiCrashMissingDescriptorCapture(
 ) noreturn {
     var message: CrashMessage = .{};
     message.str("boxy runtime descriptor capture local ");
-    message.uint(@intFromEnum(local));
+    message.uint(@backingInt(local));
     message.str(if (supplied_null) " was null" else " was missing");
     message.str("; supplied capture ids=");
     message.uintList(g.capture_ids);
@@ -694,7 +694,7 @@ fn abiCrashDuplicateErasedArgDescriptor(
 }
 
 fn layoutIdx(raw: u32) layout_mod.Idx {
-    return @enumFromInt(raw);
+    return @fromBackingInt(@intCast(raw));
 }
 
 fn valueAt(ptr: ?[*]const u8) Value {
@@ -935,7 +935,7 @@ fn erasedInvocationCaptureWithKeys(
         }
         const desc = descs[desc_index] orelse
             abiCrashNullErasedArgDescriptor(g, registered.proc_id, offset.key);
-        const payload_index = @intFromEnum(desc.payload_layout);
+        const payload_index = @backingInt(desc.payload_layout);
         if (payload_index >= g.runtime.layout_store.layoutCount()) {
             abiCrash(g, "erased invocation descriptor payload layout");
         }
@@ -1200,7 +1200,7 @@ pub fn roc_boxy_box(
         layoutIdx(payload_layout),
         source_desc orelse payload_desc,
         payload_desc,
-        @enumFromInt(payload_mode),
+        @fromBackingInt(@intCast(payload_mode)),
         layoutIdx(target_layout),
     ) catch abiCrash(g, "box");
     writeResult(g, out, boxed.value, layoutIdx(target_layout));
@@ -1260,7 +1260,7 @@ pub fn roc_boxy_unbox(
         source_desc,
         target_desc,
         layoutIdx(target_layout),
-        @enumFromInt(source_mode),
+        @fromBackingInt(@intCast(source_mode)),
     ) catch abiCrash(g, "unbox");
     writeResult(g, out, unboxed.value, layoutIdx(target_layout));
     out_desc.* = unboxed.desc;
@@ -1279,16 +1279,16 @@ pub fn roc_boxy_adapt(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    const adapter: LIR.BoxyAdapterId = @enumFromInt(adapter_id);
+    const adapter: LIR.BoxyAdapterId = @fromBackingInt(@intCast(adapter_id));
     const planned = g.runtime.requireBoxyAdapter(adapter);
     if (source_desc) |desc| {
-        const payload_index = @intFromEnum(desc.payload_layout);
+        const payload_index = @backingInt(desc.payload_layout);
         if (payload_index >= g.runtime.layout_store.layoutCount()) {
             abiCrash(g, "adapter source descriptor payload layout");
         }
     }
     if (target_desc) |desc| {
-        const payload_index = @intFromEnum(desc.payload_layout);
+        const payload_index = @backingInt(desc.payload_layout);
         if (payload_index >= g.runtime.layout_store.layoutCount()) {
             abiCrash(g, "adapter target descriptor payload layout");
         }
@@ -1299,7 +1299,7 @@ pub fn roc_boxy_adapt(
         source_desc,
         target_desc,
         adapter,
-        @enumFromInt(source_mode),
+        @fromBackingInt(@intCast(source_mode)),
     ) catch abiCrash(g, "adapt");
     writeResult(g, out, adapted.value, planned.target_layout);
     out_desc.* = adapted.desc;
@@ -1323,11 +1323,11 @@ pub fn roc_boxy_tag(
     const constructed = g.runtime.constructBoxyTagValue(
         hooks(g),
         target_desc,
-        @enumFromInt(tag_name),
+        @fromBackingInt(@intCast(tag_name)),
         if (payload) |p| Value{ .ptr = @constCast(p) } else null,
         layoutIdx(payload_layout),
         payload_desc,
-        @enumFromInt(payload_mode),
+        @fromBackingInt(@intCast(payload_mode)),
         layoutIdx(target_layout),
     ) catch abiCrash(g, "tag construction");
     writeResult(g, out, constructed, layoutIdx(target_layout));
@@ -1354,10 +1354,10 @@ pub fn roc_boxy_tag_payload(
         valueAt(source),
         layoutIdx(source_layout),
         source_desc,
-        @enumFromInt(tag_name),
+        @fromBackingInt(@intCast(tag_name)),
         payload_index,
         layoutIdx(target_layout),
-        @enumFromInt(source_mode),
+        @fromBackingInt(@intCast(source_mode)),
     ) catch abiCrash(g, "tag payload read");
     writeResult(g, out, read.value, layoutIdx(target_layout));
     out_desc.* = if (read.desc) |desc_ref|
@@ -1413,8 +1413,8 @@ pub fn roc_boxy_drop(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    const rc_op: layout_mod.RcOp = @enumFromInt(op);
-    const rc_atomicity: builtins.utils.RcAtomicity = @enumFromInt(atomicity);
+    const rc_op: layout_mod.RcOp = @fromBackingInt(@intCast(op));
+    const rc_atomicity: builtins.utils.RcAtomicity = @fromBackingInt(@intCast(atomicity));
     const val: Value = if (value) |p| .{ .ptr = p } else Value.zst;
     const layout_idx = layoutIdx(value_layout);
     const layout_value = g.runtime.layout_store.getLayout(layout_idx);
@@ -1942,7 +1942,7 @@ pub fn roc_boxy_tag_match(
         valueAt(source),
         layoutIdx(source_layout),
         source_desc,
-        @enumFromInt(tag_name),
+        @fromBackingInt(@intCast(tag_name)),
     ) catch abiCrash(g, "tag match");
 }
 
@@ -1967,7 +1967,7 @@ pub fn roc_boxy_desc_copy(
         g.capture_ids = &.{};
         g.capture_descs = &.{};
     }
-    const desc_ref = LIR.BoxyDescRef{ .static = @enumFromInt(desc_id) };
+    const desc_ref = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(desc_id)) };
     const captures = LIR.LocalSpan{ .start = 0, .len = @intCast(capture_count) };
     return g.runtime.materializeBoxyDescRefValueWithCaptures(hooks(g), desc_ref, captures) catch abiCrash(g, "descriptor materialization");
 }
@@ -1997,14 +1997,14 @@ pub fn roc_boxy_dict_copy(
         g.capture_ids = outer_ids;
         g.capture_descs = outer_descs;
     }
-    return g.runtime.materializeBoxyDictTemplate(hooks(g), @enumFromInt(dict_id), values) catch abiCrash(g, "dictionary materialization");
+    return g.runtime.materializeBoxyDictTemplate(hooks(g), @fromBackingInt(@intCast(dict_id)), values) catch abiCrash(g, "dictionary materialization");
 }
 
 /// Resolve a static descriptor id to its descriptor pointer in the global
 /// descriptor table.
 pub fn roc_boxy_static_desc(desc_id: u32) callconv(.c) *const BoxyTypeDesc {
     const g = requireGlobal();
-    return g.runtime.requireBoxyTypeDesc(@enumFromInt(desc_id));
+    return g.runtime.requireBoxyTypeDesc(@fromBackingInt(@intCast(desc_id)));
 }
 
 /// Materialize a worker call's raw return value into the caller's declared
@@ -2041,7 +2041,7 @@ pub fn roc_boxy_materialize_call_result(
 /// dictionary table.
 pub fn roc_boxy_static_dict(dict_id: u32) callconv(.c) *const BoxyDict {
     const g = requireGlobal();
-    return g.runtime.requireBoxyDict(@enumFromInt(dict_id));
+    return g.runtime.requireBoxyDict(@fromBackingInt(@intCast(dict_id)));
 }
 
 /// Resolve one explicit argument descriptor from a runtime dictionary method
@@ -2081,7 +2081,7 @@ pub fn roc_boxy_dict_method_hidden_desc(
         method_slot,
         method,
         hidden_index,
-        @enumFromInt(shape),
+        @fromBackingInt(@intCast(shape)),
     ) catch abiCrash(g, "dictionary method hidden descriptor resolution");
 }
 
@@ -2105,7 +2105,7 @@ pub fn roc_boxy_box_payload_desc(desc: *const BoxyTypeDesc, box_layout: u32) cal
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    return (g.runtime.boxyBoxAllocationPayloadDesc(hooks(g), @enumFromInt(box_layout), desc) catch
+    return (g.runtime.boxyBoxAllocationPayloadDesc(hooks(g), @fromBackingInt(@intCast(box_layout)), desc) catch
         abiCrash(g, "Box payload descriptor resolution")) orelse
         abiCrash(g, "Box payload descriptor missing");
 }
@@ -2119,7 +2119,7 @@ pub fn roc_boxy_tag_payload_desc(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    const name: LIR.BoxyNameId = @enumFromInt(tag_name);
+    const name: LIR.BoxyNameId = @fromBackingInt(@intCast(tag_name));
     const variant = g.runtime.findLocalBoxyTagVariant(desc, name) orelse abiCrash(g, "tag-payload descriptor variant navigation");
     const payload_desc = g.runtime.findBoxyPayloadDesc(variant, payload_index) orelse abiCrash(g, "tag-payload descriptor navigation");
     return hooks(g).resolveDescRef(payload_desc) catch abiCrash(g, "tag-payload descriptor resolution");
@@ -2268,7 +2268,7 @@ pub fn roc_boxy_call_dict(
         .move,
     ) catch abiCrash(g, "dictionary call preparation");
 
-    const registered = g.procs.get(@intFromEnum(call.proc)) orelse
+    const registered = g.procs.get(@backingInt(call.proc)) orelse
         abiCrash(g, "dictionary dispatch to an unregistered proc");
     const arg_ptrs = scratch.alloc(?*const anyopaque, call.arg_values.len) catch abiCrash(g, "dictionary call argument collection");
     for (call.arg_values, call.arg_layouts, 0..) |arg_value, arg_layout, i| {

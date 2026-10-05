@@ -362,9 +362,9 @@ pub const BUILTIN_INDICES_LAYOUT_HASH: u64 = blk: {
     var hash = hashBytes(hash_offset, "roc-builtin-indices-layout-v1");
     hash = hashInt(hash, @sizeOf(BuiltinIndices));
     hash = hashInt(hash, @alignOf(BuiltinIndices));
-    for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
-        hash = hashBytes(hash, field.name);
-        hash = hashBytes(hash, @typeName(field.type));
+    for (@typeInfo(BuiltinIndices).@"struct".field_names, @typeInfo(BuiltinIndices).@"struct".field_types) |field_name, field_type| {
+        hash = hashBytes(hash, field_name);
+        hash = hashBytes(hash, @typeName(field_type));
     }
     break :blk hash;
 };
@@ -393,17 +393,17 @@ pub const Def = struct {
             if (encoded[0] == 0) {
                 return .let;
             } else if (encoded[0] == 1) {
-                return .{ .stmt = @as(TypeVar, @enumFromInt(encoded[1])) };
+                return .{ .stmt = @as(TypeVar, @fromBackingInt(@intCast(encoded[1]))) };
             } else {
-                return .{ .ignored = @as(TypeVar, @enumFromInt(encoded[1])) };
+                return .{ .ignored = @as(TypeVar, @fromBackingInt(@intCast(encoded[1]))) };
             }
         }
 
         pub fn encode(self: Kind) [2]u32 {
             switch (self) {
                 .let => return .{ 0, 0 },
-                .stmt => |ty_var| return .{ 1, @intFromEnum(ty_var) },
-                .ignored => |ty_var| return .{ 2, @intFromEnum(ty_var) },
+                .stmt => |ty_var| return .{ 1, @backingInt(ty_var) },
+                .ignored => |ty_var| return .{ 2, @backingInt(ty_var) },
             }
         }
     };
@@ -421,7 +421,7 @@ pub const Def = struct {
 
         // Safety check: verify pattern index points to actual pattern node
         // This prevents crashes from cross-module node index issues
-        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
+        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @fromBackingInt(@intCast(@backingInt(self.pattern)));
         const pattern_node = cir.store.nodes.get(pattern_node_idx);
         const is_valid_pattern = pattern_node.tag == .pattern_identifier or
             pattern_node.tag == .pattern_var_identifier or
@@ -475,7 +475,7 @@ pub const TypeHeader = struct {
         try tree.pushStaticAtom("ty-header");
 
         // Get the region for this TypeHeader
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+        const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
         const region = cir.store.getRegionAt(node_idx);
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -546,7 +546,7 @@ pub const WhereClause = union(enum) {
                 try tree.pushStaticAtom("method");
 
                 // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+                const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -564,7 +564,7 @@ pub const WhereClause = union(enum) {
                 try tree.pushStaticAtom("alias");
 
                 // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+                const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -578,7 +578,7 @@ pub const WhereClause = union(enum) {
                 try tree.pushStaticAtom("malformed");
 
                 // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+                const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -933,7 +933,7 @@ pub const Import = struct {
             errdefer result.deinit(allocator);
 
             for (result.imports.items.items, 0..) |string_idx, i| {
-                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
                 try result.map.put(allocator, string_idx, import_idx);
             }
 
@@ -961,7 +961,7 @@ pub const Import = struct {
 
             if (self.map.get(string_idx)) |idx| {
                 if (ident_idx) |ident| {
-                    const i = @intFromEnum(idx);
+                    const i = @backingInt(idx);
                     if (i < self.import_idents.len() and self.import_idents.items.items[i].isNone()) {
                         self.import_idents.items.items[i] = ident;
                     }
@@ -970,15 +970,15 @@ pub const Import = struct {
                 return idx;
             }
 
-            const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
+            const idx = @as(Import.Idx, @fromBackingInt(@intCast(self.imports.len())));
 
             // Add to both the list and the map, with unresolved module initially
             const imports_idx = try self.imports.append(allocator, string_idx);
-            std.debug.assert(@intFromEnum(imports_idx) == @intFromEnum(idx));
+            std.debug.assert(@backingInt(imports_idx) == @backingInt(idx));
             const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            std.debug.assert(@intFromEnum(ident_idx_added) == @intFromEnum(idx));
+            std.debug.assert(@backingInt(ident_idx_added) == @backingInt(idx));
             const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
-            std.debug.assert(@intFromEnum(resolved_idx) == @intFromEnum(idx));
+            std.debug.assert(@backingInt(resolved_idx) == @backingInt(idx));
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -986,7 +986,7 @@ pub const Import = struct {
 
         /// Get the ident index for an import, or null if not set
         pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx >= self.import_idents.len()) return null;
             const ident = self.import_idents.items.items[idx];
             if (ident.isNone()) return null;
@@ -995,34 +995,34 @@ pub const Import = struct {
 
         /// Get the resolved module index for an import, or null if unresolved
         pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
             if (!resolved.isResolved()) return null;
-            return @intFromEnum(resolved);
+            return @backingInt(resolved);
         }
 
         /// Return true when import resolution has already reported a user-facing
         /// diagnostic before type checking. Type checking may continue for source
         /// tooling, but post-check lowering must never consume this import.
         pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return false;
             return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
+                self.resolved_modules.items.items[idx] = @fromBackingInt(@intCast(module_idx));
             }
         }
 
         /// Mark one import as intentionally unavailable because an earlier stage
         /// already owns the user-facing diagnostic.
         pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx < self.resolved_modules.len()) {
                 self.resolved_modules.items.items[idx] = .failed_before_checking;
             }
@@ -1079,7 +1079,7 @@ pub const Import = struct {
             }
 
             for (0..import_count) |i| {
-                const import_idx: Import.Idx = @enumFromInt(i);
+                const import_idx: Import.Idx = @fromBackingInt(@intCast(i));
                 const current = self.resolved_modules.items.items[i];
                 if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
@@ -1175,7 +1175,7 @@ pub const Import = struct {
                 // Repopulate the map - we know there's enough capacity since we
                 // are deserializing from a Serialized struct
                 for (store.imports.items.items, 0..) |string_idx, i| {
-                    const import_idx = @as(Import.Idx, @enumFromInt(i));
+                    const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
                     store.map.putAssumeCapacityNoClobber(string_idx, import_idx);
                 }
 
@@ -1305,5 +1305,5 @@ pub fn isCastable(comptime T: type) bool {
 
 /// Safely casts between compatible index types
 pub fn castIdx(comptime From: type, comptime To: type, idx: From) To {
-    return @as(To, @enumFromInt(@intFromEnum(idx)));
+    return @as(To, @fromBackingInt(@intCast(@backingInt(idx))));
 }

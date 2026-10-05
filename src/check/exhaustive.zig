@@ -44,7 +44,7 @@ const TypeStore = types.Store;
 const Var = types.Var;
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         std.debug.panic(message, args);
     }
     unreachable;
@@ -372,7 +372,7 @@ pub const TagId = enum(u32) {
     _,
 
     pub fn toInt(self: TagId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
@@ -1192,7 +1192,7 @@ fn buildUnionFromTagUnion(
         const arg_vars = type_store.sliceVars(tag.args);
         alternatives[i] = .{
             .name = .{ .tag = tag.name },
-            .tag_id = @enumFromInt(i),
+            .tag_id = @fromBackingInt(@intCast(i)),
             .arity = arg_vars.len,
         };
     }
@@ -1201,7 +1201,7 @@ fn buildUnionFromTagUnion(
     if (is_open) {
         alternatives[all_tags.items.len] = .{
             .name = .{ .tag = Ident.Idx.NONE }, // Represents "#Open"
-            .tag_id = @enumFromInt(all_tags.items.len),
+            .tag_id = @fromBackingInt(@intCast(all_tags.items.len)),
             .arity = 0,
         };
     }
@@ -1280,7 +1280,7 @@ fn varIsKnownEmpty(type_store: *TypeStore, known_empty_vars: []const Var, type_v
     const resolved_var = type_store.resolveVar(type_var).var_;
     for (known_empty_vars) |known_empty_var| {
         const resolved_known_empty = type_store.resolveVar(known_empty_var).var_;
-        if (@intFromEnum(resolved_var) == @intFromEnum(resolved_known_empty)) return true;
+        if (@backingInt(resolved_var) == @backingInt(resolved_known_empty)) return true;
     }
     return false;
 }
@@ -1470,7 +1470,7 @@ fn isUnresolvedUnboundRigid(rigid: types.Rigid) bool {
 fn appendUniqueVar(gpa: std.mem.Allocator, out: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
     const resolved_var = var_;
     for (out.items) |existing| {
-        if (@intFromEnum(existing) == @intFromEnum(resolved_var)) return;
+        if (@backingInt(existing) == @backingInt(resolved_var)) return;
     }
     try out.append(gpa, resolved_var);
 }
@@ -2482,7 +2482,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             var current_tags = tag_union.tags;
             var current_ext = tag_union.ext;
             var current_offset: usize = 0;
-            const target_idx = @intFromEnum(tag_id);
+            const target_idx = @backingInt(tag_id);
 
             // Track seen extension variables to detect cycles
             var seen_exts = std.AutoHashMap(Var, void).init(type_store.gpa);
@@ -3024,7 +3024,7 @@ fn specializeByConstructorSketched(
         switch (first) {
             .ctor => |c| {
                 const pat_tag_id = tag_ids_by_name.get(c.tag_name.idx) orelse continue;
-                if (@intFromEnum(pat_tag_id) == @intFromEnum(tag_id)) {
+                if (@backingInt(pat_tag_id) == @backingInt(tag_id)) {
                     const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
                     @memcpy(new_row[0..c.args.len], c.args);
                     @memcpy(new_row[c.args.len..], rest);
@@ -3032,7 +3032,7 @@ fn specializeByConstructorSketched(
                 }
             },
             .known_ctor => |kc| {
-                if (@intFromEnum(kc.tag_id) == @intFromEnum(tag_id)) {
+                if (@backingInt(kc.tag_id) == @backingInt(tag_id)) {
                     // For records, we need to match fields by name, not position.
                     // Different patterns may destructure different fields.
                     if (target_fields) |targets| {
@@ -4359,7 +4359,7 @@ pub fn checkMatch(
     for (ext_vars_to_close.items) |close_var| {
         var dominated = false;
         for (ext_vars_to_keep_open.items) |keep_var| {
-            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
+            if (@backingInt(close_var) == @backingInt(keep_var)) {
                 dominated = true;
                 break;
             }
@@ -4456,7 +4456,7 @@ pub fn checkDestructure(
     for (ext_vars_to_close.items) |close_var| {
         var dominated = false;
         for (ext_vars_to_keep_open.items) |keep_var| {
-            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
+            if (@backingInt(close_var) == @backingInt(keep_var)) {
                 dominated = true;
                 break;
             }
@@ -4696,8 +4696,8 @@ test "record inhabitedness retains its field-var scratch buffer" {
     var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     const gpa = counting.allocator();
     const presences = [_]types.RecordField.Presence{
-        .required(@enumFromInt(1)),
-        .required(@enumFromInt(2)),
+        .required(@fromBackingInt(@intCast(1))),
+        .required(@fromBackingInt(@intCast(2))),
     };
     var work_list: std.ArrayList(WorkItem) = .empty;
     defer work_list.deinit(gpa);

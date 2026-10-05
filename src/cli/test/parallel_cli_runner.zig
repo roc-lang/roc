@@ -96,11 +96,11 @@ const Suite = enum(u8) {
     }
 };
 
-const suite_count = @typeInfo(Suite).@"enum".fields.len;
+const suite_count = @typeInfo(Suite).@"enum".field_names.len;
 const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue, .snapshot_programs };
 
 const SuiteSelection = struct {
-    enabled: [suite_count]bool = [_]bool{false} ** suite_count,
+    enabled: [suite_count]bool = @as([suite_count]bool, @splat(false)),
 
     fn all() SuiteSelection {
         var result = SuiteSelection{};
@@ -109,7 +109,7 @@ const SuiteSelection = struct {
     }
 
     fn add(self: *SuiteSelection, suite: Suite) void {
-        self.enabled[@intFromEnum(suite)] = true;
+        self.enabled[@backingInt(suite)] = true;
     }
 
     fn addAll(self: *SuiteSelection) void {
@@ -117,7 +117,7 @@ const SuiteSelection = struct {
     }
 
     fn includes(self: SuiteSelection, suite: Suite) bool {
-        return self.enabled[@intFromEnum(suite)];
+        return self.enabled[@backingInt(suite)];
     }
 
     fn isEmpty(self: SuiteSelection) bool {
@@ -129,7 +129,7 @@ const SuiteSelection = struct {
 
     fn includesOnly(self: SuiteSelection, selected: Suite) bool {
         for (self.enabled, 0..) |enabled, index| {
-            if (enabled != (index == @intFromEnum(selected))) return false;
+            if (enabled != (index == @backingInt(selected))) return false;
         }
         return true;
     }
@@ -2876,8 +2876,8 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     const message_out = cappedCapture(result.message);
 
     const header = WireHeader{
-        .status = @intFromEnum(result.status),
-        .phase = @intFromEnum(result.phase),
+        .status = @backingInt(result.status),
+        .phase = @backingInt(result.phase),
         .duration_ns = result.duration_ns,
         .build_ns = result.build_ns,
         .run_ns = result.run_ns,
@@ -2915,8 +2915,8 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
     const message = harness.readStr(buf, &offset, header.message_len, gpa);
 
     return .{
-        .status = @enumFromInt(header.status),
-        .phase = @enumFromInt(header.phase),
+        .status = @fromBackingInt(@intCast(header.status)),
+        .phase = @fromBackingInt(@intCast(header.phase)),
         .duration_ns = header.duration_ns,
         .build_ns = header.build_ns,
         .run_ns = header.run_ns,
@@ -3547,7 +3547,7 @@ fn addPreservedWorkDirMessage(allocator: Allocator, result: TestResult, work_dir
 fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
         .exited => |code| @intCast(code),
-        .signal => |sig| @as(u32, @intFromEnum(sig)) | 0x80000000,
+        .signal => |sig| @as(u32, @backingInt(sig)) | 0x80000000,
         .stopped, .unknown => 0xFFFFFFFF,
     };
 }
@@ -13401,28 +13401,28 @@ fn printResults(
     const status_count = 7;
     const opt_count = 4;
     const all_opts = [_]OptMode{ .interpreter, .dev, .size, .speed };
-    var status_counts = [_]usize{0} ** status_count;
-    var opt_counts = [_]usize{0} ** opt_count;
-    var opt_failures = [_]usize{0} ** opt_count;
-    var suite_counts = [_]usize{0} ** suite_count;
-    var suite_failures = [_]usize{0} ** suite_count;
-    var suite_skips = [_]usize{0} ** suite_count;
+    var status_counts = @as([status_count]usize, @splat(0));
+    var opt_counts = @as([opt_count]usize, @splat(0));
+    var opt_failures = @as([opt_count]usize, @splat(0));
+    var suite_counts = @as([suite_count]usize, @splat(0));
+    var suite_failures = @as([suite_count]usize, @splat(0));
+    var suite_skips = @as([suite_count]usize, @splat(0));
 
     for (tests, 0..) |tc, i| {
         const r = results[i];
         const ms = harness.nsToMs(r.duration_ns);
-        status_counts[@intFromEnum(r.status)] += 1;
-        suite_counts[@intFromEnum(tc.suite)] += 1;
+        status_counts[@backingInt(r.status)] += 1;
+        suite_counts[@backingInt(tc.suite)] += 1;
         if (r.status != .pass and r.status != .skip) {
-            suite_failures[@intFromEnum(tc.suite)] += 1;
+            suite_failures[@backingInt(tc.suite)] += 1;
         }
         if (r.status == .skip) {
-            suite_skips[@intFromEnum(tc.suite)] += 1;
+            suite_skips[@backingInt(tc.suite)] += 1;
         }
         if (tc.backend) |backend| {
-            opt_counts[@intFromEnum(backend)] += 1;
+            opt_counts[@backingInt(backend)] += 1;
             if (r.status != .pass and r.status != .skip) {
-                opt_failures[@intFromEnum(backend)] += 1;
+                opt_failures[@backingInt(backend)] += 1;
             }
         }
 
@@ -13438,18 +13438,18 @@ fn printResults(
     }
 
     const wall_ms = harness.nsToMs(wall_ns);
-    std.debug.print("\n{d} passed", .{status_counts[@intFromEnum(TestStatus.pass)]});
-    if (status_counts[@intFromEnum(TestStatus.build_failed)] > 0) std.debug.print(", {d} build failed", .{status_counts[@intFromEnum(TestStatus.build_failed)]});
-    if (status_counts[@intFromEnum(TestStatus.run_failed)] > 0) std.debug.print(", {d} run failed", .{status_counts[@intFromEnum(TestStatus.run_failed)]});
-    if (status_counts[@intFromEnum(TestStatus.crash)] > 0) std.debug.print(", {d} crashed", .{status_counts[@intFromEnum(TestStatus.crash)]});
-    if (status_counts[@intFromEnum(TestStatus.timeout)] > 0) std.debug.print(", {d} timed out", .{status_counts[@intFromEnum(TestStatus.timeout)]});
-    if (status_counts[@intFromEnum(TestStatus.infra_error)] > 0) std.debug.print(", {d} infra errors", .{status_counts[@intFromEnum(TestStatus.infra_error)]});
-    if (status_counts[@intFromEnum(TestStatus.skip)] > 0) std.debug.print(", {d} skipped", .{status_counts[@intFromEnum(TestStatus.skip)]});
+    std.debug.print("\n{d} passed", .{status_counts[@backingInt(TestStatus.pass)]});
+    if (status_counts[@backingInt(TestStatus.build_failed)] > 0) std.debug.print(", {d} build failed", .{status_counts[@backingInt(TestStatus.build_failed)]});
+    if (status_counts[@backingInt(TestStatus.run_failed)] > 0) std.debug.print(", {d} run failed", .{status_counts[@backingInt(TestStatus.run_failed)]});
+    if (status_counts[@backingInt(TestStatus.crash)] > 0) std.debug.print(", {d} crashed", .{status_counts[@backingInt(TestStatus.crash)]});
+    if (status_counts[@backingInt(TestStatus.timeout)] > 0) std.debug.print(", {d} timed out", .{status_counts[@backingInt(TestStatus.timeout)]});
+    if (status_counts[@backingInt(TestStatus.infra_error)] > 0) std.debug.print(", {d} infra errors", .{status_counts[@backingInt(TestStatus.infra_error)]});
+    if (status_counts[@backingInt(TestStatus.skip)] > 0) std.debug.print(", {d} skipped", .{status_counts[@backingInt(TestStatus.skip)]});
     std.debug.print(" ({d} total) in {d:.0}ms using {d} worker(s)\n", .{ tests.len, wall_ms, max_children });
 
     std.debug.print("\n=== Suite Summary ===\n", .{});
     for (all_suites) |suite| {
-        const suite_idx = @intFromEnum(suite);
+        const suite_idx = @backingInt(suite);
         if (suite_counts[suite_idx] == 0) continue;
         std.debug.print("  {s:<12} {d:>4} run, {d:>4} failed, {d:>4} skipped\n", .{
             suite.displayName(),
@@ -13461,7 +13461,7 @@ fn printResults(
 
     std.debug.print("\n=== Backend Matrix ===\n", .{});
     for (all_opts) |opt| {
-        const opt_idx = @intFromEnum(opt);
+        const opt_idx = @backingInt(opt);
         if (opt_counts[opt_idx] == 0) continue;
         std.debug.print("  {s:<11} {d:>4} run, {d:>4} failed\n", .{ opt.cliName(), opt_counts[opt_idx], opt_failures[opt_idx] });
     }
@@ -13471,7 +13471,7 @@ fn printResults(
     var build_durations: std.ArrayListUnmanaged(u64) = .empty;
     var run_durations: std.ArrayListUnmanaged(u64) = .empty;
     var opt_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
-    var suite_durations = [_]std.ArrayListUnmanaged(u64){.empty} ** suite_count;
+    var suite_durations = @as([suite_count]std.ArrayListUnmanaged(u64), @splat(.empty));
     defer durations.deinit(gpa);
     defer build_durations.deinit(gpa);
     defer run_durations.deinit(gpa);
@@ -13488,9 +13488,9 @@ fn printResults(
     }
     for (tests, results) |tc, r| {
         if (r.duration_ns > 0) {
-            suite_durations[@intFromEnum(tc.suite)].append(gpa, r.duration_ns) catch {};
+            suite_durations[@backingInt(tc.suite)].append(gpa, r.duration_ns) catch {};
             if (tc.backend) |backend| {
-                opt_durations[@intFromEnum(backend)].append(gpa, r.duration_ns) catch {};
+                opt_durations[@backingInt(backend)].append(gpa, r.duration_ns) catch {};
             }
         }
     }
@@ -13501,10 +13501,10 @@ fn printResults(
         harness.printStatsRow("build", harness.computeTimingStats(build_durations.items));
         harness.printStatsRow("run", harness.computeTimingStats(run_durations.items));
         for (all_suites) |suite| {
-            harness.printStatsRow(suite.cliName(), harness.computeTimingStats(suite_durations[@intFromEnum(suite)].items));
+            harness.printStatsRow(suite.cliName(), harness.computeTimingStats(suite_durations[@backingInt(suite)].items));
         }
         for (all_opts) |opt| {
-            harness.printStatsRow(opt.cliName(), harness.computeTimingStats(opt_durations[@intFromEnum(opt)].items));
+            harness.printStatsRow(opt.cliName(), harness.computeTimingStats(opt_durations[@backingInt(opt)].items));
         }
     }
 

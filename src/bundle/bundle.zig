@@ -20,10 +20,7 @@ const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
 const format = @import("unbundle").format;
-const c = @cImport({
-    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
-    @cInclude("zstd.h");
-});
+const c = @import("zstd");
 
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.

@@ -4574,7 +4574,7 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
         .{ .line = 9, .column = 11, .token_type = 4 }, // record literal field
         .{ .line = 10, .column = 14, .token_type = 4 }, // field access
     };
-    var found = [_]bool{false} ** expected_tokens.len;
+    var found = @as([expected_tokens.len]bool, @splat(false));
     var line: u32 = 0;
     var column: u32 = 0;
     var i: usize = 0;

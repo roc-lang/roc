@@ -60,7 +60,7 @@ pub const ImmortalLocals = struct {
 
     /// Whether reference-count traffic on `local` can only ever be a no-op.
     pub fn contains(self: *const ImmortalLocals, local: LocalId) bool {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.static_written.bit_length) return false;
         return self.static_written.isSet(index) and !self.other_written.isSet(index);
     }
@@ -85,13 +85,13 @@ const Pass = struct {
     result: *ImmortalLocals,
 
     fn markStatic(self: *Pass, local: LocalId) void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.result.static_written.bit_length) return;
         self.result.static_written.set(index);
     }
 
     fn markOther(self: *Pass, local: LocalId) void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.result.other_written.bit_length) return;
         self.result.other_written.set(index);
     }
@@ -224,7 +224,7 @@ const Pass = struct {
 /// Returns how many statements were dropped.
 pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     if (!anyStaticLiteral(store)) {
-        if (@import("builtin").mode == .Debug) try verifyNothingToElide(gpa, store);
+        if (@import("builtin").mode == .debug) try verifyNothingToElide(gpa, store);
         return 0;
     }
     var immortal = try compute(gpa, store);
@@ -240,7 +240,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
 
     var drop_count: usize = 0;
     for (store.getCFStmts(), 0..) |stmt, index| {
-        const id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(index)));
+        const id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         successor[index] = id;
         const value, const next = referenceCount(stmt) orelse continue;
         if (!immortal.contains(value)) continue;
@@ -257,8 +257,8 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
         if (!dropped[index]) continue;
         var target = successor[index];
         var guard: usize = 0;
-        while (dropped[@intFromEnum(target)]) {
-            target = successor[@intFromEnum(target)];
+        while (dropped[@backingInt(target)]) {
+            target = successor[@backingInt(target)];
             guard += 1;
             if (guard > count) immortalInvariant("dropped reference-count statements form a cycle");
         }
@@ -267,16 +267,16 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
 
     const resolve = struct {
         fn call(table: []const LIR.CFStmtId, id: LIR.CFStmtId) LIR.CFStmtId {
-            return table[@intFromEnum(id)];
+            return table[@backingInt(id)];
         }
     }.call;
 
     for (0..count) |index| {
-        BodyClone.redirectSuccessors(store, @enumFromInt(@as(u32, @intCast(index))), successor, resolve);
+        BodyClone.redirectSuccessors(store, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), successor, resolve);
     }
 
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpecPtr(proc_id);
         if (proc.body) |body| proc.body = resolve(successor, body);
         const joins = store.getJoinPointSpanMut(proc.join_points);
@@ -293,7 +293,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
 /// no local can be immortal.
 fn anyStaticLiteral(store: *const LirStore) bool {
     for (0..store.procSpecCount()) |index| {
-        if (store.getProcSpec(@enumFromInt(@as(u32, @intCast(index)))).shapes.static_literal) return true;
+        if (store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes.static_literal) return true;
     }
     return false;
 }
@@ -362,11 +362,11 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
     var visited = try std.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer visited.deinit(gpa);
     for (0..store.procSpecCount()) |index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         if (proc.body) |body| try work.append(gpa, body);
         while (work.pop()) |stmt_id| {
-            if (visited.isSet(@intFromEnum(stmt_id))) continue;
-            visited.set(@intFromEnum(stmt_id));
+            if (visited.isSet(@backingInt(stmt_id))) continue;
+            visited.set(@backingInt(stmt_id));
             try Body.appendSuccessorsWithAllocator(store, &work, stmt_id, gpa);
             const value, _ = referenceCount(store.getCFStmt(stmt_id)) orelse continue;
             if (immortal.contains(value)) immortalInvariant("a program without static-literal shapes counted references on an immortal local");
@@ -375,7 +375,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
 }
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         @panic("immortal locals invariant violated: " ++ message);
     }
     unreachable;

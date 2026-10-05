@@ -150,7 +150,7 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
 
     try reporting.renderReportToPlain(&report, &writer.writer, config);
     try testing.expectEqualStrings(
-        "── ● duplicate definition " ++ ("─" ** 38) ++ " example.roc:2:1\n" ++
+        "── ● duplicate definition " ++ (@as([38]u8, @splat('─'))) ++ " example.roc:2:1\n" ++
             "\n" ++
             "The name c is being redeclared here:\n" ++
             "\n" ++
@@ -172,7 +172,7 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
     const cyan = "\x1b[36m";
     const reset = "\x1b[0m";
     try testing.expectEqualStrings(
-        gray ++ "── " ++ yellow ++ "● duplicate definition " ++ gray ++ ("─" ** 38) ++ " " ++ cyan ++ "example.roc" ++ gray ++ ":2:1" ++ reset ++ "\n" ++
+        gray ++ "── " ++ yellow ++ "● duplicate definition " ++ gray ++ (@as([38]u8, @splat('─'))) ++ " " ++ cyan ++ "example.roc" ++ gray ++ ":2:1" ++ reset ++ "\n" ++
             "\n" ++
             "The name " ++ cyan ++ "c" ++ reset ++ " is being redeclared here:\n" ++
             "\n" ++

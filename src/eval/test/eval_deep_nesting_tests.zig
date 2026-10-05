@@ -34,7 +34,12 @@ const loop_depth = 300;
 const codec_chain_depth = 100;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
-    return text ** count;
+    const result = comptime repeated: {
+        var buffer: [text.len * count]u8 = undefined;
+        for (0..count) |i| @memcpy(buffer[i * text.len ..][0..text.len], text);
+        break :repeated buffer;
+    };
+    return &result;
 }
 
 /// `format` printed with `args(i)` for each `i` below `n`, written into one

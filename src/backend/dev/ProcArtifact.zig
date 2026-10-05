@@ -502,7 +502,7 @@ pub const PreparedData = struct {
             const relocations = try a.alloc(DataRelocation, constant.relocations.len);
             for (constant.relocations, relocations) |relocation, *out| {
                 const name = switch (relocation.target) {
-                    .data_symbol => |target| constant_exports[@intFromEnum(target)].symbol_name,
+                    .data_symbol => |target| constant_exports[@backingInt(target)].symbol_name,
                     .named => relocation.target_symbol_name,
                 };
                 out.* = .{
@@ -582,7 +582,7 @@ pub fn extractPrepared(
         };
         try data_by_name.put(name, .{
             .name = name,
-            .bytes = try arena_allocator.dupe(u8, &([_]u8{0} ** 8)),
+            .bytes = try arena_allocator.dupe(u8, &(@as([8]u8, @splat(0)))),
             .alignment = 8,
             .symbol_offset = 0,
             .relocations = cell_relocations,
@@ -633,9 +633,9 @@ pub fn extractPrepared(
     for (regions, 0..) |region, region_index| {
         const index = artifact_of_region[region_index] orelse continue;
         const kind: Kind = switch (region.kind) {
-            .proc => |proc_id| .{ .proc = proc_specs[@intFromEnum(proc_id)].identity },
+            .proc => |proc_id| .{ .proc = proc_specs[@backingInt(proc_id)].identity },
             .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) },
-            .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity },
+            .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
             .branch_island, .hosted_stub => unreachable,
@@ -663,9 +663,9 @@ pub fn extractPrepared(
         for (refs) |ref| {
             if (ref.site < region.start or ref.site >= region.end) continue;
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
-                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@intFromEnum(proc_id)].identity } else null,
+                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@backingInt(proc_id)].identity } else null,
                 .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) } else null,
-                .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity } else null,
+                .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity } else null,
                 .message, .offset => null,
             };
             if (symbolic_target) |target| {
@@ -876,7 +876,7 @@ pub fn append(
     defer procs_by_identity.deinit();
     for (proc_specs, 0..) |proc, index| {
         if (proc.is_static_initializer) continue;
-        try procs_by_identity.put(proc.identity, @enumFromInt(@as(u32, @intCast(index))));
+        try procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
 
     try appendPrepared(CG, allocator, codegen, set, &procs_by_identity, helper_keys);
@@ -1279,7 +1279,7 @@ test "artifact local calls reserve veneers before later regions exceed reach" {
     var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
     defer image.deinit();
     image.codegen.branch_reach_limit = 4096;
-    const gap = [_]u8{0} ** 8192;
+    const gap = @as([8192]u8, @splat(0));
     var set = Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .artifacts = &.{
@@ -1335,7 +1335,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     defer local.deinit();
     try local.put("cell", .{
         .name = "cell",
-        .bytes = &([_]u8{0} ** 8),
+        .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 0, .name = "roc__d0", .addend = 0, .function = false, .external = true }},
@@ -1349,7 +1349,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     prepared_live = false;
     try std.testing.expectEqual(@as(usize, 2), items.len);
     try std.testing.expectEqualStrings("cell", items[0].name);
-    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 8), items[0].bytes);
+    try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), items[0].bytes);
     try std.testing.expect(items[0].relocations[0].external);
     try std.testing.expectEqualStrings("roc__d0", items[0].relocations[0].name);
     try std.testing.expectEqualStrings("literal", items[1].name);
@@ -1494,16 +1494,16 @@ test "constants are named by content across programs, through cycles, and never 
     // Program one: a cycle between the first two constants, a leaf, and a
     // host-visible export that points at the leaf.
     const one = [_]DataItem{
-        testItem("roc__d0", "\x00" ** 16, &.{testReloc(8, "roc__d0_1", 0)}, true),
-        testItem("roc__d0_1", "\x00" ** 16, &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0", @as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", @as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
         testItem("roc__d0_2", "leaf", &.{}, true),
-        testItem("roc__answer", "\x00" ** 8, &.{testReloc(0, "roc__d0_2", 0)}, false),
+        testItem("roc__answer", @as([8]u8, @splat('\x00')), &.{testReloc(0, "roc__d0_2", 0)}, false),
     };
     // Program two: the same graph under other names and another order.
     const two = [_]DataItem{
         testItem("roc__d7_2", "leaf", &.{}, true),
-        testItem("roc__d7", "\x00" ** 16, &.{testReloc(8, "roc__d7_1", 0)}, true),
-        testItem("roc__d7_1", "\x00" ** 16, &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
+        testItem("roc__d7", @as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d7_1", 0)}, true),
+        testItem("roc__d7_1", @as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
     };
 
     var storage_one: [1]Artifact = undefined;
@@ -1529,8 +1529,8 @@ test "constants are named by content across programs, through cycles, and never 
 
     // A different leaf changes every name that reaches it.
     const three = [_]DataItem{
-        testItem("roc__d0", "\x00" ** 16, &.{testReloc(8, "roc__d0_1", 0)}, true),
-        testItem("roc__d0_1", "\x00" ** 16, &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0", @as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", @as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
         testItem("roc__d0_2", "LEAF", &.{}, true),
     };
     var storage_three: [1]Artifact = undefined;

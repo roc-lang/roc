@@ -282,7 +282,7 @@ pub fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
 
 /// Panic in debug builds for a violated post-check invariant.
 pub fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("postcheck invariant violated: {s}", .{message});
     }
     unreachable;
@@ -290,7 +290,7 @@ pub fn invariant(comptime message: []const u8) noreturn {
 
 /// `invariant` with runtime context formatted into the panic message.
 pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("postcheck invariant violated: " ++ fmt, args);
     }
     unreachable;
@@ -314,7 +314,7 @@ pub const SymbolGen = struct {
     next: u32 = 0,
 
     pub fn fresh(self: *SymbolGen) Symbol {
-        const symbol: Symbol = @enumFromInt(self.next);
+        const symbol: Symbol = @fromBackingInt(@intCast(self.next));
         self.next += 1;
         return symbol;
     }

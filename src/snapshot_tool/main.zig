@@ -1063,11 +1063,11 @@ fn processSnapshotContent(
 
             switch (content.meta.node_type) {
                 .expr => {
-                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
                 },
                 .statement => {
-                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const ast_stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
                 .file,
@@ -2415,11 +2415,11 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .header => {
-            const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+            const header = parse_ast.store.getHeader(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .expr => {
-            const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+            const expr = parse_ast.store.getExpr(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .mono => {
@@ -2427,7 +2427,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .statement => {
-            const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+            const stmt = parse_ast.store.getStatement(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .package => {
@@ -3911,7 +3911,7 @@ fn snapshotRootRequestByOrder(
     for (root_artifact.root_requests.requests) |request| {
         if (request.order == order) return request;
     }
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
     }
     unreachable;
@@ -3924,14 +3924,14 @@ fn snapshotProvidedEntrypointName(
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted => {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
             }
             unreachable;
         },
     };
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
         }
         unreachable;
@@ -3943,7 +3943,7 @@ fn snapshotProvidedEntrypointName(
         }
     }
 
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic(
             "snapshot invariant violated: exported platform root has no published FFI symbol",
             .{},
@@ -3960,7 +3960,7 @@ fn snapshotNativeEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic(
                 "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
                 .{ root_procs.len, root_metadata.len },
@@ -4132,14 +4132,14 @@ fn processDevObjectSnapshot(
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
-    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+    const roc_target_info = @typeInfo(RocTarget).@"enum";
 
-    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var hash_results: [roc_target_info.field_names.len]TargetHashResult = undefined;
     var object_compiler = backend.ObjectFileCompiler.init(allocator);
 
-    inline for (roc_target_fields, 0..) |field, i| {
-        const target: RocTarget = @enumFromInt(field.value);
-        hash_results[i].target_name = field.name;
+    inline for (roc_target_info.field_names, roc_target_info.field_values, 0..) |field_name, field_value, i| {
+        const target: RocTarget = @fromBackingInt(@intCast(field_value));
+        hash_results[i].target_name = field_name;
 
         target_snapshot: {
             const arch = target.toCpuArch();
@@ -4488,7 +4488,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allo
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
-    return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
 }
 
 fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplInputKind {
@@ -4752,7 +4752,7 @@ fn renderSnapshotReplTypeProblems(
 
     const repl_expr = switch (source_kind) {
         .expr => blk: {
-            const statement_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const statement_idx: AST.Statement.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
             const statement = parse_ast.store.getStatement(statement_idx);
             const expr_idx = switch (statement) {
                 .expr => |expr_stmt| expr_stmt.expr,

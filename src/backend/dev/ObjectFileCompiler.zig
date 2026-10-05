@@ -349,7 +349,7 @@ fn compileWithCodeGen(
         var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external_procs.deinit(allocator);
         for (proc_specs, 0..) |proc, index| {
-            if (proc.external) external_procs.append(allocator, @enumFromInt(@as(u32, @intCast(index)))) catch return CompilationError.OutOfMemory;
+            if (proc.external) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
         }
         spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
@@ -357,7 +357,7 @@ fn compileWithCodeGen(
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
         if (proc.is_static_initializer or proc.external) continue;
-        demand.append(allocator, @enumFromInt(index)) catch return CompilationError.OutOfMemory;
+        demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
     var retained = NativeProcCompiler.run(CodeGen, allocator, &codegen, demand.items, .{
@@ -446,10 +446,10 @@ fn compileWithCodeGen(
     }
 
     for (proc_specs, 0..) |_, i| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (proc_specs[i].is_static_initializer) continue;
         const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
             }
             unreachable;
@@ -487,7 +487,7 @@ fn compileWithCodeGen(
     }
     for (static_rc_helpers) |helper_key| {
         const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic(
                     "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
                     .{helper_key.encode()},
@@ -742,7 +742,7 @@ pub fn spliceExternalProcs(
     defer procs_by_identity.deinit();
     for (proc_specs, 0..) |proc, index| {
         if (proc.is_static_initializer) continue;
-        try procs_by_identity.put(proc.identity, @enumFromInt(@as(u32, @intCast(index))));
+        try procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
 
     const PackState = struct { placed: std.AutoHashMap(u32, usize) };
@@ -754,10 +754,10 @@ pub fn spliceExternalProcs(
     }
 
     for (external_procs) |proc_id| {
-        const proc = proc_specs[@intFromEnum(proc_id)];
-        if (!proc.external) std.debug.panic("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
+        const proc = proc_specs[@backingInt(proc_id)];
+        if (!proc.external) std.debug.panic("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
         const located = source.find(source.context, proc.identity) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
             }
             unreachable;
@@ -805,17 +805,17 @@ fn resolveObjectSymbols(
     };
     for (relocations) |relocation| switch (relocation) {
         .linked_function => |function| {
-            symbols[@intFromEnum(function.symbol)].is_function = true;
+            symbols[@backingInt(function.symbol)].is_function = true;
         },
         .linked_data, .local_data, .jmp_to_return, .retired => {},
     };
     for (definitions) |definition| {
-        const symbol = &symbols[@intFromEnum(definition.id)];
+        const symbol = &symbols[@backingInt(definition.id)];
         std.debug.assert(symbol.is_external);
         symbol.* = definition.symbol;
     }
     for (table.required_definitions.items) |id| {
-        std.debug.assert(!symbols[@intFromEnum(id)].is_external);
+        std.debug.assert(!symbols[@backingInt(id)].is_external);
     }
     return .{ .symbols = symbols };
 }
@@ -844,7 +844,7 @@ fn appendStaticDataExports(
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
         for (data_export.relocations) |relocation| {
             const id = switch (relocation.target) {
-                .data_symbol => |target| data_symbols[@intFromEnum(target)],
+                .data_symbol => |target| data_symbols[@backingInt(target)],
                 .named => blk: {
                     if (relocation.procedure) |proc| {
                         if (functions.get(proc)) |id| break :blk id;
@@ -887,7 +887,7 @@ fn appendStaticDataExport(
 ) CompilationError!void {
     const alignment = @as(usize, @intCast(data_export.alignment));
     const symbol_offset: usize = @intCast(data_export.symbol_offset);
-    if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
+    if (builtin.mode == .debug and symbol_offset > data_export.bytes.len) {
         std.debug.panic(
             "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
             .{ data_export.symbol_offset, data_export.bytes.len },
@@ -1022,7 +1022,7 @@ fn crossCompileDispatch(
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
     inline for (enum_info.fields) |field| {
-        const comptime_target: RocTarget = @enumFromInt(field.value);
+        const comptime_target: RocTarget = @fromBackingInt(@intCast(field.value));
         if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
         if (default_target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();
@@ -1142,7 +1142,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
-                .value = .{ .static_data = @enumFromInt(7) },
+                .value = .{ .static_data = @fromBackingInt(@intCast(7)) },
                 .next = ret,
             } }, .test_fixture);
             _ = try store.addProcSpec(.{
@@ -1164,12 +1164,12 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             relocation[0] = .{
                 .offset = 0,
                 .target_symbol_name = try a.dupe(u8, "roc__d7_1"),
-                .target = .{ .data_symbol = @enumFromInt(1) },
+                .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) },
                 .addend = 8,
             };
             exports[0] = .{
                 .symbol_name = try a.dupe(u8, "roc__d7"),
-                .value_id = @enumFromInt(7),
+                .value_id = @fromBackingInt(@intCast(7)),
                 .bytes = descriptor,
                 .alignment = 8,
                 .is_exported = false,

@@ -1220,8 +1220,8 @@ fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator
         }
     } else {
         // On POSIX systems, use the link system call
-        const source_c = try ctx.arena.dupeZ(u8, source);
-        const dest_c = try ctx.arena.dupeZ(u8, dest);
+        const source_c = try ctx.arena.dupeSentinel(u8, source, 0);
+        const dest_c = try ctx.arena.dupeSentinel(u8, dest, 0);
 
         const result = c.link(source_c, dest_c);
         if (result != 0) {
@@ -3595,11 +3595,11 @@ fn spawnExecutableWithArgv0(
             ) c_int;
         };
 
-        const exe_path_z = try ctx.arena.dupeZ(u8, exe_path);
+        const exe_path_z = try ctx.arena.dupeSentinel(u8, exe_path, 0);
         const argv = try ctx.arena.allocSentinel(?[*:0]const u8, 1 + app_args.len, null);
-        argv[0] = (try ctx.arena.dupeZ(u8, argv0)).ptr;
+        argv[0] = (try ctx.arena.dupeSentinel(u8, argv0, 0)).ptr;
         for (app_args, 0..) |arg, i| {
-            argv[1 + i] = (try ctx.arena.dupeZ(u8, arg)).ptr;
+            argv[1 + i] = (try ctx.arena.dupeSentinel(u8, arg, 0)).ptr;
         }
 
         var pid: std.c.pid_t = undefined;
@@ -7274,7 +7274,7 @@ fn getRocCacheDir(allocator: std.mem.Allocator) (Allocator.Error || error{NoCach
 /// Cross-platform helper to get environment variable.
 /// Returns null if the variable is not set. Caller must free the returned slice.
 fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error!?[]const u8 {
-    const key_z = try allocator.dupeZ(u8, key);
+    const key_z = try allocator.dupeSentinel(u8, key, 0);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
     const len = std.mem.len(value);
@@ -10171,11 +10171,11 @@ fn nativeEmissionCounters(metrics: backend.dev.NativeProcCompiler.Metrics) [12]p
 
 test "native artifact counters preserve every measured field" {
     var metrics: backend.dev.NativeProcCompiler.Metrics = .{};
-    inline for (std.meta.fieldNames(@TypeOf(metrics)), 1..) |field_name, value| {
+    inline for (@typeInfo(@TypeOf(metrics)).@"struct".field_names, 1..) |field_name, value| {
         @field(metrics, field_name) = value;
     }
     const counters = nativeEmissionCounters(metrics);
-    try std.testing.expectEqual(std.meta.fieldNames(@TypeOf(metrics)).len, counters.len);
+    try std.testing.expectEqual(@typeInfo(@TypeOf(metrics)).@"struct".field_names.len, counters.len);
     for (counters, 1..) |counter, value| {
         try std.testing.expectEqual(@as(u64, @intCast(value)), counter.count);
     }
@@ -17317,7 +17317,7 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
     };
 }
 
-const spec_constr_counter_count = 7 + 2 * std.meta.fieldNames(lir.CheckedPipeline.SpecConstrPhase).len;
+const spec_constr_counter_count = 7 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
 
 fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMetrics) [spec_constr_counter_count]progress.Counter {
     var rows: [spec_constr_counter_count]progress.Counter = undefined;
@@ -17430,8 +17430,8 @@ test "post-check diagnostics preserve labeled ARC counts" {
         "Uniqueness statement rows",
         "Uniqueness local rows",
     };
-    try std.testing.expectEqual(std.meta.fieldNames(lir.CheckedPipeline.ArcParallelMetrics).len - 1 +
-        std.meta.fieldNames(@FieldType(lir.CheckedPipeline.ArcParallelMetrics, "uniqueness")).len, rows.len);
+    try std.testing.expectEqual(@typeInfo(lir.CheckedPipeline.ArcParallelMetrics).@"struct".field_names.len - 1 +
+        @typeInfo(@FieldType(lir.CheckedPipeline.ArcParallelMetrics, "uniqueness")).@"struct".field_names.len, rows.len);
     for (rows, names, 0..) |row, name, index| {
         try std.testing.expectEqualStrings(name, row.name);
         try std.testing.expectEqual(@as(u64, index + 1), row.count);
@@ -17439,7 +17439,7 @@ test "post-check diagnostics preserve labeled ARC counts" {
     for (arcParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
-const lir_pass_counter_count = 5 + 2 * std.meta.fieldNames(lir.CheckedPipeline.LirPassPhase).len;
+const lir_pass_counter_count = 5 + 2 * @typeInfo(lir.CheckedPipeline.LirPassPhase).@"enum".field_names.len;
 
 fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics) [lir_pass_counter_count]progress.Counter {
     var rows: [lir_pass_counter_count]progress.Counter = undefined;
@@ -17598,7 +17598,7 @@ test "post-check diagnostics preserve labeled Solved-LIR counts" {
         "Worker literal tasks committed",
         "Worker loop tasks committed",
     };
-    try std.testing.expectEqual(std.meta.fieldNames(lir.CheckedPipeline.SolvedLirParallelMetrics).len, rows.len);
+    try std.testing.expectEqual(@typeInfo(lir.CheckedPipeline.SolvedLirParallelMetrics).@"struct".field_names.len, rows.len);
     for (rows, names, 1..) |row, name, count| {
         try std.testing.expectEqualStrings(name, row.name);
         try std.testing.expectEqual(@as(u64, @intCast(count)), row.count);
@@ -17633,7 +17633,7 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         "Range proving",
         "Box reuse",
     };
-    try std.testing.expectEqual(std.meta.fieldNames(lir.CheckedPipeline.LirPassPhase).len, phase_names.len);
+    try std.testing.expectEqual(@typeInfo(lir.CheckedPipeline.LirPassPhase).@"enum".field_names.len, phase_names.len);
     inline for (phase_names, 0..) |name, index| {
         try std.testing.expectEqualStrings(name ++ " tasks", rows[5 + 2 * index].name);
         try std.testing.expectEqualStrings(name ++ " rewrites", rows[6 + 2 * index].name);
@@ -17809,7 +17809,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         var shared_input = shared;
         if (case.counters_only) {
             shared_input.total_ns = 0;
-            inline for (std.meta.fieldNames(lir.CheckedPipeline.TimingSnapshot)) |field_name| {
+            inline for (@typeInfo(lir.CheckedPipeline.TimingSnapshot).@"struct".field_names) |field_name| {
                 if (@FieldType(lir.CheckedPipeline.TimingSnapshot, field_name) == u64) @field(shared_input.lowering, field_name) = 0;
             }
             shared_input.static_data_ns = 0;

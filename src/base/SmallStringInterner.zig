@@ -38,18 +38,18 @@ pub const Idx = enum(u32) {
 };
 
 fn assertAppendIndex(expected: usize, idx: collections.SafeList(u8).Idx) void {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.assert(@intFromEnum(idx) == expected);
-    } else if (@intFromEnum(idx) != expected) {
+    if (comptime builtin.mode == .debug) {
+        std.debug.assert(@backingInt(idx) == expected);
+    } else if (@backingInt(idx) != expected) {
         unreachable;
     }
 }
 
 fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.assert(@intFromEnum(range.start) == expected_start);
+    if (comptime builtin.mode == .debug) {
+        std.debug.assert(@backingInt(range.start) == expected_start);
         std.debug.assert(range.count == expected_len);
-    } else if (@intFromEnum(range.start) != expected_start or range.count != expected_len) {
+    } else if (@backingInt(range.start) != expected_start or range.count != expected_len) {
         unreachable;
     }
 }
@@ -118,11 +118,11 @@ const Policy = struct {
         return cell;
     }
     pub fn textForId(self: *const SmallStringInterner, id: Id) []const u8 {
-        return std.mem.sliceTo(self.bytes.items.items[@intFromEnum(id)..], 0);
+        return std.mem.sliceTo(self.bytes.items.items[@backingInt(id)..], 0);
     }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
-        const new_offset: Idx = @enumFromInt(self.bytes.len());
+        const new_offset: Idx = @fromBackingInt(@intCast(self.bytes.len()));
         {
             const expected_start = self.bytes.items.items.len;
             const range = try self.bytes.appendSlice(gpa, string);
@@ -144,7 +144,7 @@ const Policy = struct {
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
 
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         std.debug.panic("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
@@ -247,14 +247,14 @@ pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
 /// reserved "unused" sentinel, and any offset at or beyond the bytes buffer was
 /// never produced by this interner—so an Idx from another store fails this.
 pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
-    const offset = @intFromEnum(idx);
+    const offset = @backingInt(idx);
     return offset != 0 and offset < self.bytes.items.items.len;
 }
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
-    const start = @intFromEnum(idx);
+    const start = @backingInt(idx);
     return std.mem.sliceTo(bytes_slice[start..], 0);
 }
 
@@ -473,7 +473,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     for (test_data) |data| {
         const idx = try original.insert(gpa, data.str);
-        try std.testing.expectEqual(@as(u32, data.expected_idx), @intFromEnum(idx));
+        try std.testing.expectEqual(@as(u32, data.expected_idx), @backingInt(idx));
     }
 
     // Verify the hash table is populated
@@ -517,14 +517,14 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     // But all strings should still be accessible
     // Note: Index 0 is reserved, so all indices are offset by 1
-    try std.testing.expectEqualStrings("first", deserialized.getText(@enumFromInt(1)));
-    try std.testing.expectEqualStrings("second", deserialized.getText(@enumFromInt(7)));
-    try std.testing.expectEqualStrings("third", deserialized.getText(@enumFromInt(14)));
-    try std.testing.expectEqualStrings("fourth", deserialized.getText(@enumFromInt(20)));
-    try std.testing.expectEqualStrings("fifth", deserialized.getText(@enumFromInt(27)));
-    try std.testing.expectEqualStrings("sixth", deserialized.getText(@enumFromInt(33)));
-    try std.testing.expectEqualStrings("seventh", deserialized.getText(@enumFromInt(39)));
-    try std.testing.expectEqualStrings("eighth", deserialized.getText(@enumFromInt(47)));
+    try std.testing.expectEqualStrings("first", deserialized.getText(@fromBackingInt(@intCast(1))));
+    try std.testing.expectEqualStrings("second", deserialized.getText(@fromBackingInt(@intCast(7))));
+    try std.testing.expectEqualStrings("third", deserialized.getText(@fromBackingInt(@intCast(14))));
+    try std.testing.expectEqualStrings("fourth", deserialized.getText(@fromBackingInt(@intCast(20))));
+    try std.testing.expectEqualStrings("fifth", deserialized.getText(@fromBackingInt(@intCast(27))));
+    try std.testing.expectEqualStrings("sixth", deserialized.getText(@fromBackingInt(@intCast(33))));
+    try std.testing.expectEqualStrings("seventh", deserialized.getText(@fromBackingInt(@intCast(39))));
+    try std.testing.expectEqualStrings("eighth", deserialized.getText(@fromBackingInt(@intCast(47))));
 
     // Verify the original had entries
     try std.testing.expect(original_entry_count > 0);
@@ -539,7 +539,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
 
     const idx1 = try original.insert(gpa, "test1");
     const idx2 = try original.insert(gpa, "test2");
-    try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
+    try std.testing.expect(@backingInt(idx1) < @backingInt(idx2));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -575,8 +575,8 @@ test "SmallStringInterner CompactWriter roundtrip" {
 
     // Verify strings are still accessible
     // Note: Index 0 is reserved for the unused marker, so strings start at index 1
-    try std.testing.expectEqualStrings("test1", deserialized.getText(@enumFromInt(1)));
-    try std.testing.expectEqualStrings("test2", deserialized.getText(@enumFromInt(7)));
+    try std.testing.expectEqualStrings("test1", deserialized.getText(@fromBackingInt(@intCast(1))));
+    try std.testing.expectEqualStrings("test2", deserialized.getText(@fromBackingInt(@intCast(7))));
 }
 
 test "SmallStringInterner edge cases CompactWriter roundtrip" {

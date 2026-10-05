@@ -91,28 +91,28 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
     const list_layout = try program.layouts.insertList(.u32);
-    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const scalar_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .scalar);
-    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .{ .list = scalar_plan });
-    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = failure_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = .{ .checked = @enumFromInt(1) },
+            .root = .{ .checked = @fromBackingInt(@intCast(1)) },
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
         },
     });
-    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = list_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = .{ .checked = @enumFromInt(1) },
+            .root = .{ .checked = @fromBackingInt(@intCast(1)) },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = list_plan } },
         },
@@ -129,11 +129,11 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .body = body,
         .ret_layout = list_layout,
     }, .none);
-    program.static_data_values.items[@intFromEnum(value_slot)].accessor = accessor;
+    program.static_data_values.items[@backingInt(value_slot)].accessor = accessor;
     try @import("comptime_value_guards.zig").insert(allocator, &program, null);
-    var failure_record = [_]u8{0} ** 32;
+    var failure_record = @as([32]u8, @splat(0));
     failure_record[failed_offset] = 1;
-    const descriptor = [_]u8{0} ** 24;
+    const descriptor = @as([24]u8, @splat(0));
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "failure", .value_id = failure_slot, .bytes = &failure_record, .alignment = 8 },
         .{ .symbol_name = "value", .value_id = value_slot, .bytes = &descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },

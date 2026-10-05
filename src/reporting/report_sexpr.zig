@@ -328,10 +328,10 @@ test "canonical S-expression covers every document element variant" {
     }, null);
 
     // Keep this corpus exhaustive as the document model grows.
-    var covered = std.EnumSet(std.meta.Tag(DocumentElement)).initEmpty();
+    var covered = std.EnumSet(std.meta.Tag(DocumentElement)).empty;
     for (doc.elements.items) |element| covered.insert(std.meta.activeTag(element));
-    inline for (@typeInfo(DocumentElement).@"union".fields) |field| {
-        try std.testing.expect(covered.contains(@field(std.meta.Tag(DocumentElement), field.name)));
+    inline for (@typeInfo(DocumentElement).@"union".field_names) |field_name| {
+        try std.testing.expect(covered.contains(@field(std.meta.Tag(DocumentElement), field_name)));
     }
 
     var tree = SExprTree.init(gpa);

@@ -48,7 +48,7 @@ test "path validation for unbundle prevents security issues" {
 
         // Edge cases
         .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long (> 255 chars)" },
+        .{ .path = @as([256]u8, @splat('a')), .should_fail = true, .description = "Path too long (> 255 chars)" },
 
         // Valid paths (these should work with pathHasUnbundleErr)
         .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
@@ -89,7 +89,7 @@ test "path validation for bundle prevents Windows issues" {
         .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path" },
         .{ .path = "./foo", .should_fail = true, .description = "Current directory reference" },
         .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long" },
+        .{ .path = @as([256]u8, @splat('a')), .should_fail = true, .description = "Path too long" },
 
         // Windows-specific checks (these fail in bundle but not unbundle)
         .{ .path = "foo:bar.txt", .should_fail = true, .description = "Colon character" },
@@ -156,7 +156,7 @@ test "path validation returns correct error reasons" {
         expected_reason: bundle.PathValidationReason,
     }{
         .{ .path = "", .expected_reason = .empty_path },
-        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
+        .{ .path = @as([256]u8, @splat('a')), .expected_reason = .path_too_long },
         .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
         .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
         .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
@@ -176,7 +176,7 @@ test "path validation returns correct error reasons" {
         expected_reason: bundle.PathValidationReason,
     }{
         .{ .path = "", .expected_reason = .empty_path },
-        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
+        .{ .path = @as([256]u8, @splat('a')), .expected_reason = .path_too_long },
         .{ .path = "foo:bar", .expected_reason = .{ .windows_reserved_char = ':' } },
         .{ .path = "foo*bar", .expected_reason = .{ .windows_reserved_char = '*' } },
         .{ .path = "foo?bar", .expected_reason = .{ .windows_reserved_char = '?' } },

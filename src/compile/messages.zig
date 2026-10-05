@@ -632,7 +632,7 @@ test "WorkerResult accessors" {
             .module_id = 1,
             .module_name = "Foo",
             .path = "/path/to/Foo.roc",
-            .source_file_state = .{ .hash = [_]u8{0} ** 32 },
+            .source_file_state = .{ .hash = @as([32]u8, @splat(0)) },
             .module_env = undefined,
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
@@ -640,7 +640,7 @@ test "WorkerResult accessors" {
             .reports = reports,
             .parse_ns = 1000,
             .is_entry_module = false,
-            .canonicalized_cache_key = [_]u8{0} ** 32,
+            .canonicalized_cache_key = @as([32]u8, @splat(0)),
         },
     };
 

@@ -60,7 +60,7 @@ fn byteboxValTypes(comptime vts: []const BuiltinSignatures.ValType) []const byte
 }
 
 fn readIntLittle(comptime T: type, buffer: []const u8, offset: usize) T {
-    const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const UInt = @Int(.unsigned, @bitSizeOf(T));
     var result: UInt = 0;
     var i: usize = 0;
     while (i < @sizeOf(T)) : (i += 1) {
@@ -70,7 +70,7 @@ fn readIntLittle(comptime T: type, buffer: []const u8, offset: usize) T {
 }
 
 fn writeIntLittle(comptime T: type, buffer: []u8, offset: usize, value: T) void {
-    const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const UInt = @Int(.unsigned, @bitSizeOf(T));
     var remaining: UInt = @bitCast(value);
     var i: usize = 0;
     while (i < @sizeOf(T)) : (i += 1) {
@@ -721,7 +721,7 @@ fn hostHasherWriteStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [
     const ptr: usize = @intCast(params[1].I32);
     const len: usize = @intCast(params[2].I32);
     const bytes = if (len == 0) buffer[0..0] else buffer[ptr..][0..len];
-    const str_domain = @intFromEnum(builtins.hash.HasherDomain.str);
+    const str_domain = @backingInt(builtins.hash.HasherDomain.str);
     results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_bytes(seed, str_domain, bytes.ptr, bytes.len)) };
 }
 
@@ -1485,7 +1485,7 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 }
 
 fn readWasmStr(buffer: []u8, str_ptr: usize) WasmStr {
-    if (builtin.mode == .Debug and std.debug.runtime_safety) {
+    if (builtin.mode == .debug and std.debug.runtime_safety) {
         if (str_ptr + wasm_roc_str_size > buffer.len) {
             std.debug.panic(
                 "wasm_runner invariant violated: string header ptr={} exceeds memory len={}",
@@ -1496,7 +1496,7 @@ fn readWasmStr(buffer: []u8, str_ptr: usize) WasmStr {
     const bytes = buffer[str_ptr..][0..wasm_roc_str_size];
     if ((bytes[wasm_small_str_max_len] & builtins.str.RocStr.small_str_flag) != 0) {
         const len = builtins.str.RocStr.smallStrLenFromFlagByte(bytes[wasm_small_str_max_len]);
-        if (builtin.mode == .Debug and std.debug.runtime_safety) {
+        if (builtin.mode == .debug and std.debug.runtime_safety) {
             if (len > wasm_small_str_max_len) {
                 std.debug.panic(
                     "wasm_runner invariant violated: invalid SSO string len={} at ptr={}",
@@ -1509,7 +1509,7 @@ fn readWasmStr(buffer: []u8, str_ptr: usize) WasmStr {
         const data_ptr: usize = @intCast(readIntLittle(u32, buffer, str_ptr));
         const cap_or_alloc = readIntLittle(u32, buffer, str_ptr + 4);
         const len: usize = @intCast(readIntLittle(u32, buffer, str_ptr + 8));
-        if (builtin.mode == .Debug and std.debug.runtime_safety) {
+        if (builtin.mode == .debug and std.debug.runtime_safety) {
             if (data_ptr + len > buffer.len) {
                 std.debug.panic(
                     "wasm_runner invariant violated: heap string ptr={} len={} exceeds memory len={} (header ptr={})",
@@ -1816,7 +1816,7 @@ fn hostStrEscapeAndQuote(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, para
 
     const result_len = slice.len + extra + 2;
     if (result_len < wasm_roc_str_size) {
-        var small: [wasm_roc_str_size]u8 = .{0} ** wasm_roc_str_size;
+        var small: [wasm_roc_str_size]u8 = @splat(0);
         small[0] = '"';
         var pos: usize = 1;
         for (slice) |ch| {
@@ -2755,7 +2755,7 @@ fn hostStrFromUtf8(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
                     error.Utf8CodepointTooLarge => .CodepointTooLarge,
                 };
                 writeWasmInt(buffer, result_ptr + index_off, index_size, @intCast(index));
-                writeWasmInt(buffer, result_ptr + problem_off, problem_size, @intFromEnum(problem));
+                writeWasmInt(buffer, result_ptr + problem_off, problem_size, @backingInt(problem));
                 break;
             };
             index += next_num_bytes;

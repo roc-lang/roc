@@ -701,7 +701,7 @@ pub fn addGlobalImportWithSymbol(
     val_type: ValType,
     mutable: bool,
 ) Allocator.Error!struct { global_index: u32, symbol: SymbolIndex } {
-    const imported = try self.addGlobalImportWithSymbolRaw(module_name, field_name, @intFromEnum(val_type), mutable);
+    const imported = try self.addGlobalImportWithSymbolRaw(module_name, field_name, @backingInt(val_type), mutable);
     return .{
         .global_index = imported.global_index,
         .symbol = imported.symbol,
@@ -937,7 +937,7 @@ fn resolveUndefinedFunctionSymbols(
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
         if (self.imports.items[sym.index].type_idx != defined_type) {
-            if (builtin.mode == .Debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
+            if (builtin.mode == .debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
             return error.FunctionTypeMismatch;
         }
         if (first_match == null) first_match = @intCast(i);
@@ -1044,7 +1044,7 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
 /// Assert that a function has the expected wasm type index.
 pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_type_idx: u32) void {
     if (self.functionType(function) == expected_type_idx) return;
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic(
             "WasmModule invariant violated: function {d} has type {d}, expected {d}",
             .{ function.raw(), self.functionType(function), expected_type_idx },
@@ -1727,7 +1727,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             const local_idx = fn_idx - old_import_count;
             if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
             if (!self.funcTypesEqual(self.func_type_indices.items[local_idx], remapped_type)) {
-                if (builtin.mode == .Debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
+                if (builtin.mode == .debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
                 return error.FunctionTypeMismatch;
             }
             func_remap[src_idx] = fn_idx;
@@ -1740,7 +1740,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
                 if (!self.funcTypesEqual(self_imp.type_idx, remapped_type)) {
-                    if (builtin.mode == .Debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
+                    if (builtin.mode == .debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
                     return error.FunctionTypeMismatch;
                 }
                 matched = @intCast(self_idx);
@@ -2700,7 +2700,7 @@ pub fn patchRelocatableSymbolFlags(self: *const Self, object_bytes: []u8) ParseE
         const payload_len = try readU32(object_bytes, &cursor);
         const payload_end = cursor + payload_len;
         if (payload_end > object_bytes.len) return error.UnexpectedEnd;
-        if (section_id != @intFromEnum(SectionId.custom_section)) {
+        if (section_id != @backingInt(SectionId.custom_section)) {
             cursor = payload_end;
             continue;
         }
@@ -2721,7 +2721,7 @@ pub fn patchRelocatableSymbolFlags(self: *const Self, object_bytes: []u8) ParseE
             const subsection_len = try readU32(object_bytes[0..payload_end], &linking_cursor);
             const subsection_end = linking_cursor + subsection_len;
             if (subsection_end > payload_end) return error.UnexpectedEnd;
-            if (subsection_id != @intFromEnum(WasmLinking.LinkingSubsection.symbol_table)) {
+            if (subsection_id != @backingInt(WasmLinking.LinkingSubsection.symbol_table)) {
                 linking_cursor = subsection_end;
                 continue;
             }
@@ -3193,7 +3193,7 @@ pub fn prepareObjectAbiForFinalLink(self: *Self) (Allocator.Error || error{ Unex
         const is_base = std.mem.eql(u8, imp.field_name, "__memory_base") or
             std.mem.eql(u8, imp.field_name, "__table_base");
         if (!std.mem.eql(u8, imp.module_name, "env") or
-            imp.val_type != @intFromEnum(ValType.i32) or
+            imp.val_type != @backingInt(ValType.i32) or
             !(is_stack or is_base) or
             (is_stack and !imp.mutable))
         {
@@ -3247,14 +3247,14 @@ pub fn prepareObjectAbiForFinalLink(self: *Self) (Allocator.Error || error{ Unex
             break :blk 0;
         } else if (std.mem.eql(u8, name, "__memory_base")) blk: {
             if (memory_base_index == null) {
-                memory_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
+                memory_base_index = try self.addDefinedGlobal(@backingInt(ValType.i32), imported.mutable, 0);
                 memory_base_mutable = imported.mutable;
             }
             if (memory_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
             break :blk memory_base_index.?;
         } else if (std.mem.eql(u8, name, "__table_base")) blk: {
             if (table_base_index == null) {
-                table_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
+                table_base_index = try self.addDefinedGlobal(@backingInt(ValType.i32), imported.mutable, 0);
                 table_base_mutable = imported.mutable;
             }
             if (table_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
@@ -3491,7 +3491,7 @@ fn normalizeDataRelocations(self: *Self) ParseError!void {
 /// If yes, read the section size and return it. If no, return null (section absent).
 fn beginSection(bytes: []const u8, cursor: *usize, expected: SectionId) ParseError!?u32 {
     if (cursor.* >= bytes.len) return null;
-    if (bytes[cursor.*] != @intFromEnum(expected)) return null;
+    if (bytes[cursor.*] != @backingInt(expected)) return null;
     cursor.* += 1;
     return try readU32(bytes, cursor);
 }
@@ -3791,7 +3791,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
 
 fn parseCustomSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
     if (cursor.* >= bytes.len) return;
-    if (bytes[cursor.*] != @intFromEnum(SectionId.custom_section)) return error.InvalidSection;
+    if (bytes[cursor.*] != @backingInt(SectionId.custom_section)) return error.InvalidSection;
     cursor.* += 1;
 
     const section_size = try readU32(bytes, cursor);
@@ -4091,7 +4091,7 @@ fn encodeRelocatableImportSection(self: *Self, gpa: Allocator, output: *std.Arra
         try section_data.append(gpa, if (imp.mutable) @as(u8, 0x01) else @as(u8, 0x00));
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.import_section));
+    try output.append(gpa, @backingInt(SectionId.import_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4105,7 +4105,7 @@ fn encodeCodeSectionFromCodeBytes(self: *Self, gpa: Allocator, output: *std.Arra
     const count_leb_size: u32 = @intCast(section_data.items.len - before_count);
     try section_data.appendSlice(gpa, self.code_bytes.items);
 
-    try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try output.append(gpa, @backingInt(SectionId.code_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
     return count_leb_size;
@@ -4135,7 +4135,7 @@ fn encodeLinkingSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8),
             try leb128WriteU32(gpa, &segment_data, segment.alignment);
             try leb128WriteU32(gpa, &segment_data, segment.flags);
         }
-        try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.segment_info));
+        try payload.append(gpa, @backingInt(WasmLinking.LinkingSubsection.segment_info));
         try leb128WriteU32(gpa, &payload, @intCast(segment_data.items.len));
         try payload.appendSlice(gpa, segment_data.items);
     }
@@ -4147,17 +4147,17 @@ fn encodeLinkingSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8),
         if (!symbol_encode_map.emit[i]) continue;
         try encodeSymbol(gpa, &symbol_data, sym);
     }
-    try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.symbol_table));
+    try payload.append(gpa, @backingInt(WasmLinking.LinkingSubsection.symbol_table));
     try leb128WriteU32(gpa, &payload, @intCast(symbol_data.items.len));
     try payload.appendSlice(gpa, symbol_data.items);
 
-    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try output.append(gpa, @backingInt(SectionId.custom_section));
     try leb128WriteU32(gpa, output, @intCast(payload.items.len));
     try output.appendSlice(gpa, payload.items);
 }
 
 fn encodeSymbol(gpa: Allocator, output: *std.ArrayList(u8), sym: WasmLinking.SymInfo) Allocator.Error!void {
-    try output.append(gpa, @intFromEnum(sym.kind));
+    try output.append(gpa, @backingInt(sym.kind));
     try leb128WriteU32(gpa, output, sym.flags);
     switch (sym.kind) {
         .function, .global, .event, .table => {
@@ -4242,7 +4242,7 @@ fn encodeRelocationSection(
         const segment_delta = self.relocationSegmentDelta(entry);
         switch (entry) {
             .index => |idx| {
-                try payload.append(gpa, @intFromEnum(idx.type_id));
+                try payload.append(gpa, @backingInt(idx.type_id));
                 try leb128WriteU32(gpa, &payload, idx.offset + code_offset_delta + segment_delta);
                 const relocation_index = if (idx.type_id == .type_index_leb)
                     idx.symbol_index
@@ -4251,7 +4251,7 @@ fn encodeRelocationSection(
                 try leb128WriteU32(gpa, &payload, relocation_index);
             },
             .offset => |off| {
-                try payload.append(gpa, @intFromEnum(off.type_id));
+                try payload.append(gpa, @backingInt(off.type_id));
                 try leb128WriteU32(gpa, &payload, off.offset + code_offset_delta + segment_delta);
                 try leb128WriteU32(gpa, &payload, try encodedSymbolIndex(symbol_encode_map, off.symbol_index));
                 try leb128WriteI32(gpa, &payload, off.addend);
@@ -4259,7 +4259,7 @@ fn encodeRelocationSection(
         }
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try output.append(gpa, @backingInt(SectionId.custom_section));
     try leb128WriteU32(gpa, output, @intCast(payload.items.len));
     try output.appendSlice(gpa, payload.items);
 }
@@ -4280,17 +4280,17 @@ fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
         try section_data.append(gpa, 0x60); // func type marker
         try leb128WriteU32(gpa, &section_data, @intCast(ft.params.len));
         for (ft.params) |p| {
-            try section_data.append(gpa, @intFromEnum(p));
+            try section_data.append(gpa, @backingInt(p));
         }
         if (self.func_type_results.items[idx]) |r| {
             try section_data.append(gpa, 1); // 1 result
-            try section_data.append(gpa, @intFromEnum(r));
+            try section_data.append(gpa, @backingInt(r));
         } else {
             try section_data.append(gpa, 0); // 0 results
         }
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.type_section));
+    try output.append(gpa, @backingInt(SectionId.type_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4330,7 +4330,7 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         }
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.import_section));
+    try output.append(gpa, @backingInt(SectionId.import_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4344,7 +4344,7 @@ fn encodeFunctionSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)
         try leb128WriteU32(gpa, &section_data, type_idx);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.function_section));
+    try output.append(gpa, @backingInt(SectionId.function_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4363,7 +4363,7 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.memory_section));
+    try output.append(gpa, @backingInt(SectionId.memory_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4376,7 +4376,7 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try leb128WriteU32(gpa, &section_data, global_count);
 
     // Global 0: __stack_pointer (i32, mutable)
-    try section_data.append(gpa, @intFromEnum(ValType.i32));
+    try section_data.append(gpa, @backingInt(ValType.i32));
     try section_data.append(gpa, 0x01); // mutable
     try section_data.append(gpa, Op.i32_const);
     try leb128WriteI32(gpa, &section_data, @intCast(self.stack_pointer_init));
@@ -4391,7 +4391,7 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try section_data.append(gpa, Op.end);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.global_section));
+    try output.append(gpa, @backingInt(SectionId.global_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4404,11 +4404,11 @@ fn encodeExportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     for (self.exports.items) |exp| {
         try leb128WriteU32(gpa, &section_data, @intCast(exp.name.len));
         try section_data.appendSlice(gpa, exp.name);
-        try section_data.append(gpa, @intFromEnum(exp.kind));
+        try section_data.append(gpa, @backingInt(exp.kind));
         try leb128WriteU32(gpa, &section_data, exp.idx);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.export_section));
+    try output.append(gpa, @backingInt(SectionId.export_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4423,7 +4423,7 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
         try section_data.appendSlice(gpa, fb.body);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try output.append(gpa, @backingInt(SectionId.code_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4480,7 +4480,7 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8), om
         try section_data.appendSlice(gpa, ds.data);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.data_section));
+    try output.append(gpa, @backingInt(SectionId.data_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4498,7 +4498,7 @@ fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) A
     try section_data.append(gpa, 0x00); // limits: no max
     try leb128WriteU32(gpa, &section_data, table_size);
 
-    try output.append(gpa, @intFromEnum(SectionId.table_section));
+    try output.append(gpa, @backingInt(SectionId.table_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4520,7 +4520,7 @@ fn encodeElementSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8))
         try leb128WriteU32(gpa, &section_data, func_idx);
     }
 
-    try output.append(gpa, @intFromEnum(SectionId.element_section));
+    try output.append(gpa, @backingInt(SectionId.element_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
@@ -4735,31 +4735,31 @@ fn decodePaddedI32(bytes: []const u8) i32 {
 }
 
 test "overwritePaddedU32—value 0 encodes as [0x80, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—value 1 encodes as [0x81, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 1);
     try std.testing.expectEqualSlices(u8, &.{ 0x81, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—value 0x7F encodes as [0xFF, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0x7F);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—value 128 encodes as [0x80, 0x81, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 128);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x81, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32—max u32 (0xFFFFFFFF) encodes correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0xFFFFFFFF);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x0F }, &buf);
 }
@@ -4767,14 +4767,14 @@ test "overwritePaddedU32—max u32 (0xFFFFFFFF) encodes correctly" {
 test "overwritePaddedU32—round-trip: write then decode matches original value" {
     const test_values = [_]u32{ 0, 1, 127, 128, 255, 256, 16383, 16384, 2097151, 2097152, 0x0FFFFFFF, 0xFFFFFFFF };
     for (test_values) |val| {
-        var buf = [_]u8{0} ** 5;
+        var buf = @as([5]u8, @splat(0));
         overwritePaddedU32(&buf, 0, val);
         try std.testing.expectEqual(val, decodePaddedU32(&buf));
     }
 }
 
 test "overwritePaddedI32—negative value (-1) encodes correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedI32(&buf, 0, -1);
     // -1 in signed padded LEB128: all 7-bit groups are 0x7F, last byte keeps sign bit
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x7F }, &buf);
@@ -4783,7 +4783,7 @@ test "overwritePaddedI32—negative value (-1) encodes correctly" {
 test "overwritePaddedI32—positive value round-trips correctly" {
     const test_values = [_]i32{ 0, 1, -1, 127, -128, 32767, -32768, std.math.maxInt(i32), std.math.minInt(i32) };
     for (test_values) |val| {
-        var buf = [_]u8{0} ** 5;
+        var buf = @as([5]u8, @splat(0));
         overwritePaddedI32(&buf, 0, val);
         try std.testing.expectEqual(val, decodePaddedI32(&buf));
     }
@@ -4862,7 +4862,7 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
     try out.appendSlice(allocator, &[_]u8{ 0x01, 0x00, 0x00, 0x00 });
 
     // Type section: 1 type () -> ()
-    try out.append(allocator, @intFromEnum(SectionId.type_section));
+    try out.append(allocator, @backingInt(SectionId.type_section));
     try writeSectionBody(allocator, &out, &.{
         0x01, // 1 type
         0x60, // func
@@ -4885,20 +4885,20 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try import_data.append(allocator, 0x00);
         try leb128WriteU32(allocator, &import_data, 0);
 
-        try out.append(allocator, @intFromEnum(SectionId.import_section));
+        try out.append(allocator, @backingInt(SectionId.import_section));
         try leb128WriteU32(allocator, &out, @intCast(import_data.items.len));
         try out.appendSlice(allocator, import_data.items);
     }
 
     // Function section: 1 function with type 0
-    try out.append(allocator, @intFromEnum(SectionId.function_section));
+    try out.append(allocator, @backingInt(SectionId.function_section));
     try writeSectionBody(allocator, &out, &.{
         0x01, // 1 function
         0x00, // type index 0
     });
 
     // Memory section: 1 memory, min 1 page
-    try out.append(allocator, @intFromEnum(SectionId.memory_section));
+    try out.append(allocator, @backingInt(SectionId.memory_section));
     try writeSectionBody(allocator, &out, &.{
         0x01, // 1 memory
         0x00, // no max
@@ -4915,7 +4915,7 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try export_data.append(allocator, 0x00); // func export
         try leb128WriteU32(allocator, &export_data, 1); // func index 1
 
-        try out.append(allocator, @intFromEnum(SectionId.export_section));
+        try out.append(allocator, @backingInt(SectionId.export_section));
         try leb128WriteU32(allocator, &out, @intCast(export_data.items.len));
         try out.appendSlice(allocator, export_data.items);
     }
@@ -4937,7 +4937,7 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try leb128WriteU32(allocator, &code_section, body.len);
         try code_section.appendSlice(allocator, &body);
 
-        try out.append(allocator, @intFromEnum(SectionId.code_section));
+        try out.append(allocator, @backingInt(SectionId.code_section));
         try leb128WriteU32(allocator, &out, @intCast(code_section.items.len));
         try out.appendSlice(allocator, code_section.items);
     }
@@ -4962,23 +4962,23 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
             try leb128WriteU32(allocator, &sym_data, 2); // 2 symbols
 
             // Symbol 0: undefined function import "roc__main_exposed" (index 0)
-            try sym_data.append(allocator, @intFromEnum(WasmLinking.SymKind.function));
+            try sym_data.append(allocator, @backingInt(WasmLinking.SymKind.function));
             try leb128WriteU32(allocator, &sym_data, WasmLinking.SymFlag.UNDEFINED); // flags
             try leb128WriteU32(allocator, &sym_data, 0); // function index
 
             // Symbol 1: defined function "_start" (index 1)
-            try sym_data.append(allocator, @intFromEnum(WasmLinking.SymKind.function));
+            try sym_data.append(allocator, @backingInt(WasmLinking.SymKind.function));
             try leb128WriteU32(allocator, &sym_data, 0); // flags (defined, not undefined)
             try leb128WriteU32(allocator, &sym_data, 1); // function index
             try leb128WriteU32(allocator, &sym_data, 6); // name length
             try sym_data.appendSlice(allocator, "_start");
 
-            try linking_body.append(allocator, @intFromEnum(WasmLinking.LinkingSubsection.symbol_table));
+            try linking_body.append(allocator, @backingInt(WasmLinking.LinkingSubsection.symbol_table));
             try leb128WriteU32(allocator, &linking_body, @intCast(sym_data.items.len));
             try linking_body.appendSlice(allocator, sym_data.items);
         }
 
-        try out.append(allocator, @intFromEnum(SectionId.custom_section));
+        try out.append(allocator, @backingInt(SectionId.custom_section));
         try leb128WriteU32(allocator, &out, @intCast(linking_body.items.len));
         try out.appendSlice(allocator, linking_body.items);
     }
@@ -4993,17 +4993,17 @@ fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
         try reloc_body.appendSlice(allocator, "reloc.CODE");
 
         // Target section index (code section)
-        try leb128WriteU32(allocator, &reloc_body, @intFromEnum(SectionId.code_section));
+        try leb128WriteU32(allocator, &reloc_body, @backingInt(SectionId.code_section));
 
         // 1 relocation entry
         try leb128WriteU32(allocator, &reloc_body, 1);
 
         // R_WASM_FUNCTION_INDEX_LEB, offset=2 (after size+locals), symbol_index=0
-        try reloc_body.append(allocator, @intFromEnum(WasmLinking.IndexRelocType.function_index_leb));
+        try reloc_body.append(allocator, @backingInt(WasmLinking.IndexRelocType.function_index_leb));
         try leb128WriteU32(allocator, &reloc_body, 2); // offset within code_bytes
         try leb128WriteU32(allocator, &reloc_body, 0); // symbol index
 
-        try out.append(allocator, @intFromEnum(SectionId.custom_section));
+        try out.append(allocator, @backingInt(SectionId.custom_section));
         try leb128WriteU32(allocator, &out, @intCast(reloc_body.items.len));
         try out.appendSlice(allocator, reloc_body.items);
     }
@@ -5615,7 +5615,7 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     try module.global_imports.append(allocator, .{
         .module_name = "env",
         .field_name = "__stack_pointer",
-        .val_type = @intFromEnum(ValType.i32),
+        .val_type = @backingInt(ValType.i32),
         .mutable = true,
     });
     module.import_global_count = 1;
@@ -5782,7 +5782,7 @@ test "initial memory ends above static data and the reserved stack" {
     var module = Self.init(allocator);
     defer module.deinit();
 
-    _ = try module.addDataSegment(&([_]u8{0} ** 32), 16);
+    _ = try module.addDataSegment(&(@as([32]u8, @splat(0))), 16);
     try module.finalizeMemoryAndTable(1024 * 1024);
 
     try std.testing.expectEqual(module.stack_pointer_init, module.initialMemoryByteLen());
@@ -6443,7 +6443,7 @@ test "mergeModule—later weak definition resolves earlier undefined function im
     try std.testing.expectEqual(@as(u32, 2), host.table_func_indices.items[0]);
 
     try host.resolveRelocations();
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedU32(&expected, 0, 2);
     try std.testing.expectEqualSlices(u8, &expected, host.code_bytes.items[3..8]);
 
@@ -6544,7 +6544,7 @@ fn encodedDataSummary(bytes: []const u8) ParseError!EncodedDataSummary {
         const section_end = cursor + section_size;
         if (section_end > bytes.len) return error.UnexpectedEnd;
 
-        if (section_id == @intFromEnum(SectionId.data_section)) {
+        if (section_id == @backingInt(SectionId.data_section)) {
             const count = try readU32(bytes, &cursor);
             var payload_len: u32 = 0;
             for (0..count) |_| {
@@ -6591,7 +6591,7 @@ test "encode—omits bss payload when final memory starts zero-filled" {
     defer module.deinit();
 
     _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
-    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+    _ = try module.addDataSegmentWithInfo(&(@as([64]u8, @splat(0))), 16, ".bss.heap", 0);
     try std.testing.expect(module.data_segments.items[1].zero_fill);
 
     try module.finalizeMemoryAndTableWithConfig(.{
@@ -6617,7 +6617,7 @@ test "encode—keeps bss payload when imported memory may be uninitialized" {
     defer module.deinit();
 
     _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
-    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+    _ = try module.addDataSegmentWithInfo(&(@as([64]u8, @splat(0))), 16, ".bss.heap", 0);
 
     try module.finalizeMemoryAndTableWithConfig(.{
         .stack_bytes = 16,
@@ -6713,7 +6713,7 @@ test "resolveCodeRelocations—table_index_sleb resolves to table index not func
     try module.resolveCodeRelocations();
 
     // Should be patched to table index 2 (position in table_func_indices), NOT function index 4
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedI32(&expected, 0, 2);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -6746,7 +6746,7 @@ test "resolveCodeRelocations—table index relocation materializes a missing ele
     try module.resolveCodeRelocations();
 
     try std.testing.expectEqualSlices(u32, &.{0}, module.table_func_indices.items);
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedI32(&expected, 0, 0);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -6828,7 +6828,7 @@ test "BuiltinSymbols—all symbols found after merge" {
     // Spot check a few builtins (populate returns function index = enum index + 1,
     // since index 0 is the import and symbols are added in `BuiltinKind` order).
     try std.testing.expectEqual(@as(u32, 1), syms.get(.dec_mul)); // first defined fn after import
-    try std.testing.expectEqual(@as(u32, @intFromEnum(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
+    try std.testing.expectEqual(@as(u32, @backingInt(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
 }
 
 test "BuiltinSymbols—fails when symbol missing" {
@@ -6857,7 +6857,7 @@ test "resolveCodeRelocations—patches function call in code_bytes" {
     try module.resolveCodeRelocations();
 
     // Read the patched value at offset 3 (5-byte padded LEB128).
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedU32(&expected, 0, 42);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -7470,10 +7470,10 @@ test "all-zero static exports without relocations become zero-fill segments" {
     defer exports.deinit(allocator);
     // Capture the table's actual export index before adding its descriptor.
     const table_id = exports.items.len;
-    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &([_]u8{0} ** 64), .symbol_offset = 8, .alignment = 8, .is_exported = false });
-    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(table_id) }, .addend = 8 }};
+    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &(@as([64]u8, @splat(0))), .symbol_offset = 8, .alignment = 8, .is_exported = false });
+    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @fromBackingInt(@intCast(table_id)) }, .addend = 8 }};
     // The descriptor is zeroed too, but its relocation requires stored data.
-    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 12), .alignment = 4, .is_exported = false, .relocations = &relocations });
+    try exports.append(allocator, .{ .symbol_name = "descriptor", .bytes = &(@as([12]u8, @splat(0))), .alignment = 4, .is_exported = false, .relocations = &relocations });
     try exports.append(allocator, .{ .symbol_name = "filled", .bytes = &.{ 1, 0, 0, 0 }, .alignment = 4, .is_exported = false });
     try module.addStaticDataExports(exports.items);
     // Linear memory starts zeroed, so the table needs no bytes; the
@@ -7763,7 +7763,7 @@ test "eliminateDeadCode—exported function and its callees are preserved" {
     defer module.deinit();
 
     // No extra called_fns—only exports seed the live set.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // main_fn (3) is exported → live.
@@ -7790,7 +7790,7 @@ test "eliminateDeadCode—unreachable function body replaced with unreachable st
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7810,7 +7810,7 @@ test "eliminateDeadCode—dead import removed, dead_import_dummy_count increment
     const orig_import_count = module.imports.items.len;
     const orig_dummy_count = module.dead_import_dummy_count;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // js_unused (import 1) is only called by dead_fn which is dead.
@@ -7840,7 +7840,7 @@ test "eliminateDeadCode—non-function imports are preserved" {
     module.has_memory = true;
     module.has_table = true;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try std.testing.expect(module.has_memory);
@@ -7857,7 +7857,7 @@ test "eliminateDeadCode—indirect call targets (element section) preserved" {
     // it's in the table.
     try module.table_func_indices.append(allocator, 5);
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7877,7 +7877,7 @@ test "eliminateDeadCode—table indices follow compacted function imports" {
     // dead import before it is removed and shifts js_helper to function index 1.
     try module.table_func_indices.append(allocator, 2);
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
@@ -7893,7 +7893,7 @@ test "eliminateDeadCode—transitive callees preserved (A calls B calls C → al
     // main_fn (3) → helper_fn (4) → js_helper (import 2)
     // All three should be live. js_helper is an import that's called by
     // helper_fn which is called by exported main_fn.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // js_helper should still be in imports.
@@ -7915,7 +7915,7 @@ test "eliminateDeadCode—init functions preserved" {
     // But mark dead_fn (sym 5) as an init function—it should stay live.
     try module.linking.init_funcs.append(allocator, .{ .priority = 0, .symbol_index = 5 });
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7960,7 +7960,7 @@ test "eliminateDeadCode—call_indirect conservatively keeps matching-signature 
     // Remove the direct call to helper_fn (reloc at offset 10) so the only
     // reason dead_fn stays live is the indirect call.
     // Actually, let's keep things simple: just verify dead_fn is live.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -7980,7 +7980,7 @@ test "eliminateDeadCode—function indices unchanged after elimination" {
     // Record original function count.
     const orig_defined_count = module.function_offsets.items.len;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // The number of function_offsets entries should be unchanged
@@ -8124,7 +8124,7 @@ test "encode—code section function count includes dummies" {
         pos += 1;
         var cursor: usize = pos;
         const section_size = readU32(output, &cursor) catch unreachable;
-        if (section_id == @intFromEnum(SectionId.code_section)) {
+        if (section_id == @backingInt(SectionId.code_section)) {
             code_section_start = cursor;
             break;
         }
@@ -8158,7 +8158,7 @@ test "encode—dummy functions prepended before real functions in code section" 
         pos += 1;
         var cursor: usize = pos;
         const section_size = readU32(output, &cursor) catch unreachable;
-        if (section_id == @intFromEnum(SectionId.code_section)) {
+        if (section_id == @backingInt(SectionId.code_section)) {
             // Skip the function count
             _ = readU32(output, &cursor) catch unreachable;
             code_body_start = cursor;
@@ -8214,7 +8214,7 @@ test "encode—linking section NOT present in output" {
         const section_size = readU32(output, &cursor) catch unreachable;
         const section_end = cursor + section_size;
 
-        if (section_id == @intFromEnum(SectionId.custom_section)) {
+        if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
             const name_len = readU32(output, &cursor) catch unreachable;
             const name = output[cursor .. cursor + name_len];
@@ -8246,7 +8246,7 @@ test "encode—reloc.CODE section NOT present in output" {
         const section_size = readU32(output, &cursor) catch unreachable;
         const section_end = cursor + section_size;
 
-        if (section_id == @intFromEnum(SectionId.custom_section)) {
+        if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
             const name_len = readU32(output, &cursor) catch unreachable;
             const name = output[cursor .. cursor + name_len];

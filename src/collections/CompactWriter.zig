@@ -144,7 +144,7 @@ pub fn appendSlice(
     self.total_bytes += size * len;
 
     // Return the same slice type as the input
-    const result = if (info.pointer.is_const)
+    const result = if (info.pointer.attrs.@"const")
         @as([*]const T, @ptrFromInt(offset))[0..len]
     else
         @as([*]T, @ptrFromInt(offset))[0..len];

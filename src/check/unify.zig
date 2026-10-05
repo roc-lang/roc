@@ -622,8 +622,8 @@ const Unifier = struct {
     const visited_scan_limit = 16;
 
     fn visitedPairKey(self: *Self, a_var: Var, b_var: Var) VisitedPairKey {
-        const a = @intFromEnum(self.types_store.resolveVar(a_var).desc_idx);
-        const b = @intFromEnum(self.types_store.resolveVar(b_var).desc_idx);
+        const a = @backingInt(self.types_store.resolveVar(a_var).desc_idx);
+        const b = @backingInt(self.types_store.resolveVar(b_var).desc_idx);
         return .{ .low = @min(a, b), .high = @max(a, b) };
     }
 
@@ -1560,7 +1560,7 @@ const Unifier = struct {
             if (nominal.sourceDecl().present) {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
                 }
                 unreachable;
@@ -1593,7 +1593,7 @@ const Unifier = struct {
             for (args) |arg| {
                 _ = try self.scratch.opened_nominal_args.append(self.scratch.gpa, self.types_store.resolveVar(arg).var_);
             }
-            break :blk VarSafeList.Range{ .start = @enumFromInt(start), .count = @intCast(args.len) };
+            break :blk VarSafeList.Range{ .start = @fromBackingInt(@intCast(start)), .count = @intCast(args.len) };
         };
 
         // An earlier call in this generalization scope may already have
@@ -1628,7 +1628,7 @@ const Unifier = struct {
         const now: u32 = @intCast(self.types_store.len());
         var fresh_int: u32 = baseline;
         while (fresh_int < now) : (fresh_int += 1) {
-            _ = try self.scratch.fresh_vars.append(self.scratch.gpa, @enumFromInt(fresh_int));
+            _ = try self.scratch.fresh_vars.append(self.scratch.gpa, @fromBackingInt(@intCast(fresh_int)));
         }
 
         try self.scratch.opened_nominals.append(self.scratch.gpa, .{
@@ -1642,7 +1642,7 @@ const Unifier = struct {
         var persistable = true;
         var minted: u32 = baseline;
         while (minted < now) : (minted += 1) {
-            switch (self.types_store.resolveVar(@enumFromInt(minted)).desc.content) {
+            switch (self.types_store.resolveVar(@fromBackingInt(@intCast(minted))).desc.content) {
                 .flex, .rigid => {
                     persistable = false;
                     break;
@@ -3089,7 +3089,7 @@ const Unifier = struct {
         var i: u32 = shared_fields_range.len();
         while (i > 0) {
             i -= 1;
-            const idx: TwoRecordFieldsSafeList.Idx = @enumFromInt(@intFromEnum(shared_fields_range.start) + i);
+            const idx: TwoRecordFieldsSafeList.Idx = @fromBackingInt(@intCast(@backingInt(shared_fields_range.start) + i));
             var shared = self.scratch.in_both_fields.get(idx).*;
 
             // Merge field presence
@@ -3609,7 +3609,7 @@ const Unifier = struct {
         var shared_idx: u32 = shared_tags_range.len();
         while (shared_idx > 0) {
             shared_idx -= 1;
-            const idx: TwoTagsSafeList.Idx = @enumFromInt(@intFromEnum(shared_tags_range.start) + shared_idx);
+            const idx: TwoTagsSafeList.Idx = @fromBackingInt(@intCast(@backingInt(shared_tags_range.start) + shared_idx));
             const tags = self.scratch.in_both_tags.get(idx).*;
             if (tags.a.args.len() != tags.b.args.len()) return error.TypeMismatch;
 
@@ -3653,7 +3653,7 @@ const Unifier = struct {
         // unifyStaticDispatchConstraints, which appends to the same scratch buffer.
         // If that append causes reallocation, a cached slice would be invalidated.
         if (partitioned.in_both.len() > 0) {
-            const in_both_start: usize = @intFromEnum(partitioned.in_both.start);
+            const in_both_start: usize = @backingInt(partitioned.in_both.start);
             for (0..partitioned.in_both.len()) |i| {
                 // Re-fetch on each iteration since the backing array may have moved
                 const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
@@ -3793,11 +3793,11 @@ const Unifier = struct {
         };
 
         const a_indices = scratch.a_static_dispatch_constraint_indices.sliceRange(.{
-            .start = @enumFromInt(a_indices_start),
+            .start = @fromBackingInt(@intCast(a_indices_start)),
             .count = @intCast(a_constraints.len),
         });
         const b_indices = scratch.b_static_dispatch_constraint_indices.sliceRange(.{
-            .start = @enumFromInt(b_indices_start),
+            .start = @fromBackingInt(@intCast(b_indices_start)),
             .count = @intCast(b_constraints.len),
         });
         std.mem.sort(u32, a_indices, ConstraintOrder{
@@ -4449,7 +4449,7 @@ pub const Scratch = struct {
         const entry_index: u32 = @intCast(self.persistent_openings.items.len);
         try self.persistent_openings.append(self.gpa, .{
             .decl = memo.decl,
-            .args = .{ .start = @enumFromInt(start), .count = @intCast(key.args.len) },
+            .args = .{ .start = @fromBackingInt(@intCast(start)), .count = @intCast(key.args.len) },
             .opened = memo.opened,
         });
         errdefer _ = self.persistent_openings.pop();
@@ -4663,7 +4663,7 @@ pub const Scratch = struct {
         // Now we have: [sorted_base | sorted_extension]
         // Do an in-place merge using the standard merge technique
         // Get the slice starting from range.start with the new total length
-        const start_idx: usize = @intFromEnum(range.start);
+        const start_idx: usize = @backingInt(range.start);
         const total_len = current_len + new_count;
         const items = self.gathered_fields.items.items[start_idx..][0..total_len];
 
@@ -4724,7 +4724,7 @@ pub const Scratch = struct {
         }
 
         // In-place merge
-        const start_idx: usize = @intFromEnum(range.start);
+        const start_idx: usize = @backingInt(range.start);
         const total_len = current_len + new_count;
         const items = self.gathered_tags.items.items[start_idx..][0..total_len];
 
@@ -4970,9 +4970,9 @@ pub fn structurallyIncompatiblePair(
 /// Write `src` into `dest`, copying only the active variant's payload.
 fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
     const tag = std.meta.activeTag(src);
-    inline for (@typeInfo(U).@"union".fields) |field| {
-        if (tag == @field(std.meta.Tag(U), field.name)) {
-            dest.* = @unionInit(U, field.name, @field(src, field.name));
+    inline for (@typeInfo(U).@"union".field_names) |field_name| {
+        if (tag == @field(std.meta.Tag(U), field_name)) {
+            dest.* = @unionInit(U, field_name, @field(src, field_name));
             return;
         }
     }

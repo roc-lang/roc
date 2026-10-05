@@ -36,7 +36,7 @@ pub const DescriptorState = enum(u32) {
 /// block. The compiler parent owns byte reclamation; the shim only updates refs.
 pub const ImageDescriptor = extern struct {
     magic: u32 = DESCRIPTOR_MAGIC,
-    state: u32 = @intFromEnum(DescriptorState.reclaimed),
+    state: u32 = @backingInt(DescriptorState.reclaimed),
     refs: u32 = 0,
     _padding: u32 = 0,
     generation: u64 = 0,
@@ -57,7 +57,7 @@ pub const Control = extern struct {
     image_size: u64 = 0,
     ack_sequence: u64 = 0,
     acknowledged_generation: u64 = 0,
-    status: u32 = @intFromEnum(Status.none),
+    status: u32 = @backingInt(Status.none),
     _ack_padding: u32 = 0,
 };
 
@@ -127,7 +127,7 @@ inline fn storeU32(ptr: *u32, value: u32, comptime order: std.builtin.AtomicOrde
 }
 
 fn builtinModeDebug() bool {
-    return @import("builtin").mode == .Debug;
+    return @import("builtin").mode == .debug;
 }
 
 fn nextOddSequence(sequence: u64) u64 {
@@ -154,7 +154,7 @@ pub fn prepareDescriptor(
     reset_refs: bool,
 ) void {
     descriptor.magic = DESCRIPTOR_MAGIC;
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.writing), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.writing), .release);
     if (reset_refs) storeU32(&descriptor.refs, 0, .release);
     descriptor._padding = 0;
     storeU64(&descriptor.generation, generation, .release);
@@ -178,7 +178,7 @@ pub fn publishDescriptor(control: *Control, generation: u64, descriptor_offset: 
     const image_offset = loadU64(&descriptor.image_offset, .acquire);
     const image_size = loadU64(&descriptor.image_size, .acquire);
     storeU64(&descriptor.generation, generation, .release);
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.published), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.published), .release);
 
     const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
     storeU64(&control.publish_sequence, start, .release);
@@ -308,12 +308,12 @@ pub fn descriptorSnapshotFromOffset(base_ptr: [*]align(1) const u8, total_size: 
 
 /// Mark a descriptor as no longer published but not yet known reusable.
 pub fn markDescriptorRetired(descriptor: *ImageDescriptor) void {
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.retired), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.retired), .release);
 }
 
 /// Mark a descriptor reusable by a future compiler rebuild.
 pub fn markDescriptorReclaimed(descriptor: *ImageDescriptor) void {
-    storeU32(&descriptor.state, @intFromEnum(DescriptorState.reclaimed), .release);
+    storeU32(&descriptor.state, @backingInt(DescriptorState.reclaimed), .release);
 }
 
 /// Retain the latest published image while the shim installs it for direct execution.
@@ -371,7 +371,7 @@ pub fn releaseDescriptor(descriptor: *ImageDescriptor) void {
 pub fn acknowledge(control: *Control, generation: u64, status: Status) void {
     const start = nextOddSequence(loadU64(&control.ack_sequence, .acquire));
     storeU64(&control.ack_sequence, start, .release);
-    @atomicStore(u32, &control.status, @intFromEnum(status), .release);
+    @atomicStore(u32, &control.status, @backingInt(status), .release);
     storeU64(&control.acknowledged_generation, generation, .release);
     storeU64(&control.ack_sequence, start +% 1, .release);
 }
@@ -406,15 +406,15 @@ pub fn acknowledgement(control: *const Control) ?Acknowledgement {
 }
 
 fn statusFromRaw(raw: u32) Status {
-    if (raw == @intFromEnum(Status.accepted)) return .accepted;
-    if (raw == @intFromEnum(Status.rejected)) return .rejected;
+    if (raw == @backingInt(Status.accepted)) return .accepted;
+    if (raw == @backingInt(Status.rejected)) return .rejected;
     return .none;
 }
 
 fn descriptorStateFromRaw(raw: u32) DescriptorState {
-    if (raw == @intFromEnum(DescriptorState.writing)) return .writing;
-    if (raw == @intFromEnum(DescriptorState.published)) return .published;
-    if (raw == @intFromEnum(DescriptorState.retired)) return .retired;
+    if (raw == @backingInt(DescriptorState.writing)) return .writing;
+    if (raw == @backingInt(DescriptorState.published)) return .published;
+    if (raw == @backingInt(DescriptorState.retired)) return .retired;
     return .reclaimed;
 }
 
@@ -433,7 +433,7 @@ fn testDescriptor(base_ptr: [*]align(1) u8, offset: usize) *ImageDescriptor {
 }
 
 test "hot reload control publishes and acknowledges generations" {
-    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = @as([4096]u8, @splat(0));
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -489,7 +489,7 @@ test "hot reload acknowledgement snapshots reject in-progress writes" {
     control.format_version = FORMAT_VERSION;
 
     storeU64(&control.ack_sequence, 5, .release);
-    @atomicStore(u32, &control.status, @intFromEnum(Status.accepted), .release);
+    @atomicStore(u32, &control.status, @backingInt(Status.accepted), .release);
     storeU64(&control.acknowledged_generation, 2, .release);
     try std.testing.expect(acknowledgement(&control) == null);
 
@@ -504,7 +504,7 @@ test "hot reload control block fits in shared memory reserved header bytes" {
 }
 
 test "hot reload image descriptors can be retained and released" {
-    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = @as([4096]u8, @splat(0));
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -523,7 +523,7 @@ test "hot reload image descriptors can be retained and released" {
 }
 
 test "hot reload image retain rejects descriptors that stopped being current" {
-    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 8192;
+    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = @as([8192]u8, @splat(0));
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 

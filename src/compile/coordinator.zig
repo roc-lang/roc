@@ -1956,25 +1956,25 @@ pub const Coordinator = struct {
     /// Return the published checked artifact for a package root module.
     pub fn rootCheckedArtifact(self: *Coordinator, package_name: []const u8) *const check.CheckedArtifact.CheckedModuleArtifact {
         const pkg = self.packages.get(package_name) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator.rootCheckedArtifact missing package {s}", .{package_name});
             }
             unreachable;
         };
         const root_id = pkg.root_module_id orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator.rootCheckedArtifact missing root module for package {s}", .{package_name});
             }
             unreachable;
         };
         const root_mod = pkg.getModule(root_id) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator.rootCheckedArtifact root id out of range for package {s}", .{package_name});
             }
             unreachable;
         };
         return root_mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator.rootCheckedArtifact missing checked artifact for package {s}", .{package_name});
             }
             unreachable;
@@ -2115,7 +2115,7 @@ pub const Coordinator = struct {
     /// coordinator allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *Coordinator) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
             }
             unreachable;
@@ -2137,7 +2137,7 @@ pub const Coordinator = struct {
 
             if (pkg.root_file) |root_file| {
                 const state = pkg.root_file_state orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.panic("coordinator package {s} has root_file without root_file_state", .{pkg.name});
                     }
                     unreachable;
@@ -2147,7 +2147,7 @@ pub const Coordinator = struct {
 
             for (pkg.modules.items) |*mod| {
                 const state = mod.source_file_state orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.panic("coordinator module {s} has source path without source_file_state", .{mod.name});
                     }
                     unreachable;
@@ -2213,7 +2213,7 @@ pub const Coordinator = struct {
 
             for (view.direct_import_artifact_keys) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.panic("compile.coordinator missing direct dependency checked artifact", .{});
                     }
                     unreachable;
@@ -2223,7 +2223,7 @@ pub const Coordinator = struct {
 
             for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
                     }
                     unreachable;
@@ -2253,7 +2253,7 @@ pub const Coordinator = struct {
     }
 
     fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.panic("compile.coordinator invariant violated: " ++ message, args);
         }
         unreachable;
@@ -2270,7 +2270,7 @@ pub const Coordinator = struct {
         if (rootRelationContainsArtifact(root_artifact, key)) return;
         if (importedArtifactViewExists(views.items, key)) return;
         const artifact = self.checkedArtifactByKey(key) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator invariant violated: public API dependency references unavailable checked artifact", .{});
             }
             unreachable;
@@ -2517,7 +2517,7 @@ pub const Coordinator = struct {
 
     pub fn appRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
         const app_package_name = self.app_package_name orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator.appRootCheckedArtifact called before markAppPackage", .{});
             }
             unreachable;
@@ -2535,7 +2535,7 @@ pub const Coordinator = struct {
 
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
                 }
                 unreachable;
@@ -2591,25 +2591,25 @@ pub const Coordinator = struct {
             return null;
         };
         const pkg = self.packages.get(location.pkg_name) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
             }
             unreachable;
         };
         const mod = pkg.getModule(location.module_id) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
             }
             unreachable;
         };
         const artifact = mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
             }
             unreachable;
         };
         if (!std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
             }
             unreachable;
@@ -2630,7 +2630,7 @@ pub const Coordinator = struct {
     ) Allocator.Error!void {
         const artifact = mod.checkedArtifact() orelse return;
         const module_id = moduleIdForPtr(pkg, mod) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("compile.coordinator could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
             }
             unreachable;
@@ -3539,7 +3539,7 @@ pub const Coordinator = struct {
         checked_imports: []const check.CheckedArtifact.PublishImportArtifact,
     ) bool {
         for (env.imports.imports.items.items, 0..) |_, i| {
-            const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+            const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const resolved_module_idx = env.imports.getResolvedModule(import_idx) orelse continue;
 
             var found = false;
@@ -4079,7 +4079,7 @@ pub const Coordinator = struct {
 
     /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
     fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
-        if (comptime builtin.mode == .Debug) {
+        if (comptime builtin.mode == .debug) {
             var buf: [2048]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
             self.roc_ctx.writeStderr(msg) catch {};
@@ -5158,7 +5158,7 @@ pub const Coordinator = struct {
 
         const direct_imports = module_env.imports.imports.items.items;
         for (direct_imports, 0..) |str_idx, i| {
-            const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+            const import_idx: can.CIR.Import.Idx = @fromBackingInt(@intCast(i));
             const import_name = module_env.getString(str_idx);
 
             if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
@@ -5199,7 +5199,7 @@ pub const Coordinator = struct {
 
         module_env.imports.markUnresolvedImportsFailedBeforeChecking();
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             for (mod.imports.items) |edge| {
                 const imp = pkg.getModule(edge.module_id).?;
                 std.debug.assert(imp.completedSuccessfully());
@@ -5232,7 +5232,7 @@ pub const Coordinator = struct {
         const module_env = mod.moduleEnv().?;
         const direct_imports = module_env.imports.imports.items.items;
         for (direct_imports, 0..) |str_idx, i| {
-            const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+            const import_idx: can.CIR.Import.Idx = @fromBackingInt(@intCast(i));
             const import_name = module_env.getString(str_idx);
             const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
 
@@ -6793,7 +6793,7 @@ fn compileAppRootIdentityExpecting(
     errdefer allocator.free(stderr_bytes);
     var where_method_scheme_use_count: usize = 0;
     for (root.moduleEnvConst().scheme_uses.items.items) |record| {
-        if (record.slot_kind == @intFromEnum(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+        if (record.slot_kind == @backingInt(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
             where_method_scheme_use_count += 1;
         }
     }
@@ -6801,7 +6801,7 @@ fn compileAppRootIdentityExpecting(
     for (root.checked_bodies.stored_exprs.items) |expr| {
         if (expr.data != .call) continue;
         const target = expr.data.call.direct_target orelse continue;
-        if (root.resolved_value_refs.records[@intFromEnum(target)].ref == .platform_required_proc) {
+        if (root.resolved_value_refs.records[@backingInt(target)].ref == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }
@@ -8131,7 +8131,7 @@ fn hashPatternExtractionRegionsForView(
         const lookup = synthetic_lookup.data.lookup_local;
         if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
         if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
-        const resolved_index = @intFromEnum(lookup.resolved.?);
+        const resolved_index = @backingInt(lookup.resolved.?);
         if (resolved_index >= view.resolved_value_refs.records.len) return error.PatternExtractionResolvedRefMissing;
         const resolved = view.resolved_value_refs.records[resolved_index].ref;
         switch (root.kind) {
@@ -8147,11 +8147,11 @@ fn hashPatternExtractionRegionsForView(
         }
 
         hasher.update(&view.key.bytes);
-        hashU32IntoSha256(hasher, @intFromEnum(root.id));
-        hashU32IntoSha256(hasher, @intFromEnum(root.expr));
-        hashU32IntoSha256(hasher, @intFromEnum(extraction.base_expr));
-        hashU32IntoSha256(hasher, @intFromEnum(extraction.scrutinee_pattern));
-        hashU32IntoSha256(hasher, @intFromEnum(extraction.result_pattern));
+        hashU32IntoSha256(hasher, @backingInt(root.id));
+        hashU32IntoSha256(hasher, @backingInt(root.expr));
+        hashU32IntoSha256(hasher, @backingInt(extraction.base_expr));
+        hashU32IntoSha256(hasher, @backingInt(extraction.scrutinee_pattern));
+        hashU32IntoSha256(hasher, @backingInt(extraction.result_pattern));
         hashRegionIntoSha256(hasher, expected_base_region);
         hashRegionIntoSha256(hasher, base_expr.source_region);
         hashRegionIntoSha256(hasher, expected_match_region);
@@ -8166,7 +8166,7 @@ fn checkedExprForId(
     view: check.CheckedArtifact.ImportedModuleView,
     expr: check.CheckedArtifact.CheckedExprId,
 ) ?check.CheckedArtifact.CheckedExpr {
-    const index = @intFromEnum(expr);
+    const index = @backingInt(expr);
     if (index >= view.checked_bodies.exprCount()) return null;
     return view.checked_bodies.expr(expr);
 }
@@ -8175,7 +8175,7 @@ fn checkedPatternForId(
     view: check.CheckedArtifact.ImportedModuleView,
     pattern: check.CheckedArtifact.CheckedPatternId,
 ) ?check.CheckedArtifact.CheckedPattern {
-    const index = @intFromEnum(pattern);
+    const index = @backingInt(pattern);
     if (index >= view.checked_bodies.patternCount()) return null;
     return view.checked_bodies.pattern(pattern);
 }
@@ -8216,14 +8216,14 @@ fn hashExhaustivenessSitesForView(
     for (view.exhaustiveness_sites.sites) |site| {
         count.* += 1;
         hasher.update(&view.key.bytes);
-        hashU32IntoSha256(hasher, @intFromEnum(site.id));
+        hashU32IntoSha256(hasher, @backingInt(site.id));
         hashU32IntoSha256(hasher, switch (site.kind) {
             .match => 0,
             .destructure => 1,
         });
         hashRegionIntoSha256(hasher, site.region);
-        hashOptionalU32IntoSha256(hasher, if (site.checked_expr) |expr| @intFromEnum(expr) else null);
-        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern) |pattern| @intFromEnum(pattern) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_expr) |expr| @backingInt(expr) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern) |pattern| @backingInt(pattern) else null);
         hashExhaustivenessOwnerIntoSha256(hasher, site.owner);
         hashExhaustivenessPolicyIntoSha256(hasher, site.policy);
     }
@@ -8246,12 +8246,12 @@ fn hashExhaustivenessOwnerIntoSha256(
         .procedure_template => |template| {
             hashU32IntoSha256(hasher, 1);
             hasher.update(&template.artifact.bytes);
-            hashU32IntoSha256(hasher, @intFromEnum(template.proc_base));
-            hashU32IntoSha256(hasher, @intFromEnum(template.template));
+            hashU32IntoSha256(hasher, @backingInt(template.proc_base));
+            hashU32IntoSha256(hasher, @backingInt(template.template));
         },
         .root => |root| {
             hashU32IntoSha256(hasher, 2);
-            hashU32IntoSha256(hasher, @intFromEnum(root));
+            hashU32IntoSha256(hasher, @backingInt(root));
         },
     } else {
         hashU32IntoSha256(hasher, 0);
@@ -8265,7 +8265,7 @@ fn hashExhaustivenessPolicyIntoSha256(
     switch (policy) {
         .compile_time_replaced_by_root => |root| {
             hashU32IntoSha256(hasher, 0);
-            hashU32IntoSha256(hasher, @intFromEnum(root));
+            hashU32IntoSha256(hasher, @backingInt(root));
         },
         .compile_time_only => hashU32IntoSha256(hasher, 1),
         .runtime_reachable => hashU32IntoSha256(hasher, 2),
@@ -9180,7 +9180,7 @@ test "Coordinator collectWatchInputStates includes package root state" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{11} ** 32;
+    const root_hash = @as([32]u8, @splat(11));
     const pkg = try coord.ensurePackage("pkg", "/test/pkg");
     try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
 
@@ -9253,8 +9253,8 @@ test "Coordinator collectWatchInputStates includes module source file state" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{11} ** 32;
-    const module_hash = [_]u8{22} ** 32;
+    const root_hash = @as([32]u8, @splat(11));
+    const module_hash = @as([32]u8, @splat(22));
     const pkg = try coord.ensurePackage("pkg", "/test/pkg");
     try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
     const module_id = try pkg.ensureModule(allocator, "Foo", "/test/pkg/Foo.roc");
@@ -9670,7 +9670,7 @@ test "Coordinator post-check executor supports incremental sessions and repeated
         received += 1;
     }
     session.end();
-    var observed = [_]bool{false} ** tasks.len;
+    var observed = @as([tasks.len]bool, @splat(false));
     for (completions) |completion| {
         try std.testing.expect(completion.id < tasks.len);
         try std.testing.expect(!observed[completion.id]);
@@ -10441,7 +10441,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(allocator);
             defer visited.deinit();
             for (0..store.procSpecCount()) |proc_index| {
-                const proc = store.getProcSpec(@enumFromInt(proc_index));
+                const proc = store.getProcSpec(@fromBackingInt(@intCast(proc_index)));
                 if (proc.body) |body| try work.append(allocator, body);
             }
             while (work.pop()) |stmt_id| {

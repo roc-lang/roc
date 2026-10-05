@@ -87,13 +87,13 @@ fn assertMatches(comptime Fn: type, comptime params: []const Param) void {
     // `CallingConvention.c` is a per-target alias rather than a tag, so the
     // comparison is against the tag that alias resolves to on this target.
     const c_tag = std.meta.activeTag(std.builtin.CallingConvention.c);
-    if (std.meta.activeTag(info.calling_convention) != c_tag) {
+    if (std.meta.activeTag(info.attrs.@"callconv") != c_tag) {
         @compileError("RC callback ABI must be callconv(.c)");
     }
     if (info.return_type != void) @compileError("RC callback ABI must return void");
-    if (info.params.len != params.len) @compileError("RC callback ABI parameter count disagrees with its Param list");
-    inline for (info.params, params) |actual, expected| {
-        if (actual.type != paramType(expected)) {
+    if (info.param_types.len != params.len) @compileError("RC callback ABI parameter count disagrees with its Param list");
+    inline for (info.param_types, params) |actual, expected| {
+        if (actual != paramType(expected)) {
             @compileError("RC callback ABI parameter type disagrees with its Param list");
         }
     }

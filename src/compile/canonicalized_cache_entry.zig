@@ -71,7 +71,7 @@ pub fn encode(record: ParseStageRecord, dest: []u8) void {
     var offset: usize = 0;
     offset = writeU32(dest, offset, @intCast(record.diagnostics.len));
     for (record.diagnostics) |diagnostic| {
-        offset = writeU16(dest, offset, @intFromEnum(diagnostic.stage));
+        offset = writeU16(dest, offset, @backingInt(diagnostic.stage));
         offset = writeU16(dest, offset, diagnostic.tag);
         offset = writeU16(dest, offset, diagnostic.token_tag);
         offset = writeU16(dest, offset, 0);
@@ -81,7 +81,7 @@ pub fn encode(record: ParseStageRecord, dest: []u8) void {
 
     offset = writeU32(dest, offset, @intCast(record.local_imports.len));
     for (record.local_imports) |local_import| {
-        offset = writeU16(dest, offset, @intFromEnum(local_import.base));
+        offset = writeU16(dest, offset, @backingInt(local_import.base));
         offset = writeU16(dest, offset, local_import.parent_count);
         offset = writeU32(dest, offset, @intCast(local_import.import_name.len));
         @memcpy(dest[offset..][0..local_import.import_name.len], local_import.import_name);
@@ -200,8 +200,8 @@ fn validateDiagnosticTags(
 /// Convert a stored integer into `E` only when it names one of `E`'s values, so
 /// a corrupt entry is rejected instead of producing an out-of-range enum.
 fn enumFromIntChecked(comptime E: type, value: u16) ?E {
-    inline for (@typeInfo(E).@"enum".fields) |field| {
-        if (value == field.value) return @field(E, field.name);
+    inline for (@typeInfo(E).@"enum".field_names, @typeInfo(E).@"enum".field_values) |field_name, field_value| {
+        if (value == field_value) return @field(E, field_name);
     }
     return null;
 }
@@ -222,14 +222,14 @@ test "parse-stage record round-trips every field" {
     const diagnostics = [_]AST.ResolvedDiagnostic{
         .{
             .stage = .tokenize,
-            .tag = @intFromEnum(parse.tokenize.Diagnostic.Tag.UnclosedString),
-            .token_tag = @intFromEnum(AST.Token.Tag.EndOfFile),
+            .tag = @backingInt(parse.tokenize.Diagnostic.Tag.UnclosedString),
+            .token_tag = @backingInt(AST.Token.Tag.EndOfFile),
             .region = .{ .start = .{ .offset = 3 }, .end = .{ .offset = 9 } },
         },
         .{
             .stage = .parse,
-            .tag = @intFromEnum(AST.Diagnostic.Tag.missing_arrow),
-            .token_tag = @intFromEnum(AST.Token.Tag.LowerIdent),
+            .tag = @backingInt(AST.Diagnostic.Tag.missing_arrow),
+            .token_tag = @backingInt(AST.Token.Tag.LowerIdent),
             .region = .{ .start = .{ .offset = 11 }, .end = .{ .offset = 17 } },
         },
     };
@@ -281,8 +281,8 @@ test "parse-stage record rejects truncated and corrupt bytes" {
 
     const diagnostics = [_]AST.ResolvedDiagnostic{.{
         .stage = .parse,
-        .tag = @intFromEnum(AST.Diagnostic.Tag.missing_arrow),
-        .token_tag = @intFromEnum(AST.Token.Tag.LowerIdent),
+        .tag = @backingInt(AST.Diagnostic.Tag.missing_arrow),
+        .token_tag = @backingInt(AST.Token.Tag.LowerIdent),
         .region = .{ .start = .{ .offset = 1 }, .end = .{ .offset = 2 } },
     }};
     const local_imports = [_]LocalImport{

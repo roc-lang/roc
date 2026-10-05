@@ -80,8 +80,8 @@ fn f2ulz(a: f32) callconv(.{ .arm_aapcs = .{} }) u64 {
 pub fn HalveInt(comptime T: type, comptime signed_half: bool) type {
     return extern union {
         pub const bits = @divExact(@typeInfo(T).int.bits, 2);
-        pub const HalfTU = std.meta.Int(.unsigned, bits);
-        pub const HalfTS = std.meta.Int(.signed, bits);
+        pub const HalfTU = @Int(.unsigned, bits);
+        pub const HalfTS = @Int(.signed, bits);
         pub const HalfT = if (signed_half) HalfTS else HalfTU;
         all: T,
         s: if (builtin.cpu.arch.endian() == .little)

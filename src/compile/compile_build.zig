@@ -2532,7 +2532,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .Debug) std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+            if (builtin.mode == .debug) std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
             unreachable;
         }
 
@@ -2549,7 +2549,7 @@ pub const BuildEnv = struct {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
             const state = pkg.root_file_state orelse {
-                if (builtin.mode == .Debug) std.debug.panic("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
+                if (builtin.mode == .debug) std.debug.panic("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
                 unreachable;
             };
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
@@ -2562,7 +2562,7 @@ pub const BuildEnv = struct {
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
                     const state = mod.source_file_state orelse {
-                        if (builtin.mode == .Debug) std.debug.panic("coordinator module {s} has no source_file_state", .{mod.name});
+                        if (builtin.mode == .debug) std.debug.panic("coordinator module {s} has no source_file_state", .{mod.name});
                         unreachable;
                     };
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
@@ -3271,13 +3271,13 @@ pub const BuildEnv = struct {
 
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
         const semantic = self.getExecutableRootSemanticData() orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("build env invariant violated: executable root semantic data is missing", .{});
             }
             unreachable;
         };
         return semantic.checked_artifact orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("build env invariant violated: executable root has no checked artifact", .{});
             }
             unreachable;
@@ -3367,7 +3367,7 @@ pub const BuildEnv = struct {
         for (root_artifact.lowering_visibility.module_ids) |key| {
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
             const artifact = self.artifactByKey(key) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("build env invariant violated: missing lowering visibility artifact", .{});
                 }
                 unreachable;
@@ -3388,7 +3388,7 @@ pub const BuildEnv = struct {
 
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const artifact = self.artifactByKey(binding.app_value.artifact) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("build env invariant violated: missing relation artifact", .{});
                 }
                 unreachable;
@@ -3812,7 +3812,7 @@ pub const BuildEnv = struct {
                 const import_name = module.getString(str_idx);
                 for (all_module_envs, 0..) |candidate_env, module_idx| {
                     if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
-                        module.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                        module.imports.setResolvedModule(@fromBackingInt(@intCast(i)), @intCast(module_idx));
                         break;
                     }
                 }
@@ -3857,7 +3857,7 @@ test "BuildEnv collectWatchInputStates includes package root state" {
     defer env.deinit();
     env.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{7} ** 32;
+    const root_hash = @as([32]u8, @splat(7));
     const key = try allocator.dupe(u8, "pkg");
     errdefer allocator.free(key);
 
@@ -3918,7 +3918,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         .name = try allocator.dupe(u8, "pkg"),
         .kind = .package,
         .root_file = try allocator.dupe(u8, generated_app_path),
-        .root_file_state = .{ .hash = [_]u8{1} ** 32 },
+        .root_file_state = .{ .hash = @as([32]u8, @splat(1)) },
         .root_dir = try allocator.dupe(u8, generated_dir),
     });
 
@@ -3937,11 +3937,11 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     env.coordinator = coord;
 
     const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
-    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = [_]u8{1} ** 32 });
+    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = @as([32]u8, @splat(1)) });
     const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
     const coord_mod = &coord_pkg.modules.items[coord_module_id];
     coord_mod.source_dir_override = try allocator.dupe(u8, real_src_dir);
-    coord_mod.source_file_state = .{ .hash = [_]u8{2} ** 32 };
+    coord_mod.source_file_state = .{ .hash = @as([32]u8, @splat(2)) };
     try testing.expectEqualStrings(real_src_dir, coord_mod.canonicalSourceDir());
 
     const source = try allocator.dupe(u8, "main = 1\n");
@@ -3949,7 +3949,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.initCIRFields("App");
     const dep_idx = try module_env.recordFileDependency("data.txt", 0, 0);
-    const dep_hash = [_]u8{3} ** 32;
+    const dep_hash = @as([32]u8, @splat(3));
     module_env.setFileDependencyContentHash(dep_idx, dep_hash);
     coord_mod.semantic = .{ .module_env = module_env, .checked_artifact = null };
 

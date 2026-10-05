@@ -570,9 +570,9 @@ pub const Token = struct {
             .MalformedDotQuestionUnicodeIdent,
             .MalformedNoSpaceDotQuestionUnicodeIdent,
         };
-        const first = @intFromEnum(ordered_dot_suffix_tags[0]);
+        const first = @backingInt(ordered_dot_suffix_tags[0]);
         for (ordered_dot_suffix_tags, 0..) |tag, offset| {
-            if (@intFromEnum(tag) != first + offset) {
+            if (@backingInt(tag) != first + offset) {
                 @compileError("dot suffix token tags must remain contiguous for parser dispatch");
             }
         }
@@ -621,11 +621,11 @@ pub const Token = struct {
     /// parser can interpret are equal by construction.
     pub const valid_number_suffixes = blk: {
         const Suffix = NumericLiteral.DeprecatedSuffix;
-        const fields = @typeInfo(Suffix).@"enum".fields;
+        const fields = @typeInfo(Suffix).@"enum".field_values;
         var kvs: [fields.len - 1]struct { []const u8, void } = undefined;
         var i: usize = 0;
         for (fields) |field| {
-            const suffix: Suffix = @enumFromInt(field.value);
+            const suffix: Suffix = @fromBackingInt(@intCast(field));
             if (suffix.oldText()) |text| {
                 kvs[i] = .{ text, {} };
                 i += 1;
@@ -1877,7 +1877,7 @@ pub const Tokenizer = struct {
                 // first byte of a UTF-8 sequence
                 0x80...0xff => {
                     const valid = self.cursor.chompIdentGeneral();
-                    if (comptime @import("builtin").mode == .Debug) {
+                    if (comptime @import("builtin").mode == .debug) {
                         std.debug.assert(!valid);
                     } else if (valid) {
                         unreachable;

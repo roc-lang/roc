@@ -181,14 +181,14 @@ const Pass = struct {
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
             const args = self.store.getLocalSpan(proc.args);
             for (0..args.len) |index| {
                 const arg = GuardedList.at(args, index);
-                _ = self.local_info[@intFromEnum(arg)].markAll(self.allocator);
+                _ = self.local_info[@backingInt(arg)].markAll(self.allocator);
             }
         }
     }
@@ -198,9 +198,9 @@ const Pass = struct {
         while (changed) {
             changed = false;
             for (0..self.store.procSpecCount()) |proc_index| {
-                const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+                const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
                 const body = proc.body orelse continue;
-                if (try self.analyzeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) {
+                if (try self.analyzeProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))), body)) {
                     changed = true;
                 }
             }
@@ -238,7 +238,7 @@ const Pass = struct {
                 try self.pushStmt(s.next);
             },
             .assign_call => |s| {
-                const callee_index = @intFromEnum(s.proc);
+                const callee_index = @backingInt(s.proc);
                 if (callee_index >= self.proc_returns.len) tagReachabilityInvariant("callee proc id exceeded proc table");
                 if (try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index])) changed = true;
                 try self.pushStmt(s.next);
@@ -313,7 +313,7 @@ const Pass = struct {
                 try self.pushStmt(s.remainder);
             },
             .ret => |s| {
-                if (try self.proc_returns[@intFromEnum(proc_id)].mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
+                if (try self.proc_returns[@backingInt(proc_id)].mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
             },
             .expect_err,
             .jump,
@@ -386,7 +386,7 @@ const Pass = struct {
     fn collectUseCounts(self: *Pass) Allocator.Error!void {
         @memset(self.use_counts, 0);
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             try self.countStmtUses(stmt);
         }
     }
@@ -543,7 +543,7 @@ const Pass = struct {
     fn rewriteSwitches(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = self.store.getCFStmt(stmt_id);
             if (stmt != .switch_stmt) continue;
             const switch_stmt = stmt.switch_stmt;
@@ -591,7 +591,7 @@ const Pass = struct {
     fn removeDeadDiscriminantReads(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = self.store.getCFStmt(stmt_id);
             if (stmt != .assign_ref) continue;
             const assign = stmt.assign_ref;
@@ -610,7 +610,7 @@ const Pass = struct {
         if (self.redirects.count() == 0) return;
 
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpecPtr(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = self.store.getProcSpecPtr(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| proc.body = self.resolveRedirect(body);
             const join_points = self.store.getJoinPointSpanMut(proc.join_points);
             for (0..join_points.len) |index| {
@@ -621,7 +621,7 @@ const Pass = struct {
 
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = self.store.getCFStmtPtr(stmt_id);
             switch (stmt.*) {
                 .init_uninitialized => |*s| s.next = self.resolveRedirect(s.next),
@@ -718,11 +718,11 @@ const Pass = struct {
     }
 
     fn localInfo(self: *const Pass, local: LIR.LocalId) *const ValueInfo {
-        return &self.local_info[@intFromEnum(local)];
+        return &self.local_info[@backingInt(local)];
     }
 
     fn localInfoMut(self: *Pass, local: LIR.LocalId) *ValueInfo {
-        return &self.local_info[@intFromEnum(local)];
+        return &self.local_info[@backingInt(local)];
     }
 
     fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
@@ -730,16 +730,16 @@ const Pass = struct {
     }
 
     fn noteUse(self: *Pass, local: LIR.LocalId) void {
-        self.use_counts[@intFromEnum(local)] += 1;
+        self.use_counts[@backingInt(local)] += 1;
     }
 
     fn useCount(self: *Pass, local: LIR.LocalId) u32 {
-        return self.use_counts[@intFromEnum(local)];
+        return self.use_counts[@backingInt(local)];
     }
 };
 
 fn tagReachabilityInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("tag reachability invariant violated: {s}", .{message});
     }
     unreachable;

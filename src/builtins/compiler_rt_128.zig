@@ -37,8 +37,8 @@ const native_endian = builtin.cpu.arch.endian();
 fn HalveInt(comptime T: type, comptime signed_half: bool) type {
     return extern union {
         pub const bits = @divExact(@typeInfo(T).int.bits, 2);
-        pub const HalfTU = std.meta.Int(.unsigned, bits);
-        pub const HalfTS = std.meta.Int(.signed, bits);
+        pub const HalfTU = @Int(.unsigned, bits);
+        pub const HalfTS = @Int(.signed, bits);
         pub const HalfT = if (signed_half) HalfTS else HalfTU;
 
         all: T,
@@ -222,7 +222,7 @@ fn DivMod(comptime T: type) type {
 
 fn udivmod(comptime T: type, a_: T, b_: T) DivMod(T) {
     const HalfT = HalveInt(T, false).HalfT;
-    const SignedT = std.meta.Int(.signed, @bitSizeOf(T));
+    const SignedT = @Int(.signed, @bitSizeOf(T));
 
     if (b_ > a_) {
         return .{ .quot = 0, .rem = a_ };

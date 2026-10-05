@@ -96,7 +96,7 @@ fn fileRootNode(parser: *Parser) Allocator.Error!u32 {
 
 fn exprRootNode(parser: *Parser) Allocator.Error!u32 {
     const id = try parser.runExpr();
-    return @intFromEnum(id);
+    return @backingInt(id);
 }
 
 /// Parses a Roc expression - for use in REPL and snapshots.
@@ -109,7 +109,7 @@ pub fn expr(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
 
 fn headerRootNode(parser: *Parser) Allocator.Error!u32 {
     const id = try parser.runHeader();
-    return @intFromEnum(id);
+    return @backingInt(id);
 }
 
 /// Parses a Roc header - for use in snapshots.
@@ -122,12 +122,12 @@ pub fn header(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
 
 fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     const idx = try parser.runStatement();
-    return @intFromEnum(idx);
+    return @backingInt(idx);
 }
 
 fn topLevelStatementRootNode(parser: *Parser) Allocator.Error!u32 {
     const idx = try parser.runTopLevelStatement();
-    return @intFromEnum(idx);
+    return @backingInt(idx);
 }
 
 /// Parses a single Roc statement - for use in REPL and snapshots.
@@ -184,8 +184,8 @@ test "package S-expression emits each dependency once" {
 test "deeply nested parentheses parse stack-safely" {
     const gpa = std.testing.allocator;
 
-    const open_parens = "(" ** 512;
-    const close_parens = ")" ** 512;
+    const open_parens = @as([512]u8, @splat('('));
+    const close_parens = @as([512]u8, @splat(')'));
     const source = open_parens ++ "1" ++ close_parens;
 
     var env = try CommonEnv.init(gpa, source);
@@ -212,7 +212,7 @@ test "pipe question suffix precedence distinguishes empty call" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    const root = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx)));
     try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
     const items = ast.store.exprSlice(root.tuple.items);
     try std.testing.expectEqual(@as(usize, 3), items.len);
@@ -250,7 +250,7 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    const root = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx)));
     try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
     const items = ast.store.exprSlice(root.tuple.items);
     try std.testing.expectEqual(@as(usize, 7), items.len);
@@ -297,7 +297,7 @@ test "uppercase qualified value lookup ignores trivia before dot" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    const root = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx)));
     try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
     const items = ast.store.exprSlice(root.tuple.items);
     try std.testing.expectEqual(@as(usize, 5), items.len);
@@ -371,7 +371,7 @@ test "pipe target may be a method call on a literal receiver" {
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-        const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+        const root = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx)));
         try std.testing.expectEqual(.arrow_call, std.meta.activeTag(root));
         try std.testing.expectEqual(AST.PipeTargetKind.method_call, root.arrow_call.target_kind);
 
@@ -398,7 +398,7 @@ test "grouping a complete pipe target method call preserves result-call semantic
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const tuple = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).tuple;
+    const tuple = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx))).tuple;
     const items = ast.store.exprSlice(tuple.items);
     try std.testing.expectEqual(AST.PipeTargetKind.method_call, ast.store.getExpr(items[0]).arrow_call.target_kind);
     try std.testing.expectEqual(AST.PipeTargetKind.ordinary, ast.store.getExpr(items[1]).arrow_call.target_kind);
@@ -417,7 +417,7 @@ test "lowercase pipe receiver method is not parsed as a qualified value" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const tuple = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).tuple;
+    const tuple = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx))).tuple;
     const items = ast.store.exprSlice(tuple.items);
 
     const method_pipe = ast.store.getExpr(items[0]).arrow_call;
@@ -450,7 +450,7 @@ test "grouped pipe target ending in a field access starts a new suffix path" {
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-        const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+        const root = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx)));
         try std.testing.expectEqual(.arrow_call, std.meta.activeTag(root));
 
         const outer = ast.store.getExpr(root.arrow_call.right).field_access;
@@ -479,7 +479,7 @@ test "optional record type fields preserve their source marker" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const stmt_idx: AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
+    const stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
     const stmt = ast.store.getStatement(stmt_idx);
     try std.testing.expectEqual(.type_anno, std.meta.activeTag(stmt));
 
@@ -534,7 +534,7 @@ test "optional field access parses as a one-segment field path" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const expr_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
     const access = ast.store.getExpr(expr_idx).field_access;
     const segments = ast.store.fieldAccessSegmentSlice(access.segments);
     try std.testing.expectEqual(@as(usize, 1), segments.len);
@@ -562,7 +562,7 @@ test "optional field access binds before try propagation and defaulting" {
         defer ast.deinit();
 
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root_idx: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const root = ast.store.getExpr(root_idx);
         try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(root));
 
@@ -581,7 +581,7 @@ test "optional field access binds before try propagation and defaulting" {
         defer ast.deinit();
 
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root_idx: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const root = ast.store.getExpr(root_idx);
         try std.testing.expectEqual(.bin_op, std.meta.activeTag(root));
         try std.testing.expectEqual(AST.Token.Tag.OpDoubleQuestion, ast.tokens.tokenTag(root.bin_op.operator));
@@ -601,7 +601,7 @@ test "mixed required and optional field path is one source-ordered AST node" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const root: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const root: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
     const path = ast.store.getExpr(root).field_access;
     const segments = ast.store.fieldAccessSegmentSlice(path.segments);
     try std.testing.expectEqual(@as(usize, 5), segments.len);
@@ -639,7 +639,7 @@ test "parentheses and non-field suffixes form field path boundaries" {
         defer ast.deinit();
 
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-        const root: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const c = ast.store.getExpr(root).field_access;
         const c_segments = ast.store.fieldAccessSegmentSlice(c.segments);
         try std.testing.expectEqual(@as(usize, 1), c_segments.len);
@@ -660,7 +660,7 @@ test "parentheses and non-field suffixes form field path boundaries" {
         defer ast.deinit();
 
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-        const root: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const c = ast.store.getExpr(root).field_access;
         const c_segments = ast.store.fieldAccessSegmentSlice(c.segments);
         try std.testing.expectEqual(@as(usize, 1), c_segments.len);
@@ -722,7 +722,7 @@ test "optional function fields must be propagated before application" {
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root_idx: AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const root = ast.store.getExpr(root_idx);
         try std.testing.expectEqual(.apply, std.meta.activeTag(root));
         const propagated = ast.store.getExpr(root.apply.@"fn");
@@ -741,7 +741,7 @@ test "optional function fields must be propagated before application" {
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-        const field = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+        const field = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx))).field_access;
         try std.testing.expectEqual(AST.FieldAccessMode.required, ast.store.fieldAccessSegmentSlice(field.segments)[0].mode);
         const method = ast.store.getExpr(field.receiver).method_call;
         const receiver_path = ast.store.getExpr(method.receiver).field_access;
@@ -758,7 +758,7 @@ test "optional function fields must be propagated before application" {
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-        const field = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+        const field = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx))).field_access;
         try std.testing.expectEqual(AST.FieldAccessMode.required, ast.store.fieldAccessSegmentSlice(field.segments)[0].mode);
         const apply = ast.store.getExpr(field.receiver).apply;
         const propagated = ast.store.getExpr(apply.@"fn");
@@ -786,7 +786,7 @@ test "deep optional field access chains parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const path = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+    const path = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx))).field_access;
     const segments = ast.store.fieldAccessSegmentSlice(path.segments);
     try std.testing.expectEqual(@as(usize, depth), segments.len);
     for (segments) |segment| {
@@ -819,7 +819,7 @@ test "deep mixed field access chains stay flat and source-ordered" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const path = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+    const path = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx))).field_access;
     const segments = ast.store.fieldAccessSegmentSlice(path.segments);
     try std.testing.expectEqual(@as(usize, depth), segments.len);
     for (segments, 0..) |segment, i| {
@@ -884,7 +884,7 @@ test "abandoned inner record leaves no phantom fields on the outer record" {
         ast.parse_diagnostics.items[0].tag,
     );
 
-    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    const root = ast.store.getExpr(@fromBackingInt(@intCast(ast.root_node_idx)));
     try std.testing.expectEqual(.record, std.meta.activeTag(root));
     const fields = ast.store.recordFieldSlice(root.record.fields);
     try std.testing.expectEqual(@as(usize, 2), fields.len);
@@ -1054,7 +1054,7 @@ test "parser records top-level type declaration dependencies" {
     const parsed_file = ast.store.getFile();
     const decls = ast.decl_index.scopeDecls(parsed_file.scope);
     for (decls) |decl_idx| {
-        const decl = ast.decl_index.decls.items[@intFromEnum(decl_idx)];
+        const decl = ast.decl_index.decls.items[@backingInt(decl_idx)];
         if (decl.kind != .type_alias) continue;
         const name_ident = decl.name_ident orelse continue;
         if (!std.mem.eql(u8, env.getIdent(name_ident), "A")) continue;
@@ -1106,10 +1106,10 @@ test "parser records nested associated owner paths" {
         if (!std.mem.eql(u8, env.getIdent(name_ident), "val")) continue;
 
         const owner_path = decl.owner_type_path orelse return error.MissingOwnerPath;
-        const owner = ast.decl_index.type_paths.items[@intFromEnum(owner_path)];
+        const owner = ast.decl_index.type_paths.items[@backingInt(owner_path)];
         try std.testing.expectEqualStrings("Nested", env.getIdent(owner.name));
         const parent_path = owner.parent orelse return error.MissingParentPath;
-        const parent = ast.decl_index.type_paths.items[@intFromEnum(parent_path)];
+        const parent = ast.decl_index.type_paths.items[@backingInt(parent_path)];
         try std.testing.expectEqualStrings("Parent", env.getIdent(parent.name));
 
         const assoc_decls = ast.decl_index.assocValueDecls(owner_path, name_ident);
@@ -1175,8 +1175,8 @@ test "parser keeps block-local type paths lexically distinct" {
     try std.testing.expect(first_inner_path != null);
     try std.testing.expect(second_inner_path != null);
 
-    try std.testing.expect(@intFromEnum(first_t_path.?) != @intFromEnum(second_t_path.?));
-    try std.testing.expect(@intFromEnum(first_inner_path.?) != @intFromEnum(second_inner_path.?));
+    try std.testing.expect(@backingInt(first_t_path.?) != @backingInt(second_t_path.?));
+    try std.testing.expect(@backingInt(first_inner_path.?) != @backingInt(second_inner_path.?));
 }
 
 test "parser does not create a type path for malformed associated type headers" {
@@ -1296,7 +1296,12 @@ test "a dotted upper where alias candidate without a colon is a parse error" {
 
 test "bidi source rejection and omitted diagnostics survive the parser boundary" {
     const gpa = std.testing.allocator;
-    const source = "# " ++ "\u{202e}" ** 140;
+    const source = "# " ++ repeated: {
+        const pattern = "\u{202e}";
+        var result: [pattern.len * (140)]@TypeOf(pattern[0]) = undefined;
+        for (0..(140)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated &result;
+    };
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
     const ast = try file(gpa, &env);

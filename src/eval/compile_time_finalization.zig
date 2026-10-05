@@ -132,7 +132,7 @@ const DebugEvents = struct {
     fn lessThan(_: void, a: Event, b: Event) bool {
         const order = std.mem.order(u8, &a.module.bytes, &b.module.bytes);
         if (order != .eq) return order == .lt;
-        if (a.root != b.root) return @intFromEnum(a.root) < @intFromEnum(b.root);
+        if (a.root != b.root) return @backingInt(a.root) < @backingInt(b.root);
         return a.sequence < b.sequence;
     }
 
@@ -239,7 +239,7 @@ const ModuleOwners = struct {
     }
 
     fn position(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) ?u32 {
-        const raw = @intFromEnum(id);
+        const raw = @backingInt(id);
         if (raw >= self.positions.len) {
             finalizationInvariant("lowered row named a checked module outside the lowering's module table");
         }
@@ -258,7 +258,7 @@ const ModuleOwners = struct {
         if (self.position(id)) |first| return .{ .owners = self, .next = first, .unfinalized = null };
         const reports = self.unfinalized orelse
             finalizationInvariant("compile-time failure named a checked module this finalization neither completes nor reports for");
-        return .{ .owners = self, .next = null, .unfinalized = try reports.module(reports.context, self.lowering_modules[@intFromEnum(id)]) };
+        return .{ .owners = self, .next = null, .unfinalized = try reports.module(reports.context, self.lowering_modules[@backingInt(id)]) };
     }
 };
 
@@ -315,10 +315,10 @@ pub const ProgramSession = struct {
             if (!std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                 finalizationInvariant("runtime policy differs from the compilation's declared consumer");
         }
-        inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".fields) |field| {
-            const expected = @field(self.runtime_roots, field.name);
-            const actual = @field(roots, field.name);
-            if (@typeInfo(field.type) == .pointer) {
+        inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_names, @typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_types) |field_name, field_type| {
+            const expected = @field(self.runtime_roots, field_name);
+            const actual = @field(roots, field_name);
+            if (@typeInfo(field_type) == .pointer) {
                 if (expected.len != actual.len) finalizationInvariant("runtime request differs from the declared consumer");
                 for (expected, actual) |a, b| {
                     if (!std.meta.eql(a, b)) finalizationInvariant("runtime root metadata differs from the declared consumer");
@@ -454,20 +454,20 @@ fn transcodeCompletedSlots(
     @memset(source_symbols, null);
     for (frozen.exports, 0..) |item, symbol| {
         const slot = item.value_id orelse continue;
-        source_symbols[@intFromEnum(slot)] = @enumFromInt(symbol);
+        source_symbols[@backingInt(slot)] = @fromBackingInt(@intCast(symbol));
     }
     for (target.static_data_values.items, 0..) |target_entry, index| {
         const target_root = target_entry.compile_time_root orelse continue;
-        const target_slot: lir.LIR.StaticDataId = @enumFromInt(index);
+        const target_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(index));
         const ordinal = source_slots.get(.{ .module = target_root.module, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
             finalizationInvariant("target slot has no corresponding host root");
         const source_entry = source.lir_result.static_data_values.items[ordinal];
-        const source_symbol = frozenSlotSymbol(source_symbols, @enumFromInt(ordinal));
+        const source_symbol = frozenSlotSymbol(source_symbols, @fromBackingInt(@intCast(ordinal)));
         const failed = if (target_root.role == .value) block: {
             const failure_slot = source_entry.compile_time_root.?.role.value.failure_slot;
-            const failure_entry = source.lir_result.static_data_values.items[@intFromEnum(failure_slot)];
+            const failure_entry = source.lir_result.static_data_values.items[@backingInt(failure_slot)];
             const failure_symbol = frozenSlotSymbol(source_symbols, failure_slot);
-            const failure_export = frozen.exports[@intFromEnum(failure_symbol)];
+            const failure_export = frozen.exports[@backingInt(failure_symbol)];
             const offset = failure_entry.compile_time_root.?.role.failure_message.failed_offset;
             break :block failure_export.bytes[failure_export.symbol_offset + offset] != 0;
         } else false;
@@ -488,13 +488,13 @@ fn transcodeCompletedSlots(
 }
 
 fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
-    return symbols[@intFromEnum(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
+    return symbols[@backingInt(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
 }
 
 /// Failed values have no representation to convert. Their explicit guard
 /// owns the failure; reserve the destination slot without inspecting its bytes.
 fn uninitializedFailedSlot(allocator: Allocator, program: *const LirProgram.Result, slot: lir.LIR.StaticDataId) Allocator.Error![]static_data_exports.StaticDataExport {
-    const entry = program.static_data_values.items[@intFromEnum(slot)];
+    const entry = program.static_data_values.items[@backingInt(slot)];
     const size_align = program.layouts.layoutSizeAlign(program.layouts.getLayout(entry.layout_idx));
     const name = try LirProgram.staticDataSymbolName(allocator, slot);
     errdefer allocator.free(name);
@@ -510,7 +510,7 @@ fn appendFrozenGraph(allocator: Allocator, destination: *std.ArrayList(static_da
     try destination.ensureUnusedCapacity(allocator, graph.len);
     const start = destination.items.len;
     for (graph) |*item| for (@constCast(item.relocations)) |*relocation| {
-        if (relocation.target == .data_symbol) relocation.target.data_symbol = @enumFromInt(start + @intFromEnum(relocation.target.data_symbol));
+        if (relocation.target == .data_symbol) relocation.target.data_symbol = @fromBackingInt(@intCast(start + @backingInt(relocation.target.data_symbol)));
     };
     destination.appendSliceAssumeCapacity(graph);
 }
@@ -521,17 +521,17 @@ fn cloneRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootReques
         .include_internal_static_data = roots.include_internal_static_data,
     };
     errdefer deinitRootRequests(allocator, owned);
-    inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".fields) |field| {
-        if (@typeInfo(field.type) == .pointer) {
-            @field(owned, field.name) = try allocator.dupe(@typeInfo(field.type).pointer.child, @field(roots, field.name));
+    inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_names, @typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_types) |field_name, field_type| {
+        if (@typeInfo(field_type) == .pointer) {
+            @field(owned, field_name) = try allocator.dupe(@typeInfo(field_type).pointer.child, @field(roots, field_name));
         }
     }
     return owned;
 }
 
 fn deinitRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootRequestSet) void {
-    inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".fields) |field| {
-        if (@typeInfo(field.type) == .pointer) allocator.free(@field(roots, field.name));
+    inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_names, @typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_types) |field_name, field_type| {
+        if (@typeInfo(field_type) == .pointer) allocator.free(@field(roots, field_name));
     }
 }
 
@@ -936,7 +936,7 @@ fn finalizeLoweredProgram(
 
         fn ensure(context: *anyopaque, slot: lir.LIR.StaticDataId) (FinalizeError || error{CompileTimeDependencyCycle})!void {
             const self: *Self = @ptrCast(@alignCast(context));
-            const ordinal = self.slot_roots[@intFromEnum(slot)] orelse return;
+            const ordinal = self.slot_roots[@backingInt(slot)] orelse return;
             try self.evaluate(ordinal);
         }
 
@@ -945,7 +945,7 @@ fn finalizeLoweredProgram(
             const root = self.roots[ordinal];
             const first_state = &self.states[root.module];
             const id = first_state.completion.request_root_ids[root.request];
-            const demand_ordinal = first_state.ordinals[@intFromEnum(id)].?;
+            const demand_ordinal = first_state.ordinals[@backingInt(id)].?;
             if (first_state.completion.isDone(id)) return;
             if (self.active[demand_ordinal]) return error.CompileTimeDependencyCycle;
             self.active[demand_ordinal] = true;
@@ -1006,7 +1006,7 @@ fn finalizeLoweredProgram(
     @memset(slot_roots, null);
     const literal_roots = lowered.lir_result.literal_roots.items;
     for (literal_roots, 0..) |plan, index| {
-        if (@intFromEnum(plan.id) != index) finalizationInvariant("lowered program published a literal root away from its id");
+        if (@backingInt(plan.id) != index) finalizationInvariant("lowered program published a literal root away from its id");
     }
     const literal_active = try allocator.alloc(bool, literal_roots.len);
     defer allocator.free(literal_active);
@@ -1038,7 +1038,7 @@ fn finalizeLoweredProgram(
         const state = &states[module_index];
         const request_index = state.completion.requestIndexForRoot(root_id);
         roots[ordinal] = .{ .module = module_index, .request = request_index };
-        const slot = &state.ordinals[@intFromEnum(root_id)];
+        const slot = &state.ordinals[@backingInt(root_id)];
         if (slot.*) |existing| {
             if (owners.next_alias[module_index] == null) {
                 finalizationInvariant("lowered program published one compile-time root twice");
@@ -1052,13 +1052,13 @@ fn finalizeLoweredProgram(
             var alias: ?u32 = module_index;
             while (alias) |index| : (alias = owners.next_alias[index]) {
                 _ = states[index].completion.requestIndexForRoot(root_id);
-                states[index].ordinals[@intFromEnum(root_id)] = ordinal;
+                states[index].ordinals[@backingInt(root_id)] = ordinal;
             }
         }
     }
     for (states) |*state| {
         for (state.completion.request_root_ids) |id| {
-            if (state.ordinals[@intFromEnum(id)] == null) {
+            if (state.ordinals[@backingInt(id)] == null) {
                 finalizationInvariant("lowered program omitted a requested compile-time root");
             }
         }
@@ -1067,18 +1067,18 @@ fn finalizeLoweredProgram(
     for (const_roots[0..root_count]) |plan| {
         const module_index = owners.position(plan.owner).?;
         const root_id = plan.request.compile_time_root.?;
-        const ordinal = states[module_index].ordinals[@intFromEnum(root_id)].?;
+        const ordinal = states[module_index].ordinals[@backingInt(root_id)].?;
         var next = publication.first(plan.owner, .{ .checked = root_id });
         while (next) |slot| {
-            slot_roots[@intFromEnum(slot)] = ordinal;
-            next = publication.next[@intFromEnum(slot)];
+            slot_roots[@backingInt(slot)] = ordinal;
+            next = publication.next[@backingInt(slot)];
         }
     }
     for (literal_roots, 0..) |plan, index| {
         var next = publication.first(plan.site.owner, .{ .literal = plan.id });
         while (next) |slot| {
-            slot_roots[@intFromEnum(slot)] = root_count + index;
-            next = publication.next[@intFromEnum(slot)];
+            slot_roots[@backingInt(slot)] = root_count + index;
+            next = publication.next[@backingInt(slot)];
         }
     }
     for (lowered.lir_result.static_data_values.items, slot_roots) |slot, owner| {
@@ -1226,8 +1226,8 @@ pub const TimingSnapshot = struct {
 
 test "shared lowering timing preserves full snapshots through aggregation" {
     var lowering: lir.CheckedPipeline.TimingSnapshot = .{};
-    inline for (std.meta.fields(lir.CheckedPipeline.TimingSnapshot), 0..) |field, i| {
-        if (field.type == u64) @field(lowering, field.name) = i + 1;
+    inline for (@typeInfo(lir.CheckedPipeline.TimingSnapshot).@"struct".field_names, 0..) |field_name, i| {
+        if (@FieldType(lir.CheckedPipeline.TimingSnapshot, field_name) == u64) @field(lowering, field_name) = i + 1;
     }
     lowering.monotype_parallel.specialization_tasks_submitted = 11;
     lowering.monotype_parallel.peak_worker_lanes_used = 4;
@@ -1498,7 +1498,7 @@ const RootCompletionState = struct {
         @memset(request_index_by_root, no_request);
         for (module.root_requests.compile_time_requests, 0..) |request, i| {
             const root_id = compileTimeRootForRequest(module, request);
-            const raw = @intFromEnum(root_id);
+            const raw = @backingInt(root_id);
             if (requested_roots[raw]) {
                 finalizationInvariant("compile-time root was requested more than once");
             }
@@ -1531,7 +1531,7 @@ const RootCompletionState = struct {
     /// finalization asks the owner for the position instead of assuming the
     /// plan appears at the same offset the request did.
     fn requestIndexForRoot(self: *const RootCompletionState, root_id: checked.ComptimeRootId) usize {
-        const raw = @intFromEnum(root_id);
+        const raw = @backingInt(root_id);
         if (raw >= self.request_index_by_root.len) {
             finalizationInvariant("compile-time root id is outside its declared owner's root table");
         }
@@ -1554,11 +1554,11 @@ const RootCompletionState = struct {
     }
 
     fn isDone(self: *const RootCompletionState, root_id: checked.ComptimeRootId) bool {
-        return self.statuses[@intFromEnum(root_id)] == .done;
+        return self.statuses[@backingInt(root_id)] == .done;
     }
 
     fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
-        self.statuses[@intFromEnum(root_id)] = .done;
+        self.statuses[@backingInt(root_id)] = .done;
     }
 
     fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
@@ -1602,7 +1602,7 @@ const RootCompletionState = struct {
         template_ref: canonical.ProcedureTemplateRef,
     ) Allocator.Error!bool {
         if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
-        const index = @intFromEnum(template_ref.template);
+        const index = @backingInt(template_ref.template);
         if (index >= self.visited_templates.len) {
             finalizationInvariant("compile-time dependency referenced an unknown local procedure template");
         }
@@ -1617,7 +1617,7 @@ const RootCompletionState = struct {
             finalizationInvariant("compile-time dependency template-ref span was outside the checked table");
         }
         for (self.module.resolved_value_refs.template_refs[start..end]) |ref_id| {
-            const raw = @intFromEnum(ref_id);
+            const raw = @backingInt(ref_id);
             if (raw >= self.module.resolved_value_refs.records.len) {
                 finalizationInvariant("compile-time dependency ref id was outside the checked table");
             }
@@ -1700,7 +1700,7 @@ const RootCompletionState = struct {
         };
         if (!is_strict) return true;
 
-        return !self.requested_roots[@intFromEnum(dependency_root_id)] or self.isDone(dependency_root_id);
+        return !self.requested_roots[@backingInt(dependency_root_id)] or self.isDone(dependency_root_id);
     }
 
     fn rootForConstRef(
@@ -1746,7 +1746,7 @@ const RootCompletionState = struct {
             .imported, .hosted => return .{ .complete = true },
             .platform_required => |required| {
                 if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
-                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
+                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse
                     finalizationInvariant("platform-required procedure dependency referenced a missing binding");
                 switch (required_binding.value_use) {
                     .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,
@@ -2037,7 +2037,7 @@ const LiteralRootFailures = struct {
     }
 
     fn record(self: *LiteralRootFailures, allocator: Allocator, id: lir.LIR.LiteralRootId, cause: Cause, failure: LiteralRootFailure) Allocator.Error!void {
-        const destination = &self.records[@intFromEnum(id)];
+        const destination = &self.records[@backingInt(id)];
         std.debug.assert(destination.* == null);
         destination.* = switch (cause) {
             .literal => |read| .{ .literal = read },
@@ -2062,7 +2062,7 @@ const LiteralRootFailures = struct {
     fn source(self: *const LiteralRootFailures, id: lir.LIR.LiteralRootId) ?lir.LIR.LiteralRootId {
         var current = id;
         while (true) {
-            const entry = self.records[@intFromEnum(current)] orelse
+            const entry = self.records[@backingInt(current)] orelse
                 finalizationInvariant("a failed literal root value was read before its root failed");
             switch (entry) {
                 .own => return current,
@@ -2084,7 +2084,7 @@ test "literal root failures leave no record when retaining a message runs out of
     var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
     const failure = LiteralRootFailure{ .message = "rejected", .stmt = null, .region = null, .loc = null };
     for (failures.records, 0..) |_, index| {
-        const id: lir.LIR.LiteralRootId = @enumFromInt(index);
+        const id: lir.LIR.LiteralRootId = @fromBackingInt(@intCast(index));
         try std.testing.expectError(error.OutOfMemory, failures.record(failing.allocator(), id, .crash, failure));
         try std.testing.expect(failures.records[0] == null);
         try std.testing.expectEqual(@as(usize, 0), failures.messages.items.len);
@@ -2097,7 +2097,7 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
     var failures = try LiteralRootFailures.init(allocator, 6);
     defer failures.deinit(allocator);
     var root_ids: [6]lir.LIR.LiteralRootId = undefined;
-    for (failures.records, 0..) |_, index| root_ids[index] = @enumFromInt(index);
+    for (failures.records, 0..) |_, index| root_ids[index] = @fromBackingInt(@intCast(index));
     try std.testing.expectEqual(@as(usize, 0), failures.messages.capacity);
 
     const expected = "this message is long enough to live on the heap";
@@ -2105,7 +2105,7 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
     @memcpy(&temporary, expected);
     const failure = LiteralRootFailure{
         .message = &temporary,
-        .stmt = @enumFromInt(17),
+        .stmt = @fromBackingInt(@intCast(17)),
         .region = base.Region.from_raw_offsets(3, 8),
         .loc = .{ .file = 2, .line = 4, .column = 5 },
     };
@@ -2155,7 +2155,7 @@ fn guardProducerSlot(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LI
     const stmt = failed_stmt orelse return null;
     for (lir_result.comptime_value_guards.items) |guard| {
         if (guard.crash != stmt and guard.checked_crash != stmt) continue;
-        const root = lir_result.static_data_values.items[@intFromEnum(guard.value_slot)].compile_time_root orelse
+        const root = lir_result.static_data_values.items[@backingInt(guard.value_slot)].compile_time_root orelse
             finalizationInvariant("value guard slot lost its compile-time producer");
         return .{ .module = root.module, .root = root.root };
     }
@@ -2217,8 +2217,8 @@ fn reportEmbeddedFailure(
             const failures = owners.literal_failures orelse
                 finalizationInvariant("a literal root guard was read in a program without literal roots");
             const source = failures.source(read) orelse return .reported_elsewhere;
-            failures.embedded[@intFromEnum(source)] = true;
-            const own = failures.records[@intFromEnum(source)].?.own;
+            failures.embedded[@backingInt(source)] = true;
+            const own = failures.records[@backingInt(source)].?.own;
             const failure = own.borrow(failures.messages.items);
             break :blk .{
                 .kind = own.kind,
@@ -2428,7 +2428,7 @@ fn reportLiteralRootFailure(
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@enumFromInt(plan.site.checked_expr)).source_region;
+        const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, failure.region, failure.loc);
         const message_idx = try store.putExtraString(failure.message);
         _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
@@ -2451,7 +2451,7 @@ fn reportLiteralRootExpectFailure(
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@enumFromInt(plan.site.checked_expr)).source_region;
+        const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, region, loc);
         const message_idx = try store.putExtraString(message);
         _ = try store.appendProblem(allocator, .{ .comptime_expect_failed = .{
@@ -2545,10 +2545,10 @@ const ThreadSafeAllocator = struct {
 
 fn boxyNativeFnTable() BoxyNativeFnTable {
     var table: BoxyNativeFnTable = undefined;
-    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
-        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
+        const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
         const name = comptime boxy_fn.symbolName();
-        table[field.value] = @intFromPtr(&@field(boxy_abi, name));
+        table[field_value] = @intFromPtr(&@field(boxy_abi, name));
     }
     return table;
 }
@@ -2572,7 +2572,7 @@ const DevRootJob = struct {
     ret_buf: []align(collections.max_roc_alignment.toByteUnits()) u8,
     host: CompileTimeHost,
     result: DevRootResult = .pending,
-    progress: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(DevRootProgressState.pending)),
+    progress: std.atomic.Value(u8) = std.atomic.Value(u8).init(@backingInt(DevRootProgressState.pending)),
     start_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
     last_progress_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
     label: DevRootLabel,
@@ -2676,7 +2676,7 @@ const DevProgressReporter = struct {
         const spinner = spinnerByte(now / 250);
 
         for (self.jobs) |*job| {
-            const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
+            const progress: DevRootProgressState = @fromBackingInt(@intCast(job.progress.load(.acquire)));
             if (progress != .running) continue;
             const started_at = job.start_ms.load(.acquire);
             const elapsed_since_start = elapsedMs(now, started_at) orelse continue;
@@ -2700,7 +2700,7 @@ const DevProgressReporter = struct {
         var next: ?ProgressMillis = null;
 
         for (self.jobs) |*job| {
-            const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
+            const progress: DevRootProgressState = @fromBackingInt(@intCast(job.progress.load(.acquire)));
             if (progress != .running) continue;
             const started_at = job.start_ms.load(.acquire);
             if (started_at == 0) continue;
@@ -2980,7 +2980,7 @@ const PublicationSlots = struct {
         for (result.static_data_values.items, 0..) |entry, index| {
             const root = entry.compile_time_root orelse continue;
             const head = switch (root.root) {
-                .literal => |id| &literal_heads[@intFromEnum(id)],
+                .literal => |id| &literal_heads[@backingInt(id)],
                 .checked => |id| blk: {
                     const reuse = if (last_key) |key| key.eql(root.module) else false;
                     if (!reuse) {
@@ -2988,24 +2988,24 @@ const PublicationSlots = struct {
                             finalizationInvariant("compile-time slot has no declared module");
                         last_key = root.module;
                     }
-                    const heads = &checked_heads[@intFromEnum(last_owner)];
-                    const raw = @intFromEnum(id);
+                    const heads = &checked_heads[@backingInt(last_owner)];
+                    const raw = @backingInt(id);
                     if (raw >= heads.items.len) try heads.appendNTimes(allocator, null, raw + 1 - heads.items.len);
                     break :blk &heads.items[raw];
                 },
             };
             next[index] = head.*;
-            head.* = @enumFromInt(index);
+            head.* = @fromBackingInt(@intCast(index));
         }
         return .{ .checked_heads = checked_heads, .literal_heads = literal_heads, .next = next };
     }
 
     fn first(self: *const PublicationSlots, owner: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer) ?lir.LIR.StaticDataId {
         return switch (producer) {
-            .literal => |id| self.literal_heads[@intFromEnum(id)],
+            .literal => |id| self.literal_heads[@backingInt(id)],
             .checked => |id| blk: {
-                const heads = self.checked_heads[@intFromEnum(owner)].items;
-                const raw = @intFromEnum(id);
+                const heads = self.checked_heads[@backingInt(owner)].items;
+                const raw = @backingInt(id);
                 break :blk if (raw < heads.len) heads[raw] else null;
             },
         };
@@ -3032,20 +3032,20 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
     try result.setLoweringModules(&keys);
     const first_module = result.loweringModuleId(keys[0]).?;
     const second_module = result.loweringModuleId(keys[1]).?;
-    const literal_id: lir.LIR.LiteralRootId = @enumFromInt(result.literal_roots.items.len);
+    const literal_id: lir.LIR.LiteralRootId = @fromBackingInt(@intCast(result.literal_roots.items.len));
     // Only the literal table's length is used to allocate its dense index.
     try result.literal_roots.append(allocator, undefined);
     const producers = [_]lir.LIR.ComptimeProducer{
-        .{ .checked = @enumFromInt(7) },
-        .{ .checked = @enumFromInt(7) },
-        .{ .checked = @enumFromInt(7) },
+        .{ .checked = @fromBackingInt(@intCast(7)) },
+        .{ .checked = @fromBackingInt(@intCast(7)) },
+        .{ .checked = @fromBackingInt(@intCast(7)) },
         .{ .literal = literal_id },
     };
     const modules = [_]usize{ 0, 1, 0, 1 };
     // The append loop fills every slot ID before the assertions read them.
     var slots: [producers.len]lir.LIR.StaticDataId = undefined;
     for (producers, modules, &slots) |producer, module, *slot| {
-        slot.* = @enumFromInt(result.static_data_values.items.len);
+        slot.* = @fromBackingInt(@intCast(result.static_data_values.items.len));
         try result.static_data_values.append(allocator, .{
             .initializer = null,
             .layout_idx = .u8,
@@ -3062,13 +3062,13 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
     defer publication.deinit(allocator);
     const slot = lir.LIR.StaticDataId;
     try std.testing.expectEqual(@as(?slot, slots[2]), publication.first(first_module, producers[0]));
-    try std.testing.expectEqual(@as(?slot, slots[0]), publication.next[@intFromEnum(slots[2])]);
-    try std.testing.expectEqual(@as(?slot, null), publication.next[@intFromEnum(slots[0])]);
+    try std.testing.expectEqual(@as(?slot, slots[0]), publication.next[@backingInt(slots[2])]);
+    try std.testing.expectEqual(@as(?slot, null), publication.next[@backingInt(slots[0])]);
     try std.testing.expectEqual(@as(?slot, slots[1]), publication.first(second_module, producers[1]));
-    try std.testing.expectEqual(@as(?slot, null), publication.next[@intFromEnum(slots[1])]);
+    try std.testing.expectEqual(@as(?slot, null), publication.next[@backingInt(slots[1])]);
     try std.testing.expectEqual(@as(?slot, slots[3]), publication.first(second_module, producers[3]));
-    try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @enumFromInt(6) }));
-    try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @enumFromInt(8) }));
+    try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @fromBackingInt(@intCast(6)) }));
+    try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @fromBackingInt(@intCast(8)) }));
 }
 
 /// Shared immutable-slot publication owner for native and interpreter sessions.
@@ -3135,7 +3135,7 @@ const StaticSlotEnvironment = struct {
         const positions = try allocator.alloc(?usize, count);
         @memset(positions, null);
         for (exports, 0..) |entry, index| if (entry.value_id) |slot| {
-            positions[@intFromEnum(slot)] = index;
+            positions[@backingInt(slot)] = index;
         };
         return positions;
     }
@@ -3152,7 +3152,7 @@ const StaticSlotEnvironment = struct {
     ) FinalizeError!void {
         var next = self.publication.first(module, producer);
         while (next) |slot| {
-            const index = @intFromEnum(slot);
+            const index = @backingInt(slot);
             next = self.publication.next[index];
             const entry = lowered.lir_result.static_data_values.items[index];
             const root = entry.compile_time_root.?;
@@ -3194,7 +3194,7 @@ const StaticSlotEnvironment = struct {
             else => finalizationInvariant("evaluated root export omitted an emitted function"),
         };
         const source = image.symbolAddress(exports[0].symbol_name) orelse finalizationInvariant("evaluated root export omitted its root symbol");
-        const index = @intFromEnum(slot);
+        const index = @backingInt(slot);
         const value_layout = lowered.lir_result.static_data_values.items[index].layout_idx;
         const size = lowered.lir_result.layouts.layoutSize(lowered.lir_result.layouts.getLayout(value_layout));
         const destination: [*]u8 = @ptrFromInt(self.addresses[index]);
@@ -3205,12 +3205,12 @@ const StaticSlotEnvironment = struct {
     fn publishFailureOrigin(self: *StaticSlotEnvironment, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, origin: lir.LIR.ComptimeFailureOrigin) void {
         var next = self.publication.first(module, producer);
         while (next) |slot| {
-            next = self.publication.next[@intFromEnum(slot)];
-            var guard_index = lowered.lir_result.static_data_values.items[@intFromEnum(slot)].first_comptime_guard;
+            next = self.publication.next[@backingInt(slot)];
+            var guard_index = lowered.lir_result.static_data_values.items[@backingInt(slot)].first_comptime_guard;
             while (guard_index) |index| {
                 const guard = lowered.lir_result.comptime_value_guards.items[index];
-                self.failure_origins[@intFromEnum(guard.crash)] = origin;
-                self.failure_origins[@intFromEnum(guard.checked_crash)] = origin;
+                self.failure_origins[@backingInt(guard.crash)] = origin;
+                self.failure_origins[@backingInt(guard.checked_crash)] = origin;
                 guard_index = guard.next_for_slot;
             }
         }
@@ -3227,7 +3227,7 @@ const StaticSlotEnvironment = struct {
         const allocator = self.allocator;
         var next = self.publication.first(module, producer);
         while (next) |slot| {
-            const index = @intFromEnum(slot);
+            const index = @backingInt(slot);
             next = self.publication.next[index];
             const entry = lowered.lir_result.static_data_values.items[index];
             const root = entry.compile_time_root.?;
@@ -3255,9 +3255,9 @@ const StaticSlotEnvironment = struct {
             @memset(bytes, 0);
             exports[0] = .{ .symbol_name = name, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false };
             count = 1;
-            bytes[metadata.failed_offset] = @intFromEnum(if (failure) |failed| failed.kind.recordKind() else lir.Program.ComptimeFailureKind.none);
+            bytes[metadata.failed_offset] = @backingInt(if (failure) |failed| failed.kind.recordKind() else lir.Program.ComptimeFailureKind.none);
             if (large) {
-                const backing_name = try LirProgram.staticDataNodeSymbolName(allocator, @intFromEnum(slot), 1);
+                const backing_name = try LirProgram.staticDataNodeSymbolName(allocator, @backingInt(slot), 1);
                 const backing = allocator.alloc(u8, @sizeOf(usize) + text.len) catch |err| {
                     allocator.free(backing_name);
                     return err;
@@ -3267,7 +3267,7 @@ const StaticSlotEnvironment = struct {
                 exports[1] = .{ .symbol_name = backing_name, .bytes = backing, .symbol_offset = @sizeOf(usize), .alignment = @alignOf(usize), .is_exported = false };
                 count = 2;
                 const relocations = try allocator.alloc(static_data_exports.StaticDataRelocation, 1);
-                relocations[0] = .{ .offset = metadata.message_offset, .target_symbol_name = backing_name, .target = .{ .data_symbol = @enumFromInt(1) } };
+                relocations[0] = .{ .offset = metadata.message_offset, .target_symbol_name = backing_name, .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) } };
                 exports[0].relocations = relocations;
                 std.mem.writeInt(usize, bytes[metadata.message_offset + @offsetOf(builtins.str.RocStr, "length") ..][0..@sizeOf(usize)], text.len, builtin.cpu.arch.endian());
                 std.mem.writeInt(usize, bytes[metadata.message_offset + @offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr") ..][0..@sizeOf(usize)], builtins.str.RocStr.encodeCapacity(text.len), builtin.cpu.arch.endian());
@@ -3302,12 +3302,12 @@ const StaticSlotEnvironment = struct {
             const cloned = try static_data_exports.cloneStaticData(self.allocator, completed.exports);
             defer self.allocator.free(cloned);
             const slot = cloned[0].value_id.?;
-            const index = self.export_positions[@intFromEnum(slot)] orelse finalizationInvariant("completed root had no allocated value slot");
+            const index = self.export_positions[@backingInt(slot)] orelse finalizationInvariant("completed root had no allocated value slot");
             const nested_start = all.items.len;
             for (cloned) |*item| for (@constCast(item.relocations)) |*relocation| {
                 if (relocation.target == .data_symbol) {
-                    const local = @intFromEnum(relocation.target.data_symbol);
-                    relocation.target.data_symbol = @enumFromInt(if (local == 0) index else nested_start + local - 1);
+                    const local = @backingInt(relocation.target.data_symbol);
+                    relocation.target.data_symbol = @fromBackingInt(@intCast(if (local == 0) index else nested_start + local - 1));
                 }
             };
             const old = all.items[index];
@@ -3501,7 +3501,7 @@ const DevProgram = struct {
         const address = @intFromPtr(payload.callable_fn_ptr);
         const base_address = @intFromPtr(self.executable.codePtr());
         for (self.codegen.store.getProcSpecs(), 0..) |_, index| {
-            const proc: lir.LIR.LirProcSpecId = @enumFromInt(index);
+            const proc: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
             const symbol = self.codegen.compiledProcSymbol(proc) orelse continue;
             if (base_address + symbol.code_start == address) return .{
                 .proc = proc,
@@ -3745,7 +3745,7 @@ fn evalDevProgramRoots(
             const payload = builtins.erased_callable.payloadPtr(data_ptr);
             const runtime_addr = @intFromPtr(payload.callable_fn_ptr);
             for (self.store.getProcSpecs(), 0..) |_, proc_index| {
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(proc_index);
+                const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
                 const symbol = self.codegen.compiledProcSymbol(proc_id) orelse continue;
                 const compiled_addr = @intFromPtr(self.executable.codePtr() + symbol.code_start);
                 if (compiled_addr == runtime_addr) {
@@ -3856,7 +3856,7 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     }
     job.start_ms.store(if (context.std_io) |io| nowMs(io) else 0, .release);
     job.last_progress_ms.store(0, .release);
-    job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
+    job.progress.store(@backingInt(DevRootProgressState.running), .release);
     if (context.progress_reporter) |progress| progress.rootStarted();
 
     var crash_boundary = job.host.enterCrashBoundary();
@@ -3882,7 +3882,7 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
             break :blk .host_oom;
         },
     };
-    job.progress.store(@intFromEnum(DevRootProgressState.done), .release);
+    job.progress.store(@backingInt(DevRootProgressState.done), .release);
 }
 
 fn nowNs(io: std.Io) i64 {
@@ -4136,7 +4136,7 @@ fn reportLiteralRejection(
     var targets = try owners.reportTargets(site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const region = owner.module.checked_bodies.expr(@enumFromInt(site.checked_expr)).source_region;
+        const region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(site.checked_expr))).source_region;
         if (literalRejectionReported(store, site.kind, region)) continue;
         const failure_site = comptimeFailureSiteFrom(owner.module, region, null, null, null);
         const message_idx = try store.putExtraString(message);
@@ -4300,7 +4300,7 @@ fn recordComptimeSiteHits(
     // diagnostic-collecting evaluation already accounted for.
     _ = maybe_problem_store orelse return;
     for (hits) |hit| {
-        const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
+        const site = lir_result.comptime_sites.items[@backingInt(hit.site)];
         if (owners.report_sites and comptimeSiteEmpiricalKind(site.kind) != null) {
             if (site.checked_site) |checked_site| {
                 var alias = owners.position(site.owner);
@@ -4367,7 +4367,7 @@ fn appendCompileTimeExhaustivenessProblem(
     site_id: lir.LIR.ComptimeSiteId,
 ) Allocator.Error!void {
     if (!owners.report_sites) return;
-    const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
+    const site = lir_result.comptime_sites.items[@backingInt(site_id)];
     _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
         .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
@@ -4411,7 +4411,7 @@ fn discardUnreachedRootComptimeSites(
 ) void {
     for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
         if (root_site.proc != root_proc) continue;
-        if (raw_site_id == @intFromEnum(failed_site_id)) continue;
+        if (raw_site_id == @backingInt(failed_site_id)) continue;
         if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
         const checked_site = root_site.checked_site orelse continue;
         if (root_site.owner == failed_owner and checked_site == failed_checked_site) continue;
@@ -4753,7 +4753,7 @@ fn compileTimeRootForRequest(
     const root_id = request.compile_time_root orelse {
         finalizationInvariant("compile-time request had no exact checked root identity");
     };
-    const raw = @intFromEnum(root_id);
+    const raw = @backingInt(root_id);
     if (raw >= module.compile_time_roots.roots.len) {
         finalizationInvariant("compile-time request root identity was outside the checked root table");
     }
@@ -4874,14 +4874,14 @@ fn lowerFinalizationModulesToLir(
 
 /// A splice invariant failure names the symbol the link stopped at.
 fn spliceInvariant(splice: *const backend.dev.HostSplice, comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("compile-time finalization invariant violated: {s}: {s}", .{ message, splice.unresolved orelse "" });
     }
     finalizationInvariant(message);
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("compile-time finalization invariant violated: {s}", .{message});
     }
     unreachable;
@@ -4914,10 +4914,10 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     var owners = try ModuleOwners.init(allocator, &program, &modules);
     defer owners.deinit(allocator);
     try std.testing.expectEqual(@as(?u32, 1), owners.position(.first));
-    try std.testing.expectEqual(@as(?u32, null), owners.position(@enumFromInt(1)));
-    try std.testing.expectEqual(@as(?u32, 0), owners.position(@enumFromInt(2)));
-    try std.testing.expect(owners.get(@enumFromInt(1)) == null);
-    try std.testing.expectEqual(&artifacts[0], owners.get(@enumFromInt(2)).?.module);
+    try std.testing.expectEqual(@as(?u32, null), owners.position(@fromBackingInt(@intCast(1))));
+    try std.testing.expectEqual(@as(?u32, 0), owners.position(@fromBackingInt(@intCast(2))));
+    try std.testing.expect(owners.get(@fromBackingInt(@intCast(1))) == null);
+    try std.testing.expectEqual(&artifacts[0], owners.get(@fromBackingInt(@intCast(2))).?.module);
     try std.testing.expectEqual(&artifacts[1], owners.get(.first).?.module);
     try std.testing.expectEqual(@as(?u32, 2), owners.next_alias[0]);
     try std.testing.expectEqual(@as(?u32, null), owners.next_alias[1]);
@@ -5065,7 +5065,7 @@ test "shared compile-time debug replay sorts module root and event identities" {
     for (inputs, 0..) |input, index| {
         const message = try allocator.dupe(u8, input.message);
         errdefer allocator.free(message);
-        try events.events.append(allocator, .{ .module = .{ .bytes = [_]u8{input.module} ** 32 }, .root = @enumFromInt(input.root), .sequence = index, .is_repl = false, .message = message });
+        try events.events.append(allocator, .{ .module = .{ .bytes = @as([32]u8, @splat(input.module)) }, .root = @fromBackingInt(@intCast(input.root)), .sequence = index, .is_repl = false, .message = message });
     }
     const Output = struct {
         bytes: [128]u8 = undefined,
@@ -5087,11 +5087,11 @@ test "completed frozen graphs rebase independent nested symbols" {
     defer arena.deinit();
     const temporary = arena.allocator();
     const first = try static_data_exports.cloneStaticData(temporary, &.{
-        .{ .symbol_name = "root_a", .bytes = &.{ 0, 0, 0, 0 }, .alignment = 4, .relocations = &.{.{ .offset = 0, .target_symbol_name = "backing_a", .target = .{ .data_symbol = @enumFromInt(1) } }} },
+        .{ .symbol_name = "root_a", .bytes = &.{ 0, 0, 0, 0 }, .alignment = 4, .relocations = &.{.{ .offset = 0, .target_symbol_name = "backing_a", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) } }} },
         .{ .symbol_name = "backing_a", .bytes = "a", .alignment = 1 },
     });
     const second = try static_data_exports.cloneStaticData(temporary, &.{
-        .{ .symbol_name = "root_b", .bytes = &.{ 0, 0, 0, 0 }, .alignment = 4, .relocations = &.{.{ .offset = 0, .target_symbol_name = "backing_b", .target = .{ .data_symbol = @enumFromInt(1) } }} },
+        .{ .symbol_name = "root_b", .bytes = &.{ 0, 0, 0, 0 }, .alignment = 4, .relocations = &.{.{ .offset = 0, .target_symbol_name = "backing_b", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) } }} },
         .{ .symbol_name = "backing_b", .bytes = "b", .alignment = 1 },
     });
     var destination = std.ArrayList(static_data_exports.StaticDataExport).empty;
@@ -5100,8 +5100,8 @@ test "completed frozen graphs rebase independent nested symbols" {
     try appendFrozenGraph(allocator, &destination, second);
     const owned = try static_data_exports.cloneStaticData(allocator, destination.items);
     defer static_data_exports.deinitStaticData(allocator, owned);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(owned[0].relocations[0].target.data_symbol));
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(owned[2].relocations[0].target.data_symbol));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(owned[0].relocations[0].target.data_symbol));
+    try std.testing.expectEqual(@as(u32, 3), @backingInt(owned[2].relocations[0].target.data_symbol));
     try std.testing.expectEqualStrings("backing_a", owned[0].relocations[0].target_symbol_name);
     try std.testing.expectEqualStrings("backing_b", owned[2].relocations[0].target_symbol_name);
 }
@@ -5135,14 +5135,14 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const module_id = result.loweringModuleId(module_key).?;
     var checked_roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer checked_roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @enumFromInt(checked_roots.items.len);
+    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(checked_roots.items.len));
     // This execution fixture consumes only root identity, never checked syntax.
     try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .pending });
     const failure_layout = try result.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = result.layouts.getLayout(failure_layout).getStruct().idx;
     const failed_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
-    const failure_slot: lir.LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
+    const failure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = failure_layout,
@@ -5153,9 +5153,9 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
             .message_offset = message_offset,
         } } },
     });
-    const value_plan: LirProgram.ConstPlanId = @enumFromInt(result.const_plans.items.len);
+    const value_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(result.const_plans.items.len));
     try result.const_plans.append(allocator, .str);
-    const value_slot: lir.LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
+    const value_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .str,
@@ -5397,7 +5397,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     var program = try LirProgram.Result.init(allocator, .native);
     defer program.deinit();
     const erased_layout = try program.layouts.insertErasedCallable();
-    const closure_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const closure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = erased_layout });
     const capture_arg = try program.store.addLocal(.{ .layout_idx = .opaque_ptr });
     const reuse_arg = try program.store.addLocal(.{ .layout_idx = erased_layout });
@@ -5423,10 +5423,10 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = call_result, .closure = closure, .args = .empty(), .arg_plan = arg_plan, .next = caller_ret } }, .test_fixture);
     const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = closure_slot }, .next = call } }, .test_fixture);
     const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = caller_body, .ret_layout = .bool }, .none);
-    const closure_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
-    const erased_set: LirProgram.ErasedFnsId = @enumFromInt(program.erased_fns.items.len);
+    const closure_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    const erased_set: LirProgram.ErasedFnsId = @fromBackingInt(@intCast(program.erased_fns.items.len));
     try program.const_plans.append(allocator, .{ .erased_fn = erased_set });
-    const capture_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const capture_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .str);
     const captures = try allocator.dupe(LirProgram.CaptureSlot, &.{.{ .id = undefined, .slot = 0, .ty = undefined, .plan = capture_plan, .storage = .value }});
     const entries = try allocator.dupe(LirProgram.ErasedFn, &.{.{
@@ -5448,7 +5448,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, &program.layouts, .{ .op = .host_drop, .layout_idx = .str });
     defer allocator.free(drop_name);
     const exports = try static_data_exports.cloneStaticData(allocator, &.{
-        .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 * word }} },
+        .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 2 * word }} },
         .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .host_drop, .layout_idx = .str } } } },
     });
     defer static_data_exports.deinitStaticData(allocator, exports);
@@ -5549,7 +5549,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     }
     // Exercise the inspected-run ownership path with procedure and drop-helper
     // relocations, then return a separate frozen string through its Str ABI.
-    const result_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const result_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
     const inspected_closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const inspected_bool = try program.store.addLocal(.{ .layout_idx = .bool });
@@ -5588,7 +5588,7 @@ test "inspected runners consume frozen string slots on every backend" {
         const width: base.target.TargetUsize = if (kind == .wasm) .u32 else .native;
         var program = try LirProgram.Result.init(allocator, width);
         defer program.deinit();
-        const slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+        const slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
         try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
         const value = try program.store.addLocal(.{ .layout_idx = .str });
         const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);

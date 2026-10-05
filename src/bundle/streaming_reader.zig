@@ -6,10 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const c = @cImport({
-    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
-    @cInclude("zstd.h");
-});
+const c = @import("zstd");
 
 /// A reader that decompresses zstd data and verifies hash incrementally
 pub const DecompressingHashReader = struct {
@@ -81,7 +78,7 @@ pub const DecompressingHashReader = struct {
     pub fn deinit(self: *Self) void {
         const rc = c.ZSTD_freeDCtx(self.dctx);
         if (c.ZSTD_isError(rc) != 0) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("ZSTD_freeDCtx failed: {s}", .{c.ZSTD_getErrorName(rc)});
             }
             unreachable;

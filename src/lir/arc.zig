@@ -93,8 +93,8 @@ pub const ParallelMetrics = struct {
     uniqueness: UniquenessMetrics = .{},
 
     pub fn add(self: *ParallelMetrics, other: ParallelMetrics) void {
-        inline for (std.meta.fields(ParallelMetrics)) |field| {
-            if (field.type == u64) @field(self, field.name) +|= @field(other, field.name);
+        inline for (@typeInfo(ParallelMetrics).@"struct".field_names) |field_name| {
+            if (@FieldType(ParallelMetrics, field_name) == u64) @field(self, field_name) +|= @field(other, field_name);
         }
         self.uniqueness.add(other.uniqueness);
     }
@@ -190,9 +190,9 @@ const ProcArcDomain = struct {
         };
         for (0..frame_len) |frame_index| {
             const local = GuardedList.at(frame, frame_index);
-            const local_index = @intFromEnum(local);
+            const local_index = @backingInt(local);
             if (local_index >= store.localCount()) arcInvariant("ARC frame-local inventory names an unknown local");
-            if (frame_index > 0 and @intFromEnum(frame_locals[frame_index - 1]) >= local_index) {
+            if (frame_index > 0 and @backingInt(frame_locals[frame_index - 1]) >= local_index) {
                 arcInvariant("ARC frame-local inventory is not unique and sorted");
             }
             if (global_local_index.contains(local)) {
@@ -204,7 +204,7 @@ const ProcArcDomain = struct {
         }
 
         for (frame_locals) |local| {
-            const local_index = @intFromEnum(local);
+            const local_index = @backingInt(local);
             if (local_index >= local_contains_refcounted.len) arcInvariant("ARC refcounted-local table did not cover frame local");
             if (!local_contains_refcounted[local_index]) continue;
 
@@ -414,7 +414,7 @@ const GroupLivenessIndex = struct {
                 const group = bit - raw_bits.len;
                 ranges[group].end += 1;
                 if (seed_refcounted) |rc| {
-                    if (rc[@intFromEnum(local)]) seed_ranges[group].end += 1;
+                    if (rc[@backingInt(local)]) seed_ranges[group].end += 1;
                 }
             } else {
                 singletons += 1;
@@ -445,7 +445,7 @@ const GroupLivenessIndex = struct {
                 raw_bit.* = range.end;
                 range.end += 1;
                 if (seed_refcounted) |rc| {
-                    if (rc[@intFromEnum(local)]) {
+                    if (rc[@backingInt(local)]) {
                         const seed_range = &seed_ranges[group];
                         seed_resources[seed_range.end] = @intCast(resource);
                         seed_range.end += 1;
@@ -454,7 +454,7 @@ const GroupLivenessIndex = struct {
             } else {
                 raw_bit.* = singleton_bit;
                 if (seed_refcounted) |rc| {
-                    seed_resources[singleton_bit] = if (rc[@intFromEnum(local)]) @intCast(resource) else no_arc_bit;
+                    seed_resources[singleton_bit] = if (rc[@backingInt(local)]) @intCast(resource) else no_arc_bit;
                 }
                 singleton_bit += 1;
             }
@@ -472,18 +472,18 @@ const GroupLivenessIndex = struct {
         var singletons = reads.iteratorRange(0, singleton_end);
         while (singletons.next()) |bit| {
             const resource = if (self.ranges.len == 0) blk: {
-                if (!refcounted[@intFromEnum(resources[bit])]) continue;
+                if (!refcounted[@backingInt(resources[bit])]) continue;
                 break :blk @as(u32, @intCast(bit));
             } else self.seed_resources[bit];
             if (resource == no_arc_bit) continue;
-            if (builtin.mode == .Debug) keep_set_liveness_visits.increment();
+            if (builtin.mode == .debug) keep_set_liveness_visits.increment();
             try keep.setResource(resource);
         }
         var groups = reads.iteratorRange(resources.len, resources.len + self.seed_ranges.len);
         while (groups.next()) |bit| {
             const range = self.seed_ranges[bit - resources.len];
             for (self.seed_resources[range.start..range.end]) |resource| {
-                if (builtin.mode == .Debug) keep_set_liveness_visits.increment();
+                if (builtin.mode == .debug) keep_set_liveness_visits.increment();
                 try keep.setResource(resource);
             }
         }
@@ -500,7 +500,7 @@ const GroupLivenessIndex = struct {
         else {
             if (leader == except) return false;
             const bit = self.rawBitOf(domain, leader) orelse return false;
-            if (builtin.mode == .Debug) group_liveness_member_visits.increment();
+            if (builtin.mode == .debug) group_liveness_member_visits.increment();
             return reads.isSet(bit);
         };
         if (self.rawBitOf(domain, except)) |bit| {
@@ -569,7 +569,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var take_iter = dismantles.takes.keyIterator();
     var any_take = false;
     while (take_iter.next()) |stmt| {
-        take_stmts.set(@intFromEnum(stmt.*));
+        take_stmts.set(@backingInt(stmt.*));
         any_take = true;
     }
     if (any_take) {
@@ -581,7 +581,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const spec = store.getProcSpec(proc);
         source.* = .{
             .template = &inserter,
@@ -623,7 +623,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         defer for (owners[0..count]) |*owner| owner.deinit();
         while (count < owners.len) {
             const job: QueuedVariant = if (base_index < base_proc_count) blk: {
-                const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_index)));
+                const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_index))));
                 base_index += 1;
                 break :blk .{ .variant = proc, .source = proc, .sig = solution.sigOf(proc) };
             } else if (variant_index < variants.queue.items.len) blk: {
@@ -635,10 +635,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             spec.rc_borrowed_params = job.sig.borrowed_params;
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
-            if (sources[@intFromEnum(job.source)].body == null) continue;
+            if (sources[@backingInt(job.source)].body == null) continue;
             owners[count] = .{
                 .inserter = inserter,
-                .source = &sources[@intFromEnum(job.source)],
+                .source = &sources[@backingInt(job.source)],
                 .job = job,
             };
             count += 1;
@@ -677,7 +677,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
     }
 
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const all_sigs = try store.allocator.alloc(arc_sig.RcSig, store.procSpecCount());
         defer store.allocator.free(all_sigs);
         for (all_sigs, 0..) |*sig, proc_index| {
@@ -710,14 +710,14 @@ fn recordObjectCacheFacts(
     var tail_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
     defer tail_targets.deinit(store.allocator);
     for (0..proc_count) |proc_index| {
-        const caller: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const caller: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         for (solution.tailCallsOf(caller)) |tail_call| {
             const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
-            if (callee != caller) tail_targets.set(@intFromEnum(callee));
+            if (callee != caller) tail_targets.set(@backingInt(callee));
         }
     }
     for (0..proc_count) |proc_index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (store.getProcSpec(proc).body == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
@@ -1027,7 +1027,7 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
     const local_count = store.localCount();
     const descs = try store.allocator.alloc(?LIR.BoxyDescRef, local_count);
     for (0..local_count) |index| {
-        const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+        const local_id: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         descs[index] = store.getLocal(local_id).boxy_desc;
     }
     return descs;
@@ -1048,7 +1048,7 @@ const BoxyDescUsers = struct {
         for (descs) |maybe_desc| {
             const desc = maybe_desc orelse continue;
             const desc_local = desc.localOrNull() orelse continue;
-            starts[@intFromEnum(desc_local) + 1] += 1;
+            starts[@backingInt(desc_local) + 1] += 1;
             user_count += 1;
         }
         for (1..starts.len) |index| starts[index] += starts[index - 1];
@@ -1059,8 +1059,8 @@ const BoxyDescUsers = struct {
         for (descs, 0..) |maybe_desc, index| {
             const desc = maybe_desc orelse continue;
             const desc_local = desc.localOrNull() orelse continue;
-            const cursor = &cursors[@intFromEnum(desc_local)];
-            locals[cursor.*] = @enumFromInt(@as(u32, @intCast(index)));
+            const cursor = &cursors[@backingInt(desc_local)];
+            locals[cursor.*] = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             cursor.* += 1;
         }
         return .{ .starts = starts, .locals = locals };
@@ -1072,14 +1072,14 @@ const BoxyDescUsers = struct {
     }
 
     fn usersOf(self: BoxyDescUsers, desc_local: LIR.LocalId) []const LIR.LocalId {
-        const index: usize = @intFromEnum(desc_local);
+        const index: usize = @backingInt(desc_local);
         if (index + 1 >= self.starts.len) return &.{};
         return self.locals[self.starts[index]..self.starts[index + 1]];
     }
 };
 
 fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
-    const index = @intFromEnum(local);
+    const index = @backingInt(local);
     if (index >= descs.len) return null;
     return descs[index];
 }
@@ -1105,7 +1105,7 @@ const EmissionRefcounted = union(enum) {
     }
 
     fn exclude(self: *EmissionRefcounted, allocator: Allocator, local: LIR.LocalId) Allocator.Error!void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (!self.slice()[index]) return;
         const values = switch (self.*) {
             .shared => |shared| values: {
@@ -1140,7 +1140,7 @@ fn computeEmissionContainsRefcounted(
     var stack = std.ArrayList(layout_mod.Idx).empty;
     defer stack.deinit(allocator);
     for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
         const stmt = store.getCFStmt(stmt_id);
         if (stmt == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
             const target = stmt.assign_low_level.target;
@@ -1195,7 +1195,7 @@ fn variantIdentity(allocator: std.mem.Allocator, sig_table: arc_sig.SigTable, so
     var key = try std.ArrayList(u8).initCapacity(allocator, 8 + outcomes.len * 6);
     defer key.deinit(allocator);
     key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.borrowed_params)));
-    key.appendAssumeCapacity(@intFromEnum(demanded.ret_mode));
+    key.appendAssumeCapacity(@backingInt(demanded.ret_mode));
     key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.unique_params)));
     for (outcomes) |outcome| {
         key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u32, outcome.discriminant)));
@@ -1228,8 +1228,8 @@ const VariantTable = struct {
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
-            .frame_locals = self.sources[@intFromEnum(callee)].frame,
-            .body = self.sources[@intFromEnum(callee)].body,
+            .frame_locals = self.sources[@backingInt(callee)].frame,
+            .body = self.sources[@backingInt(callee)].body,
             .ret_layout = source_spec.ret_layout,
             .ret_desc = source_spec.ret_desc,
             .runtime_ret_desc = source_spec.runtime_ret_desc,
@@ -1528,7 +1528,7 @@ const RestitutionSwitch = struct {
     default_resources: std.ArrayList(RestoredResource) = .empty,
     /// The converged resource carrier for each call argument position. One
     /// position can denote a whole unit or one residual field, never both.
-    position_resources: [arc_sig.tracked_param_count]?RestoredResource = .{null} ** arc_sig.tracked_param_count,
+    position_resources: [arc_sig.tracked_param_count]?RestoredResource = @splat(null),
     restored_positions: arc_sig.ParamMask = 0,
 };
 
@@ -2330,7 +2330,7 @@ const Inserter = struct {
             // some uniqueness verdict rests on call the fresh procedure, and
             // every other one keeps the static datum, its fresh procedure
             // leaving with the next reachability pass.
-            .assign_literal => |assign| if (assign.fresh_alternative != null and self.solution.fresh_reads.isSet(@intFromEnum(at)))
+            .assign_literal => |assign| if (assign.fresh_alternative != null and self.solution.fresh_reads.isSet(@backingInt(at)))
                 try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
                     .proc = assign.fresh_alternative.?,
@@ -2352,7 +2352,7 @@ const Inserter = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
                     .proc = if (step.variant_request) |request|
-                        self.resolved_variants[@intFromEnum(request)]
+                        self.resolved_variants[@backingInt(request)]
                     else
                         assign.proc,
                     .args = assign.args,
@@ -2663,7 +2663,7 @@ const Inserter = struct {
         try self.pushSolveSegment(&tasks, body, entry_owned, .{}, root_plan);
         while (true) {
             while (tasks.pop()) |task| {
-                if (builtin.mode == .Debug) solver_iterations.increment();
+                if (builtin.mode == .debug) solver_iterations.increment();
                 switch (task) {
                     .segment => |segment| try self.processSolveSegment(&tasks, segment),
                     .join_process => |join_index| try self.processSolveJoin(&tasks, join_index),
@@ -4110,7 +4110,7 @@ const Inserter = struct {
         reads: *const ExactBitSet,
         local: LIR.LocalId,
     ) bool {
-        if (builtin.mode == .Debug) keep_set_liveness_visits.increment();
+        if (builtin.mode == .debug) keep_set_liveness_visits.increment();
         if (self.groupBitOf(local)) |bit| return reads.isSet(bit);
         const bit = self.rawLivenessBitOf(local) orelse return false;
         return reads.isSet(bit);
@@ -5452,7 +5452,7 @@ const Inserter = struct {
     /// must-owned set has one bit per ownership place, so two positions rooted
     /// at the same source value cannot be restored independently yet.
     fn outcomeArgumentOrigin(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
-        var cursor = @intFromEnum(local);
+        var cursor = @backingInt(local);
         var steps: usize = 0;
         while (cursor < self.solution.alias_source.len and
             self.solution.alias_source[cursor] != no_arc_bit)
@@ -5463,7 +5463,7 @@ const Inserter = struct {
                 arcInvariant("ARC outcome argument alias chain contained a cycle");
             }
         }
-        return @enumFromInt(cursor);
+        return @fromBackingInt(@intCast(cursor));
     }
 
     fn outcomeArgumentsHaveDistinctPlaces(
@@ -5922,7 +5922,7 @@ const Inserter = struct {
         stamp: u32 = 0,
     };
 
-    const no_rebind: LIR.LocalId = @enumFromInt(std.math.maxInt(u32));
+    const no_rebind: LIR.LocalId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
     fn placeUseFacts(self: *Inserter) ResourceError!*PlaceUseFacts {
         if (self.place_use_facts) |*facts| return facts;
@@ -5962,10 +5962,10 @@ const Inserter = struct {
             rebinds[node_index] = facts.rebinds orelse no_rebind;
             if (facts.rebinds) |root| {
                 const loop = forest.innermost[node_index];
-                if (loop != LoopForest.none) try rebound_roots[loop].set(@intFromEnum(root));
+                if (loop != LoopForest.none) try rebound_roots[loop].set(@backingInt(root));
             }
             for (uses.items) |local| {
-                try place_user_list.append(allocator, .{ .place = @intFromEnum(self.ownershipPlaceLeader(local)), .node = @intCast(node_index) });
+                try place_user_list.append(allocator, .{ .place = @backingInt(self.ownershipPlaceLeader(local)), .node = @intCast(node_index) });
             }
         }
         var order = loop_count;
@@ -6080,8 +6080,8 @@ const Inserter = struct {
     fn solvePlaceUseRegion(self: *Inserter, facts: *PlaceUseFacts, root: LIR.LocalId) ResourceError!void {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
-        const root_key = @as(u64, @intFromEnum(root)) << 32;
-        const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @intFromEnum(root) };
+        const root_key = @as(u64, @backingInt(root)) << 32;
+        const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
         facts.stamp +%= 1;
         const Unit = struct { loop: bool, index: u32 };
         var work = std.ArrayList(Unit).empty;
@@ -6098,7 +6098,7 @@ const Inserter = struct {
                 }
             }
         }.reach;
-        const place: u32 = @intFromEnum(self.ownershipPlaceLeader(root));
+        const place: u32 = @backingInt(self.ownershipPlaceLeader(root));
         var low: usize = 0;
         var high: usize = facts.place_leaders.len;
         while (low < high) {
@@ -6136,7 +6136,7 @@ const Inserter = struct {
                 }
             }
         }
-        try facts.solved_roots.put(allocator, @intFromEnum(root), {});
+        try facts.solved_roots.put(allocator, @backingInt(root), {});
     }
 
     /// Exact use query for one complete ownership place, keyed by the unit
@@ -6151,7 +6151,7 @@ const Inserter = struct {
         root: LIR.LocalId,
     ) ResourceError!bool {
         const used = try self.placeUsedInPath(start, root);
-        if (builtin.mode == .Debug and used != try self.walkOwnershipPlaceUsedInPath(start, root)) {
+        if (builtin.mode == .debug and used != try self.walkOwnershipPlaceUsedInPath(start, root)) {
             arcInvariant("ARC place-use regions disagreed with the statement walk");
         }
         return used;
@@ -6160,9 +6160,9 @@ const Inserter = struct {
     fn placeUsedInPath(self: *Inserter, start: LIR.CFStmtId, root: LIR.LocalId) ResourceError!bool {
         const facts = try self.placeUseFacts();
         const start_node = self.source_liveness.nodeIndex(start);
-        if (!facts.solved_roots.contains(@intFromEnum(root))) try self.solvePlaceUseRegion(facts, root);
-        const root_key = @as(u64, @intFromEnum(root)) << 32;
-        const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @intFromEnum(root) };
+        if (!facts.solved_roots.contains(@backingInt(root))) try self.solvePlaceUseRegion(facts, root);
+        const root_key = @as(u64, @backingInt(root)) << 32;
+        const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
         if (transparency.outermost(start_node)) |loop| {
             if (facts.live_loops.contains(root_key | loop)) return true;
         } else if (facts.live_nodes.contains(root_key | start_node)) {
@@ -6309,7 +6309,7 @@ const Inserter = struct {
         // outcomes. Such a root receipt makes the outcome convention mandatory
         // for its position: the argument carries the root's only unit and the
         // root is read again on the restoring paths.
-        var root_receipts = [_]?LIR.LocalId{null} ** arc_sig.tracked_param_count;
+        var root_receipts = @as([arc_sig.tracked_param_count]?LIR.LocalId, @splat(null));
         var any_root_receipt = false;
         if (outcome_refinement) |refinement| {
             for (0..@min(GuardedList.borrowLen(locals), arc_sig.tracked_param_count)) |position| {
@@ -6524,7 +6524,7 @@ const Inserter = struct {
         {
             return null;
         }
-        const id: VariantRequestId = @enumFromInt(@as(u32, @intCast(self.variant_requests.items.len)));
+        const id: VariantRequestId = @fromBackingInt(@intCast(@as(u32, @intCast(self.variant_requests.items.len))));
         try self.variant_requests.append(self.emission_allocator, .{ .source = callee, .demanded = demanded });
         return id;
     }
@@ -7216,13 +7216,13 @@ const Inserter = struct {
     /// than its size times its depth.
     fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
         try self.solveStructuredLiveness(graph);
-        if (builtin.mode == .Debug) try self.certifyStructuredLiveness(graph);
+        if (builtin.mode == .debug) try self.certifyStructuredLiveness(graph);
     }
 
     /// Debug-only oracle: re-solve the equations by flooding each cyclic
     /// component to its least fixed point and require identical rows.
     fn certifyStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         const allocator = self.source_liveness.scratch_allocator;
         const solved = try allocator.alloc(ExactBitSet, graph.nodes.items.len);
         defer allocator.free(solved);
@@ -7890,7 +7890,7 @@ const Inserter = struct {
         cache.keep_reads = keep_reads;
         cache.initialized = true;
         cache.dirty = false;
-        if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
+        if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
         return if (cache.rows[start_node]) |*row|
             row
         else
@@ -7918,7 +7918,7 @@ const Inserter = struct {
         if (old_keep_reads.eql(new_keep_reads)) {
             cache.dirty = false;
             cache.consumed_keep_bits = !new_keep_reads.isEmpty();
-            if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
+            if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
             return;
         }
 
@@ -7987,7 +7987,7 @@ const Inserter = struct {
         try old_keep_reads.setUnion(new_keep_reads);
         cache.consumed_keep_bits = !new_keep_reads.isEmpty();
         cache.dirty = false;
-        if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
+        if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
     }
 
     /// Debug-only independent least-fixed-point recomputation for one loop
@@ -7996,7 +7996,7 @@ const Inserter = struct {
     /// keep-free solution and grows all active rows, so agreement certifies
     /// both directions of the exact-delta algorithm.
     fn certifyLoopReadsBeforeRebind(self: *Inserter, cache: *const LoopLivenessCache) ResourceError!void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         const graph = self.source_liveness.graphFor(self.current_sig);
         const active = if (cache.active) |*bits|
             bits
@@ -8409,7 +8409,7 @@ const Inserter = struct {
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
-        const local_index = @intFromEnum(local);
+        const local_index = @backingInt(local);
         if (local_index < self.boxy_rc_descs.len) {
             if (self.boxy_rc_descs[local_index]) |desc| {
                 return .{ .boxy = desc };
@@ -8419,9 +8419,9 @@ const Inserter = struct {
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
-            if (comptime builtin.mode == .Debug and builtin.target.os.tag == .freestanding) {
+            if (comptime builtin.mode == .debug and builtin.target.os.tag == .freestanding) {
                 @panic("ARC attempted to emit a noop RC helper for a refcounted local");
-            } else if (comptime builtin.mode == .Debug) {
+            } else if (comptime builtin.mode == .debug) {
                 var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
@@ -8433,14 +8433,14 @@ const Inserter = struct {
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
                 const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
                 std.debug.panic("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
-                    @intFromEnum(local),
-                    @intFromEnum(local_layout),
+                    @backingInt(local),
+                    @backingInt(local_layout),
                     self.layouts.getLayout(local_layout),
                     boxyDescForLocal(self.boxy_rc_descs, local),
-                    @intFromEnum(self.current_proc),
-                    if (self.current_rewrite_stmt) |stmt_id| @intFromEnum(stmt_id) else null,
-                    if (ref_source) |source| @intFromEnum(source) else null,
-                    if (ref_source_layout) |source_layout| @intFromEnum(source_layout) else null,
+                    @backingInt(self.current_proc),
+                    if (self.current_rewrite_stmt) |stmt_id| @backingInt(stmt_id) else null,
+                    if (ref_source) |source| @backingInt(source) else null,
+                    if (ref_source_layout) |source_layout| @backingInt(source_layout) else null,
                     if (ref_source_layout) |source_layout| self.layouts.getLayout(source_layout) else null,
                     ref_source_desc,
                     if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
@@ -8471,7 +8471,7 @@ const Inserter = struct {
     }
 
     fn localContainsRefcounted(self: *const Inserter, local: LIR.LocalId) bool {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.local_contains_refcounted.len) arcInvariant("ARC local refcounted cache did not cover local");
         return self.local_contains_refcounted[index];
     }
@@ -8482,7 +8482,7 @@ const Inserter = struct {
 };
 
 fn joinPointLessThan(_: void, a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
-    return @intFromEnum(a.id) < @intFromEnum(b.id);
+    return @backingInt(a.id) < @backingInt(b.id);
 }
 
 fn joinPointEql(a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
@@ -8696,7 +8696,7 @@ fn argMaskBit(index: usize) u64 {
 }
 
 fn arcInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .debug) std.debug.panic(message, .{});
     unreachable;
 }
 
@@ -8961,7 +8961,7 @@ const ArcTest = struct {
     }
 
     fn freshJoinPointId(self: *ArcTest) LIR.JoinPointId {
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point));
         self.next_join_point += 1;
         return id;
     }
@@ -8989,7 +8989,7 @@ const ArcTest = struct {
         // production lowering supplies the exact per-proc subset.
         const frame_locals = try self.allocator.alloc(LIR.LocalId, self.store.localCount());
         defer self.allocator.free(frame_locals);
-        for (frame_locals, 0..) |*frame_local, index| frame_local.* = @enumFromInt(@as(u32, @intCast(index)));
+        for (frame_locals, 0..) |*frame_local, index| frame_local.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(1),
@@ -9335,7 +9335,7 @@ const ArcTest = struct {
 
     fn procBody(self: *const ArcTest) LIR.CFStmtId {
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| return body;
         }
         arcInvariant("ARC test fixture has no procedure body");
@@ -9344,7 +9344,7 @@ const ArcTest = struct {
     fn joinBody(self: *const ArcTest, join_id: LIR.JoinPointId) LIR.CFStmtId {
         var found: ?LIR.CFStmtId = null;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             if (stmt == .join) {
                 if (stmt.join.id == join_id) found = stmt.join.body;
             }
@@ -9355,7 +9355,7 @@ const ArcTest = struct {
     fn countRc(self: *const ArcTest, local_id: LIR.LocalId, kind: RcKind) usize {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             if (stmt == .incref and kind == .incref and stmt.incref.value == local_id) count += 1;
             if (stmt == .decref and kind == .decref and stmt.decref.value == local_id) count += 1;
             if (stmt == .decref_if_initialized and kind == .decref and stmt.decref_if_initialized.value == local_id) count += 1;
@@ -9369,7 +9369,7 @@ const ArcTest = struct {
     fn expectRcAtomicity(self: *const ArcTest, local_id: LIR.LocalId, expected: LIR.RcAtomicity) ExpectError!void {
         var seen: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             const found: LIR.RcAtomicity = if (stmt == .incref and stmt.incref.value == local_id)
                 stmt.incref.atomicity
             else if (stmt == .decref and stmt.decref.value == local_id)
@@ -9389,7 +9389,7 @@ const ArcTest = struct {
     fn uniqueArgsFor(self: *const ArcTest, target: LIR.LocalId) u64 {
         var mask: u64 = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             if (stmt == .assign_low_level and stmt.assign_low_level.target == target) {
                 mask |= stmt.assign_low_level.unique_args;
             }
@@ -9523,7 +9523,7 @@ const ArcTest = struct {
     fn countAllRc(self: *const ArcTest) usize {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             if (stmt == .incref or stmt == .decref or stmt == .decref_if_initialized or stmt == .free) count += 1;
         }
         return count;
@@ -9767,7 +9767,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     const capture_ptr = try f.local(.opaque_ptr);
     const capture_view = try f.local(capture_layout);
     const captured_value = try f.local(erased_box);
-    f.store.setLocalBoxyDesc(captured_value, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
 
     const result = try f.local(.i64);
     const ret = try f.ret(result);
@@ -9795,10 +9795,10 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     );
     defer local_contains_refcounted.deinit(f.allocator);
 
-    try testing.expect(!local_contains_refcounted.slice()[@intFromEnum(capture_view)]);
-    try testing.expect(local_contains_refcounted.slice()[@intFromEnum(captured_value)]);
-    try testing.expect(borrow_anchors[@intFromEnum(capture_view)]);
-    try testing.expect(borrow_anchors[@intFromEnum(captured_value)]);
+    try testing.expect(!local_contains_refcounted.slice()[@backingInt(capture_view)]);
+    try testing.expect(local_contains_refcounted.slice()[@backingInt(captured_value)]);
+    try testing.expect(borrow_anchors[@backingInt(capture_view)]);
+    try testing.expect(borrow_anchors[@backingInt(captured_value)]);
 }
 
 test "ARC preserves erased callable repack reuse" {
@@ -9821,7 +9821,7 @@ test "ARC preserves erased callable repack reuse" {
     }, .none);
 
     const ret = try f.ret(new_callable);
-    const result_desc: LIR.BoxyDescRef = .{ .static = @enumFromInt(fixtureTableIndex(2)) };
+    const result_desc: LIR.BoxyDescRef = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(2))) };
     const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
         .proc = callback,
@@ -9924,7 +9924,7 @@ test "ARC preserves erased call ABI metadata" {
     const arg_descs = try f.span(&.{arg_desc});
     const arg_layouts: LIR.BoxySpan = .{ .start = 4, .len = 1 };
     const arg_desc_keys: LIR.BoxySpan = .{ .start = 7, .len = 1 };
-    const result_desc: LIR.BoxyDescRef = .{ .static = @enumFromInt(fixtureTableIndex(3)) };
+    const result_desc: LIR.BoxyDescRef = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(3))) };
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{.u64});
 
     const ret = try f.ret(result);
@@ -10543,9 +10543,9 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     // Model another proc spec sharing this solved leader. The module-wide
     // group has three members, but this proc's liveness domain must contain
     // only the leader and alias named by its explicit frame.
-    solution.borrowed.set(@intFromEnum(external_member));
-    solution.leader[@intFromEnum(external_member)] = @intFromEnum(leader);
-    solution.alias_source[@intFromEnum(external_member)] = @intFromEnum(leader);
+    solution.borrowed.set(@backingInt(external_member));
+    solution.leader[@backingInt(external_member)] = @backingInt(leader);
+    solution.alias_source[@backingInt(external_member)] = @backingInt(leader);
     try testing.expectEqual(leader, solution.leaderOf(external_member));
 
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -10696,7 +10696,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     const rc = try testing.allocator.alloc(bool, f.store.localCount());
     defer testing.allocator.free(rc);
     @memset(rc, false);
-    rc[@intFromEnum(local)] = true;
+    rc[@backingInt(local)] = true;
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{proc}, true);
     defer solution.deinit();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -10711,7 +10711,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     try testing.expectEqual(@as(usize, 0), domain.frameIndexOf(local));
     try testing.expect(domain.frameContainsLocal(local));
     try testing.expect(!domain.frameContainsLocal(non_frame_local));
-    try testing.expect(!domain.frameContainsLocal(@enumFromInt(std.math.maxInt(u32))));
+    try testing.expect(!domain.frameContainsLocal(@fromBackingInt(@intCast(std.math.maxInt(u32)))));
     try testing.expectEqual(@as(usize, 1), domain.resource_locals.len);
     domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 0), indices.count());
@@ -10750,7 +10750,7 @@ test "ARC sparse join seeds agree with exhaustive group predicates and emission 
     try testing.expectEqual(locals[3], solution.leaderOf(locals[4]));
     try testing.expectEqual(locals[7], solution.leaderOf(locals[8]));
     // A scalar-only group and a solver-only RC anchor must not create units.
-    solution.leader[@intFromEnum(locals[6])] = @intFromEnum(locals[5]);
+    solution.leader[@backingInt(locals[6])] = @backingInt(locals[5]);
     var concrete_rc = solver_rc;
     concrete_rc[7] = false;
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -10785,7 +10785,7 @@ test "ARC sparse join seeds agree with exhaustive group predicates and emission 
         domain.resource_full_masks[domain.requiredResourceBitOf(locals[3])] = if (round % 2 == 0) 0 else 3;
         domain.resource_full_masks[domain.requiredResourceBitOf(locals[4])] = if (round % 2 == 0) 3 else 0;
         for (domain.resource_locals) |local| {
-            if (!concrete_rc[@intFromEnum(local)]) continue;
+            if (!concrete_rc[@backingInt(local)]) continue;
             const bit = domain.groupBitOf(solution.leaderOf(local)) orelse grouped.rawBitOf(&domain, local).?;
             if (reads.isSet(bit)) try expected.set(local);
         }
@@ -10812,7 +10812,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
             try f.assignRefLocal(locals[index], locals[index % 3], use);
     }
     const proc = try f.addProc(&.{}, body, .i64);
-    var rc = [_]bool{true} ** (locals.len + 1);
+    var rc = @as([(locals.len + 1)]bool, @splat(true));
     rc[locals.len] = false;
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
     defer solution.deinit();
@@ -10825,7 +10825,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     defer domain.clearGlobalIndices();
     const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
     var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
-    var expected = [_]bool{false} ** locals.len;
+    var expected = @as([locals.len]bool, @splat(false));
     var prng = std.Random.DefaultPrng.init(11127);
     const random = prng.random();
     for (0..20) |round| {
@@ -10877,7 +10877,7 @@ test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty 
     }
     const before = @import("arc_state.zig").range_query_node_visits.read();
     try testing.expect(!reads.anySetInRange(513, 999999));
-    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").range_query_node_visits.read() - before <= 2 * 8 * 11);
+    if (builtin.mode == .debug) try testing.expect(@import("arc_state.zig").range_query_node_visits.read() - before <= 2 * 8 * 11);
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
@@ -11645,7 +11645,7 @@ test "RC residual shell metadata uses semantic field indices" {
 
     var found = false;
     for (0..f.store.cfStmtCount()) |stmt_index| {
-        const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_ref or stmt.assign_ref.target != shell) continue;
         const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
         if (absent.len == 0) continue;
@@ -12417,7 +12417,7 @@ fn chainedJoinSolveWork(join_count: usize) Allocator.Error!u64 {
 }
 
 test "RC join summary solver work grows linearly with chained joins" {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const small = try chainedJoinSolveWork(8);
     const large = try chainedJoinSolveWork(16);
     // Doubling the join count must stay near double the solver work;
@@ -12460,7 +12460,7 @@ fn strConcatChainGroupLivenessWork(chain_len: usize) Allocator.Error!u64 {
 }
 
 test "RC borrow-group liveness work grows linearly with chained string concats" {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const small = try strConcatChainGroupLivenessWork(32);
     const large = try strConcatChainGroupLivenessWork(64);
     if (large > small * 3) {
@@ -12502,7 +12502,7 @@ fn chainedJoinKeepSetLivenessWork(step_count: usize) Allocator.Error!u64 {
 }
 
 test "RC join keep-set liveness work grows linearly with a proc's refcounted locals" {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const small = try chainedJoinKeepSetLivenessWork(32);
     const large = try chainedJoinKeepSetLivenessWork(64);
     if (large > small * 3) {
@@ -13341,7 +13341,7 @@ test "uniqueness: specialized variant elides the check on a unique dying argumen
     // base proc keeps the runtime check.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, appended));
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
 }
 
@@ -13377,7 +13377,7 @@ test "uniqueness: specialized body clones do not poison local births" {
     const base_proc_count = f.store.procSpecCount();
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, first));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(callee, second));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, first));
@@ -13929,7 +13929,7 @@ test "uniqueness: a seeded parameter's alias is check-free in the specialized va
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, appended));
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
 }
 
@@ -15280,7 +15280,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const outcome_variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const outcome_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, changed));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(outcome_variant, changed));
 
@@ -15409,7 +15409,7 @@ test "RC outcome restitution moves an argument alias's source unit through a mat
 
         var outcome_call = false;
         for (0..f.store.cfStmtCount()) |stmt_index| {
-            const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             if (stmt == .assign_call and stmt.assign_call.target == call_result) {
                 outcome_call = stmt.assign_call.proc != callee;
             }
@@ -15485,7 +15485,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
         const rc = try testing.allocator.alloc(bool, f.store.localCount());
         defer testing.allocator.free(rc);
         for (rc, 0..) |*is_rc, local_index| {
-            const local = f.store.getLocal(@enumFromInt(@as(u32, @intCast(local_index))));
+            const local = f.store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))));
             is_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(local.layout_idx));
         }
         {
@@ -15547,7 +15547,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
         try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
         const caller_body = f.store.getCFStmt(f.store.getProcSpec(caller).body.?);
         try testing.expect(caller_body == .assign_call);
-        try testing.expectEqual(base_proc_count, @intFromEnum(caller_body.assign_call.proc));
+        try testing.expectEqual(base_proc_count, @backingInt(caller_body.assign_call.proc));
 
         // Neither the caller nor either callee emission needs an extra unit
         // for the list or replacement. The failure receipt releases exactly
@@ -15866,7 +15866,7 @@ test "ARC outcome capability rejects stale witnesses across set-local and join r
     const rc_local = try testing.allocator.alloc(bool, f.store.localCount());
     defer testing.allocator.free(rc_local);
     for (rc_local, 0..) |*contains_rc, index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         contains_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(f.store.getLocal(local).layout_idx));
     }
     var solution = try arc_solve.solve(
@@ -16141,14 +16141,14 @@ test "RC outcome restitution intersects every outcome represented by the default
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, changed));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, changed));
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
 }
 
 test "RC outcome restitution solves sixteen independent conditional arguments polynomially" {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -16227,7 +16227,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
     defer solution.deinit();
     for (0..proc_count) |i| {
-        const span = solution.availableOutcomeSpanOf(@enumFromInt(@as(u32, @intCast(i))));
+        const span = solution.availableOutcomeSpanOf(@fromBackingInt(@intCast(@as(u32, @intCast(i)))));
         try testing.expectEqual(@as(u32, 2), span.len);
         const failure = solution.outcomes[span.start];
         const success = solution.outcomes[span.start + 1];
@@ -16240,7 +16240,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
 }
 
 test "RC restitution scratch work scales with disjoint procedure statements" {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const small = try outcomeScratchWork(16);
     const large = try outcomeScratchWork(32);
     try testing.expect(small > 0);
@@ -16308,7 +16308,7 @@ test "RC outcome restitution follows an exact result through a terminal join" {
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, changed));
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
 }
@@ -16625,7 +16625,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
         if (stmt == .assign_call and stmt.assign_call.target == call_result) {
-            try testing.expect(@intFromEnum(stmt.assign_call.proc) >= base_proc_count);
+            try testing.expect(@backingInt(stmt.assign_call.proc) >= base_proc_count);
             break;
         }
         cursor = switch (stmt) {
@@ -16795,7 +16795,7 @@ test "RC specialization: caller body survives variant proc append" {
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(callee_flag, f.store.getProcSpec(variant).runtime_ret_desc.?);
 
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
@@ -16897,7 +16897,7 @@ test "RC specialization: a variant's frame excludes the source's base dismantle 
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
 
     const base_frame = f.store.getLocalSpan(f.store.getProcSpec(callee).frame_locals);
     const variant_frame = f.store.getLocalSpan(f.store.getProcSpec(variant).frame_locals);
@@ -16906,14 +16906,14 @@ test "RC specialization: a variant's frame excludes the source's base dismantle 
     var shared_generated: usize = 0;
     for (0..GuardedList.borrowLen(base_frame)) |base_index| {
         const base_local = GuardedList.at(base_frame, base_index);
-        if (@intFromEnum(base_local) < producer_local_count) continue;
+        if (@backingInt(base_local) < producer_local_count) continue;
         base_generated += 1;
         for (0..GuardedList.borrowLen(variant_frame)) |variant_index| {
             if (GuardedList.at(variant_frame, variant_index) == base_local) shared_generated += 1;
         }
     }
     for (0..GuardedList.borrowLen(variant_frame)) |variant_index| {
-        if (@intFromEnum(GuardedList.at(variant_frame, variant_index)) >= producer_local_count) variant_generated += 1;
+        if (@backingInt(GuardedList.at(variant_frame, variant_index)) >= producer_local_count) variant_generated += 1;
     }
 
     // Both emissions dismantle the pair, so both frames grow, and no generated
@@ -17183,7 +17183,7 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     // a unit and moves it into one mandatory owned variant, whose recursive
     // edge targets itself with no cleanup after the call.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const owned_variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const owned_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     const base_switch = f.walkToSwitch(f.store.getProcSpec(recurse).body.?);
     const base_borrow_call = f.walkToDirectCall(base_switch.default_branch);
     try testing.expectEqual(identity, base_borrow_call.proc);
@@ -17323,7 +17323,7 @@ test "RC interprocedural: tail call matches the caller return ownership" {
     try testing.expect(!f.store.getProcSpec(caller).rc_ret_borrowed);
     try testing.expect(f.store.getProcSpec(lender).rc_ret_borrowed);
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    const owned_return_variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const owned_return_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expect(!f.store.getProcSpec(owned_return_variant).rc_ret_borrowed);
     const caller_switch = f.walkToSwitch(f.store.getProcSpec(caller).body.?);
     const rewritten_tail_call = f.walkToDirectCall(caller_switch.default_branch);
@@ -17559,7 +17559,7 @@ test "RC releases descriptor-backed old set_local value before immutable replace
     const assign_current = try f.assignStr(current, "old", assign_replacement);
     const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .next = assign_current,
     } }, .test_fixture);
     _ = try f.addProc(&.{}, init_desc, .str);
@@ -17593,13 +17593,13 @@ test "RC descriptor updates scan only the current proc frame" {
     const assign_result = try f.assignI64(result, 1, ret);
     const update_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .next = assign_result,
     } }, .test_fixture);
     const assign_current = try f.assignStr(current, "old", update_desc);
     const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .next = assign_current,
     } }, .test_fixture);
     _ = try f.store.addProcSpec(.{
@@ -17632,7 +17632,7 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
     const use_alias = try f.expectStmt(alias, assign_result);
     const reuse_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = source_desc,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(1)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(1))) },
         .next = use_alias,
     } }, .test_fixture);
     const assign_alias = try f.assignRefLocal(alias, source, reuse_source_desc);
@@ -17640,7 +17640,7 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
     const assign_source = try f.assignStr(source, "old", snapshot_desc);
     const init_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = source_desc,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .next = assign_source,
     } }, .test_fixture);
     _ = try f.addProc(&.{}, init_source_desc, .i64);
@@ -17657,7 +17657,7 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     const source = try f.local(f.list_i64);
     const adapted = try f.local(f.list_i64);
     const result = try f.local(.i64);
-    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
+    const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
     f.store.setLocalBoxyDesc(source, desc);
     f.store.setLocalBoxyDesc(adapted, desc);
 
@@ -17667,7 +17667,7 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = source,
-        .adapter = @enumFromInt(fixtureTableIndex(0)),
+        .adapter = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_desc = desc,
         .target_desc = desc,
         .source_mode = .move,
@@ -17700,7 +17700,7 @@ test "RC descriptor-bearing tag aliases and aggregates follow their committed la
         const alias_stmt = try f.assignRefLocal(alias, tag, record_stmt);
         const tag_stmt = try f.store.addCFStmt(.{ .assign_tag = .{
             .target = tag,
-            .target_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+            .target_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .variant_index = 1,
             .discriminant = 1,
             .payload = payload,
@@ -17723,7 +17723,7 @@ test "RC does not treat a descriptor-bearing scalar dictionary result as refcoun
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
-    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
+    const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
     const result = try f.local(.u32);
     const adapted = try f.local(.u32);
     f.store.setLocalBoxyDesc(result, desc);
@@ -17733,7 +17733,7 @@ test "RC does not treat a descriptor-bearing scalar dictionary result as refcoun
     const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = result,
-        .adapter = @enumFromInt(fixtureTableIndex(0)),
+        .adapter = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_desc = desc,
         .target_desc = desc,
         .source_mode = .move,
@@ -17741,8 +17741,8 @@ test "RC does not treat a descriptor-bearing scalar dictionary result as refcoun
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_call_dict = .{
         .target = result,
-        .dict = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
-        .method = @enumFromInt(fixtureTableIndex(0)),
+        .dict = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .method_slot = 0,
         .args = .empty(),
         .result_desc = desc,
@@ -17834,7 +17834,7 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(allocator);
     defer global_local_index.deinit();
     for (locals, indices, 0..) |*local, *index, ordinal| {
-        local.* = @enumFromInt(ordinal);
+        local.* = @fromBackingInt(@intCast(ordinal));
         index.* = @intCast(ordinal);
         try global_local_index.put(local.*, index.*);
     }
@@ -17858,7 +17858,7 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var reverse = owned.iterator(.{ .direction = .reverse });
     for (0..keys.len) |index| try testing.expectEqual(keys[keys.len - 1 - index], reverse.next().?);
     try testing.expectEqual(null, reverse.next());
-    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits.read() - before <= keys.len * 11);
+    if (builtin.mode == .debug) try testing.expect(@import("arc_state.zig").iterator_node_visits.read() - before <= keys.len * 11);
     // The solver filters a persistent fork by removing each visited resource.
     var filtered = try cloneOwnedSetWith(allocator, &owned);
     var forward = filtered.iterator(.{});

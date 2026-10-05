@@ -112,7 +112,7 @@ pub const CompletedScalarValues = struct {
         for (program.static_data_values.items, 0..) |entry, index| {
             const root = entry.compile_time_root orelse continue;
             if (root.role != .value) continue;
-            const slot: LIR.StaticDataId = @enumFromInt(index);
+            const slot: LIR.StaticDataId = @fromBackingInt(@intCast(index));
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
             const key = Key{ .module = root.module, .root = root.root };
@@ -442,7 +442,7 @@ pub const Decoder = struct {
         while (true) {
             const value_layout = self.program.layouts.getLayout(current.layout_idx);
             if (value_layout.tag == .zst) return .{ .done = .zst };
-            return switch (self.program.const_plans.items[@intFromEnum(current.plan)]) {
+            return switch (self.program.const_plans.items[@backingInt(current.plan)]) {
                 .zst => .{ .done = .zst },
                 .scalar => .{ .done = if (decodeScalar(current.layout_idx, current.bytes)) |literal| .{ .literal = literal } else null },
                 .str => .{ .done = if (self.stringIsEmpty(current.bytes)) .empty_str else null },
@@ -510,8 +510,8 @@ pub const Decoder = struct {
     /// The items live behind the descriptor's relocation, past the backing's
     /// allocation header, which the relocation's addend skips.
     pub fn decodeUniformList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, plan_id: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?UniformList {
-        var plan = self.program.const_plans.items[@intFromEnum(plan_id)];
-        while (plan == .named) plan = self.program.const_plans.items[@intFromEnum(plan.named.backing)];
+        var plan = self.program.const_plans.items[@backingInt(plan_id)];
+        while (plan == .named) plan = self.program.const_plans.items[@backingInt(plan.named.backing)];
         const element_plan = switch (plan) {
             .list => |element_plan| element_plan,
             .zst, .scalar, .str, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => return null,
@@ -602,10 +602,10 @@ pub const Decoder = struct {
 /// Whether the completed value in `slot` is a successful root: its failure
 /// record's `failed` byte is zero in the frozen image.
 fn slotSucceeded(program: *const Program.Result, frozen: *const Program.FrozenStaticData, slot: LIR.StaticDataId) bool {
-    const root = program.static_data_values.items[@intFromEnum(slot)].compile_time_root orelse return false;
+    const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse return false;
     if (root.role != .value) return false;
     const failure_slot = root.role.value.failure_slot;
-    const failure_root = program.static_data_values.items[@intFromEnum(failure_slot)].compile_time_root orelse return false;
+    const failure_root = program.static_data_values.items[@backingInt(failure_slot)].compile_time_root orelse return false;
     if (failure_root.role != .failure_message) return false;
     const failure_export = exportOf(frozen, failure_slot) orelse return false;
     const offset = failure_export.symbol_offset + failure_root.role.failure_message.failed_offset;
@@ -671,12 +671,12 @@ fn intLiteral(comptime Int: type, layout_idx: layout.Idx, bytes: []const u8) ?LI
 }
 
 test "a u128 scalar above the i128 range decodes to its bit pattern" {
-    const max_bytes = [_]u8{0xff} ** 16;
+    const max_bytes = @as([16]u8, @splat(0xff));
     const max = decodeScalar(.u128, &max_bytes) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u128, std.math.maxInt(u128)), @as(u128, @bitCast(max.i128_literal.value)));
     try std.testing.expectEqual(layout.Idx.u128, max.i128_literal.layout_idx);
 
-    const high_bit_bytes = [_]u8{0} ** 15 ++ [_]u8{0x80};
+    const high_bit_bytes = @as([15]u8, @splat(0)) ++ [_]u8{0x80};
     const high_bit = decodeScalar(.u128, &high_bit_bytes) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u128, 1) << 127, @as(u128, @bitCast(high_bit.i128_literal.value)));
 
@@ -692,7 +692,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
-    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .scalar);
 
     // Slots: 0 = failure record of 1, 1 = successful u32 root, 2 = failure
@@ -709,18 +709,18 @@ test "completed successful scalar roots decode to literals; failed and aggregate
             },
             .compile_time_root = .{
                 .module = .{},
-                .root = .{ .checked = @enumFromInt(index) },
+                .root = .{ .checked = @fromBackingInt(@intCast(index)) },
                 .const_locator = null,
                 .role = switch (role) {
                     .failure => .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
-                    .value => .{ .value = .{ .failure_slot = @enumFromInt(index - 1), .plan = plan } },
-                    .string => .{ .value = .{ .failure_slot = @enumFromInt(4), .plan = plan } },
+                    .value => .{ .value = .{ .failure_slot = @fromBackingInt(@intCast(index - 1)), .plan = plan } },
+                    .string => .{ .value = .{ .failure_slot = @fromBackingInt(@intCast(4)), .plan = plan } },
                 },
             },
         });
     }
-    var ok_record = [_]u8{0} ** 32;
-    var failed_record = [_]u8{0} ** 32;
+    var ok_record = @as([32]u8, @splat(0));
+    var failed_record = @as([32]u8, @splat(0));
     failed_record[failed_offset] = 1;
     const relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "backing" }};
     var exports = [_]Program.StaticDataExport{
@@ -730,23 +730,23 @@ test "completed successful scalar roots decode to literals; failed and aggregate
         .{ .symbol_name = "s3", .bytes = &.{ 7, 0, 0, 0 }, .alignment = 4 },
         .{ .symbol_name = "s4", .bytes = &ok_record, .alignment = 8 },
         .{ .symbol_name = "s5", .bytes = &.{ 0xfe, 0xff }, .alignment = 2 },
-        .{ .symbol_name = "s6", .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &relocation },
+        .{ .symbol_name = "s6", .bytes = &(@as([24]u8, @splat(0))), .alignment = 8, .relocations = &relocation },
     };
     // This program's static roots are exported densely in root order, so each
     // export carries the id of its own position.
-    for (&exports, 0..) |*item, index| item.value_id = @enumFromInt(@as(u32, @intCast(index)));
+    for (&exports, 0..) |*item, index| item.value_id = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
 
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
-    const first = values.literalFor(.{}, .{ .checked = @enumFromInt(1) }, .u32) orelse return error.TestUnexpectedResult;
+    const first = values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, .u32) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, 12345), first.i128_literal.value);
     try std.testing.expectEqual(layout.Idx.u32, first.i128_literal.layout_idx);
-    try std.testing.expect(values.literalFor(.{}, .{ .checked = @enumFromInt(1) }, .u64) == null);
-    try std.testing.expect(values.literalFor(.{}, .{ .checked = @enumFromInt(3) }, .u32) == null);
-    const third = values.literalFor(.{}, .{ .checked = @enumFromInt(5) }, .i16) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, .u64) == null);
+    try std.testing.expect(values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(3)) }, .u32) == null);
+    const third = values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(5)) }, .i16) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, -2), third.i128_literal.value);
-    try std.testing.expect(values.literalFor(.{}, .{ .checked = @enumFromInt(6) }, .str) == null);
+    try std.testing.expect(values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(6)) }, .str) == null);
 }
 
 test "completed empty list roots decode to their constructions; lists with elements keep their slots" {
@@ -758,20 +758,20 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
     const list_layout = try program.layouts.insertList(.u32);
-    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const scalar_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .scalar);
-    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .{ .list = scalar_plan });
     // Slots: 0 = failure record of 1, 2 and 3; 1 = empty list evaluated with
     // capacity 16; 2 = three copies of 7; 3 = the list [1, 2, 3].
-    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     for (0..4) |index| {
         try program.static_data_values.append(allocator, .{
             .initializer = null,
             .layout_idx = if (index == 0) record_layout else list_layout,
             .compile_time_root = .{
                 .module = .{},
-                .root = .{ .checked = @enumFromInt(index) },
+                .root = .{ .checked = @fromBackingInt(@intCast(index)) },
                 .const_locator = null,
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
@@ -780,11 +780,11 @@ test "completed empty list roots decode to their constructions; lists with eleme
             },
         });
     }
-    var ok_record = [_]u8{0} ** 32;
-    var empty_descriptor = [_]u8{0} ** 24;
-    var uniform_descriptor = [_]u8{0} ** 24;
+    var ok_record = @as([32]u8, @splat(0));
+    var empty_descriptor = @as([24]u8, @splat(0));
+    var uniform_descriptor = @as([24]u8, @splat(0));
     std.mem.writeInt(u64, uniform_descriptor[8..16], 3, .little);
-    var varied_descriptor = [_]u8{0} ** 24;
+    var varied_descriptor = @as([24]u8, @splat(0));
     std.mem.writeInt(u64, varied_descriptor[8..16], 3, .little);
     // A backing starts with a word-sized allocation header that the
     // relocation's addend skips; the uniform backing carries three copies
@@ -800,18 +800,18 @@ test "completed empty list roots decode to their constructions; lists with eleme
         .{ .symbol_name = "varied_backing", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0 }, .alignment = 8 },
     };
     for (&exports, 0..) |*item, index| {
-        if (index < 4) item.value_id = @enumFromInt(index);
+        if (index < 4) item.value_id = @fromBackingInt(@intCast(index));
     }
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
 
-    const empty = values.constructionFor(.{}, .{ .checked = @enumFromInt(1) }, list_layout) orelse return error.TestUnexpectedResult;
+    const empty = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, list_layout) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u64, 16), empty.empty_list);
     // A uniform list and a varied list alike keep their slots: rebuilding
     // either would allocate at every read.
-    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @enumFromInt(2) }, list_layout));
-    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @enumFromInt(3) }, list_layout));
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, list_layout));
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(3)) }, list_layout));
 
     // A consumer that lowers its own roots interns layouts in its own order,
     // so the list layout it reads the root at is a different index from the
@@ -839,7 +839,7 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const empty_target = try ctx.addLocal(reader_list_layout);
     const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
     const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } }, origin);
-    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, .{ .checked = @enumFromInt(1) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
+    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmt(reserved).assign_literal.value.i64_literal.value);
 }
 
@@ -856,27 +856,27 @@ test "an empty string root and a record of an empty list and a scalar decode to 
     const record_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const list_field_offset = program.layouts.getStructFieldOffsetByOriginalIndex(record_idx, 0);
     const count_field_offset = program.layouts.getStructFieldOffsetByOriginalIndex(record_idx, 1);
-    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const scalar_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .scalar);
-    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .str);
-    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .{ .list = scalar_plan });
-    const record_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const record_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     // The program frees a record plan's children on deinit.
     try program.const_plans.append(allocator, .{ .record = try allocator.dupe(Program.ConstPlanId, &.{ list_plan, scalar_plan }) });
     // Slots: 0 = failure record of the rest; 1 = the empty string; 2 = the
     // record { empty list with capacity 4, 9 }; 3 = the small string "ab".
     const layouts_by_slot = [_]layout.Idx{ failure_layout, .str, record_layout, .str };
     const plans_by_slot = [_]Program.ConstPlanId{ scalar_plan, str_plan, record_plan, str_plan };
-    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     for (layouts_by_slot, plans_by_slot, 0..) |slot_layout, slot_plan, index| {
         try program.static_data_values.append(allocator, .{
             .initializer = null,
             .layout_idx = slot_layout,
             .compile_time_root = .{
                 .module = .{},
-                .root = .{ .checked = @enumFromInt(index) },
+                .root = .{ .checked = @fromBackingInt(@intCast(index)) },
                 .const_locator = null,
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
@@ -885,16 +885,16 @@ test "an empty string root and a record of an empty list and a scalar decode to 
             },
         });
     }
-    var ok_record = [_]u8{0} ** 32;
+    var ok_record = @as([32]u8, @splat(0));
     // Small strings set the top bit of the final byte and keep their
     // length in its low seven bits.
-    var empty_string = [_]u8{0} ** 24;
+    var empty_string = @as([24]u8, @splat(0));
     empty_string[23] = 0x80;
-    var short_string = [_]u8{0} ** 24;
+    var short_string = @as([24]u8, @splat(0));
     short_string[0] = 'a';
     short_string[1] = 'b';
     short_string[23] = 0x82;
-    var record_bytes = [_]u8{0} ** 32;
+    var record_bytes = @as([32]u8, @splat(0));
     std.mem.writeInt(u64, record_bytes[count_field_offset..][0..8], 9, .little);
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
@@ -902,16 +902,16 @@ test "an empty string root and a record of an empty list and a scalar decode to 
         .{ .symbol_name = "s2", .bytes = &record_bytes, .alignment = 8, .empty_list_capacities = &.{.{ .offset = list_field_offset, .capacity = 4 }} },
         .{ .symbol_name = "s3", .bytes = &short_string, .alignment = 8 },
     };
-    for (&exports, 0..) |*item, index| item.value_id = @enumFromInt(index);
+    for (&exports, 0..) |*item, index| item.value_id = @fromBackingInt(@intCast(index));
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
 
-    const string = values.constructionFor(.{}, .{ .checked = @enumFromInt(1) }, .str) orelse return error.TestUnexpectedResult;
+    const string = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, .str) orelse return error.TestUnexpectedResult;
     try std.testing.expect(string == .empty_str);
-    const record = values.constructionFor(.{}, .{ .checked = @enumFromInt(2) }, record_layout) orelse return error.TestUnexpectedResult;
+    const record = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, record_layout) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 2), record.record.len);
     try std.testing.expectEqual(@as(u64, 4), record.record[0].empty_list);
     try std.testing.expectEqual(@as(i128, 9), record.record[1].literal.i128_literal.value);
-    try std.testing.expect(values.constructionFor(.{}, .{ .checked = @enumFromInt(3) }, .str) == null);
+    try std.testing.expect(values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(3)) }, .str) == null);
 }

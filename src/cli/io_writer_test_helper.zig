@@ -5,8 +5,18 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = @import("CliCtx.zig").Io;
 
-const stdout_payload = "stdout \u{2713} issue-10465\n" ** 256;
-const stderr_payload = "stderr \u{2713} issue-10465\n" ** 256;
+const stdout_payload = repeated: {
+    const pattern = "stdout \u{2713} issue-10465\n";
+    var result: [pattern.len * (256)]@TypeOf(pattern[0]) = undefined;
+    for (0..(256)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+    break :repeated &result;
+};
+const stderr_payload = repeated: {
+    const pattern = "stderr \u{2713} issue-10465\n";
+    var result: [pattern.len * (256)]@TypeOf(pattern[0]) = undefined;
+    for (0..(256)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+    break :repeated &result;
+};
 
 const HelperError = std.process.Args.ToSliceError || std.Io.File.OpenError || std.Io.Writer.Error || error{
     InvalidArguments,

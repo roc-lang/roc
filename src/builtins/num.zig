@@ -1458,14 +1458,14 @@ fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) NumTestHelperEr
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: std.meta.Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) NumTestHelperError!void {
+fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: @Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
     const result = parseFloatFromStr(T, roc_str);
     try std.testing.expectEqual(@as(u8, 0), result.errorcode);
 
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const Bits = @Int(.unsigned, @bitSizeOf(T));
     try std.testing.expectEqual(@as(Bits, expected_bits), @as(Bits, @bitCast(result.value)));
 }
 
@@ -1626,7 +1626,7 @@ fn expectSeparatorsIgnored(comptime T: type, with_separators: []const u8, roc_op
     try std.testing.expectEqual(@as(u8, 0), with.errorcode);
     try std.testing.expectEqual(@as(u8, 0), without.errorcode);
 
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const Bits = @Int(.unsigned, @bitSizeOf(T));
     try std.testing.expectEqual(@as(Bits, @bitCast(without.value)), @as(Bits, @bitCast(with.value)));
 }
 
@@ -2063,7 +2063,7 @@ pub const prefix_parse_testing = struct {
     /// Check the prefix-parse properties of one generated input against the
     /// whole-string parser of the same type.
     pub fn expectProperties(comptime T: type, text: []const u8, comptime prefixLen: fn ([]const u8) usize, comptime parsePrefix: fn ([]const u8) NumPrefixParseResult(T), comptime parseWhole: fn ([]const u8) ?T) PrefixTestError!void {
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const Bits = @Int(.unsigned, @bitSizeOf(T));
         const result = parsePrefix(text);
         const consumed: usize = @intCast(result.consumed);
         try std.testing.expect(consumed <= text.len);
@@ -2108,7 +2108,7 @@ fn expectPrefixOk(comptime T: type, result: NumPrefixParseResult(T), expected: T
     try std.testing.expectEqual(@as(u8, 0), result.errorcode);
     try std.testing.expectEqual(@as(u64, consumed), result.consumed);
     if (@typeInfo(T) == .float) {
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const Bits = @Int(.unsigned, @bitSizeOf(T));
         try std.testing.expectEqual(@as(Bits, @bitCast(expected)), @as(Bits, @bitCast(result.value)));
     } else {
         try std.testing.expectEqual(expected, result.value);

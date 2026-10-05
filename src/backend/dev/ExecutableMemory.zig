@@ -84,7 +84,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var total: usize = 0;
         for (functions) |function| {
             if (function.start_offset >= function.end_offset) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
                 }
                 unreachable;
@@ -122,7 +122,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var previous_end: u32 = 0;
         for (sorted_functions, 0..) |function, i| {
             if (function.start_offset >= function.end_offset or function.end_offset > code_size or function.start_offset < previous_end) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
                 }
                 unreachable;

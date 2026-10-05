@@ -1601,7 +1601,7 @@ fn runCrashTest(
     }
 
     if (!require_problems and has_problems) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.print("runCrashTest compile-time problems:\n", .{});
             for (can_diags) |diag| {
                 std.debug.print("  can: {s}\n", .{@tagName(diag)});
@@ -1843,7 +1843,7 @@ fn serializeOutcomeToBuffer(
     duration_ns: u64,
 ) RunnerError!void {
     var header: WireHeader = .{
-        .status = @intFromEnum(outcome.status),
+        .status = @backingInt(outcome.status),
         .backend_statuses = undefined,
         .backend_durations = undefined,
         .parse_ns = outcome.timings.parse_ns,
@@ -1861,7 +1861,7 @@ fn serializeOutcomeToBuffer(
     };
     if (outcome.has_backend_details) {
         for (0..NUM_BACKENDS) |i| {
-            header.backend_statuses[i] = @intFromEnum(outcome.backends[i].status);
+            header.backend_statuses[i] = @backingInt(outcome.backends[i].status);
             header.backend_durations[i] = outcome.backends[i].duration_ns;
             header.backend_value_lens[i] = if (outcome.backends[i].value) |v| @intCast(v.len) else 0;
         }
@@ -1912,7 +1912,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
         for (0..NUM_BACKENDS) |i| {
             const value = harness.readStr(buf, &offset, header.backend_value_lens[i], gpa);
             backends[i] = .{
-                .status = @enumFromInt(header.backend_statuses[i]),
+                .status = @fromBackingInt(@intCast(header.backend_statuses[i])),
                 .value = value,
                 .duration_ns = header.backend_durations[i],
             };
@@ -1920,7 +1920,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     }
 
     return .{
-        .status = @enumFromInt(header.status),
+        .status = @fromBackingInt(@intCast(header.status)),
         .message = message,
         .duration_ns = header.duration_ns,
         .timings = .{

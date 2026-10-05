@@ -134,7 +134,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     var manager = CacheManager.init(allocator, config, filesystem);
 
     const test_data = "Hello, test cache!";
-    const cache_key = [_]u8{0x42} ** 32;
+    const cache_key = @as([32]u8, @splat(0x42));
 
     // Store raw bytes
     manager.storeRawBytes(cache_key, test_data, tmp_path);
@@ -163,7 +163,7 @@ test "concurrent cache stores of one key use separate staging files" {
     var first = CacheManager.init(std.heap.page_allocator, config, filesystem);
     var second = CacheManager.init(std.heap.page_allocator, config, filesystem);
 
-    const key = [_]u8{0x51} ** 32;
+    const key = @as([32]u8, @splat(0x51));
     const data = "same checked artifact";
     var first_task = CacheStoreTask{ .manager = &first, .directory = tmp_path, .key = key, .data = data };
     var second_task = CacheStoreTask{ .manager = &second, .directory = tmp_path, .key = key, .data = data };
@@ -196,7 +196,7 @@ test "loadRawBytes returns null on miss" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const cache_key = [_]u8{0x24} ** 32;
+    const cache_key = @as([32]u8, @splat(0x24));
     const loaded = manager.loadRawBytes(cache_key, tmp_path);
 
     // Should return null

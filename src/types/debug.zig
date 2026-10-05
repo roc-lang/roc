@@ -39,7 +39,7 @@ pub const IterationGuard = struct {
     /// In debug builds, panics if MAX_ITERATIONS is exceeded.
     /// In release builds, this is a no-op that should be optimized away.
     pub inline fn tick(self: *Self) void {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             self.count += 1;
             if (self.count > MAX_ITERATIONS) {
                 std.debug.panic(
@@ -65,6 +65,6 @@ test "IterationGuard does not panic for normal iteration counts" {
     }
     // In release builds, tick() is a no-op so count stays at 0.
     // In debug builds, count should be 1000.
-    const expected: u32 = if (builtin.mode == .Debug) 1000 else 0;
+    const expected: u32 = if (builtin.mode == .debug) 1000 else 0;
     try std.testing.expectEqual(expected, guard.getCount());
 }

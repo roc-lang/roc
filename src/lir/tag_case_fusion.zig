@@ -325,7 +325,7 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
     join_params.next_join_point = body_clone.firstFreshJoinPoint(store);
     stats.global_statement_visits = store.cfStmtCount();
     for (0..store.procSpecCount()) |proc_index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         try runProcWithStats(store, layouts, proc, store.allocator, &join_params, &stats, &analysis);
     }
     return stats;
@@ -401,7 +401,7 @@ fn runProcWithStats(
 /// jump left outside its declaration's scope would only surface later as an
 /// ARC lift failure with no pointer back here.
 fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR.JoinPointId, allocator: Allocator) ResourceError!void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const Item = struct { stmt: LIR.CFStmtId, depth: usize };
     var work = std.ArrayList(Item).empty;
     defer work.deinit(allocator);
@@ -420,7 +420,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
         switch (store.getCFStmt(item.stmt)) {
             .join => |join| {
                 if ((try declarations.getOrPut(join.id)).found_existing) {
-                    std.debug.panic("tag case fusion of j{d} duplicated declaration j{d}", .{ @intFromEnum(fused_id), @intFromEnum(join.id) });
+                    std.debug.panic("tag case fusion of j{d} duplicated declaration j{d}", .{ @backingInt(fused_id), @backingInt(join.id) });
                 }
                 try scope.append(allocator, join.id);
                 try work.append(allocator, .{ .stmt = join.body, .depth = scope.items.len });
@@ -433,9 +433,9 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
                 }
                 if (!in_scope) {
                     std.debug.panic("tag case fusion of j{d} in {s} left a jump to j{d} outside its declaration", .{
-                        @intFromEnum(fused_id),
+                        @backingInt(fused_id),
                         store.procDebugName(proc) orelse "an unnamed procedure",
-                        @intFromEnum(jump.target),
+                        @backingInt(jump.target),
                     });
                 }
             },
@@ -1462,7 +1462,7 @@ const TestGraph = struct {
 
     fn freshJoin(self: *TestGraph) LIR.JoinPointId {
         defer self.next_join += 1;
-        return @enumFromInt(self.next_join);
+        return @fromBackingInt(@intCast(self.next_join));
     }
 
     fn tag(self: *TestGraph, param: LIR.LocalId, variant: u32, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -1564,7 +1564,7 @@ test "tag case fusion procedure scratch is bounded and output survives scratch d
         const result = try graph.local(.u64);
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         _ = try store.addCFStmt(.{ .join = .{
-            .id = @enumFromInt(50000),
+            .id = @fromBackingInt(@intCast(50000)),
             .params = .empty(),
             .body = ret,
             .remainder = ret,
@@ -1586,7 +1586,7 @@ test "tag case fusion procedure scratch is bounded and output survives scratch d
             var joins = body_clone.JoinParamIndex.init(fixed.allocator());
             defer joins.deinit();
             joins.next_join_point = next_join;
-            try runProc(&procedures, &layouts, @enumFromInt(index), fixed.allocator(), &joins);
+            try runProc(&procedures, &layouts, @fromBackingInt(@intCast(index)), fixed.allocator(), &joins);
             next_join = joins.next_join_point;
         }
         // Poison the storage to catch accidentally retained temporary spans.
@@ -1596,17 +1596,17 @@ test "tag case fusion procedure scratch is bounded and output survives scratch d
     try testing.expectEqual(layout_count, layouts.layoutCount());
     try testing.expectEqual(standalone.cfStmtCount(), procedures.cfStmtCount());
     for (0..standalone.cfStmtCount()) |index| {
-        try testing.expectEqualDeep(standalone.getCFStmt(@enumFromInt(index)), procedures.getCFStmt(@enumFromInt(index)));
+        try testing.expectEqualDeep(standalone.getCFStmt(@fromBackingInt(@intCast(index))), procedures.getCFStmt(@fromBackingInt(@intCast(index))));
     }
     for (0..procedures.procSpecCount()) |index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(index);
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         try testing.expectEqualDeep(standalone.getProcSpec(proc), procedures.getProcSpec(proc));
         var walk = try body_clone.ReachableStmts.init(&procedures, rewritableProcBody(&procedures, proc).?);
         defer walk.deinit();
         while (try walk.next()) |stmt| {
             const node = procedures.getCFStmt(stmt);
             try testing.expect(node != .assign_tag);
-            if (node == .join) try testing.expect(@intFromEnum(node.join.id) > 50000);
+            if (node == .join) try testing.expect(@backingInt(node.join.id) > 50000);
         }
     }
 }
@@ -1637,7 +1637,7 @@ fn testIndependentFusions(allocator: Allocator, candidate_count: usize, unrelate
     _ = try graph.proc(root);
     // Unreachable declarations still occupy the global identity domain.
     _ = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(50000),
+        .id = @fromBackingInt(@intCast(50000)),
         .params = LIR.LocalSpan.empty(),
         .body = ret,
         .remainder = ret,
@@ -1652,7 +1652,7 @@ fn testIndependentFusions(allocator: Allocator, candidate_count: usize, unrelate
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
         try testing.expect(stmt != .assign_tag);
-        if (stmt == .join) try testing.expect(@intFromEnum(stmt.join.id) > 50000);
+        if (stmt == .join) try testing.expect(@backingInt(stmt.join.id) > 50000);
     }
     return stats;
 }
@@ -1829,7 +1829,7 @@ test "tag case fusion rejects a consumer that loops back to the union join" {
     const selector = try graph.local(.u64);
     const result = try graph.local(.u64);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-    const reenter = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(graph.next_join) } }, .test_fixture);
+    const reenter = try store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(graph.next_join)) } }, .test_fixture);
     const root = try graph.candidate(selector, .{ ret, reenter }, 2);
     _ = try graph.proc(root);
     const stats = try runWithStats(&store, &layouts);
@@ -2102,8 +2102,8 @@ test "tag case fusion indexes reused join ids per procedure when cloning nested 
     defer layouts.deinit();
     var roots: [2]LIR.CFStmtId = undefined;
     var results: [2]LIR.LocalId = undefined;
-    const external_id: LIR.JoinPointId = @enumFromInt(1);
-    const internal_id: LIR.JoinPointId = @enumFromInt(2);
+    const external_id: LIR.JoinPointId = @fromBackingInt(@intCast(1));
+    const internal_id: LIR.JoinPointId = @fromBackingInt(@intCast(2));
     for (&roots, &results) |*root, *result| {
         // Both procedures reuse all source join IDs but own distinct parameters.
         var graph: TestGraph = .{ .store = &store };
@@ -2148,7 +2148,7 @@ test "tag case fusion indexes reused join ids per procedure when cloning nested 
             const stmt = store.getCFStmt(id);
             try testing.expect(stmt != .assign_tag);
             if (stmt == .join and stmt.join.id != external_id) {
-                try testing.expect(@intFromEnum(stmt.join.id) > @intFromEnum(internal_id));
+                try testing.expect(@backingInt(stmt.join.id) > @backingInt(internal_id));
                 try testing.expect(!cloned_ids.contains(stmt.join.id));
                 try cloned_ids.put(stmt.join.id, {});
                 const params = store.getLocalSpan(stmt.join.params);
@@ -2184,7 +2184,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2272,7 +2272,7 @@ test "tag case fusion shares the suffix its arms converge on" {
     const one_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const two_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const shared_default = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2390,7 +2390,7 @@ test "tag case fusion carries releases on a producer edge" {
     const finished = try store.addLocal(.{ .layout_idx = .str });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2486,7 +2486,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     const taken = try store.addLocal(.{ .layout_idx = .str });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
 
     // The payload arm reads the payload, then releases the whole union.
     const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
@@ -2589,8 +2589,8 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     const out = try store.addLocal(.{ .layout_idx = .u64 });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
-    const cont_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
+    const cont_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(join_id) + 1));
 
     // Each arm initializes the match result and jumps to its continuation,
     // which lowering declared at the head of the union join's body.
@@ -2642,7 +2642,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
         .payload = null,
         .next = jump_one,
     } }, .test_fixture);
-    const external_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(cont_id) + 1);
+    const external_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(cont_id) + 1));
     const external_build: ?LIR.CFStmtId = if (shared_continuation) try store.addCFStmt(.{ .assign_tag = .{
         .target = param,
         .variant_index = 0,
@@ -2744,8 +2744,8 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
-    const dead_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
+    const dead_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(join_id) + 1));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{

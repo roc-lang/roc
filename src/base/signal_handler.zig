@@ -19,6 +19,12 @@ const supports_posix_signals = switch (builtin.os.tag) {
     .netbsd,
     .openbsd,
     => true,
+    .wiiu,
+    .@"switch",
+    .gba,
+    .psx,
+    .tios,
+    .ashetos,
     .freestanding,
     .other,
     .contiki,
@@ -391,6 +397,9 @@ fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
             const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
             return @intCast(uc.uc_mcontext.sp);
         },
+        .ez80,
+        .m88k,
+        .spork8,
         .alpha,
         .amdgcn,
         .arc,

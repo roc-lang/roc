@@ -54,16 +54,16 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Bitmask of callee-saved general registers available for allocation
         /// X19-X28 (not FP/X29 or LR/X30 - they're special)
         pub const CALLEE_SAVED_GENERAL_MASK: u32 =
-            (1 << @intFromEnum(GeneralReg.X19)) |
-            (1 << @intFromEnum(GeneralReg.X20)) |
-            (1 << @intFromEnum(GeneralReg.X21)) |
-            (1 << @intFromEnum(GeneralReg.X22)) |
-            (1 << @intFromEnum(GeneralReg.X23)) |
-            (1 << @intFromEnum(GeneralReg.X24)) |
-            (1 << @intFromEnum(GeneralReg.X25)) |
-            (1 << @intFromEnum(GeneralReg.X26)) |
-            (1 << @intFromEnum(GeneralReg.X27)) |
-            (1 << @intFromEnum(GeneralReg.X28));
+            (1 << @backingInt(GeneralReg.X19)) |
+            (1 << @backingInt(GeneralReg.X20)) |
+            (1 << @backingInt(GeneralReg.X21)) |
+            (1 << @backingInt(GeneralReg.X22)) |
+            (1 << @backingInt(GeneralReg.X23)) |
+            (1 << @backingInt(GeneralReg.X24)) |
+            (1 << @backingInt(GeneralReg.X25)) |
+            (1 << @backingInt(GeneralReg.X26)) |
+            (1 << @backingInt(GeneralReg.X27)) |
+            (1 << @backingInt(GeneralReg.X28));
 
         emit: Emit,
         allocator: Allocator,
@@ -170,7 +170,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
             // Try callee-saved
             if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
-                self.callee_saved_used |= @as(u32, 1) << @intFromEnum(reg);
+                self.callee_saved_used |= @as(u32, 1) << @backingInt(reg);
                 return reg;
             }
             return null;
@@ -180,12 +180,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (mask.* == 0) return null;
             const bit: u5 = @intCast(@ctz(mask.*));
             mask.* &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
+            return @fromBackingInt(@intCast(bit));
         }
 
         /// Free a general-purpose register, making it available for allocation.
         pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             // Return to appropriate pool
             if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
                 self.callee_saved_available |= @as(u32, 1) << idx;
@@ -196,7 +196,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Mark a fixed ABI register as in use so it won't be allocated.
         pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             // Remove from free pool (it's now in use)
             self.free_general &= ~(@as(u32, 1) << idx);
             self.callee_saved_available &= ~(@as(u32, 1) << idx);
@@ -206,11 +206,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (self.free_float == 0) return null;
             const bit: u5 = @intCast(@ctz(self.free_float));
             self.free_float &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
+            return @fromBackingInt(@intCast(bit));
         }
 
         pub fn freeFloat(self: *Self, reg: FloatReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             self.free_float |= @as(u32, 1) << idx;
         }
 
@@ -244,8 +244,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Check if any register in a pair is used
         pub fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
-            const mask1 = @as(u32, 1) << @intFromEnum(pair[0]);
-            const mask2 = @as(u32, 1) << @intFromEnum(pair[1]);
+            const mask1 = @as(u32, 1) << @backingInt(pair[0]);
+            const mask2 = @as(u32, 1) << @backingInt(pair[1]);
             return (self.callee_saved_used & (mask1 | mask2)) != 0;
         }
 
@@ -702,7 +702,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         fn branchSiteIndex(self: *Self, loc: usize) u32 {
             return self.branch_site_index.get(loc) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     std.debug.panic("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
                 }
                 unreachable;
@@ -840,7 +840,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Patch a jump target
         pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
-            if (builtin.mode == .Debug and self.branch_sites.items[index].kind != .jump and self.branch_sites.items[index].kind != .cond_jump) {
+            if (builtin.mode == .debug and self.branch_sites.items[index].kind != .jump and self.branch_sites.items[index].kind != .cond_jump) {
                 std.debug.panic("AArch64 patchJump called for the call site at 0x{x}", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
@@ -849,7 +849,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Patch a call emitted by `emitCallPlaceholder`.
         pub fn patchCall(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
-            if (builtin.mode == .Debug and self.branch_sites.items[index].kind != .call) {
+            if (builtin.mode == .debug and self.branch_sites.items[index].kind != .call) {
                 std.debug.panic("AArch64 patchCall called for a site at 0x{x} that is not a pending call", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
@@ -950,7 +950,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn attachVeneer(self: *Self, index: u32, veneer: usize) void {
             const site = &self.branch_sites.items[index];
             std.debug.assert(site.veneer == null);
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 if (!fitsSignedBits(@divExact(branchByteOffset(site.directWordLoc(), veneer), 4), 26)) {
                     std.debug.panic("AArch64 branch site at 0x{x} cannot reach its veneer at 0x{x}", .{ site.loc, veneer });
                 }
@@ -1018,7 +1018,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// direct BL to a linked symbol gets a stub here; every such site is
         /// still within reach of this point.
         pub fn finishImage(self: *Self) Allocator.Error!void {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 for (self.branch_sites.items) |site| {
                     if (site.kind != .extern_call and site.target == null) {
                         std.debug.panic("AArch64 branch site at 0x{x} was never patched", .{site.loc});
@@ -1089,7 +1089,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                     }
                     if (veneer_moved != target_moved) self.writePcRelSequence(veneer, target_loc, .IP0, .IP1);
                 } else if (loc_moved != target_moved) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.panic("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
                     }
                     unreachable;
@@ -1135,7 +1135,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn assertBranchFits(offset_words: i64, comptime bits: u6, comptime kind: []const u8) void {
             if (fitsSignedBits(offset_words, bits)) return;
 
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic(
                     "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
                     .{ kind, offset_words, bits },
@@ -1169,7 +1169,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             const imm19: u19 = @bitCast(@as(i19, @intCast(offset_words)));
             return (@as(u32, 0b01010100) << 24) |
                 (@as(u32, imm19) << 5) |
-                @intFromEnum(cond);
+                @backingInt(cond);
         }
         /// Emit function call with relocation
         pub fn emitCall(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
@@ -1261,7 +1261,7 @@ test "vector allocation excludes AAPCS64 partial-width callee-saved registers" {
     const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_FLOAT);
     for (0..count) |_| {
         const reg = cg.allocFloat().?;
-        const index = @intFromEnum(reg);
+        const index = @backingInt(reg);
         try std.testing.expect(index <= 7 or index >= 16);
     }
     try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
@@ -1307,7 +1307,7 @@ test "patch conditional jump keeps near targets short" {
     const cond_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
     const reserved_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
 
-    try std.testing.expectEqual(@as(u4, @intFromEnum(EmitMod.Emit(.arm64linux).Condition.ne)), @as(u4, @truncate(cond_inst)));
+    try std.testing.expectEqual(@as(u4, @backingInt(EmitMod.Emit(.arm64linux).Condition.ne)), @as(u4, @truncate(cond_inst)));
     try std.testing.expectEqual(@as(u19, @intCast(@divExact(@as(i64, @intCast(target - patch)), 4))), @as(u19, @truncate(cond_inst >> 5)));
     try std.testing.expectEqual(@as(u32, 0xD503201F), reserved_inst);
 }
@@ -1325,7 +1325,7 @@ test "patch conditional jump expands far targets" {
     const skip_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
     const branch_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
 
-    try std.testing.expectEqual(@as(u4, @intFromEnum(EmitMod.Emit(.arm64linux).Condition.eq)), @as(u4, @truncate(skip_inst)));
+    try std.testing.expectEqual(@as(u4, @backingInt(EmitMod.Emit(.arm64linux).Condition.eq)), @as(u4, @truncate(skip_inst)));
     try std.testing.expectEqual(@as(u19, 2), @as(u19, @truncate(skip_inst >> 5)));
     try std.testing.expectEqual(@as(u6, 0b000101), @as(u6, @truncate(branch_inst >> 26)));
     try std.testing.expectEqual(@as(u26, @intCast(@divExact(@as(i64, @intCast(target - (patch + 4))), 4))), @as(u26, @truncate(branch_inst)));
@@ -1402,7 +1402,7 @@ test "far conditional jump reaches its target through a veneer" {
 
     const veneer = target + 4;
     const skip_inst = testInst(&cg, patch);
-    try std.testing.expectEqual(@as(u4, @intFromEnum(TestEmit.Condition.eq)), @as(u4, @truncate(skip_inst)));
+    try std.testing.expectEqual(@as(u4, @backingInt(TestEmit.Condition.eq)), @as(u4, @truncate(skip_inst)));
     try std.testing.expectEqual(@as(u19, 2), @as(u19, @truncate(skip_inst >> 5)));
     try expectDirectBranch(0b000101, testInst(&cg, patch + 4), patch + 4, veneer);
     try expectVeneer(&cg, veneer, target);

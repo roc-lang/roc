@@ -47,20 +47,20 @@ test "tokenTagToSemanticType maps keywords" {
     for (keyword_tags) |tag| {
         const result = semantic_tokens.tokenTagToSemanticType(tag);
         try std.testing.expect(result != null);
-        try std.testing.expectEqual(@intFromEnum(SemanticType.keyword), result.?);
+        try std.testing.expectEqual(@backingInt(SemanticType.keyword), result.?);
     }
 }
 
 test "tokenTagToSemanticType maps type identifiers" {
     const result = semantic_tokens.tokenTagToSemanticType(.UpperIdent);
     try std.testing.expect(result != null);
-    try std.testing.expectEqual(@intFromEnum(SemanticType.type), result.?);
+    try std.testing.expectEqual(@backingInt(SemanticType.type), result.?);
 }
 
 test "tokenTagToSemanticType maps variable identifiers" {
     const result = semantic_tokens.tokenTagToSemanticType(.LowerIdent);
     try std.testing.expect(result != null);
-    try std.testing.expectEqual(@intFromEnum(SemanticType.variable), result.?);
+    try std.testing.expectEqual(@backingInt(SemanticType.variable), result.?);
 }
 
 test "tokenTagToSemanticType maps numeric literals" {
@@ -74,7 +74,7 @@ test "tokenTagToSemanticType maps numeric literals" {
     for (number_tags) |tag| {
         const result = semantic_tokens.tokenTagToSemanticType(tag);
         try std.testing.expect(result != null);
-        try std.testing.expectEqual(@intFromEnum(SemanticType.number), result.?);
+        try std.testing.expectEqual(@backingInt(SemanticType.number), result.?);
     }
 }
 
@@ -89,7 +89,7 @@ test "tokenTagToSemanticType maps string literals" {
     for (string_tags) |tag| {
         const result = semantic_tokens.tokenTagToSemanticType(tag);
         try std.testing.expect(result != null);
-        try std.testing.expectEqual(@intFromEnum(SemanticType.string), result.?);
+        try std.testing.expectEqual(@backingInt(SemanticType.string), result.?);
     }
 }
 
@@ -106,7 +106,7 @@ test "tokenTagToSemanticType maps operators" {
     for (operator_tags) |tag| {
         const result = semantic_tokens.tokenTagToSemanticType(tag);
         try std.testing.expect(result != null);
-        try std.testing.expectEqual(@intFromEnum(SemanticType.operator), result.?);
+        try std.testing.expectEqual(@backingInt(SemanticType.operator), result.?);
     }
 }
 
@@ -119,7 +119,7 @@ test "tokenTagToSemanticType maps property access" {
     for (property_tags) |tag| {
         const result = semantic_tokens.tokenTagToSemanticType(tag);
         try std.testing.expect(result != null);
-        try std.testing.expectEqual(@intFromEnum(SemanticType.property), result.?);
+        try std.testing.expectEqual(@backingInt(SemanticType.property), result.?);
     }
 }
 
@@ -132,7 +132,7 @@ test "tokenTagToSemanticType maps enum members (tags)" {
     for (enum_tags) |tag| {
         const result = semantic_tokens.tokenTagToSemanticType(tag);
         try std.testing.expect(result != null);
-        try std.testing.expectEqual(@intFromEnum(SemanticType.enumMember), result.?);
+        try std.testing.expectEqual(@backingInt(SemanticType.enumMember), result.?);
     }
 }
 
@@ -172,7 +172,7 @@ test "deltaEncode single token" {
             .line = 0,
             .start_char = 0,
             .length = 5,
-            .token_type = @intFromEnum(SemanticType.keyword),
+            .token_type = @backingInt(SemanticType.keyword),
             .modifiers = 0,
         },
     };
@@ -185,7 +185,7 @@ test "deltaEncode single token" {
     try std.testing.expectEqual(@as(u32, 0), result[0]); // deltaLine
     try std.testing.expectEqual(@as(u32, 0), result[1]); // deltaStartChar
     try std.testing.expectEqual(@as(u32, 5), result[2]); // length
-    try std.testing.expectEqual(@intFromEnum(SemanticType.keyword), result[3]); // tokenType
+    try std.testing.expectEqual(@backingInt(SemanticType.keyword), result[3]); // tokenType
     try std.testing.expectEqual(@as(u32, 0), result[4]); // tokenModifiers
 }
 
@@ -197,14 +197,14 @@ test "deltaEncode same line tokens" {
             .line = 0,
             .start_char = 0,
             .length = 2,
-            .token_type = @intFromEnum(SemanticType.keyword),
+            .token_type = @backingInt(SemanticType.keyword),
             .modifiers = 0,
         },
         .{
             .line = 0,
             .start_char = 3,
             .length = 1,
-            .token_type = @intFromEnum(SemanticType.variable),
+            .token_type = @backingInt(SemanticType.variable),
             .modifiers = 0,
         },
     };
@@ -234,14 +234,14 @@ test "deltaEncode different line tokens" {
             .line = 0,
             .start_char = 0,
             .length = 1,
-            .token_type = @intFromEnum(SemanticType.variable),
+            .token_type = @backingInt(SemanticType.variable),
             .modifiers = 0,
         },
         .{
             .line = 1,
             .start_char = 0,
             .length = 1,
-            .token_type = @intFromEnum(SemanticType.variable),
+            .token_type = @backingInt(SemanticType.variable),
             .modifiers = 0,
         },
     };
@@ -281,16 +281,16 @@ test "extractSemanticTokens simple expression" {
     var found_number = false;
 
     for (tokens) |token| {
-        if (token.token_type == @intFromEnum(SemanticType.variable)) {
+        if (token.token_type == @backingInt(SemanticType.variable)) {
             found_variable = true;
             try std.testing.expectEqual(@as(u32, 0), token.line);
             try std.testing.expectEqual(@as(u32, 0), token.start_char);
             try std.testing.expectEqual(@as(u32, 1), token.length);
         }
-        if (token.token_type == @intFromEnum(SemanticType.operator)) {
+        if (token.token_type == @backingInt(SemanticType.operator)) {
             found_operator = true;
         }
-        if (token.token_type == @intFromEnum(SemanticType.number)) {
+        if (token.token_type == @backingInt(SemanticType.number)) {
             found_number = true;
             try std.testing.expectEqual(@as(u32, 0), token.line);
             try std.testing.expectEqual(@as(u32, 4), token.start_char);
@@ -316,10 +316,10 @@ test "extractSemanticTokens keeps field access and method calls distinct" {
     var found_field = false;
     var found_method = false;
     for (tokens) |token| {
-        if (token.line == 0 and token.token_type == @intFromEnum(SemanticType.property)) {
+        if (token.line == 0 and token.token_type == @backingInt(SemanticType.property)) {
             found_field = true;
         }
-        if (token.line == 1 and token.token_type == @intFromEnum(SemanticType.function)) {
+        if (token.line == 1 and token.token_type == @backingInt(SemanticType.function)) {
             found_method = true;
         }
     }
@@ -366,10 +366,10 @@ test "extractSemanticTokens handles keywords" {
     var variable_count: usize = 0;
 
     for (tokens) |token| {
-        if (token.token_type == @intFromEnum(SemanticType.keyword)) {
+        if (token.token_type == @backingInt(SemanticType.keyword)) {
             keyword_count += 1;
         }
-        if (token.token_type == @intFromEnum(SemanticType.variable)) {
+        if (token.token_type == @backingInt(SemanticType.variable)) {
             variable_count += 1;
         }
     }
@@ -392,7 +392,7 @@ test "extractSemanticTokens handles types" {
     var found_type = false;
 
     for (tokens) |token| {
-        if (token.token_type == @intFromEnum(SemanticType.type)) {
+        if (token.token_type == @backingInt(SemanticType.type)) {
             found_type = true;
             try std.testing.expectEqual(@as(u32, 3), token.length); // "Int" is 3 chars
         }
@@ -502,7 +502,7 @@ fn expectTokens(source: []const u8, expectations: []const Expectation) ExpectErr
         };
         errdefer std.debug.print("at `{s}` on line {d}\n", .{ expected.at, expected.line });
         try std.testing.expectEqual(utf16Len(text), token.length);
-        try std.testing.expectEqual(expected.type, @as(SemanticType, @enumFromInt(token.token_type)));
+        try std.testing.expectEqual(expected.type, @as(SemanticType, @fromBackingInt(@intCast(token.token_type))));
         try std.testing.expectEqual(expected.modifiers, token.modifiers);
     }
 }
@@ -910,10 +910,10 @@ test "tokens are sorted and never overlap" {
 
 test "every advertised token type and modifier has an index" {
     const capabilities = @import("lsp").capabilities;
-    inline for (@typeInfo(SemanticType).@"enum".fields) |field| {
-        try std.testing.expectEqualStrings(field.name, capabilities.TOKEN_TYPES[field.value]);
+    inline for (@typeInfo(SemanticType).@"enum".field_names, @typeInfo(SemanticType).@"enum".field_values) |field_name, field_value| {
+        try std.testing.expectEqualStrings(field_name, capabilities.TOKEN_TYPES[field_value]);
     }
-    try std.testing.expectEqual(@typeInfo(SemanticType).@"enum".fields.len, capabilities.TOKEN_TYPES.len);
+    try std.testing.expectEqual(@typeInfo(SemanticType).@"enum".field_names.len, capabilities.TOKEN_TYPES.len);
     try std.testing.expectEqualStrings("declaration", capabilities.TOKEN_MODIFIERS[0]);
     try std.testing.expectEqual(@as(u32, 1), semantic_tokens.modifier_declaration);
 }

@@ -101,14 +101,14 @@ pub fn exportRuntimeFns(comptime fns: anytype, comptime visibility: std.builtin.
 
 comptime {
     // Every constant in this module spells the symbol it names.
-    for (@typeInfo(@This()).@"struct".decls) |decl| {
-        const value = @field(@This(), decl.name);
+    for (@typeInfo(@This()).@"struct".decl_names) |decl| {
+        const value = @field(@This(), decl);
         if (@TypeOf(value) == [:0]const u8 or (@typeInfo(@TypeOf(value)) == .pointer and
             @typeInfo(@TypeOf(value)).pointer.size == .one))
         {
             const text: []const u8 = value;
-            if (!std.mem.eql(u8, text, decl.name)) {
-                @compileError("shim_symbols." ++ decl.name ++ " must equal \"" ++ decl.name ++ "\"");
+            if (!std.mem.eql(u8, text, decl)) {
+                @compileError("shim_symbols." ++ decl ++ " must equal \"" ++ decl ++ "\"");
             }
         }
     }
