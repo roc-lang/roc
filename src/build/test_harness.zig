@@ -735,9 +735,11 @@ pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Alloc
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
         const arg = raw_args[i];
-        if (std.mem.eql(u8, arg, "--filter")) {
+        if (std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "--test-filter")) {
             i += 1;
             if (i < raw_args.len) try filters.append(allocator, raw_args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--test-filter=")) {
+            try filters.append(allocator, arg["--test-filter=".len..]);
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
         } else if (std.mem.eql(u8, arg, "--llvm") or std.mem.eql(u8, arg, "--include-llvm")) {
@@ -837,14 +839,16 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
         "0",
         "--filter",
         "alpha",
-        "--filter",
+        "--test-filter",
         "beta",
+        "--test-filter=gamma",
     }, arena.allocator());
 
     try std.testing.expect(args.max_threads == null);
-    try std.testing.expectEqual(@as(usize, 2), args.filters.len);
+    try std.testing.expectEqual(@as(usize, 3), args.filters.len);
     try std.testing.expectEqualStrings("alpha", args.filters[0]);
     try std.testing.expectEqualStrings("beta", args.filters[1]);
+    try std.testing.expectEqualStrings("gamma", args.filters[2]);
     try std.testing.expectEqual(@as(usize, 1), args.positional.len);
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }

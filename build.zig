@@ -1014,9 +1014,17 @@ fn buildAndCopyTestPlatformHostLib(
         null;
 
     const copy_step = b.addUpdateSourceFiles();
-    copy_step.addCopyFileToSource(lib.getEmittedBin(), archive_path);
+    const host_archive = if (target.result.os.tag == .windows)
+        lib.getEmittedBin()
+    else
+        FixArchivePaddingStep.create(b, lib.getEmittedBin());
+    copy_step.addCopyFileToSource(host_archive, archive_path);
     if (baseline_archive_path) |path| {
-        copy_step.addCopyFileToSource(baseline_lib.?.getEmittedBin(), path);
+        const baseline_archive = if (target.result.os.tag == .windows)
+            baseline_lib.?.getEmittedBin()
+        else
+            FixArchivePaddingStep.create(b, baseline_lib.?.getEmittedBin());
+        copy_step.addCopyFileToSource(baseline_archive, path);
 
         inline for (.{ "crt1.o", "libc.a" }) |runtime_filename| {
             copy_step.addCopyFileToSource(
@@ -1024,24 +1032,6 @@ fn buildAndCopyTestPlatformHostLib(
                 b.pathJoin(&.{ "test", platform_dir, "platform/targets", baseline_target_name.?, runtime_filename }),
             );
         }
-    }
-
-    // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
-    // Zig's archive generator doesn't add the required padding byte after odd-sized
-    // members, causing lld to reject the archive with:
-    //   "Archive::children failed: truncated or malformed archive"
-    if (target.result.os.tag != .windows) {
-        const fix_step = FixArchivePaddingStep.create(b, archive_path);
-        fix_step.step.dependOn(&copy_step.step);
-
-        if (baseline_archive_path) |path| {
-            const fix_baseline_step = FixArchivePaddingStep.create(b, path);
-            fix_baseline_step.step.dependOn(&copy_step.step);
-            fix_baseline_step.step.dependOn(&fix_step.step);
-            return &fix_baseline_step.step;
-        }
-
-        return &fix_step.step;
     }
 
     return &copy_step.step;
@@ -1176,10 +1166,12 @@ fn buildAndCopyExportsFixtureWasmHostObject(
 
 // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
 const FixArchivePaddingStep = struct {
-    fn create(b: *std.Build, path: []const u8) *Step.Run {
+    fn create(b: *std.Build, input: std.Build.LazyPath) std.Build.LazyPath {
         const run = buildChecksRun(b, "fix-archive-padding");
-        run.addArg(path);
-        return run;
+        run.addFileArg(input);
+        const output = run.addOutputFileArg("libhost.a");
+        run.expectExitCode(0);
+        return output;
     }
 };
 
@@ -5079,7 +5071,11 @@ pub fn build(b: *std.Build) void {
         const copy_test_fx_host = b.addUpdateSourceFiles();
         const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
         const fx_host_main_path = b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename });
-        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), fx_host_main_path);
+        const fx_host_archive = if (target.result.os.tag == .windows)
+            test_platform_fx_host_lib.getEmittedBin()
+        else
+            FixArchivePaddingStep.create(b, test_platform_fx_host_lib.getEmittedBin());
+        copy_test_fx_host.addCopyFileToSource(fx_host_archive, fx_host_main_path);
 
         // Also copy to the target-specific directory so findHostLibrary finds it
         const fx_host_target_path = if (fx_host_target_dir) |target_dir|
@@ -5088,26 +5084,12 @@ pub fn build(b: *std.Build) void {
             null;
         if (fx_host_target_path) |target_path| {
             copy_test_fx_host.addCopyFileToSource(
-                test_platform_fx_host_lib.getEmittedBin(),
+                fx_host_archive,
                 target_path,
             );
         }
 
-        // Apply archive padding fix for non-Windows targets (Zig bug workaround)
-        // The final_fx_host_step is what tests should depend on to ensure the archive is ready
-        const final_fx_host_step: *Step = if (target.result.os.tag != .windows) blk: {
-            const fix_main = FixArchivePaddingStep.create(b, fx_host_main_path);
-            fix_main.step.dependOn(&copy_test_fx_host.step);
-
-            if (fx_host_target_path) |target_path| {
-                const fix_target = FixArchivePaddingStep.create(b, target_path);
-                fix_target.step.dependOn(&copy_test_fx_host.step);
-                // Make fix_target depend on fix_main so both complete
-                fix_target.step.dependOn(&fix_main.step);
-                break :blk &fix_target.step;
-            }
-            break :blk &fix_main.step;
-        } else &copy_test_fx_host.step;
+        const final_fx_host_step = &copy_test_fx_host.step;
 
         b.getInstallStep().dependOn(final_fx_host_step);
 
@@ -6850,16 +6832,6 @@ const ParsedBuildArgs = struct {
     run_args: []const []const u8,
     test_filters: []const []const u8,
 };
-
-fn appendFilter(
-    list: *std.ArrayList([]const u8),
-    b: *std.Build,
-    value: []const u8,
-) void {
-    const trimmed = std.mem.trim(u8, value, " \t\n\r");
-    if (trimmed.len == 0) return;
-    list.append(b.allocator, b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
-}
 
 fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
     return .{

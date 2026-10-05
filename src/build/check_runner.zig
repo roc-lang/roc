@@ -1165,69 +1165,28 @@ const RemoveDirTreeStep = struct {
 };
 
 const FixArchivePaddingStep = struct {
-    archive_path: []const u8,
-
     pub fn run(ctx: Context) !void {
-        const self = FixArchivePaddingStep{ .archive_path = ctx.args[0] };
-        const io = ctx.io;
+        if (ctx.args.len != 2) return error.ExpectedInputAndOutput;
+        const input = try std.Io.Dir.cwd().readFileAlloc(ctx.io, ctx.args[0], ctx.allocator, .unlimited);
+        var bytes = std.ArrayList(u8).fromOwnedSlice(input);
+        if (!std.mem.startsWith(u8, bytes.items, "!<arch>\n")) return error.InvalidArchiveMagic;
 
-        const file = std.Io.Dir.cwd().openFile(io, self.archive_path, .{ .mode = .read_write }) catch {
-            // Archive doesn't exist yet (e.g. cross-compilation target not built)—skip silently.
-            return;
-        };
-        defer file.close(io);
-
-        const stat = try file.stat(io);
-        var file_size = stat.size;
-
-        // AR format requires archives to end on an even byte boundary.
-        // If file size is odd, append a newline padding byte.
-        // This fixes Zig bug https://codeberg.org/ziglang/zig/issues/30572
-        // where Zig's archiver doesn't add required padding after odd-sized members.
-        if (file_size % 2 == 1) {
-            try file.writePositionalAll(io, "\n", file_size);
-            file_size += 1;
+        // Retain the #30572 correction for a missing final member padding byte.
+        // Validate the complete archive; missing or malformed declared inputs
+        // must fail instead of creating a successful but unusable cached output.
+        var offset: usize = 8;
+        while (offset < bytes.items.len) {
+            if (bytes.items.len - offset < 60) return error.TruncatedArchiveHeader;
+            const header = bytes.items[offset..][0..60];
+            if (!std.mem.eql(u8, header[58..60], "`\n")) return error.InvalidArchiveHeader;
+            const size = try std.fmt.parseInt(usize, std.mem.trim(u8, header[48..58], " "), 10);
+            const end = try std.math.add(usize, try std.math.add(usize, offset, 60), size);
+            if (end > bytes.items.len) return error.TruncatedArchiveMember;
+            if (size % 2 == 1 and end == bytes.items.len) try bytes.append(ctx.allocator, '\n');
+            offset = try std.math.add(usize, end, size % 2);
         }
-
-        // Parse the archive to verify member offsets are valid.
-        // This catches cases where lld would fail with "truncated or malformed archive".
-        var header_buf: [8]u8 = undefined;
-        _ = try file.readPositionalAll(io, &header_buf, 0);
-        if (!std.mem.eql(u8, &header_buf, "!<arch>\n")) {
-            std.debug.print("Warning: Invalid archive magic in {s}\n", .{self.archive_path});
-            return;
-        }
-
-        var offset: u64 = 8; // After magic
-        while (offset + 60 <= file_size) {
-            var size_buf: [10]u8 = undefined;
-            _ = try file.readPositionalAll(io, &size_buf, offset + 48); // Read size field (offset 48 within 60-byte header)
-
-            // Parse size (ASCII decimal, space-padded)
-            var size: u64 = 0;
-            for (size_buf) |c| {
-                if (c >= '0' and c <= '9') {
-                    size = size * 10 + (c - '0');
-                } else break;
-            }
-
-            // Move to next member (header + content + padding if odd)
-            offset += 60 + size;
-            if (size % 2 == 1) {
-                offset += 1; // Padding byte expected
-            }
-
-            // If we're exactly at EOF, archive is valid
-            if (offset == file_size) break;
-
-            // If next offset would be past EOF, we have a problem - add missing padding
-            if (offset > file_size) {
-                const missing = offset - file_size;
-                const padding = "\n\n"; // At most 1 byte needed, but be safe
-                try file.writePositionalAll(io, padding[0..@min(missing, 2)], file_size);
-                break;
-            }
-        }
+        if (offset != bytes.items.len) return error.InvalidArchivePadding;
+        try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = ctx.args[1], .data = bytes.items });
     }
 };
 
