@@ -178,6 +178,19 @@ pub const Env = struct {
     /// construction that omitted it, so absorbing a defaulted row into an empty
     /// one is only meaningful when such a construction owns the omission.
     construction_probe: ?ConstructionProbe = null,
+    /// Links a deferred requirement callable to its copy before the unifier
+    /// relates it (design.md "Whole-use replay").
+    deferred_callables: ?DeferredCallableHook = null,
+};
+
+/// Lets the unifier have the checker link a `deferred_callable`
+/// placeholder to the callable it stands for before relating it.
+pub const DeferredCallableHook = struct {
+    ctx: *anyopaque,
+    link: *const fn (ctx: *anyopaque, placeholder: Var) std.mem.Allocator.Error!void,
+    /// Links every deferred callable not yet linked, before an error report
+    /// snapshots types that may reach them.
+    link_all: *const fn (ctx: *anyopaque) std.mem.Allocator.Error!void,
 };
 
 /// Lets the unifier ask the checker whether a var belongs to a record
@@ -332,6 +345,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         opts.record_construction_var,
     );
     unifier.root_operands = .{ a, b };
+    unifier.deferred_callables = env.deferred_callables;
     unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -346,6 +360,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         // poison the top-level operands. The caller owns the mismatch.
         if (opts.on_mismatch == .write_no_report) return Result.mismatch;
 
+        if (env.deferred_callables) |hook| try hook.link_all(hook.ctx);
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
@@ -381,6 +396,7 @@ fn snapshotRawRecordEvidence(env: *const Env, raw: RawTypePair) std.mem.Allocato
 /// vars point at the already-instantiated structures the unifier compared, so
 /// reporting never has to reopen a nominal declaration.
 pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMismatchEvidence {
+    if (env.deferred_callables) |hook| try hook.link_all(hook.ctx);
     const raw = env.unify_scratch.mismatch_evidence;
     return if (raw.record) |record|
         try snapshotRawRecordEvidence(env, record)
@@ -429,6 +445,7 @@ const Unifier = struct {
     enclosing_records: ?[2]Var,
     construction_probe: ?ConstructionProbe,
     record_construction_var: ?Var,
+    deferred_callables: ?DeferredCallableHook = null,
     /// The operands this unification started from. They are the outermost
     /// candidates for owning an absorbed omission, and keep the absorption gate
     /// in step with how the checker later attributes it.
@@ -769,6 +786,13 @@ const Unifier = struct {
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
             .equiv => return,
             .not_equiv => |vars| {
+                // A deferred requirement callable is linked to its copy
+                // before anything relates it.
+                if (vars.a.desc.flags.deferred_callable or vars.b.desc.flags.deferred_callable) {
+                    try self.linkDeferredCallable(vars.a);
+                    try self.linkDeferredCallable(vars.b);
+                    return self.processGuardedPair(a_var, b_var);
+                }
                 if (try self.isPairVisited(a_var, b_var)) {
                     return;
                 }
@@ -3711,6 +3735,12 @@ const Unifier = struct {
 
         // Unify the constraint function types
         try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+    }
+
+    fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
+        if (!resolved.desc.flags.deferred_callable) return;
+        const hook = self.deferred_callables orelse base.invariant("a deferred requirement callable reached a unification with no checker to link it", .{});
+        try hook.link(hook.ctx, resolved.var_);
     }
 
     const PartitionedStaticDispatchConstraints = struct {

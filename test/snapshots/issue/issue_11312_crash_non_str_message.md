@@ -99,7 +99,7 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "poly")))))
 			(rhs
-				(e-call (constraint-fn-var 241)
+				(e-call (constraint-fn-var 240)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

@@ -6118,18 +6118,15 @@ const Builder = struct {
         );
     }
 
-    /// Retain the exact dispatch vector selected for a specialization so a
-    /// compile-time function value can restore that vector without resolving
-    /// its requirements again.
     /// Whether every type of a checked span is ground: no variable of any
-    /// kind, error, or unpublished payload is reachable from it.
+    /// kind, error, or pending payload is reachable from it.
     fn checkedTypesGround(self: *Builder, view: ModuleView, tys: []const checked.CheckedTypeId) Allocator.Error!bool {
         if (tys.len == 0) return true;
         const key: CheckedSpanKey = .{ .view = @intFromPtr(view), .span = @intFromPtr(tys.ptr), .len = tys.len };
         if (self.checked_span_ground.get(key)) |ground| return ground;
         var pending = std.ArrayList(checked.CheckedTypeId).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         try pending.appendSlice(self.allocator, tys);
         const ground = walk: while (pending.pop()) |ty| {
@@ -6164,6 +6161,9 @@ const Builder = struct {
         return ground;
     }
 
+    /// Retain the exact dispatch vector selected for a specialization so a
+    /// compile-time function value can restore that vector without resolving
+    /// its requirements again.
     fn constFnEvidence(self: *Builder, evidence: EvidenceChain) Allocator.Error!StoredConstFnEvidence {
         var nodes = std.ArrayList(check.ConstStore.ConstFnEvidence).empty;
         defer nodes.deinit(self.allocator);

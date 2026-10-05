@@ -8987,6 +8987,30 @@ nothing observes them. Builds with runtime safety check after every replay
 that each variable it related holds exactly the source's frozen type, and
 before thawing that no frozen use instance changed.
 
+Deferred requirement callables. A use registered for whole-use replay
+copies its scheme root and requirement records but not the callables those
+requirements name, when its scheme's reachability is already known to be
+empty, no variable of the copy is shared, it is instantiated outside every
+probe, and the module declares no method in a function body (whose dispatch
+records depend on the lexical position of the use). Each copied requirement
+names a placeholder instead, one per callable, and the use keeps what its
+instantiation copied and the state it ran under. A replayed use never
+reads its callables: its relations are skipped and its substitution is the
+source's, of which its own is the subset its instantiation copied. Every
+other use links its callables before anything reads them: copying each one
+exactly as the instantiation would have, continuing from what it copied,
+redirecting its placeholder to the copy, registering every new copy as the
+instantiation would have, and extending its substitution and relations with
+them. A use is linked when a drain is about to process one of its relations,
+when a unification is about to relate one of its placeholders, before an
+error report snapshots any type, before the rank it was instantiated at is
+generalized, and when module finalization begins. A link inside a speculative
+probe is part of the speculation: its copies and redirects are in the
+probe's savepoint, a rollback undoes them and leaves the use unlinked, and
+the outermost commit registers them. Builds with runtime safety check that
+no instantiation copies a placeholder, and that by the end of checking every
+use not replayed is linked.
+
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
 constraint production to quiescence. Capture transfers a settled local codec
@@ -10207,6 +10231,11 @@ site to any family below must classify it here.
   Row Union Normalization (above). A row part every one of whose labels also
   occurs further along its chain denotes its extension once the occurrences
   are related, so it redirects there with the lower of the two ranks.
+- `linkUseCallables` (`RedirectRule.deferred_requirement_callable`)—
+  mechanism: deferred requirement callables (Whole-use replay, above). A
+  placeholder is related to nothing before it is linked, and redirecting it
+  to the callable's copy writes exactly the requirement the instantiation
+  would have copied.
 
 Other solved-graph mutations:
 

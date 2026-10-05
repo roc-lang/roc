@@ -50,6 +50,17 @@ pub const AdapterReachPosition = enum {
     nested,
 };
 
+/// A requirement callable an instantiation deferred copying, and the
+/// placeholder its copied requirements name instead.
+pub const DeferredCallable = struct {
+    placeholder: Var,
+    /// The callable's resolved variable in the instantiated scheme.
+    source: Var,
+    /// Whether the instantiation would have copied the callable's root even
+    /// where it is not generalized (an explicit scheme requirement's).
+    force_root_copy: bool,
+};
+
 /// The explicit declaration-backed opening operation (issue #9983): make a
 /// fresh copy of `decl`'s backing template with the application's actual
 /// `args` substituted for the declaration's formals, positionally.
@@ -209,6 +220,8 @@ const FlexLikeFrame = struct {
     /// `Scratch.pending_parts`.
     parts_base: u32 = 0,
     part_idx: u32 = 0,
+    /// Whether a collected constraint names a deferred callable.
+    has_deferred: bool = false,
     stage: Stage = .dispatch_fn,
 
     const Stage = enum {
@@ -342,6 +355,13 @@ pub const Instantiator = struct {
     /// After `instantiateTypeScheme` walked a root's reachability: whether a
     /// monomorphic structural node reaches a generalized variable.
     monomorphic_reach: bool = false,
+    /// When set, a copied requirement whose callable is generalized and not
+    /// yet copied keeps naming the scheme's callable instead of a copy, and
+    /// the store index of that copied requirement is recorded here; nothing
+    /// reachable only through the callable is copied. The caller names each
+    /// recorded requirement's callable afterwards (`DeferredCallable`).
+    /// Requirements with interpolation parts are always copied.
+    deferred_slots: ?*std.ArrayListUnmanaged(u32) = null,
     /// Source vars this instantiation must SHARE rather than copy, mapped to
     /// themselves in `var_map` before the walk starts. Used by a predeclared
     /// scheme for an annotation with `_` inference holes: a hole's type is
@@ -578,6 +598,22 @@ pub const Instantiator = struct {
         self.copy_scheme_structure = true;
         defer self.copy_scheme_structure = previous;
         return self.instantiateVarHelp(initial_var, true);
+    }
+
+    /// Copy a requirement callable that an instantiation of a type scheme
+    /// deferred (`deferred_callables`), continuing that instantiation: this
+    /// instantiator's `var_map` holds what it copied, and the scheme's
+    /// reachability is known to be empty.
+    pub fn instantiateDeferredCallable(
+        self: *Self,
+        deferred: DeferredCallable,
+    ) std.mem.Allocator.Error!Var {
+        self.reach_known_empty = true;
+        self.current_reach = .nested;
+        const previous = self.copy_scheme_structure;
+        self.copy_scheme_structure = true;
+        defer self.copy_scheme_structure = previous;
+        return self.instantiateVarHelp(deferred.source, deferred.force_root_copy);
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
@@ -1329,6 +1365,7 @@ pub const Instantiator = struct {
                             machine.pending_constraints.items[frame.cons_base..],
                         );
                         machine.pending_constraints.items.len = frame.cons_base;
+                        if (frame.has_deferred) try self.recordDeferredSlots(fresh_range);
                         const fresh_content = switch (frame.result) {
                             .flex => Content{ .flex = Flex{ .name = frame.name, .constraints = fresh_range } },
                             .rigid => Content{ .rigid = Rigid{ .name = frame.name.?, .constraints = fresh_range } },
@@ -1338,6 +1375,14 @@ pub const Instantiator = struct {
                     }
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     frame.stage = .await_fn;
+                    if (self.deferredCallable(constraint)) |source| {
+                        frame.has_deferred = true;
+                        try machine.value_stack.append(self.store.gpa, source);
+                        continue;
+                    }
+                    if (std.debug.runtime_safety and self.store.resolveVar(constraint.fn_var).desc.flags.deferred_callable) {
+                        base.invariant("an instantiation reached a deferred requirement callable before its use linked it", .{});
+                    }
                     self.current_reach = .nested;
                     if (!try self.requestVar(constraint.fn_var, false)) return false;
                 },
@@ -1399,6 +1444,28 @@ pub const Instantiator = struct {
                     frame.stage = .dispatch_fn;
                 },
             }
+        }
+    }
+
+    /// The scheme's callable a copy of `constraint` keeps naming, when its
+    /// copy is deferred: deferral is on, the callable is generalized, and
+    /// this instantiation has not copied it.
+    fn deferredCallable(self: *Self, constraint: StaticDispatchConstraint) ?Var {
+        if (self.deferred_slots == null or constraint.interpolation.isPresent()) return null;
+        const resolved = self.store.resolveVar(constraint.fn_var);
+        if (resolved.desc.rank != .generalized) return null;
+        if (self.var_map.contains(resolved.var_)) return null;
+        return resolved.var_;
+    }
+
+    /// Record the store index of every requirement in a just-copied run
+    /// whose callable is deferred: it still names a generalized variable.
+    fn recordDeferredSlots(self: *Self, range: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
+        const slots = self.deferred_slots.?;
+        const start: u32 = @intFromEnum(range.start);
+        for (self.store.sliceStaticDispatchConstraints(range), 0..) |constraint, offset| {
+            if (self.store.resolveVar(constraint.fn_var).desc.rank != .generalized) continue;
+            try slots.append(self.store.gpa, start + @as(u32, @intCast(offset)));
         }
     }
 
@@ -1711,6 +1778,10 @@ pub const Instantiator = struct {
         force_root_copy: bool,
     ) std.mem.Allocator.Error!StaticDispatchConstraint {
         var result = constraint;
+        if (self.deferredCallable(constraint)) |source| {
+            result.fn_var = source;
+            return result;
+        }
         result.fn_var = try self.instantiateVarHelp(constraint.fn_var, force_root_copy);
         result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
         return result;

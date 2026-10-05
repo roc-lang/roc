@@ -284,7 +284,7 @@ pub const Constants = struct {
     ///      checked procedure names use the module's own name.
     /// 129: Scheme-use records of replayed uses name their source's
     ///      substitution.
-    pub const CACHE_VERSION = 129;
+    pub const CACHE_VERSION = 130;
 };
 
 /// Configuration for the Roc cache system.

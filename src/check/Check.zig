@@ -962,6 +962,25 @@ use_instance_by_fn_var: collections.DenseMap(Var, u32),
 /// Scheme roots none of whose monomorphic structural nodes reaches a
 /// generalized variable; instantiating them needs no reachability walk.
 reach_free_schemes: collections.DenseMap(Var, void),
+/// The requirement callables registered uses deferred copying, by use
+/// (`UseInstance.deferred_start`), and what each use's instantiation had
+/// copied when it deferred them (`UseInstance.saved_start`).
+use_deferred_callables: std.ArrayListUnmanaged(types_mod.instantiate.DeferredCallable) = .empty,
+use_saved_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+/// Uses whose deferred callables are not linked yet.
+uses_with_deferred_callables: std.ArrayListUnmanaged(u32) = .empty,
+scratch_deferred_callables: std.ArrayListUnmanaged(types_mod.instantiate.DeferredCallable) = .empty,
+scratch_deferred_placeholders: collections.DenseMap(Var, Var),
+scratch_deferred_slots: std.ArrayListUnmanaged(u32) = .empty,
+scratch_replay_matches: std.ArrayListUnmanaged(u32) = .empty,
+link_var_map: collections.DenseMap(Var, Var),
+link_scratch_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
+link_scratch_owned: std.ArrayListUnmanaged(Var) = .empty,
+link_new_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+/// Uses linked inside the current probes, with the copies their links made,
+/// registered when the outermost probe commits.
+probe_links: std.ArrayListUnmanaged(ProbeLink) = .empty,
+probe_link_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
 /// Schemes one of whose uses settled as a replay source would: only their
 /// uses encode a shape.
 use_replayable_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty,
@@ -1676,6 +1695,18 @@ const UseInstance = struct {
     own_relations_only: bool = true,
     /// The end of the scheme-use records written while its relations settled.
     records_end: u32 = 0,
+    /// The callables of the relations its linking copied, in `use_owned_fns`.
+    linked_owned_start: u32 = 0,
+    linked_owned_len: u32 = 0,
+    /// The requirement callables its instantiation deferred
+    /// (`use_deferred_callables`), and what it had copied by then
+    /// (`use_saved_copies`), which linking them continues from.
+    deferred_start: u32 = 0,
+    deferred_len: u32 = 0,
+    saved_start: u32 = 0,
+    saved_len: u32 = 0,
+    deferred_linked: bool = true,
+    link: ?DeferredLinkContext = null,
 
     const State = enum {
         /// None of its relations has been processed.
@@ -1689,6 +1720,39 @@ const UseInstance = struct {
         /// It took a replay source's settled instance.
         replayed,
     };
+};
+
+/// A use linked inside a probe, with the copies its link made in
+/// `probe_link_copies`.
+const ProbeLink = struct {
+    use: u32,
+    copies_start: u32,
+    copies_len: u32,
+};
+
+/// One variable a deferring instantiation copied: the scheme's variable and
+/// its copy.
+const SavedCopy = struct {
+    old: Var,
+    fresh: Var,
+};
+
+/// The instantiation state linking a use's deferred callables restores, so
+/// they are copied and registered exactly as the instantiation would have.
+const DeferredLinkContext = struct {
+    /// The module's solver environment, which outlives every use.
+    env: *Env,
+    rank: Rank,
+    region_behavior: InstantiateRegionBehavior,
+    root_region: Region,
+    instantiation_expr: ?CIR.Expr.Idx,
+    group_index: ?u32,
+    active_scheme_root: ?Var,
+    instantiation_source_expr: ?CIR.Expr.Idx,
+    discarded_binding_rhs_expr: ?CIR.Expr.Idx,
+    checking_executable_root: bool,
+    delayed_dependency_depth: u32,
+    instantiation_is_immediate_callee: bool,
 };
 
 /// A whole-use replay source: a settled use and its shape. Its first replay
@@ -1913,6 +1977,11 @@ fn copySchemeDispatchRequirements(
         // Instantiation grows the type store but not `type_schemes`; copy
         // the record before doing either copy operation.
         const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
+        // A generated codec requirement's receiver is copied as a scheme of
+        // its own, whose reachability its callable's copy depends on.
+        const deferred_slots = instantiator.deferred_slots;
+        if (requirement.deferred_generated_codec) instantiator.deferred_slots = null;
+        defer instantiator.deferred_slots = deferred_slots;
         const receiver_var = if (requirement.deferred_generated_codec)
             try instantiator.instantiateTypeScheme(requirement.receiver_var)
         else
@@ -2015,12 +2084,13 @@ fn registerInstantiatedAttachedDispatch(
     receiver_var: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
     instantiation_expr: ?CIR.Expr.Idx,
+    owner_group_index: ?u32,
 ) Allocator.Error!void {
     try self.instantiation_dispatchers.append(self.gpa, .{
         .dispatcher_var = receiver_var,
         .constraints = constraints,
         .instantiation_expr = instantiation_expr,
-        .owner_group_index = self.currentGroupIndex(),
+        .owner_group_index = owner_group_index,
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
     // An attached constraint copied by instantiation lives on the fresh
@@ -3475,6 +3545,8 @@ fn initAssumePrepared(
         .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
+        .link_var_map = collections.DenseMap(Var, Var).init(gpa),
+        .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
         .external_pinnable = collections.DenseMap(Var, void).init(gpa),
@@ -3730,6 +3802,19 @@ pub fn deinit(self: *Self) void {
     self.use_owned_fns.deinit(self.gpa);
     self.use_instance_by_fn_var.deinit();
     self.reach_free_schemes.deinit();
+    self.use_deferred_callables.deinit(self.gpa);
+    self.use_saved_copies.deinit(self.gpa);
+    self.uses_with_deferred_callables.deinit(self.gpa);
+    self.scratch_deferred_callables.deinit(self.gpa);
+    self.link_var_map.deinit();
+    self.scratch_deferred_placeholders.deinit();
+    self.scratch_deferred_slots.deinit(self.gpa);
+    self.scratch_replay_matches.deinit(self.gpa);
+    self.link_scratch_pairs.deinit(self.gpa);
+    self.link_scratch_owned.deinit(self.gpa);
+    self.link_new_copies.deinit(self.gpa);
+    self.probe_links.deinit(self.gpa);
+    self.probe_link_copies.deinit(self.gpa);
     {
         var sources = self.use_replay_sources.valueIterator();
         while (sources.next()) |list| list.deinit(self.gpa);
@@ -6774,6 +6859,7 @@ fn unifyEnv(self: *Self) unifier.Env {
         .unify_scratch = &self.unify_scratch,
         .occurs_scratch = &self.occurs_scratch,
         .construction_probe = .{ .ctx = self, .isRecordConstruction = probeRecordConstruction },
+        .deferred_callables = .{ .ctx = self, .link = linkDeferredCallableHook, .link_all = linkAllDeferredCallablesHook },
     };
 }
 
@@ -7008,8 +7094,8 @@ fn appendTypeMismatch(
     actual: Var,
     ctx: problem.Context,
 ) std.mem.Allocator.Error!problem.Problem.Idx {
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual);
+    const expected_snapshot = try self.snapshotVarForError(expected);
+    const actual_snapshot = try self.snapshotVarForError(actual);
     const unify_env = self.unifyEnv();
     const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
     return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
@@ -7096,7 +7182,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             std.debug.assert(self.occurs_scratch.err_var != null);
             const err_var = self.occurs_scratch.err_var.?;
 
-            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
+            const snapshot = try self.snapshotVarForError(err_var);
             _ = try self.problems.appendProblem(self.gpa, .{ .anonymous_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
@@ -7109,7 +7195,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             const err_var = self.occurs_scratch.err_var.?;
 
             // Infinite type (like `a = List(a)`)
-            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
+            const snapshot = try self.snapshotVarForError(err_var);
             _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
@@ -7658,9 +7744,9 @@ fn reportRowUnionConflict(self: *Self, row: Var, conflict: RowLabelConflict, val
             .field => .record,
         },
         .label = conflict.name,
-        .outer_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, outer_var),
+        .outer_snapshot = try self.snapshotVarForError(outer_var),
         .outer_region = self.getRegionAt(conflict.outer.part_var),
-        .inner_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, inner_var),
+        .inner_snapshot = try self.snapshotVarForError(inner_var),
         .inner_region = self.getRegionAt(conflict.inner.part_var),
         .value_region = if (value) |value_var| self.getRegionAt(value_var) else null,
     } });
@@ -7998,7 +8084,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         // Snapshot the declaration's backing template (not the cycle var,
         // which resolves to the bare nominal application and would render as
         // just the type's name).
-        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, decl.backing);
+        const snapshot = try self.snapshotVarForError(decl.backing);
         _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
             .decl_var = decl_var,
             .snapshot = snapshot,
@@ -8318,7 +8404,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
 fn reportGrowingNominalDecl(self: *Self, decl_idx: types_mod.NominalDecl.Idx) std.mem.Allocator.Error!void {
     const decl = self.types.getNominalDecl(decl_idx);
     const decl_var: Var = @enumFromInt(decl.statement());
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, decl.backing);
+    const snapshot = try self.snapshotVarForError(decl.backing);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
         .decl_var = decl_var,
         .snapshot = snapshot,
@@ -9665,12 +9751,26 @@ fn instantiateVarHelp(
         // monomorphic node a generalized descendant. Its uses skip the walk.
         const scheme_key = self.types.resolveVar(var_to_instantiate).var_;
         instantiator.skip_generalized_reachability = self.reach_free_schemes.contains(scheme_key);
+        // A value use registered for whole-use replay defers copying its
+        // requirement callables (design.md "Deferred requirement
+        // callables"): a replayed use never reads them.
+        self.scratch_deferred_slots.clearRetainingCapacity();
+        if (instantiator.skip_generalized_reachability and evidence == .value_use and
+            instantiator.share_vars.len == 0 and instantiator.shared_subtrees.len == 0 and
+            self.probe_depth == 0 and !self.commit_probe_active and
+            !try self.moduleDeclaresLocalMethods())
+        {
+            instantiator.deferred_slots = &self.scratch_deferred_slots;
+        }
         const copy = try instantiator.instantiateTypeScheme(var_to_instantiate);
         if (!instantiator.reach_known_empty and !instantiator.monomorphic_reach) {
             try self.reach_free_schemes.put(scheme_key, {});
         }
         break :scheme copy;
-    } else try instantiator.instantiateVar(var_to_instantiate);
+    } else no_defer: {
+        self.scratch_deferred_slots.clearRetainingCapacity();
+        break :no_defer try instantiator.instantiateVar(var_to_instantiate);
+    };
 
     // A scheme is the root type plus its explicit pending dispatch
     // requirements. Copy both under this one var_map so generalized variables
@@ -9685,6 +9785,13 @@ fn instantiateVarHelp(
             shape_validation,
             &instantiated_requirements,
         );
+    }
+
+    const deferring = instantiator.deferred_slots != null;
+    instantiator.deferred_slots = null;
+    self.scratch_deferred_callables.clearRetainingCapacity();
+    if (deferring) {
+        try self.nameDeferredCallables(instantiator.var_map, instantiator.current_rank, instantiated_requirements.items);
     }
 
     // A value use of a constrained scheme instantiated outside every probe
@@ -9704,137 +9811,32 @@ fn instantiateVarHelp(
     // corresponding regions for them. This is essential for error reporting.
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
     self.scratch_evidence_pairs.clearRetainingCapacity();
+    const var_context: InstantiatedVarContext = .{
+        .records_scheme_use = evidence.recordsSchemeUse(),
+        .target_fn_var = if (target) |site| site.constraint_fn_var else null,
+        .registers_use = registers_use,
+        .instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
+        .group_index = self.currentGroupIndex(),
+        .region_behavior = region_behavior,
+        .root_region = root_instantiated_region,
+        .deferred = if (self.scratch_deferred_callables.items.len != 0) &self.scratch_deferred_placeholders else null,
+    };
     if (instantiator.var_map.count() > 0) {
         var iterator = instantiator.var_map.iterator();
         while (iterator.next()) |x| {
-            // Get the newly created var
-            const fresh_var = x.value_ptr.*;
-
-            const fresh_resolved = self.types.resolveVar(fresh_var);
-
-            if (evidence.recordsSchemeUse()) {
-                // A constrained scheme var was copied: remember (scheme var → fresh
-                // var) so the whole instantiation can be recorded as static-dispatch
-                // evidence below. Rigid copies (annotation-kept rigidity) are
-                // included alongside flex copies. The scheme-side constraints' fn
-                // vars are paired too: nested evidence (a chosen method target that
-                // is itself constrained) is keyed by the instantiated constraint fn
-                // var at discharge time, and publication reaches that key through
-                // these pairs.
-                // Every copied quantified variable is paired, constrained or not:
-                // the pairs are the instantiation's substitution, and a
-                // specialization is the scheme plus that substitution.
-                const fresh_constraints_len = switch (fresh_resolved.desc.content) {
-                    .flex => |flex| flex.constraints.len(),
-                    .rigid => |rigid| rigid.constraints.len(),
-                    .alias, .field_presence, .structure, .err => 0,
-                };
-                // The scheme-side variable is judged, by the same predicate
-                // the identity walk over the scheme uses, because the copy
-                // need not itself be a variable: the instantiator resolves a
-                // `#polarity` marker that the use closes to
-                // `.structure = .empty_tag_union` (`types/instantiate.zig`,
-                // the `.close`/`.neg`/`.nested` arms), and an identity the
-                // checker defaulted closed copies as a structural `[]`. That
-                // copy IS this instantiation's substitution for the variable,
-                // so `appendSiteSubstitution` must find it among the pairs;
-                // publication reaches only the recorded fresh copies.
-                // Structural nodes that are not identities stay unpaired, so a
-                // substitution's length stays the scheme's identity count.
-                const old_resolved = self.types.resolveVar(x.key_ptr.*);
-                if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
-                    try self.scratch_evidence_pairs.append(self.gpa, .{
-                        .old_var = @intFromEnum(x.key_ptr.*),
-                        .fresh_var = @intFromEnum(fresh_var),
-                    });
-                }
-                if (fresh_constraints_len > 0) {
-                    const old_constraints_range = switch (old_resolved.desc.content) {
-                        .flex => |flex| flex.constraints,
-                        .rigid => |rigid| rigid.constraints,
-                        .alias, .field_presence, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
-                    };
-                    for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
-                        // `var_map` keys are resolved roots (see `Instantiator`).
-                        const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
-                        const fresh_fn_var = instantiator.var_map.get(old_fn_root) orelse continue;
-                        try self.scratch_evidence_pairs.append(self.gpa, .{
-                            .old_var = @intFromEnum(old_fn_root),
-                            .fresh_var = @intFromEnum(fresh_fn_var),
-                        });
-                    }
-                }
-            }
-
-            // Register newly instantiated open-literal flex vars on the worklist
-            // so the defaulting passes see them. Separately, a fresh flex
-            // receiver carrying a non-literal static-dispatch constraint is
-            // a per-instantiation dispatcher: record it for the end-of-check
-            // constraint fixpoint and as an ambiguity candidate. This hook
-            // closes the holes where a polymorphic helper hides an ambiguous
-            // dispatch that only manifests at an unpinned call site. We only
-            // RECORD here, not enqueue a deferred re-check: the normal
-            // constraint solver already validates the receiver once this
-            // call's arguments unify, so an extra enqueue would only
-            // double-process and shift error attribution.
-            if (fresh_resolved.desc.content == .flex) {
-                const flex = fresh_resolved.desc.content.flex;
-                if (flex.constraints.len() > 0) {
-                    // Every constraint copied out of a selected dispatch
-                    // target belongs to that edge's derivation chain,
-                    // literal conversions included: recursive-dispatch
-                    // detection walks exactly this lineage.
-                    if (target) |site| {
-                        try self.recordDispatchDerivations(flex.constraints, site.constraint_fn_var);
-                    }
-                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-                    if (registers_use) {
-                        for (constraints) |c| try self.scratch_use_owned.append(self.gpa, c.fn_var);
-                    }
-                    var has_literal_constraint = false;
-                    var has_other_constraint = false;
-                    for (constraints) |c| {
-                        if (self.constraintIsLiteralConversion(c)) {
-                            has_literal_constraint = true;
-                        } else {
-                            has_other_constraint = true;
-                        }
-                    }
-                    const instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
-                    if (has_literal_constraint) {
-                        try self.recordOpenLiteralVar(fresh_var, constraints, instantiation_expr);
-                    }
-                    if (has_other_constraint) {
-                        try self.registerInstantiatedAttachedDispatch(
-                            fresh_var,
-                            flex.constraints,
-                            instantiation_expr,
-                        );
-                    }
-                }
-            }
-
-            // Add to pool
-            try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
-
-            // Set the region
-            try self.fillInRegionsThrough(fresh_var);
-            switch (region_behavior) {
-                .explicit => |region| {
-                    self.setRegionAt(fresh_var, region);
-                },
-                .use_root_instantiated => {
-                    self.setRegionAt(fresh_var, root_instantiated_region);
-                },
-                .use_last_var => {
-                    const old_var = x.key_ptr.*;
-                    const old_region = self.regions.get(@enumFromInt(@intFromEnum(old_var))).*;
-                    self.setRegionAt(fresh_var, old_region);
-                },
-            }
+            try self.registerInstantiatedVar(x.key_ptr.*, x.value_ptr.*, instantiator.var_map, var_context, env);
         }
     }
+    for (self.scratch_deferred_callables.items) |deferred| {
+        try self.fillInRegionsThrough(deferred.placeholder);
+        self.setRegionAt(deferred.placeholder, switch (region_behavior) {
+            .explicit => |region| region,
+            .use_root_instantiated => root_instantiated_region,
+            .use_last_var => self.regions.get(@enumFromInt(@intFromEnum(deferred.source))).*,
+        });
+    }
 
+    var deferred_saved = false;
     if (evidence.recordsSchemeUse()) {
         try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
         try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
@@ -9851,9 +9853,29 @@ fn instantiateVarHelp(
             try self.cir.recordSchemeUse(node_idx, slot, slot_data, var_to_instantiate, self.scratch_evidence_pairs.items);
             if (registers_use and self.scratch_use_owned.items.len != 0) {
                 try self.registerUseInstance(var_to_instantiate, instantiated_var, record);
+                if (self.scratch_deferred_callables.items.len != 0) {
+                    deferred_saved = true;
+                    try self.saveDeferredCallables(instantiator.var_map, .{
+                        .env = env,
+                        .rank = instantiator.current_rank,
+                        .region_behavior = region_behavior,
+                        .root_region = root_instantiated_region,
+                        .instantiation_expr = var_context.instantiation_expr,
+                        .group_index = var_context.group_index,
+                        .active_scheme_root = self.active_scheme_root,
+                        .instantiation_source_expr = self.instantiation_source_expr,
+                        .discarded_binding_rhs_expr = self.discarded_binding_rhs_expr,
+                        .checking_executable_root = self.checking_executable_root,
+                        .delayed_dependency_depth = self.delayed_dependency_depth,
+                        .instantiation_is_immediate_callee = self.instantiation_is_immediate_callee,
+                    });
+                }
             }
         }
         self.scratch_evidence_pairs.clearRetainingCapacity();
+    }
+    if (self.scratch_deferred_callables.items.len != 0 and !deferred_saved) {
+        base.invariant("an instantiation deferred requirement callables without registering the use that links them", .{});
     }
 
     // Explicit scheme requirements are pending facts of this particular use,
@@ -9879,6 +9901,207 @@ fn instantiateVarHelp(
 
     // Return the instantiated var
     return instantiated_var;
+}
+
+/// Name the callable of every requirement copy whose callable an
+/// instantiation deferred (design.md "Deferred requirement callables"):
+/// the callable's copy when the instantiation copied it after all, through
+/// another path of the scheme, and otherwise a placeholder, one per
+/// callable, recorded in `scratch_deferred_callables`.
+fn nameDeferredCallables(
+    self: *Self,
+    var_map: *const collections.DenseMap(Var, Var),
+    rank: Rank,
+    requirements: []InstantiatedSchemeDispatchRequirement,
+) Allocator.Error!void {
+    self.scratch_deferred_placeholders.clearRetainingCapacity();
+    for (self.scratch_deferred_slots.items) |slot| {
+        const constraint = &self.types.static_dispatch_constraints.items.items[slot];
+        constraint.fn_var = try self.deferredCallableName(var_map, rank, constraint.fn_var, false);
+    }
+    for (requirements) |*requirement| {
+        if (self.types.resolveVar(requirement.constraint.fn_var).desc.rank != .generalized) continue;
+        requirement.constraint.fn_var = try self.deferredCallableName(var_map, rank, requirement.constraint.fn_var, true);
+    }
+}
+
+fn deferredCallableName(
+    self: *Self,
+    var_map: *const collections.DenseMap(Var, Var),
+    rank: Rank,
+    source: Var,
+    force_root_copy: bool,
+) Allocator.Error!Var {
+    if (var_map.get(source)) |copy| return copy;
+    const entry = try self.scratch_deferred_placeholders.getOrPut(source);
+    if (entry.found_existing) return entry.value_ptr.*;
+    const placeholder = try self.types.register(.{
+        .content = .{ .flex = types_mod.Flex.init() },
+        .rank = rank,
+        .flags = .{ .deferred_callable = true },
+    });
+    entry.value_ptr.* = placeholder;
+    try self.scratch_deferred_callables.append(self.gpa, .{
+        .placeholder = placeholder,
+        .source = source,
+        .force_root_copy = force_root_copy,
+    });
+    return placeholder;
+}
+
+/// What registering an instantiated variable needs to know about the
+/// instantiation that copied it.
+const InstantiatedVarContext = struct {
+    records_scheme_use: bool,
+    target_fn_var: ?Var,
+    registers_use: bool,
+    instantiation_expr: ?CIR.Expr.Idx,
+    group_index: ?u32,
+    region_behavior: InstantiateRegionBehavior,
+    root_region: Region,
+    /// The placeholders of the callables the instantiation deferred, by
+    /// callable.
+    deferred: ?*const collections.DenseMap(Var, Var),
+};
+
+/// Register one variable an instantiation copied (`old` in the scheme,
+/// `fresh` its copy): its substitution pairs, its relations, its rank pool and
+/// its region.
+inline fn registerInstantiatedVar(
+    self: *Self,
+    old: Var,
+    fresh_copy: Var,
+    var_map: *const collections.DenseMap(Var, Var),
+    ctx: InstantiatedVarContext,
+    env: *Env,
+) Allocator.Error!void {
+    // Get the newly created var
+    const fresh_var = fresh_copy;
+
+    const fresh_resolved = self.types.resolveVar(fresh_var);
+
+    if (ctx.records_scheme_use) {
+        // A constrained scheme var was copied: remember (scheme var → fresh
+        // var) so the whole instantiation can be recorded as static-dispatch
+        // evidence below. Rigid copies (annotation-kept rigidity) are
+        // included alongside flex copies. The scheme-side constraints' fn
+        // vars are paired too: nested evidence (a chosen method target that
+        // is itself constrained) is keyed by the instantiated constraint fn
+        // var at discharge time, and publication reaches that key through
+        // these pairs.
+        // Every copied quantified variable is paired, constrained or not:
+        // the pairs are the instantiation's substitution, and a
+        // specialization is the scheme plus that substitution.
+        const fresh_constraints_len = switch (fresh_resolved.desc.content) {
+            .flex => |flex| flex.constraints.len(),
+            .rigid => |rigid| rigid.constraints.len(),
+            .alias, .field_presence, .structure, .err => 0,
+        };
+        // The scheme-side variable is judged, by the same predicate
+        // the identity walk over the scheme uses, because the copy
+        // need not itself be a variable: the instantiator resolves a
+        // `#polarity` marker that the use closes to
+        // `.structure = .empty_tag_union` (`types/instantiate.zig`,
+        // the `.close`/`.neg`/`.nested` arms), and an identity the
+        // checker defaulted closed copies as a structural `[]`. That
+        // copy IS this instantiation's substitution for the variable,
+        // so `appendSiteSubstitution` must find it among the pairs;
+        // publication reaches only the recorded fresh copies.
+        // Structural nodes that are not identities stay unpaired, so a
+        // substitution's length stays the scheme's identity count.
+        const old_resolved = self.types.resolveVar(old);
+        if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
+            try self.scratch_evidence_pairs.append(self.gpa, .{
+                .old_var = @intFromEnum(old),
+                .fresh_var = @intFromEnum(fresh_var),
+            });
+        }
+        if (fresh_constraints_len > 0) {
+            const old_constraints_range = switch (old_resolved.desc.content) {
+                .flex => |flex| flex.constraints,
+                .rigid => |rigid| rigid.constraints,
+                .alias, .field_presence, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+            };
+            for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
+                // `var_map` keys are resolved roots (see `Instantiator`).
+                const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
+                const fresh_fn_var = var_map.get(old_fn_root) orelse
+                    (if (ctx.deferred) |placeholders| placeholders.get(old_fn_root) else null) orelse continue;
+                try self.scratch_evidence_pairs.append(self.gpa, .{
+                    .old_var = @intFromEnum(old_fn_root),
+                    .fresh_var = @intFromEnum(fresh_fn_var),
+                });
+            }
+        }
+    }
+
+    // Register newly instantiated open-literal flex vars on the worklist
+    // so the defaulting passes see them. Separately, a fresh flex
+    // receiver carrying a non-literal static-dispatch constraint is
+    // a per-instantiation dispatcher: record it for the end-of-check
+    // constraint fixpoint and as an ambiguity candidate. This hook
+    // closes the holes where a polymorphic helper hides an ambiguous
+    // dispatch that only manifests at an unpinned call site. We only
+    // RECORD here, not enqueue a deferred re-check: the normal
+    // constraint solver already validates the receiver once this
+    // call's arguments unify, so an extra enqueue would only
+    // double-process and shift error attribution.
+    if (fresh_resolved.desc.content == .flex) {
+        const flex = fresh_resolved.desc.content.flex;
+        if (flex.constraints.len() > 0) {
+            // Every constraint copied out of a selected dispatch
+            // target belongs to that edge's derivation chain,
+            // literal conversions included: recursive-dispatch
+            // detection walks exactly this lineage.
+            if (ctx.target_fn_var) |parent_fn_var| {
+                try self.recordDispatchDerivations(flex.constraints, parent_fn_var);
+            }
+            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+            if (ctx.registers_use) {
+                for (constraints) |c| try self.scratch_use_owned.append(self.gpa, c.fn_var);
+            }
+            var has_literal_constraint = false;
+            var has_other_constraint = false;
+            for (constraints) |c| {
+                if (self.constraintIsLiteralConversion(c)) {
+                    has_literal_constraint = true;
+                } else {
+                    has_other_constraint = true;
+                }
+            }
+            const instantiation_expr = ctx.instantiation_expr;
+            if (has_literal_constraint) {
+                try self.recordOpenLiteralVar(fresh_var, constraints, instantiation_expr);
+            }
+            if (has_other_constraint) {
+                try self.registerInstantiatedAttachedDispatch(
+                    fresh_var,
+                    flex.constraints,
+                    instantiation_expr,
+                    ctx.group_index,
+                );
+            }
+        }
+    }
+
+    // Add to pool
+    try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
+
+    // Set the region
+    try self.fillInRegionsThrough(fresh_var);
+    switch (ctx.region_behavior) {
+        .explicit => |region| {
+            self.setRegionAt(fresh_var, region);
+        },
+        .use_root_instantiated => {
+            self.setRegionAt(fresh_var, ctx.root_region);
+        },
+        .use_last_var => {
+            const old_var = old;
+            const old_region = self.regions.get(@enumFromInt(@intFromEnum(old_var))).*;
+            self.setRegionAt(fresh_var, old_region);
+        },
+    }
 }
 
 /// Schedule the original relations of a local scheme before its use copies.
@@ -14248,7 +14471,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     try self.reported_dispatch_vars.put(resolved.var_, {});
 
     const primary_region = primary.?;
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
+    const snapshot = try self.snapshotVarForError(resolved.var_);
     const is_binop = constraint.origin == .desugared_binop;
 
     _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
@@ -14559,7 +14782,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
         try self.reported_dispatch_vars.put(resolved.var_, {});
 
         const region = self.cir.store.getExprRegion(expr_idx);
-        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
+        const snapshot = try self.snapshotVarForError(resolved.var_);
 
         const is_binop = constraint.origin == .desugared_binop;
 
@@ -14752,7 +14975,7 @@ fn reportPolymorphicValueProblem(
     region_var: Var,
     def_name: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, snapshot_var);
+    const snapshot = try self.snapshotVarForError(snapshot_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_value = .{
         .var_ = region_var,
         .snapshot = snapshot,
@@ -16705,6 +16928,7 @@ fn predeclareAnnotationSchemeHelp(
     }
     try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
+    try self.linkDeferredUsesFrom(env.rank());
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     // Problems raised here are discarded below; the annotation's own check
     // reports them against the def.
@@ -17600,6 +17824,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     }
     try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
+    try self.linkDeferredUsesFrom(env.rank());
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
     for (defs) |member_def_idx| {
@@ -18263,6 +18488,7 @@ fn replayPredeclaredSchemeUse(
                         fresh_var,
                         flex.constraints,
                         pending.source_expr,
+                        self.currentGroupIndex(),
                     );
                 }
             }
@@ -19234,8 +19460,8 @@ fn reportImplicitOpenExtExtension(
         .ext = expected_ext_var,
     } } }, env, entry.region);
     // Both snapshots describe the rows as solving left them.
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+    const actual_snapshot = try self.snapshotVarForError(actual_var);
+    const expected_snapshot = try self.snapshotVarForError(expected_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
@@ -22146,8 +22372,8 @@ fn reportInvalidRow(
         .tag_union => .{ .structure = .empty_tag_union },
     };
     const expected_var = try self.freshFromContent(expected_content, env, region);
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+    const expected_snapshot = try self.snapshotVarForError(expected_var);
+    const actual_snapshot = try self.snapshotVarForError(actual_var);
 
     return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
@@ -23406,7 +23632,7 @@ fn projectExpectedAggregateShape(
         const result = try commit_probe.unifyInContext(aggregate_type.var_, shape_var, aggregate_type.context);
         if (!result.isEstablished()) return false;
         committed = true;
-        commit_probe.commit();
+        try commit_probe.commit();
         return true;
     }
     const source = if (aggregate_type.record_field) |name|
@@ -23426,7 +23652,7 @@ fn projectExpectedAggregateShape(
     const result = try commit_probe.unifyInContext(expected_copy, shape_var, aggregate_type.context);
     if (!result.isEstablished()) return false;
     committed = true;
-    commit_probe.commit();
+    try commit_probe.commit();
     return true;
 }
 
@@ -23448,7 +23674,7 @@ fn commitProjectedStoredValue(
     const result = try commit_probe.unify(projected, actual);
     if (!result.isEstablished()) return false;
     committed = true;
-    commit_probe.commit();
+    try commit_probe.commit();
     return true;
 }
 
@@ -23612,6 +23838,7 @@ const ExprCheckFrame = struct {
         const env = self.env;
         try checker.judgeFieldKindsAtBoundary(env);
         checker.unify_scratch.clearPersistentOpenings();
+        try checker.linkDeferredUsesFrom(env.rank());
         try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
         try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
         try checker.deduplicateGeneralizedDispatchRequirements(
@@ -26065,6 +26292,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                 try self.judgeFieldKindsAtBoundary(env);
                 self.unify_scratch.clearPersistentOpenings();
+                try self.linkDeferredUsesFrom(env.rank());
                 try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                 try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
                 try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);
@@ -28283,7 +28511,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
         // Report non-exhaustive match if any patterns are missing
         if (!result.is_exhaustive) {
-            const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
+            const condition_snapshot = try self.snapshotVarForError(cond_var);
 
             // Format missing patterns and store in problems store for lifecycle management
             // Track the start position for the missing patterns range
@@ -29285,7 +29513,7 @@ fn checkPatternExhaustiveness(
     try self.closeExhaustiveVars(result, env, region);
 
     if (!result.is_exhaustive) {
-        const value_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, value_var);
+        const value_snapshot = try self.snapshotVarForError(value_var);
         const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
 
         for (result.missing_patterns) |pattern| {
@@ -30410,7 +30638,7 @@ fn seedLambdaParamsFromExpectedFn(
     const result = try commit_probe.unifyInContext(expected_var, seed_fn_var, context);
     if (!result.isEstablished()) return;
     committed = true;
-    commit_probe.commit();
+    try commit_probe.commit();
 }
 
 /// Whether a var already resolves to a type constructor (through aliases), so
@@ -31826,6 +32054,8 @@ const Probe = struct {
     dispatch_derivations_len: usize,
     component_derivations_len: usize,
     imported_schemes_len: usize,
+    probe_links_len: usize,
+    probe_link_copies_len: usize,
 
     fn rollback(self: *Probe) void {
         std.debug.assert(self.check.probe_depth > 0);
@@ -31891,6 +32121,12 @@ const Probe = struct {
             std.debug.assert(did_remove);
         }
         self.check.probe_depth -= 1;
+        // A link made inside the probe is undone with the copies it made.
+        for (self.check.probe_links.items[self.probe_links_len..]) |link| {
+            self.check.use_instances.items[link.use].deferred_linked = false;
+        }
+        self.check.probe_links.shrinkRetainingCapacity(self.probe_links_len);
+        self.check.probe_link_copies.shrinkRetainingCapacity(self.probe_link_copies_len);
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
         self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
@@ -31906,7 +32142,7 @@ const Probe = struct {
     /// dispatchers stay (they describe vars that now survive). Only
     /// `CommitProbe` commits, through the real unification wrapper;
     /// pure-predicate probes always roll back.
-    fn commit(self: *Probe) void {
+    fn commit(self: *Probe) Allocator.Error!void {
         std.debug.assert(self.check.probe_depth > 0);
         self.check.types.commitSavepoint(&self.savepoint);
         self.check.probe_depth -= 1;
@@ -31914,6 +32150,9 @@ const Probe = struct {
         // observations are real—so the journal entries are dead weight and
         // drop with the scope.
         self.check.ambiguity_escalation_journal.shrinkRetainingCapacity(self.ambiguity_escalation_journal_len);
+        if (self.check.probe_depth == 0 and !self.check.commit_probe_active) {
+            try self.check.registerProbeLinks();
+        }
     }
 };
 
@@ -31948,6 +32187,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     return .{
         .check = self,
         .env = env,
+        .probe_links_len = self.probe_links.items.len,
+        .probe_link_copies_len = self.probe_link_copies.items.len,
         .deferred_constraints_len = if (env) |probe_env|
             probe_env.deferred_static_dispatch_constraints.items.items.len
         else
@@ -32033,10 +32274,10 @@ const CommitProbe = struct {
         }
     }
 
-    fn commit(self: *CommitProbe) void {
+    fn commit(self: *CommitProbe) Allocator.Error!void {
         std.debug.assert(self.check.commit_probe_active);
         self.check.commit_probe_active = false;
-        self.probe.commit();
+        try self.probe.commit();
     }
 };
 
@@ -33518,6 +33759,8 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // the defaulting rounds and constraint validation below (design.md
     // "Defaulted Fields").
     try self.checkPendingDefaults(env);
+    // Finalization reads every pending relation's callables.
+    try self.linkAllDeferredUses();
     try self.judgeFieldKindsAtBoundary(env);
 
     try self.checkAllConstraints(env);
@@ -33582,6 +33825,14 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // consumer reads.
     try self.defaultLiteralFieldKinds(env);
     try self.freezeBoundaryCodecDerivations(env);
+    if (std.debug.runtime_safety) {
+        for (self.uses_with_deferred_callables.items) |use_idx| {
+            const use = self.use_instances.items[use_idx];
+            if (!use.deferred_linked and use.state != .replayed) {
+                base.invariant("a use that was not replayed reached the end of checking with its requirement callables deferred", .{});
+            }
+        }
+    }
 }
 
 /// Record, for each `to_inspect` method this module declares, the use
@@ -33648,7 +33899,7 @@ fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, binding_var: Va
     if (!self.isNominalOverDistinctUnconstrainedVars(func)) return null;
 
     committed = true;
-    probe.commit();
+    try probe.commit();
     return use_var;
 }
 
@@ -34193,7 +34444,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
         }
 
         committed = true;
-        commit_probe.commit();
+        try commit_probe.commit();
         return;
     }
 
@@ -34340,7 +34591,7 @@ fn emitBoundaryWarningAfterCommit(
     // main defaulted them (silently)—so flagging it is just noise.
     if (pending.kind != .numeral) return;
     if (!pending.leaks_into_signature) return;
-    const default_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, snapshot_var);
+    const default_snapshot = try self.snapshotVarForError(snapshot_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .literal_defaulted = .{
         .literal_var = literal_root,
         .kind = pending.kind,
@@ -34841,7 +35092,7 @@ fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplic
     // side treats this probe's class as the equality authority
     // (`where_method_use_by_fn_root`, src/check/checked_artifact.zig:17985).
     if (result.isEstablished()) {
-        probe.commit();
+        try probe.commit();
         return true;
     }
     probe.rollback();
@@ -35079,9 +35330,7 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
                     self.cir.store.getExprRegion(expr_idx)
                 else
                     self.getRegionAt(requirement.receiver_var);
-                const snapshot = try self.snapshots.snapshotVarForError(
-                    self.types,
-                    &self.type_writer,
+                const snapshot = try self.snapshotVarForError(
                     requirement.receiver_var,
                 );
                 _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
@@ -35612,7 +35861,7 @@ fn reportDerivedCodecOpenRecord(
         self.dispatchInstantiationExpr(constraint) orelse failure_expr,
         self.getRegionAt(deferred.var_),
     );
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, deferred.var_);
+    const snapshot = try self.snapshotVarForError(deferred.var_);
     _ = try self.problems.appendProblem(self.gpa, .{ .derived_codec_open_record = .{
         .region = region,
         .direction = if (constraint.fn_name.eql(self.cir.idents.parser_for)) .parse else .encode,
@@ -36520,7 +36769,7 @@ fn tryCommitNumeralCandidate(
     if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
 
     committed = true;
-    commit_probe.commit();
+    try commit_probe.commit();
     return candidate_var;
 }
 
@@ -37193,7 +37442,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             );
             if (!result.isEstablished()) break;
             committed = true;
-            commit_probe.commit();
+            try commit_probe.commit();
             body_try = self.tryArgsFromVar(frame.body_result);
             break;
         }
@@ -39139,9 +39388,9 @@ fn rejectRecursiveStaticDispatch(
     failure_expr: ?CIR.Expr.Idx,
     grown_from_receiver: ?Var,
 ) Allocator.Error!void {
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const snapshot = try self.snapshotVarForError(dispatcher_var);
     const grown_from_snapshot = if (grown_from_receiver) |ancestor_receiver|
-        try self.snapshots.snapshotVarForError(self.types, &self.type_writer, ancestor_receiver)
+        try self.snapshotVarForError(ancestor_receiver)
     else
         null;
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
@@ -39966,6 +40215,245 @@ fn registerUseInstance(self: *Self, scheme_root: Var, instance_root: Var, record
     });
 }
 
+/// Save what the use just registered needs to link the requirement
+/// callables its instantiation deferred: the callables, every variable the
+/// instantiation copied, and the instantiation's state.
+fn saveDeferredCallables(
+    self: *Self,
+    var_map: *collections.DenseMap(Var, Var),
+    link: DeferredLinkContext,
+) Allocator.Error!void {
+    const use_idx: u32 = @intCast(self.use_instances.items.len - 1);
+    const use = &self.use_instances.items[use_idx];
+    use.deferred_start = @intCast(self.use_deferred_callables.items.len);
+    use.deferred_len = @intCast(self.scratch_deferred_callables.items.len);
+    try self.use_deferred_callables.appendSlice(self.gpa, self.scratch_deferred_callables.items);
+    use.saved_start = @intCast(self.use_saved_copies.items.len);
+    try self.use_saved_copies.ensureUnusedCapacity(self.gpa, var_map.count());
+    var copies = var_map.iterator();
+    while (copies.next()) |copy| {
+        self.use_saved_copies.appendAssumeCapacity(.{ .old = copy.key_ptr.*, .fresh = copy.value_ptr.* });
+    }
+    use.saved_len = @as(u32, @intCast(self.use_saved_copies.items.len)) - use.saved_start;
+    use.deferred_linked = false;
+    use.link = link;
+    try self.uses_with_deferred_callables.append(self.gpa, use_idx);
+}
+
+/// MECHANISM: deferred requirement callables (design.md). Copy the
+/// requirement callables a use's instantiation deferred exactly as that
+/// instantiation would have, continuing from what it copied and under its
+/// state, link each placeholder to its callable's copy, and register the
+/// copies as the instantiation would have.
+fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
+    const use = self.use_instances.items[use_idx];
+    if (use.deferred_linked) return;
+    self.use_instances.items[use_idx].deferred_linked = true;
+    const link = use.link.?;
+
+    self.link_var_map.clearRetainingCapacity();
+    for (self.use_saved_copies.items[use.saved_start..][0..use.saved_len]) |copy| {
+        try self.link_var_map.put(copy.old, copy.fresh);
+    }
+    const first_new = self.types.len();
+    var instantiator = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.link_var_map,
+        .current_rank = link.rank,
+        .rigid_behavior = .fresh_flex,
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .close,
+    };
+    for (self.use_deferred_callables.items[use.deferred_start..][0..use.deferred_len]) |deferred| {
+        const copy = try instantiator.instantiateDeferredCallable(deferred);
+        try self.types.dangerousSetVarRedirect(.deferred_requirement_callable, deferred.placeholder, copy);
+    }
+    self.link_new_copies.clearRetainingCapacity();
+    var copies = self.link_var_map.iterator();
+    while (copies.next()) |copy| {
+        if (@intFromEnum(copy.value_ptr.*) < first_new) continue;
+        try self.link_new_copies.append(self.gpa, .{ .old = copy.key_ptr.*, .fresh = copy.value_ptr.* });
+    }
+
+    // Inside a probe the copies are part of the speculation: a rollback
+    // undoes them and the link with them, and the outermost commit
+    // registers them.
+    if (self.probe_depth != 0 or self.commit_probe_active) {
+        if (self.types.len() > first_new) {
+            try self.fillInRegionsThrough(@enumFromInt(self.types.len() - 1));
+        }
+        const copies_start: u32 = @intCast(self.probe_link_copies.items.len);
+        try self.probe_link_copies.appendSlice(self.gpa, self.link_new_copies.items);
+        try self.probe_links.append(self.gpa, .{
+            .use = use_idx,
+            .copies_start = copies_start,
+            .copies_len = @intCast(self.link_new_copies.items.len),
+        });
+        return;
+    }
+    try self.registerLinkedCopies(use_idx, self.link_new_copies.items);
+}
+
+/// Register the copies linking a use's deferred callables made (`new_copies`,
+/// in the order its instantiation's map holds them) as its instantiation
+/// would have, under that instantiation's own state, collecting their
+/// substitution pairs and relation callables apart from any instantiation in
+/// progress, and extend the use's substitution and relations with them.
+fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const SavedCopy) Allocator.Error!void {
+    const use = self.use_instances.items[use_idx];
+    const link = use.link.?;
+    const env = link.env;
+    self.link_var_map.clearRetainingCapacity();
+    for (self.use_saved_copies.items[use.saved_start..][0..use.saved_len]) |copy| {
+        try self.link_var_map.put(copy.old, copy.fresh);
+    }
+    for (new_copies) |copy| try self.link_var_map.put(copy.old, copy.fresh);
+
+    const outer_pairs = self.scratch_evidence_pairs;
+    const outer_owned = self.scratch_use_owned;
+    self.scratch_evidence_pairs = self.link_scratch_pairs;
+    self.scratch_use_owned = self.link_scratch_owned;
+    const outer_active_scheme_root = self.active_scheme_root;
+    const outer_instantiation_source_expr = self.instantiation_source_expr;
+    const outer_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
+    const outer_checking_executable_root = self.checking_executable_root;
+    const outer_delayed_dependency_depth = self.delayed_dependency_depth;
+    const outer_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
+    self.active_scheme_root = link.active_scheme_root;
+    self.instantiation_source_expr = link.instantiation_source_expr;
+    self.discarded_binding_rhs_expr = link.discarded_binding_rhs_expr;
+    self.checking_executable_root = link.checking_executable_root;
+    self.delayed_dependency_depth = link.delayed_dependency_depth;
+    self.instantiation_is_immediate_callee = link.instantiation_is_immediate_callee;
+    defer {
+        self.link_scratch_pairs = self.scratch_evidence_pairs;
+        self.link_scratch_owned = self.scratch_use_owned;
+        self.scratch_evidence_pairs = outer_pairs;
+        self.scratch_use_owned = outer_owned;
+        self.active_scheme_root = outer_active_scheme_root;
+        self.instantiation_source_expr = outer_instantiation_source_expr;
+        self.discarded_binding_rhs_expr = outer_discarded_binding_rhs_expr;
+        self.checking_executable_root = outer_checking_executable_root;
+        self.delayed_dependency_depth = outer_delayed_dependency_depth;
+        self.instantiation_is_immediate_callee = outer_instantiation_is_immediate_callee;
+    }
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+    self.scratch_use_owned.clearRetainingCapacity();
+
+    // The use's substitution so far comes first, as its instantiation
+    // recorded it.
+    const replayed = use.state == .replayed;
+    if (!replayed) {
+        const record = self.cir.scheme_uses.items.items[use.record];
+        try self.scratch_evidence_pairs.appendSlice(self.gpa, self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]);
+    }
+    try self.scratch_use_owned.appendSlice(self.gpa, self.use_owned_fns.items[use.owned_start..][0..use.owned_len]);
+    const var_context: InstantiatedVarContext = .{
+        .records_scheme_use = !replayed,
+        .target_fn_var = null,
+        .registers_use = true,
+        .instantiation_expr = link.instantiation_expr,
+        .group_index = link.group_index,
+        .region_behavior = link.region_behavior,
+        .root_region = link.root_region,
+        .deferred = null,
+    };
+    for (new_copies) |copy| {
+        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, env);
+    }
+
+    // A replayed use's record names its source's substitution.
+    if (!replayed) {
+        try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
+        const pairs_start: u32 = @intCast(self.cir.scheme_use_pairs.items.items.len);
+        for (self.scratch_evidence_pairs.items) |pair| {
+            _ = try self.cir.scheme_use_pairs.append(self.gpa, pair);
+        }
+        const record = &self.cir.scheme_uses.items.items[use.record];
+        record.pairs_start = pairs_start;
+        record.pairs_len = @intCast(self.scratch_evidence_pairs.items.len);
+    }
+
+    const owned = self.scratch_use_owned.items;
+    const owned_start: u32 = @intCast(self.use_owned_fns.items.len);
+    try self.use_owned_fns.appendSlice(self.gpa, owned);
+    try self.use_instance_by_fn_var.ensureUnusedCapacity(owned.len);
+    for (owned[use.owned_len..]) |fn_var| self.use_instance_by_fn_var.putAssumeCapacity(fn_var, use_idx);
+    const linked = &self.use_instances.items[use_idx];
+    linked.owned_start = owned_start;
+    linked.owned_len = @intCast(owned.len);
+    self.debugAssertArraysInSync();
+}
+
+/// Register what every link made inside the probes just committed copied.
+fn registerProbeLinks(self: *Self) Allocator.Error!void {
+    for (self.probe_links.items) |link| {
+        try self.registerLinkedCopies(link.use, self.probe_link_copies.items[link.copies_start..][0..link.copies_len]);
+    }
+    self.probe_links.clearRetainingCapacity();
+    self.probe_link_copies.clearRetainingCapacity();
+}
+
+/// Link the deferred callables of every use with a relation in `entry`,
+/// which is about to be processed.
+fn linkEntryUses(self: *Self, entry: DeferredConstraintCheck) Allocator.Error!void {
+    if (self.uses_with_deferred_callables.items.len == 0) return;
+    for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
+        const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse continue;
+        try self.linkUseCallables(use_idx);
+    }
+}
+
+/// Link the deferred callables of every use not replayed whose
+/// instantiation ran at `min_rank` or deeper, and forget the uses that no
+/// longer need linking.
+fn linkDeferredUsesFrom(self: *Self, min_rank: Rank) Allocator.Error!void {
+    var index: usize = 0;
+    while (index < self.uses_with_deferred_callables.items.len) {
+        const use_idx = self.uses_with_deferred_callables.items[index];
+        const use = self.use_instances.items[use_idx];
+        if (!use.deferred_linked and use.state != .replayed and
+            @intFromEnum(use.link.?.rank) >= @intFromEnum(min_rank))
+        {
+            try self.linkUseCallables(use_idx);
+        }
+        const done = self.use_instances.items[use_idx];
+        const in_probe = self.probe_depth != 0 or self.commit_probe_active;
+        if (!in_probe and (done.deferred_linked or done.state == .replayed)) {
+            _ = self.uses_with_deferred_callables.swapRemove(index);
+        } else index += 1;
+    }
+}
+
+/// Link the deferred callables of every use not replayed. Runs before a
+/// speculative probe, whose rollback a link must never be part of, and
+/// before an error report snapshots a type that may reach them.
+fn linkAllDeferredUses(self: *Self) Allocator.Error!void {
+    if (self.uses_with_deferred_callables.items.len == 0) return;
+    try self.linkDeferredUsesFrom(.generalized);
+}
+
+fn linkDeferredCallableHook(ctx: *anyopaque, placeholder: Var) Allocator.Error!void {
+    const self: *Self = @ptrCast(@alignCast(ctx));
+    const use_idx = self.use_instance_by_fn_var.get(placeholder) orelse
+        base.invariant("a deferred requirement callable has no use to link it", .{});
+    try self.linkUseCallables(use_idx);
+}
+
+fn linkAllDeferredCallablesHook(ctx: *anyopaque) Allocator.Error!void {
+    const self: *Self = @ptrCast(@alignCast(ctx));
+    try self.linkAllDeferredUses();
+}
+
+/// Snapshot a type for an error report once every deferred requirement
+/// callable it can reach is linked.
+fn snapshotVarForError(self: *Self, var_: Var) Allocator.Error!snapshot_mod.SnapshotContentIdx {
+    try self.linkAllDeferredUses();
+    return self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+}
+
 const DeferredEntryUse = union(enum) {
     /// The entry holds only relations of a replayed use.
     skip,
@@ -40325,7 +40813,31 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
     }
     const use = self.use_instances.items[use_idx];
     const record = self.cir.scheme_uses.items.items[use.record];
-    if (record.pairs_len != source.pairs_len) return false;
+    // Both substitutions are ordered by scheme variable. A use whose
+    // deferred callables are not linked names a subset of the source's: it
+    // has copied nothing that only those callables reach.
+    const all_pairs = self.cir.scheme_use_pairs.items.items;
+    const use_pairs = all_pairs[record.pairs_start..][0..record.pairs_len];
+    // The source position of each of the use's pairs, when the use names a
+    // proper subset.
+    const subset = record.pairs_len != source.pairs_len;
+    const matched = &self.scratch_replay_matches;
+    matched.clearRetainingCapacity();
+    if (subset) {
+        if (use.deferred_linked) return false;
+        var source_offset: u32 = 0;
+        for (use_pairs) |use_pair| {
+            while (source_offset < source.pairs_len and
+                all_pairs[source.pairs_start + source_offset].old_var != use_pair.old_var) source_offset += 1;
+            if (source_offset == source.pairs_len) return false;
+            try matched.append(self.gpa, source_offset);
+            source_offset += 1;
+        }
+    } else {
+        for (use_pairs, all_pairs[source.pairs_start..][0..source.pairs_len]) |use_pair, source_pair| {
+            if (use_pair.old_var != source_pair.old_var) return false;
+        }
+    }
     var relations: std.ArrayListUnmanaged(DispatchReplayPair) = .empty;
     defer relations.deinit(self.gpa);
     {
@@ -40345,11 +40857,9 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
     // ambiguity and literal registries. Its record names the source's
     // restated substitution, its relations are skipped, and its other
     // copies are reachable only from those.
-    const all_pairs = self.cir.scheme_use_pairs.items.items;
-    for (all_pairs[record.pairs_start..][0..record.pairs_len], all_pairs[source.pairs_start..][0..source.pairs_len]) |use_pair, frozen_pair| {
-        if (use_pair.old_var != frozen_pair.old_var) return false;
-    }
-    for (all_pairs[record.pairs_start..][0..record.pairs_len], all_pairs[source.pairs_start..][0..source.pairs_len]) |use_pair, frozen_pair| {
+    for (use_pairs, 0..) |use_pair, use_offset| {
+        const source_offset = if (subset) matched.items[use_offset] else use_offset;
+        const frozen_pair = all_pairs[source.pairs_start + source_offset];
         switch (self.types.resolveVar(@enumFromInt(use_pair.fresh_var)).desc.content) {
             .flex => |flex| if (flex.constraints.len() == 0) continue,
             .rigid, .alias, .field_presence, .structure, .err => continue,
@@ -40374,7 +40884,13 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
     // every pair is still a type root of the module; it names the frozen
     // nodes too, so it adds no types of its own.
     const pairs = self.cir.scheme_use_pairs.items.items;
-    @memcpy(pairs[record.pairs_start..][0..record.pairs_len], pairs[source.pairs_start..][0..source.pairs_len]);
+    if (subset) {
+        for (matched.items, 0..) |source_offset, use_offset| {
+            pairs[record.pairs_start + use_offset] = pairs[source.pairs_start + source_offset];
+        }
+    } else {
+        @memcpy(pairs[record.pairs_start..][0..record.pairs_len], pairs[source.pairs_start..][0..source.pairs_len]);
+    }
     const replayed = &self.cir.scheme_uses.items.items[use.record];
     replayed.pairs_start = source.pairs_start;
     replayed.pairs_len = source.pairs_len;
@@ -41366,6 +41882,7 @@ fn resumeStaticDispatchDrain(
             };
             break :pick index;
         };
+        try self.linkEntryUses(env.deferred_static_dispatch_constraints.items.items[entry_index]);
         switch (try self.processDeferredDispatchEntry(env, drain, entry_index)) {
             .next => {},
             .stopped => {
@@ -41964,7 +42481,7 @@ inline fn processDeferredDispatchEntry(
                     const probed_result = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, fn_ctx, .exact);
                     if (probed_result.isEstablished()) {
                         committed = true;
-                        probe.commit();
+                        try probe.commit();
                     }
                     break :fn_result probed_result;
                 };
@@ -42594,8 +43111,8 @@ inline fn processDeferredDispatchEntry(
 }
 
 fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, region: Region) Allocator.Error!void {
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+    const expected_snapshot = try self.snapshotVarForError(expected_var);
+    const actual_snapshot = try self.snapshotVarForError(actual_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
@@ -42659,7 +43176,7 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
         }
 
         committed = true;
-        probe.commit();
+        try probe.commit();
         break :blk true;
     };
 
@@ -44752,7 +45269,7 @@ fn appendInvalidBuiltinNumeralProblem(
     dispatcher_var: Var,
     num_literal: types_mod.NumeralInfo,
 ) Allocator.Error!void {
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const expected_snapshot = try self.snapshotVarForError(dispatcher_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
         .literal_var = dispatcher_var,
         .expected_type = expected_snapshot,
@@ -44802,7 +45319,7 @@ fn reportUnmaterializableNumeralLiteral(
         return true;
     }
 
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const expected_snapshot = try self.snapshotVarForError(dispatcher_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
         .literal_var = dispatcher_var,
         .expected_type = expected_snapshot,
@@ -45789,7 +46306,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
     // A committed import survives, including across later rolled-back hits.
     var committed = try checker.beginProbe(null);
     const retained = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
-    committed.commit();
+    try committed.commit();
     var probe = try checker.beginProbe(null);
     try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?.local_var);
     probe.rollback();
@@ -46178,7 +46695,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     {
         var probe = try checker.beginProbe(null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null);
-        probe.commit();
+        try probe.commit();
     }
     try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
     try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
@@ -48559,14 +49076,14 @@ fn reportDerivedParserErrorRow(
 ) Allocator.Error!void {
     const owner_region = self.derivedCodecDiagnosticRegion(constraint, failure_expr, region);
     const record_snapshot = if (record_var) |v|
-        try self.snapshots.snapshotVarForError(self.types, &self.type_writer, v)
+        try self.snapshotVarForError(v)
     else
         null;
     const tags_snapshot = if (tags_var) |v|
-        try self.snapshots.snapshotVarForError(self.types, &self.type_writer, v)
+        try self.snapshotVarForError(v)
     else
         null;
-    const row_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, row_var);
+    const row_snapshot = try self.snapshotVarForError(row_var);
     var required_fields: ?problem.ExtraStringIdx = null;
     if (required_field_idents.len > 0) {
         var joined = std.ArrayListUnmanaged(u8).empty;
@@ -50972,15 +51489,15 @@ fn checkFlexVarConstraintCompatibility(
             if (!result.isEstablished()) break :accepted false;
 
             committed = true;
-            commit_probe.commit();
+            try commit_probe.commit();
             break :accepted true;
         };
         if (!target_accepted) {
             // Report the signature mismatch against the untouched types the
             // rollback restored: the default owner's declared scheme versus
             // the relation as the program actually constrained it.
-            const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, imported_scheme);
-            const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, constraint.fn_var);
+            const expected_snapshot = try self.snapshotVarForError(imported_scheme);
+            const actual_snapshot = try self.snapshotVarForError(constraint.fn_var);
             _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
                 .types = .{
                     .expected_var = imported_scheme,
@@ -51031,8 +51548,8 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
 /// This is what makes the rendered message + region correct regardless of the
 /// merge operand order used to commit the types.
 fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: problem.Context) std.mem.Allocator.Error!void {
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_ret);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, body_var);
+    const expected_snapshot = try self.snapshotVarForError(expected_ret);
+    const actual_snapshot = try self.snapshotVarForError(body_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_ret,
@@ -51145,7 +51662,7 @@ fn checkBranchBodyAgainstExpected(
         const result = try commit_probe.unifyInContext(body_var, acc, ctx);
         if (result.isAccepted()) {
             committed = true;
-            commit_probe.commit();
+            try commit_probe.commit();
             return;
         }
     }
@@ -51308,7 +51825,7 @@ fn reportConstraintErrorAt(
 ) Allocator.Error!void {
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, explicit_error_expr)) return;
 
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const snapshot = try self.snapshotVarForError(dispatcher_var);
     const owner_region = self.constraintOwnerRegion(owner_expr);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{
@@ -51389,7 +51906,7 @@ fn reportEqualityError(
 ) Allocator.Error!void {
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) return;
 
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const snapshot = try self.snapshotVarForError(dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
@@ -51416,7 +51933,7 @@ fn reportUndeterminedCodecType(
 ) Allocator.Error!void {
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, owner_expr)) return;
 
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const snapshot = try self.snapshotVarForError(dispatcher_var);
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
         .undetermined_codec_type = .{
             .dispatcher_snapshot = snapshot,
@@ -51454,7 +51971,7 @@ fn reportDerivedMapError(
 ) Allocator.Error!void {
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, null)) return;
 
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const snapshot = try self.snapshotVarForError(dispatcher_var);
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
         .type_does_not_support_map = .{
             .dispatcher_snapshot = snapshot,

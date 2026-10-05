@@ -129,7 +129,12 @@ pub const DescriptorFlags = packed struct(u8) {
     /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
     /// uses of the definition widen freely.
     bounded_row_ext: bool = false,
-    _unused: u2 = 0,
+    /// A placeholder for a requirement callable that a use's instantiation
+    /// deferred copying (design.md "Whole-use replay"). It stands only in
+    /// requirement records; the checker links it to the callable's copy
+    /// before anything reads it, and reading it unlinked is a compiler bug.
+    deferred_callable: bool = false,
+    _unused: u1 = 0,
 };
 
 /// A type descriptor
