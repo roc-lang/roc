@@ -970,6 +970,10 @@ const Pass = struct {
     /// The identities a head persisted last round, while a stabilization
     /// over the cap keeps them first.
     previous_keys: std.AutoHashMap(StableFactKey, void),
+    /// `dropImpliedCandidates` scratch: the candidates' indices sorted by
+    /// endpoints and constant, and which candidates another implies.
+    candidate_order: std.ArrayList(u32),
+    candidate_implied: std.ArrayList(bool),
     /// Stable-form scratch for a captured edge's facts, its entry facts,
     /// and a persisted meet under construction; heap-allocated once, as
     /// each is sized for its cap.
@@ -1019,8 +1023,8 @@ const Pass = struct {
         try env_scratch.ensureCapacity(allocator, merge_env_persist_cap);
         errdefer env_scratch.deinit(allocator);
         var bounds_scratch = LoopBounds{};
-        try bounds_scratch.ensureCapacity(allocator, meet_bound_cap, meet_bound_cap, meet_bound_cap);
         errdefer bounds_scratch.deinit(allocator);
+        try bounds_scratch.ensureCapacity(allocator, meet_bound_cap, meet_bound_cap, meet_bound_cap);
         return .{
             .store = store,
             .layouts = layouts,
@@ -1088,6 +1092,8 @@ const Pass = struct {
             .stable_index = std.AutoHashMap(StableFactKey, u32).init(allocator),
             .stable_candidates = .empty,
             .previous_keys = std.AutoHashMap(StableFactKey, void).init(allocator),
+            .candidate_order = .empty,
+            .candidate_implied = .empty,
             .stable_scratch = stable_scratch,
             .entry_scratch = entry_scratch,
             .persist_scratch = persist_scratch,
@@ -1162,6 +1168,8 @@ const Pass = struct {
         self.stable_index.deinit();
         self.stable_candidates.deinit(self.allocator);
         self.previous_keys.deinit();
+        self.candidate_order.deinit(self.allocator);
+        self.candidate_implied.deinit(self.allocator);
         self.stable_scratch.deinit(self.allocator);
         self.allocator.destroy(self.stable_scratch);
         self.entry_scratch.deinit(self.allocator);
@@ -2795,6 +2803,10 @@ const Pass = struct {
             gop.value_ptr.* = @intCast(self.stable_candidates.items.len);
             try self.stable_candidates.append(self.allocator, candidate);
         }
+        // Under the cap every candidate persists, implied or not; over it,
+        // an implied candidate must not take a slot from one that implies
+        // it.
+        if (self.stable_candidates.items.len > loop_fact_cap) try self.dropImpliedCandidates();
         const candidates = self.stable_candidates.items;
         if (candidates.len <= loop_fact_cap or previous == null) {
             const take = @min(candidates.len, loop_fact_cap);
@@ -2818,6 +2830,83 @@ const Pass = struct {
             stable.items[stable.len] = candidate;
             stable.len += 1;
         }
+    }
+
+    /// Drop every candidate another candidate implies: the same endpoints,
+    /// a constant no larger, and no assumption the implied one lacks. The
+    /// survivors keep their order.
+    fn dropImpliedCandidates(self: *Pass) ResourceError!void {
+        const candidates = self.stable_candidates.items;
+        self.candidate_order.clearRetainingCapacity();
+        try self.candidate_order.ensureTotalCapacity(self.allocator, candidates.len);
+        for (0..candidates.len) |i| self.candidate_order.appendAssumeCapacity(@intCast(i));
+        std.mem.sortUnstable(u32, self.candidate_order.items, candidates, candidateBefore);
+        self.candidate_implied.clearRetainingCapacity();
+        try self.candidate_implied.appendNTimes(self.allocator, false, candidates.len);
+        var any_implied = false;
+        var group_start: usize = 0;
+        const order = self.candidate_order.items;
+        while (group_start < order.len) {
+            var group_end = group_start + 1;
+            while (group_end < order.len and sameEndpoints(candidates[order[group_start]], candidates[order[group_end]])) group_end += 1;
+            // Within a group the constants ascend, so only earlier members
+            // can imply a later one.
+            for (group_start + 1..group_end) |later| {
+                const implied = candidates[order[later]];
+                for (group_start..later) |earlier| {
+                    if (self.candidate_implied.items[order[earlier]]) continue;
+                    const by = candidates[order[earlier]];
+                    if (by.assumed & ~implied.assumed == 0) {
+                        self.candidate_implied.items[order[later]] = true;
+                        any_implied = true;
+                        break;
+                    }
+                }
+            }
+            group_start = group_end;
+        }
+        if (!any_implied) return;
+        var kept: usize = 0;
+        for (candidates, 0..) |candidate, i| {
+            if (self.candidate_implied.items[i]) continue;
+            candidates[kept] = candidate;
+            kept += 1;
+        }
+        self.stable_candidates.items.len = kept;
+    }
+
+    fn sameEndpoints(a: StableFact, b: StableFact) bool {
+        return std.meta.eql(a.a, b.a) and std.meta.eql(a.b, b.b);
+    }
+
+    /// Candidates ordered by endpoints, then by constant ascending.
+    fn candidateBefore(candidates: []const StableFact, x: u32, y: u32) bool {
+        const a = candidates[x];
+        const b = candidates[y];
+        switch (stableTermOrder(a.a, b.a)) {
+            .lt => return true,
+            .gt => return false,
+            .eq => {},
+        }
+        switch (stableTermOrder(a.b, b.b)) {
+            .lt => return true,
+            .gt => return false,
+            .eq => {},
+        }
+        return a.c < b.c;
+    }
+
+    fn stableTermOrder(a: StableTerm, b: StableTerm) std.math.Order {
+        const tag_a = @intFromEnum(std.meta.activeTag(a));
+        const tag_b = @intFromEnum(std.meta.activeTag(b));
+        if (tag_a != tag_b) return std.math.order(tag_a, tag_b);
+        return switch (a) {
+            .value_of, .len_of => |local| std.math.order(@intFromEnum(local), @intFromEnum(switch (b) {
+                .value_of, .len_of => |other| other,
+                .constant => unreachable,
+            })),
+            .constant => |value| std.math.order(value, b.constant),
+        };
     }
 
     /// Whether two persisted fact lists hold the same facts, with the same
