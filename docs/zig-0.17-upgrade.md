@@ -2,8 +2,9 @@
 
 This records the source migration and validation on the Zig 0.17 upgrade
 branch. Roc requires Zig 0.17.0 and a compatible roc-bootstrap dependency
-bundle containing LLVM/Clang/LLD 22.1.8. A published compatible bundle and the
-complete native compiler validation are still pending.
+bundle containing LLVM/Clang/LLD 22.1.8. A compatible LLVM 22 musl/libc++
+bundle has been built locally and passed its static C++ LLVM/LLD, Binaryen, zlib, and zstd probe. A published release
+and complete native Roc validation are still pending.
 
 ## Source and compiler correctness
 
@@ -24,19 +25,24 @@ passed, but their counts were not retained.
 | lir | 537 | 0 |
 | postcheck | 622 | 1 |
 | compile | 781 | 0 |
+| eval | 69 | 0 |
 
 Run these module leaves from the repository root with Zig 0.17.0:
 
 ```sh
-for module in collections base parse builtins can types layout check backend lir_core lir postcheck compile; do
-    zig build "run-test-zig-module-$module" -Doptimize=ReleaseSafe -j2
+for module in collections base parse builtins can types layout check backend lir_core lir postcheck compile eval; do
+    zig build "run-test-zig-module-$module" -Doptimize=ReleaseSafe \
+        -Droc-deps-path=/path/to/compatible-bundle -j2
 done
 ```
 
 The compile suite uses the vendored Zig LLVM IR builder and does not need
-LLVM library linkage. The complete eval suite does link LLVM support and
-remains pending the compatible bundle. The recorded large compile runs
-used the generated standalone `zig test` commands from the module graph;
+LLVM library linkage. The complete eval suite links LLVM support and
+passes all 69 tests against the locally built compatible bundle, including the native C++ bridge and
+LLVM/LLD linkage. Its exact command and logs are retained at
+`/tmp/roc-017-full-eval/command-retry-2.txt` and
+`/tmp/roc-017-full-eval/run-test-zig-module-eval-retry-2.log`. The recorded
+large compile runs used the generated standalone `zig test` commands from the module graph;
 the module leaves above regenerate the dependency and embedding inputs.
 
 The full check suite covers the allocator fixture lifetime corrections and
@@ -81,11 +87,32 @@ cache levels.
 
 Other validated source checks include canonical C/Rust glue output byte
 equality against the pre-migration compiler, seven target ABI compile
-checks for the emitted Zig glue, and Bytebox continuation-count regression
-coverage beyond 65,535. Bytebox's public `Val` retains 16-byte size and
-alignment. The echo-WASM runner compiles in Debug and its argument contract
+checks for the static Zig glue declarations, and Bytebox continuation-count
+regression coverage beyond 65,535. Bytebox's public `Val` retains 16-byte
+size and alignment. The echo-WASM runner compiles in Debug and its argument contract
 was checked outside the checkout; executing the complete echo artifact is
 still pending.
+
+The seven Zig ABI checks compile `test/glue/zig_abi_lock.zig` against an
+extracted template containing six byte-exact current `ZigGlue.roc` static
+blocks, plus the RocStr release-policy registry needed by that template.
+They passed for x86_64/aarch64 Linux musl, x86_64/aarch64 macOS,
+x86_64/aarch64 Windows MSVC, and wasm32-freestanding-none. A renamed RocStr
+field is rejected by the same lock. These checks cover layout and runtime
+signatures; actual `roc glue` generation and the complete generated-glue
+ABI gate remain pending. Exact rerun commands and results were retained at
+`/tmp/roc-017-abi-review-results.json`; the complete generation gate is:
+
+```sh
+zig build run-check-glue-abi -Doptimize=ReleaseSafe \
+    -Droc-deps-path=/path/to/compatible-bundle -j2
+```
+
+The final CLI classification audit adds the six new Zig OS tags to the
+existing filename, platform-support, linker, and fixture-policy branches.
+A compile-only probe using the current source declarations validates the
+install/fixture classifiers and native host selection; full CLI execution
+is pending the newly linked Roc binary.
 
 After the full suites, the official Zig 0.17 formatter updated 144 tracked
 source/test/vendor files. A token-preserving comparison verified only enum
@@ -119,6 +146,21 @@ all bakes. A production edit invalidates them; restoration reuses the
 original results. Distinct declared output names ensure the three bakes
 cannot collapse into one cached invocation. Checkpoint logs were retained
 at `/tmp/roc-build-cache-017-checkpoint` for build commit `002baaaa86`.
+
+The later 14-case cache check also passes for the independent Zig stdlib
+and mutable-dependency digest stages (`2e13e65c55`, `9193f93035`), with
+results retained at
+`/tmp/roc-build-cache-017-complete-stages-final/results.json`. Outer
+ReleaseFast, Windows GNU, and Linux GNU configurations reuse the Debug
+host compiler, three bakes, and both large-input digests. A production
+source edit reruns the final identity, compiler, and bakes while preserving
+both cached input trees and digest runs. A mutable header edit reruns only
+its dependency copy/digest, preserves the toolchain copy/digest, and
+invalidates the final compiler/bakes. Restoring inputs reuses the original
+results; a following unchanged run confirms all stages cached. Relocating
+an identical stdlib copy preserves identity, while adding a stdlib file
+changes identity and only its toolchain digest. These are build graph
+correctness checks, not full native cross-target runtime measurements.
 
 The fixture check passes concurrent separate-cache/mode and shared-cache
 graphs, selected host overlays, preserved tracked CRT inputs, immutable
@@ -170,8 +212,8 @@ not accept the compiler subcommand's `--global-cache-dir` flag.
   Zig 0.17 getauxval probe still returns zero. Historical Zig 0.16 source
   and ABI provenance comments retain their original version references.
 
-Pending validation uses the complete roc-bootstrap LLVM 22 musl/libc++
-bundle: native Roc linking, the full eval suite, native app and test fixture
+Pending validation uses the locally built complete roc-bootstrap LLVM 22
+musl/libc++ bundle: native Roc linking, native app and test fixture
 execution, and cold/warm compiler and application cache measurements.
 Performance runs must use an unstripped ReleaseFast Roc compiler; no
 native Roc timing improvement is claimed by the graph cache checks.
