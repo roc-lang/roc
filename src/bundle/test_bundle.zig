@@ -85,6 +85,14 @@ const path_corpus = [_]struct { path: []const u8, reason: ?PathReason }{
 
     .{ .path = "foo\\bar.txt", .reason = backslash_reason },
     .{ .path = "path\\with\\backslash", .reason = backslash_reason },
+
+    // Components end at a backslash too, so these are refused for what they
+    // name on Windows rather than accepted there as one opaque component.
+    .{ .path = "foo\\..\\..\\etc\\passwd", .reason = .path_traversal },
+    .{ .path = "foo\\.\\bar", .reason = .current_directory_reference },
+    .{ .path = "folder\\CON\\file.txt", .reason = .windows_reserved_name },
+    .{ .path = "foo \\bar.txt", .reason = .component_ends_with_space },
+    .{ .path = "foo.\\bar.txt", .reason = .component_ends_with_period },
 };
 
 test "bundle writes a path exactly when unbundle accepts it" {

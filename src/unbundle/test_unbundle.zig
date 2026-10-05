@@ -101,6 +101,16 @@ test "pathHasUnbundleErr - backslash handling" {
     }
 }
 
+test "pathHasUnbundleErr - traversal behind a backslash separator" {
+    // Windows treats a backslash as a separator, so extraction there would
+    // follow these components out of the destination directory.
+    for ([_][]const u8{ "foo\\..\\..\\evil.txt", "..\\evil.txt", "foo/bar\\.." }) |path| {
+        const err = unbundle.pathHasUnbundleErr(path);
+        try testing.expect(err != null);
+        try testing.expect(err.?.reason == .path_traversal);
+    }
+}
+
 test "validateBase58Hash - valid and invalid hashes" {
     // Generate a real hash and encode it
     const data = "test data";

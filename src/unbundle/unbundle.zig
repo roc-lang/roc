@@ -311,7 +311,10 @@ fn pathInvalidReason(path: []const u8) ?PathValidationReason {
     if (path[0] == '/' or path[0] == '\\') return .absolute_path;
     if (path.len >= 2 and path[1] == ':') return .absolute_path;
 
-    var iter = std.mem.tokenizeScalar(u8, path, '/');
+    // A backslash is accepted only where it is a path separator (see the
+    // character rules below), so components end at either separator: `..` and
+    // reserved names cannot hide behind a backslash.
+    var iter = std.mem.tokenizeAny(u8, path, "/\\");
     while (iter.next()) |component| {
         if (std.mem.eql(u8, component, "..")) return .path_traversal;
         if (std.mem.eql(u8, component, ".")) return .current_directory_reference;
