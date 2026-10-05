@@ -2416,12 +2416,7 @@ const Inserter = struct {
                 } }, origin);
             },
             .assign_call_erased => |assign| blk: {
-                if (step.replaces_frame) {
-                    const returned = self.store.getCFStmt(next);
-                    if (returned != .ret or returned.ret.value != assign.target) {
-                        arcInvariant("ARC deferred erased call was not immediately followed by the return of its result");
-                    }
-                } else if (!assign.reuse_closure) {
+                if (!step.replaces_frame and !assign.reuse_closure) {
                     next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
                 }
                 break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
@@ -3624,19 +3619,59 @@ const Inserter = struct {
     }
 
     /// Whether an erased call is left pending for whoever awaits this
-    /// procedure's result: its value is the procedure's whole result at the
-    /// same layout, any descriptor that comes back with it is the one the
-    /// procedure returns, and the callee does not repack the closure's
-    /// allocation.
+    /// procedure's result: the callee does not repack the closure's
+    /// allocation, and the call's value is the procedure's whole result,
+    /// either as it is or after nothing but representation conversions.
+    /// Unconverted, it has the procedure's return layout and any descriptor
+    /// that comes back with it is the one the procedure returns. Converted,
+    /// whoever makes the call applies the last conversion in the
+    /// procedure's place.
     fn erasedCallIsDeferred(self: *const Inserter, call: anytype) bool {
         if (call.reuse_closure) return false;
-        const next = self.store.getCFStmt(call.next);
-        if (next != .ret or next.ret.value != call.target) return false;
         const caller = self.store.getProcSpec(self.current_proc);
-        // The descriptor that comes back with the value is the one this
-        // procedure returns with it, or there is none on either side.
-        return caller.hosted == null and call.out_desc == caller.runtime_ret_desc and
-            self.store.getLocal(call.target).layout_idx == caller.ret_layout;
+        if (caller.hosted != null) return false;
+        const joins = self.solution.joinBodiesOf(self.current_source_proc);
+        var returned: LIR.LocalId = call.target;
+        var converted = false;
+        var current: LIR.CFStmtId = call.next;
+        // A join body that jumps back to its own join never returns, so more
+        // jumps than joins is such a cycle.
+        var jumps: usize = 0;
+        while (true) {
+            const stmt = self.store.getCFStmt(current);
+            if (stmt == .ret) {
+                if (stmt.ret.value != returned) return false;
+                if (self.store.getLocal(returned).layout_idx != caller.ret_layout) return false;
+                // The descriptor that comes back with an unconverted value
+                // is the one this procedure returns with it, or there is
+                // none on either side.
+                return converted or call.out_desc == caller.runtime_ret_desc;
+            }
+            if (stmt == .jump) {
+                if (jumps == joins.len) return false;
+                jumps += 1;
+                current = for (joins) |join| {
+                    if (join.id == stmt.jump.target) break join.body;
+                } else return false;
+                continue;
+            }
+            if (stmt == .assign_boxy_desc_ref) {
+                // The frame is released before the call, so a descriptor
+                // reference after it reads nothing the frame owned.
+                const captures = self.store.getLocalSpan(stmt.assign_boxy_desc_ref.captures);
+                for (0..GuardedList.borrowLen(captures)) |index| {
+                    if (self.localContainsRefcounted(GuardedList.at(captures, index))) return false;
+                }
+                current = stmt.assign_boxy_desc_ref.next;
+                continue;
+            }
+            if (stmt != .assign_boxy_adapt) return false;
+            const adapt = stmt.assign_boxy_adapt;
+            if (adapt.source != returned or adapt.source_mode != .move) return false;
+            returned = adapt.target;
+            converted = true;
+            current = adapt.next;
+        }
     }
 
     /// Whether the callee of a tail call can return on the current
@@ -6508,13 +6543,15 @@ const Inserter = struct {
                     try self.ownershipPlaceUsedInPath(next, owner)
                 else
                     try self.groupUsedInPath(next, local, loop_keep));
-                const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
-                    self.groupSharesOtherOperand(locals, position, local);
-                const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
+                // Another position of this call may lend the same value to the
+                // callee. Moving the caller's only unit into this position
+                // would let the callee end it while that position still reads
+                // it, so a shared operand keeps its unit.
+                const shares_other_operand = self.groupSharesOtherOperand(locals, position, local);
+                const can_transfer = owned.contains(owner) and !used_after_call and !shares_other_operand;
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
-                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
-                    !self.groupSharesOtherOperand(locals, position, local);
+                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local);
                 if (!can_transfer and !requires_tail_transfer) continue;
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take and !requires_tail_transfer) continue;
                 demanded.borrowed_params &= ~bit;

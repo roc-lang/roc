@@ -5661,12 +5661,10 @@ const ProcedureBuilder = struct {
         else
             false;
         const source_ret_layout = adapter_proc.workerRuntimeLayoutForRep(source_function.ret).layoutIdx();
-        const stored_directly = !ret_desc_is_shared and
-            ((self.result.store.getLocal(ret_local).layout_idx == source_ret_layout and
-                adapter_proc.erasedCallResultCanUseTarget(target_function.ret, source_function.ret)) or
-                try adapter_proc.erasedCallMaterializesIntoTarget(ret_local, target_function.ret, source_function.ret));
-        const concrete_target_desc = if (stored_directly) null else try adapter_proc.erasedCallConcreteTargetDesc(ret_local, target_function.ret, source_function.ret);
-        const call_target = if (stored_directly or concrete_target_desc != null)
+        const call_target = if (!ret_desc_is_shared and
+            self.result.store.getLocal(ret_local).layout_idx == source_ret_layout and
+            (adapter_proc.erasedCallResultCanUseTarget(target_function.ret, source_function.ret) or
+                adapter_proc.callResultAdoptsCalleeDescriptor(ret_local, target_function.ret)))
             ret_local
         else blk: {
             const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
@@ -5716,12 +5714,7 @@ const ProcedureBuilder = struct {
             call_args,
             &arg_desc_initializers,
         );
-        const expected_result_desc = if (concrete_target_desc) |desc|
-            ProcBodyBuilder.ResultDescriptorSource{ .desc = desc }
-        else if (adapter_proc.repIsOpenRecord(source_function.ret))
-            ProcBodyBuilder.ResultDescriptorSource{}
-        else
-            try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
+        const expected_result_desc = if (adapter_proc.repIsOpenRecord(source_function.ret)) ProcBodyBuilder.ResultDescriptorSource{} else try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
         try adapter_proc.appendResultDescriptorInitializers(&arg_desc_initializers, expected_result_desc);
         const call_stmt = try self.result.store.addCFStmt(.{
             .assign_call_erased = .{
@@ -20483,11 +20476,10 @@ const ProcBodyBuilder = struct {
             false;
 
         var continuation = next;
-        const stored_directly = !target_desc_is_shared and
-            ((target_layout == callee_ret_layout and self.erasedCallResultCanUseTarget(target_rep, callee_ret_rep)) or
-                try self.erasedCallMaterializesIntoTarget(target, target_rep, callee_ret_rep));
-        const concrete_target_desc = if (stored_directly) null else try self.erasedCallConcreteTargetDesc(target, target_rep, callee_ret_rep);
-        const call_target = if (stored_directly or concrete_target_desc != null)
+        const call_target = if (!target_desc_is_shared and
+            target_layout == callee_ret_layout and
+            (self.erasedCallResultCanUseTarget(target_rep, callee_ret_rep) or
+                self.callResultAdoptsCalleeDescriptor(target, target_rep)))
             target
         else blk: {
             const raw_ret = if (self.parent.result.store.getLocal(target).boxy_desc != null)
@@ -20524,14 +20516,11 @@ const ProcBodyBuilder = struct {
             call_args,
             &arg_desc_initializers,
         );
-        const expected_result_desc = if (concrete_target_desc) |desc|
-            ResultDescriptorSource{ .desc = desc }
-        else
-            try self.erasedCallResultDescriptorRef(
-                call_target,
-                callee_ret_rep,
-                out_desc,
-            );
+        const expected_result_desc = try self.erasedCallResultDescriptorRef(
+            call_target,
+            callee_ret_rep,
+            out_desc,
+        );
         try self.appendResultDescriptorInitializers(&arg_desc_initializers, expected_result_desc);
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
@@ -24708,11 +24697,10 @@ const ProcBodyBuilder = struct {
         else
             false;
         var continuation = next;
-        const stored_directly = !target_desc_is_shared and
-            ((target_layout == callee_ret_layout and self.erasedCallResultCanUseTarget(target_rep, callee_function.ret)) or
-                try self.erasedCallMaterializesIntoTarget(target, target_rep, callee_function.ret));
-        const concrete_target_desc = if (stored_directly) null else try self.erasedCallConcreteTargetDesc(target, target_rep, callee_function.ret);
-        const call_target = if (stored_directly or concrete_target_desc != null)
+        const call_target = if (!target_desc_is_shared and
+            target_layout == callee_ret_layout and
+            (self.erasedCallResultCanUseTarget(target_rep, callee_function.ret) or
+                self.callResultAdoptsCalleeDescriptor(target, target_rep)))
             target
         else blk: {
             const raw_ret = if (self.parent.result.store.getLocal(target).boxy_desc != null)
@@ -24755,14 +24743,11 @@ const ProcBodyBuilder = struct {
             call_args,
             &descriptor_initializers,
         );
-        const expected_result_desc = if (concrete_target_desc) |desc|
-            ResultDescriptorSource{ .desc = desc }
-        else
-            try self.erasedCallResultDescriptorRef(
-                call_target,
-                callee_function.ret,
-                out_desc,
-            );
+        const expected_result_desc = try self.erasedCallResultDescriptorRef(
+            call_target,
+            callee_function.ret,
+            out_desc,
+        );
         try self.appendResultDescriptorInitializers(&descriptor_initializers, expected_result_desc);
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
@@ -32245,43 +32230,6 @@ const ProcBodyBuilder = struct {
         target_rep: Plan.TypeRepId,
     ) bool {
         return self.repIsBareDynamic(target_rep) and self.callResultOutputDescriptorLocal(target) != null;
-    }
-
-    /// Whether an erased call can deliver its result straight into a bare
-    /// dynamic `target`. The erased-call runtime stores the callee's result in
-    /// the target's layout and returns the descriptor of what it stored, which
-    /// is all a bare dynamic value is described by. A callable crosses through
-    /// an adapter instead, which descriptors do not express.
-    fn erasedCallMaterializesIntoTarget(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        result_rep: Plan.TypeRepId,
-    ) Allocator.Error!bool {
-        if (!self.callResultAdoptsCalleeDescriptor(target, target_rep)) return false;
-        return self.functionChildrenForRep(result_rep) == null and
-            !try self.repHoldsCallableInStructure(result_rep);
-    }
-
-    /// The descriptor an erased call is asked to store its result as when
-    /// that result goes straight into a fully concrete `target`, or null when
-    /// it cannot. The erased-call runtime converts the callee's result to the
-    /// layout and descriptor the call names, which is the whole conversion
-    /// for a value that holds no callable and needs no runtime descriptor.
-    fn erasedCallConcreteTargetDesc(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        result_rep: Plan.TypeRepId,
-    ) Allocator.Error!?LIR.BoxyDescRef {
-        const target_identity = self.descriptorStorageRep(target_rep);
-        if (!self.repIsFullyConcrete(target_identity)) return null;
-        if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
-            if (desc.localOrNull() != null) return null;
-        }
-        if (self.functionChildrenForRep(target_rep) != null or self.functionChildrenForRep(result_rep) != null) return null;
-        if (try self.repHoldsCallableInStructure(target_rep) or try self.repHoldsCallableInStructure(result_rep)) return null;
-        return try self.parent.staticDescRefForRep(target_identity);
     }
 
     fn callResultOutputDescriptorLocal(

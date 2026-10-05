@@ -2188,7 +2188,12 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const result_desc_ptr = if (pending_return.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
-        const flag = try self.callBoxy("roc_boxy_return_pending", .i8, &.{try self.ptrType()}, &.{result_desc_ptr});
+        const flag = try self.callBoxy(
+            "roc_boxy_return_pending",
+            .i8,
+            &.{ try self.ptrType(), .i32 },
+            &.{ result_desc_ptr, try self.boxyInt(.i32, @intFromEnum(self.layouts().runtimeRepresentationLayoutIdx(self.current_ret_layout))) },
+        );
         const pending = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
         const return_block = wip.block(0, "return_pending") catch return error.OutOfMemory;
         const continue_block = wip.block(0, "none_pending") catch return error.OutOfMemory;
@@ -3864,6 +3869,7 @@ pub const MonoLlvmCodeGen = struct {
                     assign.deferred,
                 );
                 try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
+                if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
@@ -4873,7 +4879,7 @@ pub const MonoLlvmCodeGen = struct {
             const args_len: u32 = if (arg_locals.len == 0) 0 else self.store.getErasedCallArgsPlan(arg_plan).size;
             try self.callBoxyVoid(
                 "roc_boxy_defer_erased",
-                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, ptr_ty, .i32, .i32, .i32, .i32, ptr_ty },
+                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, ptr_ty, .i32, .i32, .i32, .i32, ptr_ty, .i32 },
                 &.{
                     fn_ptr,
                     closure_ptr,
@@ -4886,6 +4892,7 @@ pub const MonoLlvmCodeGen = struct {
                     try self.boxyInt(.i32, arg_layouts.start),
                     try self.boxyInt(.i32, arg_layouts.len),
                     if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
+                    try self.boxyInt(.i32, @intFromEnum(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
                 },
             );
             if (out_desc) |desc_local| {

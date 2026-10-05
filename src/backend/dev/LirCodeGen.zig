@@ -517,7 +517,7 @@ pub const BoxyBuiltinFn = enum {
         return switch (self) {
             .register_erased_proc => &.{ p, 4, 4, 4, 4, 4, 4, 4, 4 },
             .call_erased => &.{ p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
-            .defer_erased => &.{ p, p, p, p, p, p, 4, 4, 4, 4, p },
+            .defer_erased => &.{ p, p, p, p, p, p, 4, 4, 4, 4, p, 4 },
             .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
             .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
@@ -17086,6 +17086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try defer_builder.addImmArg(arg_layouts_span.start);
                 try defer_builder.addImmArg(arg_layouts_span.len);
                 if (result_desc_slot) |s| try defer_builder.addMemArg(frame_ptr, s) else try defer_builder.addImmArg(0);
+                try defer_builder.addImmArg(@intFromEnum(runtime_ret_layout));
                 try self.callBoxyBuiltin(&defer_builder, .defer_erased);
                 if (out_desc) |local| try self.bindAssignedLocal(local, .{ .immediate_i64 = 0 });
                 return if (ret_size == 0)
@@ -17221,6 +17222,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            const returned_layout = self.early_return_ret_layout orelse
+                std.debug.panic("Dev/codegen invariant violated: a procedure returning a pending call has no return layout", .{});
+            try builder.addImmArg(@intFromEnum(self.runtimeRepresentationLayoutIdx(returned_layout)));
             try self.callBoxyBuiltin(&builder, .return_pending);
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
             const flag_reg = try self.allocTempGeneral();
@@ -23486,6 +23490,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             );
                             const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
                             try self.bindCallResult(assign.target, driven_loc, assign.drive);
+                            if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                             try work.append(wa, .{ .node = assign.next });
                         },
 

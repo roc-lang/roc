@@ -1067,9 +1067,11 @@ pub const PendingDrive = enum(u8) {
 };
 
 /// What a procedure does when it returns early because a call is pending.
+/// Whoever makes that call converts its result to this procedure's return
+/// layout in the procedure's place.
 pub const PendingReturn = struct {
-    /// The descriptor the skipped conversions would have stored the result
-    /// as, which whoever makes the pending call stores it as instead.
+    /// The descriptor the last skipped conversion would have stored the
+    /// result as.
     result_desc: ?BoxyDescRef,
 };
 
@@ -1215,15 +1217,20 @@ pub const CFStmt = union(enum) {
         /// unit. Debug certification proves that allocation identity through
         /// the exact representation-transparent producer chain.
         reuse_source: ?LocalId = null,
-        /// Set by ARC emission on an erased call whose next statement returns
-        /// `target`: the call is left pending instead of made. The pending
-        /// call owns the reference to `closure` this statement was given,
-        /// and whoever runs it releases that reference afterwards. `target`
-        /// holds no value until a `drive` replaces it.
+        /// Set by ARC emission on an erased call whose value the procedure
+        /// returns, as it is or after representation conversions only: the
+        /// call is left pending instead of made. The pending call owns the
+        /// reference to `closure` this statement was given, and whoever runs
+        /// it releases that reference afterwards. `target` holds no value
+        /// until a `drive` replaces it.
         deferred: bool = false,
         /// Set by the tail-drive pass: where calls pending after this
         /// statement are run.
         drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a deferred call whose value is
+        /// converted before the procedure returns it. When the call is still
+        /// pending after this statement, the procedure returns at once.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {

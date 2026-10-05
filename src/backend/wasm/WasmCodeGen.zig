@@ -8507,6 +8507,22 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.cf_depth - 1) catch return error.OutOfMemory;
 }
 
+/// Return from the procedure without a value while an erased call is
+/// pending, as the tail-drive pass marked the statement just emitted. The
+/// caller makes the pending call and never reads this return.
+fn emitReturnIfCallPending(self: *Self, pending: LIR.PendingReturn) Allocator.Error!void {
+    const proc_id = self.current_proc_id orelse
+        wasmInvariantFmt("WASM/codegen invariant violated: a pending-call return outside a procedure", .{});
+    if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+    try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout))));
+    try self.emitBoxyCall("roc_boxy_return_pending");
+    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.cf_depth) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+}
+
 /// Emit the zero value of a wasm value type.
 ///
 /// A zero-sized value has no bits to load, so every op that produces one
@@ -9039,10 +9055,10 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_register_proc", &.{ .i32, .i32, .i32, .i64, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_call_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_drive_pending", &.{ .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_caller_drives", &.{.i32}, &.{.i32});
-    try self.registerBoxySymbol("roc_boxy_return_pending", &.{.i32}, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_return_pending", &.{ .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_list_concat", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_prepend", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_sublist", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32 }, &.{});
@@ -10109,17 +10125,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             });
             try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
             try self.bindAssignedLocal(assign.target);
-            if (assign.returns_pending) |pending| {
-                // The caller makes the pending call and never reads this
-                // procedure's return value.
-                if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-                try self.emitBoxyCall("roc_boxy_return_pending");
-                self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.cf_depth) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            }
+            if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_call_erased => |assign| {
@@ -10138,6 +10144,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             });
             try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
             try self.bindAssignedLocal(assign.target);
+            if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_packed_erased_fn => |assign| {
@@ -11255,6 +11262,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         try self.emitI32Const(@intCast(c.arg_layouts.start));
         try self.emitI32Const(@intCast(c.arg_layouts.len));
         if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+        try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(c.ret_layout))));
         try self.emitBoxyCall("roc_boxy_defer_erased");
         if (c.out_desc) |desc_local| {
             try self.emitNullPtr();

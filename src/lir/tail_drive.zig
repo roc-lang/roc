@@ -36,6 +36,13 @@ const DirectCall = struct {
     returns: Returns,
 };
 
+/// A descriptor local written by a call or after it, and the descriptor it
+/// is another name for, when it is one.
+const LateDescLocal = struct {
+    local: LIR.LocalId,
+    names: ?LIR.BoxyDescRef,
+};
+
 const Returns = union(enum) {
     /// Something other than returning it reads the value.
     no,
@@ -52,6 +59,8 @@ const Returns = union(enum) {
 const DeferredCall = struct {
     caller: u32,
     stmt: LIR.CFStmtId,
+    /// How the deferred call's value reaches the caller's return.
+    returns: Returns,
 };
 
 /// Stamp `drive` on every statement that can be followed by a pending call.
@@ -81,7 +90,7 @@ pub fn run(
     // join encloses every jump to it, so it is recorded before they are read.
     var join_bodies = std.ArrayList(?LIR.CFStmtId).empty;
     defer join_bodies.deinit(allocator);
-    var late_desc_locals = std.ArrayList(LIR.LocalId).empty;
+    var late_desc_locals = std.ArrayList(LateDescLocal).empty;
     defer late_desc_locals.deinit(allocator);
     for (0..proc_count) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
@@ -109,6 +118,7 @@ pub fn run(
                 if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .stmt = stmt_id,
+                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call_erased),
                 });
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                 outside.set(@intFromEnum(stmt.assign_literal.value.proc_ref));
@@ -123,6 +133,7 @@ pub fn run(
     var may_pend = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
     defer may_pend.deinit(allocator);
     for (deferred_calls.items) |deferred| {
+        if (deferred.returns == .no) continue;
         if (handsUp(store, &outside, deferred.caller) != .never) may_pend.set(deferred.caller);
     }
     var changed = true;
@@ -138,8 +149,14 @@ pub fn run(
     }
 
     for (deferred_calls.items) |deferred| {
-        const drive = driveAfter(store, &outside, deferred.caller, true);
-        store.getCFStmtPtr(deferred.stmt).assign_call_erased.drive = drive;
+        const drive = driveAfter(store, &outside, deferred.caller, deferred.returns != .no);
+        const updated = &store.getCFStmtPtr(deferred.stmt).assign_call_erased;
+        updated.drive = drive;
+        // The conversions that follow would read a value that is not there
+        // while the call is pending, so the procedure returns before them.
+        if (deferred.returns == .converted and drive.canLeavePending()) {
+            updated.returns_pending = .{ .result_desc = deferred.returns.converted };
+        }
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@enumFromInt(deferred.caller)).reads_caller_drives = true;
     }
     for (direct_calls.items) |call| {
@@ -192,7 +209,7 @@ fn returnOf(
     allocator: Allocator,
     store: *const LirStore,
     join_bodies: []const ?LIR.CFStmtId,
-    late_desc_locals: *std.ArrayList(LIR.LocalId),
+    late_desc_locals: *std.ArrayList(LateDescLocal),
     call: anytype,
 ) Allocator.Error!Returns {
     const value: LIR.LocalId = call.target;
@@ -206,9 +223,9 @@ fn returnOf(
     var counts_other = false;
     // Descriptor locals written by the call or after it. A procedure that
     // returns right after a call that left another pending has none of them,
-    // so the last conversion's descriptor must not be one.
+    // so the last conversion's descriptor is named without them.
     late_desc_locals.clearRetainingCapacity();
-    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, out_desc);
+    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, .{ .local = out_desc, .names = null });
     // Each jump enters a join body, and a body that jumps back to its own
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
@@ -218,12 +235,19 @@ fn returnOf(
             if (stmt.ret.value != returned) return .no;
             if (!converts) return .unchanged;
             if (counts_other) return .no;
-            if (converted_to) |desc| {
-                if (desc.localOrNull()) |local| {
-                    if (std.mem.findScalar(LIR.LocalId, late_desc_locals.items, local) != null) return .no;
-                }
+            // Each late local names an earlier descriptor or none, so this
+            // reaches a descriptor that exists before the call in at most
+            // one step per late local.
+            var stored_as = converted_to;
+            var index = late_desc_locals.items.len;
+            while (index > 0) {
+                index -= 1;
+                const late = late_desc_locals.items[index];
+                const named = stored_as orelse break;
+                if (named.localOrNull() != late.local) continue;
+                stored_as = late.names orelse return .no;
             }
-            return .{ .converted = converted_to };
+            return .{ .converted = stored_as };
         }
         if (stmt == .jump) {
             const join_index = @intFromEnum(stmt.jump.target);
@@ -243,7 +267,17 @@ fn returnOf(
             continue;
         }
         if (stmt == .assign_boxy_desc_ref) {
-            try late_desc_locals.append(allocator, stmt.assign_boxy_desc_ref.target);
+            const desc_ref = stmt.assign_boxy_desc_ref;
+            const names_whole_descriptor = desc_ref.nested_index == null and
+                desc_ref.box_payload_layout == null and
+                desc_ref.tag_payload == null and
+                !desc_ref.tag_ext and
+                desc_ref.tag_residual_for == null and
+                desc_ref.captures.len == 0;
+            try late_desc_locals.append(allocator, .{
+                .local = desc_ref.target,
+                .names = if (names_whole_descriptor) desc_ref.desc else null,
+            });
             current = stmt.assign_boxy_desc_ref.next;
             continue;
         }

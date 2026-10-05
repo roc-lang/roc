@@ -2791,9 +2791,10 @@ pub const Interpreter = struct {
                             // that is not there yet, so the procedure returns
                             // now to whoever makes the pending call.
                             if (assign.returns_pending) |pending_return| {
-                                if (try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc)) |desc| {
-                                    self.pending_erased.?.result_desc = desc;
-                                }
+                                self.pending_erased.?.conversion = .{
+                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                };
                                 return .returned_pending;
                             }
                             // The pending call produces this statement's
@@ -2804,7 +2805,7 @@ pub const Interpreter = struct {
                             current = assign.next;
                             continue;
                         }
-                        const driven = (try self.drivePendingErasedCalls(frame, self.store.getLocal(assign.target).layout_idx)).?;
+                        const driven = (try self.drivePendingErasedCalls(frame)).?;
                         result = .{ .value = driven.value, .layout = driven.layout, .desc = driven.desc };
                         stored_as = driven.stored_as;
                     }
@@ -2910,15 +2911,27 @@ pub const Interpreter = struct {
                             .arg_descs = arg_descs,
                             .arg_desc_keys = arg_desc_keys,
                             .arg_plan = assign.arg_plan,
+                            .site_layout = target_layout,
                             .result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc),
+                            .conversion = null,
                         };
                         if (!drivesHere(frame, assign.drive)) {
+                            // The conversions that follow would read a value
+                            // that is not there yet, so the procedure returns
+                            // now to whoever makes the pending call.
+                            if (assign.returns_pending) |pending_return| {
+                                self.pending_erased.?.conversion = .{
+                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                };
+                                return .returned_pending;
+                            }
                             frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
                             if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
                             current = assign.next;
                             continue;
                         }
-                        break :deferred (self.drivePendingErasedCalls(frame, target_layout) catch |err| {
+                        break :deferred (self.drivePendingErasedCalls(frame) catch |err| {
                             self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                             return err;
                         }).?;
@@ -4110,9 +4123,8 @@ pub const Interpreter = struct {
         value: Value,
         layout: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc = null,
-        /// When the value came from a pending call: the descriptor named by
-        /// the outermost statement that left a call pending, which the value
-        /// is stored as when the statement making the call names none.
+        /// When the value came unconverted from a pending call: the
+        /// descriptor that call's statement stored it as.
         stored_as: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
@@ -4123,7 +4135,21 @@ pub const Interpreter = struct {
         arg_descs: []const *const LirProgram.BoxyTypeDesc,
         arg_desc_keys: []const LIR.ErasedArgDescKey,
         arg_plan: LIR.ErasedCallArgsPlanId,
+        /// The layout and result descriptor the deferring statement calls
+        /// with.
+        site_layout: layout_mod.Idx,
         result_desc: ?*const LirProgram.BoxyTypeDesc,
+        /// The last conversion a procedure skipped by returning while this
+        /// call was pending. Each procedure that returns early replaces it.
+        conversion: ?PendingConversion,
+    };
+
+    /// A conversion of a pending call's result that a procedure left to
+    /// whoever makes the call: the layout that procedure returns and the
+    /// descriptor it would have stored the result as.
+    const PendingConversion = struct {
+        layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
     };
 
     /// Whether calls pending after a statement are made in this frame.
@@ -4135,16 +4161,52 @@ pub const Interpreter = struct {
         };
     }
 
-    /// Make every pending erased call in turn. Each delivers the result the
-    /// call that left it pending would have.
-    fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame, ret_layout: layout_mod.Idx) Error!?ErasedCallResult {
+    /// Make every pending erased call in turn. Each is made exactly as its
+    /// statement wrote it. The result that ends the chain is then converted
+    /// the way the procedures that returned early would have converted it,
+    /// as the native erased-call runtime does.
+    fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame) Error!?ErasedCallResult {
         var result: ?ErasedCallResult = null;
-        var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
+        // The conversion skipped on the way out to this caller. It belongs
+        // to the first pending call; later ones are left inside its extent.
+        var outermost: ?PendingConversion = null;
+        var first = true;
         while (self.pending_erased) |call| {
             self.pending_erased = null;
-            if (stored_as == null) stored_as = call.result_desc;
-            result = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, ret_layout, false);
-            result.?.stored_as = stored_as;
+            const raw = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, call.site_layout, false);
+            if (self.pending_erased == null) {
+                var current = try self.boxy_runtime.materializeCallResult(
+                    self.boxyFrameHooks(frame),
+                    raw.value,
+                    raw.layout,
+                    raw.desc,
+                    call.result_desc,
+                    call.site_layout,
+                );
+                var current_layout = call.site_layout;
+                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
+                    const conversion = skipped orelse continue;
+                    current = try self.boxy_runtime.materializeCallResult(
+                        self.boxyFrameHooks(frame),
+                        current.value,
+                        current_layout,
+                        current.desc,
+                        conversion.desc,
+                        conversion.layout,
+                    );
+                    current_layout = conversion.layout;
+                }
+                result = .{
+                    .value = current.value,
+                    .layout = current_layout,
+                    .desc = current.desc,
+                    .stored_as = if (call.conversion == null and outermost == null) call.result_desc else null,
+                };
+            }
+            if (first) {
+                outermost = call.conversion;
+                first = false;
+            }
             const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
                 "LIR/interpreter invariant violated: pending erased call had a null closure",
                 .{},
@@ -4767,7 +4829,7 @@ pub const Interpreter = struct {
         }
         const closure_value = try self.getLocalChecked(frame, closure_local);
         const first = try self.evalErasedCallOnce(frame, closure_value, closure_local, args, arg_layouts, arg_descs, arg_desc_keys, arg_plan, ret_layout, reuse_closure);
-        return try self.drivePendingErasedCalls(frame, ret_layout) orelse first;
+        return try self.drivePendingErasedCalls(frame) orelse first;
     }
 
     fn evalErasedCallOnce(
@@ -10114,9 +10176,9 @@ pub const Interpreter = struct {
         );
     }
 
-    /// Store a call's result as the statement's own descriptor describes,
-    /// or, when it names none and the value came from a pending call, as
-    /// the outermost statement that left a call pending named.
+    /// Store a call's result as the statement's own descriptor describes.
+    /// `stored_as` is the descriptor a pending call's statement already
+    /// stored the value as; applying the same one again changes nothing.
     fn materializeDrivenCallResult(
         self: *LirInterpreter,
         frame: *const Frame,
@@ -10127,13 +10189,16 @@ pub const Interpreter = struct {
         stored_as: ?*const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!boxy_runtime.BoxyAssignedValue {
-        const result_desc = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref) orelse stored_as;
+        const own = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
+        if (stored_as) |applied| {
+            if (own == applied and actual_layout == expected_layout) return .{ .value = value, .desc = actual_desc };
+        }
         return try self.boxy_runtime.materializeCallResult(
             self.boxyFrameHooks(frame),
             value,
             actual_layout,
             actual_desc,
-            result_desc,
+            own,
             expected_layout,
         );
     }

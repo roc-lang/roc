@@ -6032,12 +6032,13 @@ only by the descriptor its value arrives with. A callable adapter does the
 same with the result of the callable it wraps. No conversion statement then
 follows the call.
 
-An erased call also stores its result straight into a target of a different
-representation when the erased-call runtime's own conversion is the whole
-conversion: into a bare type variable, which takes the descriptor of whatever
-the runtime stored, or into a fully concrete target, whose static descriptor
-the call names as its result descriptor. Neither applies to a value that
-holds a callable, which crosses through an adapter instead.
+An erased call is always written in the layout of the callee's function type,
+never in a different one for the erased-call runtime to convert into. The
+runtime can convert only the results of callables it has registered, and it
+registers a callable when the value is built at run time, so a callable
+restored from a compile-time constant is called exactly as its type says. A
+result that needs another representation is converted by a statement after
+the call.
 
 The producer records a linked list of proven sites in the call nodes and a
 fresh loop join identity in the procedure. Body shards relocate these statement
@@ -16559,13 +16560,15 @@ other's behalf. A cycle that passes through an erased call in tail position
 therefore gets constant stack another way.
 
 LIR construction proves the tail position of an erased call exactly as it
-does for a direct call, and ARC marks such a call `deferred` when its value is
-the procedure's whole result at the same layout, any descriptor that comes
-back with it is the one the procedure returns, and the callee does not repack
-the closure. A deferred call is not made. Everything else the frame owns is
-released first, the call is recorded as pending together with its packed
-arguments, one owned reference to its closure and the result descriptor the
-statement names, and the procedure returns. Its target holds no value.
+does for a direct call, and ARC marks such a call `deferred` when the callee
+does not repack the closure and the call's value is the procedure's whole
+result: either unchanged, at the same layout and with any descriptor that
+comes back being the one the procedure returns, or after nothing but
+representation conversions. A deferred call is not made. Everything else the
+frame owns is released first, the call is recorded as pending together with
+its packed arguments, one owned reference to its closure, and the layout and
+result descriptor the statement calls with, and the procedure returns. Its
+target holds no value.
 
 Whoever awaits that procedure's result makes the pending call, releases the
 closure reference afterwards, and repeats while the call it made leaves
@@ -16593,24 +16596,28 @@ callee can return with a call pending, and on each deferred call:
   by its function pointer and the procedure asks with its own, so a value no
   callee read cannot answer for a different procedure entered later.
 
-A direct call cannot hand its conversion to the callee, so a generic callee's
-result may still be converted before it is returned. The pass marks such a
-call `returns_pending` when its value reaches the return through conversions
-alone and the only reference counts adjusted on the way are that value's own.
-If a call is still pending once the statement has run its drive, the
-procedure returns at once without a value, and nothing it owns is left
-behind. Skipping the conversions is sound because each one only changes how
-the same value is represented: whoever makes the pending call stores the
-final result in the representation its own statement reads. The mark carries
-the descriptor the last skipped conversion stores the value as, which must be
-one the procedure already holds when the call returns.
+A call's result may be converted to another representation before it is
+returned, by statements after the call. The pass marks a direct call or a
+deferred call `returns_pending` when its value reaches the return through
+conversions alone and the only reference counts adjusted on the way are that
+value's own. If a call is still pending once the statement has run its drive,
+the procedure returns at once without a value, and nothing it owns is left
+behind. It records, on the pending call, the layout it returns and the
+descriptor its last skipped conversion stores the value as, which must be one
+the procedure already holds at that point. Each procedure that returns early
+replaces the record of the one before, so the record names the conversion
+nearest whoever makes the call.
 
-One rule decides the descriptor a pending call's result is stored as: the
-outermost statement the result passes through that names one. The statement
-making the call uses its own when it has one. Otherwise it uses the pending
-record's, which starts as the deferred statement's and is replaced by each
-`returns_pending` procedure on the way out, and it keeps that choice for
-every further call the one it made leaves pending.
+Whoever makes a pending call makes it exactly as its statement wrote it, in
+that statement's layout and with its result descriptor, so the callee needs
+nothing a call from that statement would not. When the call returns a value
+rather than leaving another call pending, that value is converted the way the
+procedures that returned early would have converted it: by the conversion
+recorded on that call, then by the one recorded on the first call of the
+chain, which is the one skipped on the way out to this caller. Skipping the
+conversions in between is sound because each only changes how the same value
+is represented. The caller's own result descriptor applies last, as it would
+have to the value its callee returned.
 
 Backends follow these marks and nothing else: a deferred call becomes a call
 to the runtime's record function, a drive becomes a call to its drive
