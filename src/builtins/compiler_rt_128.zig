@@ -306,11 +306,6 @@ pub fn mul_i128(a: i128, b: i128) i128 {
     return mulX(i128, a, b);
 }
 
-/// Wrapping unsigned 128-bit multiplication (low 128 bits only).
-pub fn mul_u128_lo(a: u128, b: u128) u128 {
-    return @bitCast(mulX(i128, @bitCast(a), @bitCast(b)));
-}
-
 // Public API: 128-bit division
 
 /// Signed 128-bit truncating division.

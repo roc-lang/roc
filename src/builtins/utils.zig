@@ -372,12 +372,6 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
     increfRcPtr(ptr_to_refcount, amount, .atomic, roc_ops);
 }
 
-/// Increments reference count of an RC pointer by specified amount, for
-/// allocations proven confined to a single thread.
-pub fn increfRcPtrSingleThreadC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
-    increfRcPtr(ptr_to_refcount, amount, .single_thread, roc_ops);
-}
-
 /// Decrements the refcount pointed to directly by `bytes_or_null`,
 /// using the given count-update atomicity.
 pub fn decrefRcPtr(
@@ -1099,26 +1093,6 @@ test "increfC, static data" {
     var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
     const ptr_to_refcount: *isize = &mock_rc;
     @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
-}
-
-test "increfRcPtrSingleThreadC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 19);
-}
-
-test "increfRcPtrSingleThreadC, static data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 

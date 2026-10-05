@@ -810,11 +810,6 @@ pub fn strStaticSmallWordCaselessEq(self: RocStr, offset: u64, active_len: u64, 
 }
 
 // Str.numberOfBytes
-/// TODO: Document strNumberOfBytes.
-pub fn strNumberOfBytes(string: RocStr) callconv(.c) usize {
-    return string.len();
-}
-
 // Str.fromInt
 // Str.fromFloat
 /// Format a Roc float into caller-owned scratch bytes.

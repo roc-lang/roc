@@ -12,7 +12,6 @@ const decimal_parse = @import("decimal_parse.zig");
 const float_bits = @import("float_bits.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
-const Ordering = @import("utils.zig").Ordering;
 const RocOps = @import("utils.zig").RocOps;
 const TestEnv = @import("utils.zig").TestEnv;
 const RocStr = @import("str.zig").RocStr;
@@ -446,22 +445,6 @@ pub fn modI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
     return i128h.mod_i128(a, b);
 }
 
-/// Returns true if lhs is a multiple of rhs.
-pub fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
-    if (rhs == 0 or rhs == -1) {
-        // lhs is a multiple of rhs iff
-        //
-        // - rhs == -1
-        // - rhs == 0 and lhs == 0
-        //
-        // Note: lhs % 0 is a runtime panic, so we can't use @mod.
-        return (rhs == -1) or (lhs == 0);
-    } else {
-        const rem = if (T == i128) i128h.mod_i128(lhs, rhs) else @mod(lhs, rhs);
-        return rem == 0;
-    }
-}
-
 /// Adds two numbers, returning result and overflow flag.
 pub fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     if (@typeInfo(T) == .int) {
@@ -583,97 +566,6 @@ pub fn exportMulWithOverflow(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Shifts an i128 right with zero fill.
-pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.c) i128 {
-    if (other & 0b1000_0000 > 0) {
-        return 0;
-    } else {
-        // Zero-fill right shift on a signed value: cast to unsigned, shift, cast back.
-        return @bitCast(i128h.shr(@as(u128, @bitCast(self)), @as(u7, @intCast(other))));
-    }
-}
-
-/// Shifts a u128 right with zero fill.
-pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.c) u128 {
-    if (other & 0b1000_0000 > 0) {
-        return 0;
-    } else {
-        return i128h.shr(self, @as(u7, @intCast(other)));
-    }
-}
-
-/// Compares two i128 values, returning ordering.
-pub fn compareI128(self: i128, other: i128) callconv(.c) Ordering {
-    if (self == other) {
-        return Ordering.Same;
-    } else if (self < other) {
-        return Ordering.Before;
-    } else {
-        return Ordering.After;
-    }
-}
-
-/// Compares two u128 values, returning ordering.
-pub fn compareU128(self: u128, other: u128) callconv(.c) Ordering {
-    if (self == other) {
-        return Ordering.Same;
-    } else if (self < other) {
-        return Ordering.Before;
-    } else {
-        return Ordering.After;
-    }
-}
-
-/// Returns true if self < other for i128.
-pub fn lessThanI128(self: i128, other: i128) callconv(.c) bool {
-    return self < other;
-}
-
-/// Returns true if self <= other for i128.
-pub fn lessThanOrEqualI128(self: i128, other: i128) callconv(.c) bool {
-    return self <= other;
-}
-
-/// Returns true if self > other for i128.
-pub fn greaterThanI128(self: i128, other: i128) callconv(.c) bool {
-    return self > other;
-}
-
-/// Returns true if self >= other for i128.
-pub fn greaterThanOrEqualI128(self: i128, other: i128) callconv(.c) bool {
-    return self >= other;
-}
-
-/// Returns the bitwise parts of an f32.
-pub fn f32ToParts(self: f32) callconv(.c) F32Parts {
-    const u32Value = @as(u32, @bitCast(self));
-    return F32Parts{
-        .fraction = u32Value & 0x7fffff,
-        .exponent = @truncate(u32Value >> 23 & 0xff),
-        .sign = u32Value >> 31 & 1 == 1,
-    };
-}
-
-/// Returns the bitwise parts of an f64.
-pub fn f64ToParts(self: f64) callconv(.c) F64Parts {
-    const u64Value = @as(u64, @bitCast(self));
-    return F64Parts{
-        .fraction = u64Value & 0xfffffffffffff,
-        .exponent = @truncate(u64Value >> 52 & 0x7ff),
-        .sign = u64Value >> 63 & 1 == 1,
-    };
-}
-
-/// Constructs an f32 from its bitwise parts.
-pub fn f32FromParts(parts: F32Parts) callconv(.c) f32 {
-    return @as(f32, @bitCast(parts.fraction & 0x7fffff | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
-}
-
-/// Constructs an f64 from its bitwise parts.
-pub fn f64FromParts(parts: F64Parts) callconv(.c) f64 {
-    return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
 }
 
 /// Returns the bit pattern of an f32 as u32.
@@ -1151,53 +1043,6 @@ test "addWithOverflow with floating point" {
     try std.testing.expectEqual(true, result2.has_overflowed);
 }
 
-test "isMultipleOf functionality" {
-    // Test basic multiples
-    try std.testing.expect(isMultipleOf(i32, 10, 5));
-    try std.testing.expect(isMultipleOf(i32, 15, 3));
-    try std.testing.expect(!isMultipleOf(i32, 10, 3));
-
-    // Test edge cases
-    try std.testing.expect(isMultipleOf(i32, 0, 5)); // 0 is multiple of anything
-    try std.testing.expect(isMultipleOf(i32, 5, -1)); // anything is multiple of -1
-    try std.testing.expect(isMultipleOf(i32, 0, 0)); // 0 is multiple of 0
-    try std.testing.expect(!isMultipleOf(i32, 5, 0)); // 5 is not multiple of 0
-}
-
-test "compareI128 functionality" {
-    const a: i128 = 1000000000000000000;
-    const b: i128 = 2000000000000000000;
-    const c: i128 = 1000000000000000000;
-
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Before, compareI128(a, b));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.After, compareI128(b, a));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Same, compareI128(a, c));
-}
-
-test "compareU128 functionality" {
-    const a: u128 = 1000000000000000000;
-    const b: u128 = 2000000000000000000;
-    const c: u128 = 1000000000000000000;
-
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Before, compareU128(a, b));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.After, compareU128(b, a));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Same, compareU128(a, c));
-}
-
-test "128-bit comparison functions" {
-    const small: i128 = 100;
-    const large: i128 = 200;
-
-    try std.testing.expect(lessThanI128(small, large));
-    try std.testing.expect(!lessThanI128(large, small));
-    try std.testing.expect(lessThanOrEqualI128(small, large));
-    try std.testing.expect(lessThanOrEqualI128(small, small));
-    try std.testing.expect(greaterThanI128(large, small));
-    try std.testing.expect(!greaterThanI128(small, large));
-    try std.testing.expect(greaterThanOrEqualI128(large, small));
-    try std.testing.expect(greaterThanOrEqualI128(small, small));
-}
-
 test "mul_u128 basic functionality" {
     const a: u128 = 1000000;
     const b: u128 = 2000000;
@@ -1206,30 +1051,6 @@ test "mul_u128 basic functionality" {
     // 1000000 * 2000000 = 2000000000000, which fits in u128
     try std.testing.expectEqual(@as(u128, 0), result.hi);
     try std.testing.expectEqual(@as(u128, 2000000000000), result.lo);
-}
-
-test "f32ToParts and f32FromParts roundtrip" {
-    const values = [_]f32{ 0.0, 1.0, -1.0, 3.14159, -42.5, std.math.inf(f32), -std.math.inf(f32) };
-
-    for (values) |val| {
-        if (!std.math.isNan(val)) { // Skip NaN since NaN != NaN
-            const parts = f32ToParts(val);
-            const reconstructed = f32FromParts(parts);
-            try std.testing.expectEqual(val, reconstructed);
-        }
-    }
-}
-
-test "f64ToParts and f64FromParts roundtrip" {
-    const values = [_]f64{ 0.0, 1.0, -1.0, 3.141592653589793, -42.5, std.math.inf(f64), -std.math.inf(f64) };
-
-    for (values) |val| {
-        if (!std.math.isNan(val)) { // Skip NaN since NaN != NaN
-            const parts = f64ToParts(val);
-            const reconstructed = f64FromParts(parts);
-            try std.testing.expectEqual(val, reconstructed);
-        }
-    }
 }
 
 test "f32ToBits and f32FromBits roundtrip" {
@@ -1267,66 +1088,6 @@ test "float to bits normalizes every NaN representation" {
     for (f64_nan_bits) |bits| {
         try std.testing.expectEqual(float_bits.normalized_f64_nan_bits, f64ToBits(f64FromBits(bits)));
     }
-}
-
-test "f32ToParts specific values" {
-    // Test zero
-    const zero_parts = f32ToParts(0.0);
-    try std.testing.expectEqual(@as(u32, 0), zero_parts.fraction);
-    try std.testing.expectEqual(@as(u8, 0), zero_parts.exponent);
-    try std.testing.expectEqual(false, zero_parts.sign);
-
-    // Test negative zero
-    const neg_zero_parts = f32ToParts(-0.0);
-    try std.testing.expectEqual(@as(u32, 0), neg_zero_parts.fraction);
-    try std.testing.expectEqual(@as(u8, 0), neg_zero_parts.exponent);
-    try std.testing.expectEqual(true, neg_zero_parts.sign);
-
-    // Test 1.0
-    const one_parts = f32ToParts(1.0);
-    try std.testing.expectEqual(@as(u32, 0), one_parts.fraction);
-    try std.testing.expectEqual(@as(u8, 127), one_parts.exponent); // bias is 127
-    try std.testing.expectEqual(false, one_parts.sign);
-}
-
-test "shiftRightZeroFillI128 basic functionality" {
-    // Test normal shift
-    const value: i128 = 0x1000;
-    const result1 = shiftRightZeroFillI128(value, 4);
-    try std.testing.expectEqual(@as(i128, 0x100), result1);
-
-    // Test shift by 0
-    const result2 = shiftRightZeroFillI128(value, 0);
-    try std.testing.expectEqual(value, result2);
-
-    // Test large shift (should return 0)
-    const result3 = shiftRightZeroFillI128(value, 128);
-    try std.testing.expectEqual(@as(i128, 0), result3);
-
-    // Test negative value (zero-fill right shift clears the sign bit)
-    const neg_value: i128 = -1;
-    const result4 = shiftRightZeroFillI128(neg_value, 1);
-    try std.testing.expectEqual(@as(i128, std.math.maxInt(i128)), result4);
-}
-
-test "shiftRightZeroFillU128 basic functionality" {
-    // Test normal shift
-    const value: u128 = 0x1000;
-    const result1 = shiftRightZeroFillU128(value, 4);
-    try std.testing.expectEqual(@as(u128, 0x100), result1);
-
-    // Test shift by 0
-    const result2 = shiftRightZeroFillU128(value, 0);
-    try std.testing.expectEqual(value, result2);
-
-    // Test large shift (should return 0)
-    const result3 = shiftRightZeroFillU128(value, 128);
-    try std.testing.expectEqual(@as(u128, 0), result3);
-
-    // Test max value
-    const max_value: u128 = std.math.maxInt(u128);
-    const result4 = shiftRightZeroFillU128(max_value, 1);
-    try std.testing.expectEqual(@as(u128, 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF), result4);
 }
 
 test "mul_u128 large values" {
