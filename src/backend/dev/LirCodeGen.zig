@@ -15496,191 +15496,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             capture_layout: layout.Idx,
             desc_field_offset: u32,
         ) Allocator.Error!usize {
-            const cache_key = boxyCaptureDropKey(capture_layout, desc_field_offset);
-            if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
-                return code_offset;
-            }
-            if (try self.splicedRcHelperOffset(cache_key)) |code_offset| {
-                return code_offset;
-            }
-
-            const helper_region_start = self.codegen.currentOffset();
-            const skip_jump = try self.codegen.emitJump();
-
-            const saved_stack_offset = self.codegen.stack_offset;
-            const saved_callee_saved_used = self.codegen.callee_saved_used;
-            const saved_callee_saved_available = self.codegen.callee_saved_available;
-            const saved_free_general = self.codegen.free_general;
-            const saved_free_float = self.codegen.free_float;
-            const saved_ret_ptr_slot = self.ret_ptr_slot;
-            const saved_runtime_ret_desc_ptr_slot = self.runtime_ret_desc_ptr_slot;
-            const saved_runtime_ret_desc_local = self.runtime_ret_desc_local;
-            const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
-            // Reset register state for new function scope—each RC helper is a
-            // separate callable with its own prologue/epilogue, so it starts with
-            // a full set of registers regardless of what the parent is using.
-            self.codegen.callee_saved_used = 0;
-            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
-            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
-            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
-            self.ret_ptr_slot = null;
-            self.runtime_ret_desc_ptr_slot = null;
-            self.runtime_ret_desc_local = null;
-            self.uses_caller_stack_arg_base = false;
-
-            if (comptime target.toCpuArch() == .x86_64) {
-                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
-            } else {
-                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
-            }
-
-            const body_start = self.codegen.currentOffset();
-            const relocs_before = self.codegen.relocations.items.len;
-            try self.compiled_rc_helpers.put(cache_key, body_start);
-
-            errdefer {
-                _ = self.compiled_rc_helpers.remove(cache_key);
-                self.codegen.stack_offset = saved_stack_offset;
-                self.codegen.callee_saved_used = saved_callee_saved_used;
-                self.codegen.callee_saved_available = saved_callee_saved_available;
-                self.codegen.free_general = saved_free_general;
-                self.codegen.free_float = saved_free_float;
-                self.ret_ptr_slot = saved_ret_ptr_slot;
-                self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
-                self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
-                self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
-            }
-
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            const ptr_arg_reg = self.getArgumentRegister(0);
-            try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_arg_reg);
-
-            const ptr_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, ptr_slot);
-            try self.emitCmpImm(ptr_reg, 0);
-            self.codegen.freeGeneral(ptr_reg);
-            const early_return_patch = try self.emitJumpIfEqual();
-
-            try self.generateBoxyCaptureDropBody(capture_layout, desc_field_offset, ptr_slot);
-
-            const body_epilogue_offset = self.codegen.currentOffset();
-            {
-                const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
-                    @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
-                else
-                    @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                var builder = CodeGen.DeferredFrameBuilder.init();
-                builder.setCalleeSavedMask(self.codegen.callee_saved_used);
-                builder.setStackSize(actual_locals);
-                try builder.emitEpilogue(&self.codegen.emit);
-            }
-
-            try self.codegen.patchJump(early_return_patch, body_epilogue_offset);
-            const body_end = self.codegen.currentOffset();
-
-            var helper_prologue_size: u32 = 0;
-            var helper_stack_alloc: u32 = 0;
-            var helper_frame_size: u32 = 0;
-            var helper_callee_saved_mask: u32 = 0;
-            var helper_epilogue_offset: u32 = 0;
-
-            const final_offset = if (comptime target.toCpuArch() == .x86_64) blk: {
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start = self.codegen.currentOffset();
-                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-                helper_prologue_size = @intCast(prologue_size);
-                helper_stack_alloc = actual_locals_x86;
-                helper_frame_size = actual_locals_x86;
-                helper_callee_saved_mask = self.codegen.callee_saved_used;
-                helper_epilogue_offset = @intCast(body_epilogue_offset - body_start + prologue_size);
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
-
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
-                self.shiftPendingRcRefs(body_start, body_end, prologue_size);
-                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
-                self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
-                break :blk prologue_start;
-            } else blk: {
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start = self.codegen.currentOffset();
-                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                var frame_builder = CodeGen.DeferredFrameBuilder.init();
-                frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
-                frame_builder.setStackSize(actual_locals);
-                _ = try frame_builder.emitPrologue(&self.codegen.emit);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-                helper_prologue_size = @intCast(prologue_size);
-                helper_stack_alloc = actual_locals;
-                helper_frame_size = frame_builder.actual_stack_alloc;
-                helper_callee_saved_mask = self.codegen.callee_saved_used;
-                helper_epilogue_offset = @intCast(body_epilogue_offset - body_start + prologue_size);
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
-
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
-                self.shiftPendingRcRefs(body_start, body_end, prologue_size);
-                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
-                self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
-                break :blk prologue_start;
-            };
-
-            if (self.compiled_rc_helpers.getPtr(cache_key)) |entry| {
-                entry.* = final_offset;
-            }
-            try self.recordUnwindFunction(
-                final_offset,
-                self.codegen.currentOffset(),
-                helper_prologue_size,
-                helper_stack_alloc,
-                helper_frame_size,
-                helper_callee_saved_mask,
-                helper_epilogue_offset,
-                true,
+            return self.compileRcHelperCallable(
+                boxyCaptureDropKey(capture_layout, desc_field_offset),
+                .boxy_capture_drop,
+                .{ .capture_layout = capture_layout, .desc_field_offset = desc_field_offset },
             );
-
-            self.codegen.stack_offset = saved_stack_offset;
-            self.codegen.callee_saved_used = saved_callee_saved_used;
-            self.codegen.callee_saved_available = saved_callee_saved_available;
-            self.codegen.free_general = saved_free_general;
-            self.codegen.free_float = saved_free_float;
-            self.ret_ptr_slot = saved_ret_ptr_slot;
-            self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
-            self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
-            self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
-
-            try self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
-            try self.code_regions.append(self.allocator, .{
-                .start = helper_region_start,
-                .end = self.codegen.currentOffset(),
-                .entry = final_offset - helper_region_start,
-                .kind = .{ .rc_helper = cache_key },
-            });
-            return final_offset;
         }
 
         fn compileSingleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!usize {
-            const cache_key = helper.encode();
+            return self.compileRcHelperCallable(helper.encode(), .builtin, helper);
+        }
+
+        const RcHelperCallableKind = enum { builtin, boxy_capture_drop };
+
+        /// Compile one out-of-line reference-counting callable: a builtin RC
+        /// helper (`payload` is its `RcHelperVariant`) or a Boxy capture drop
+        /// (`payload` names the capture layout and descriptor field offset).
+        fn compileRcHelperCallable(
+            self: *Self,
+            cache_key: u64,
+            comptime kind: RcHelperCallableKind,
+            payload: anytype,
+        ) Allocator.Error!usize {
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
             }
@@ -15688,12 +15525,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return code_offset;
             }
 
-            const helper_plan = self.layout_store.rcHelperPlan(helper.key);
-            if (helper_plan == .noop) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
+            if (comptime kind == .builtin) {
+                const helper_plan = self.layout_store.rcHelperPlan(payload.key);
+                if (helper_plan == .noop) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(payload.key.layout_idx)});
+                    }
+                    unreachable;
                 }
-                unreachable;
             }
 
             const helper_region_start = self.codegen.currentOffset();
@@ -15747,17 +15586,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ptr_arg_reg = self.getArgumentRegister(0);
             try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_arg_reg);
 
-            var count_slot: ?i32 = null;
-            switch (helper.key.op) {
-                .incref => {
+            const count_slot: ?i32 = if (comptime kind == .builtin) switch (payload.key.op) {
+                .incref => blk: {
                     const count_arg_reg = self.getArgumentRegister(1);
-                    count_slot = self.codegen.allocStackSlot(8);
-                    try self.codegen.emitStoreStack(.w64, count_slot.?, count_arg_reg);
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStack(.w64, slot, count_arg_reg);
+                    break :blk slot;
                 },
                 // A `host_drop` adapter's second argument is the published
                 // on-drop ABI's ops slot, which the generated body ignores.
-                .decref, .free, .host_drop => {},
-            }
+                .decref, .free, .host_drop => null,
+            } else null;
 
             const ptr_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, ptr_reg, frame_ptr, ptr_slot);
@@ -15765,7 +15604,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(ptr_reg);
             const early_return_patch = try self.emitJumpIfEqual();
 
-            try self.generateBuiltinInternalRcHelperBody(helper, ptr_slot, count_slot);
+            switch (comptime kind) {
+                .builtin => try self.generateBuiltinInternalRcHelperBody(payload, ptr_slot, count_slot),
+                .boxy_capture_drop => try self.generateBoxyCaptureDropBody(payload.capture_layout, payload.desc_field_offset, ptr_slot),
+            }
 
             const body_epilogue_offset = self.codegen.currentOffset();
             {
@@ -15782,72 +15624,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.patchJump(early_return_patch, body_epilogue_offset);
             const body_end = self.codegen.currentOffset();
 
-            var helper_prologue_size: u32 = 0;
-            var helper_stack_alloc: u32 = 0;
-            var helper_frame_size: u32 = 0;
-            var helper_callee_saved_mask: u32 = 0;
-            var helper_epilogue_offset: u32 = 0;
+            const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+            defer self.allocator.free(body_bytes);
 
-            const final_offset = if (comptime target.toCpuArch() == .x86_64) blk: {
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
+            self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start = self.codegen.currentOffset();
-                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-                helper_prologue_size = @intCast(prologue_size);
-                helper_stack_alloc = actual_locals_x86;
-                helper_frame_size = actual_locals_x86;
-                helper_callee_saved_mask = self.codegen.callee_saved_used;
-                helper_epilogue_offset = @intCast(body_epilogue_offset - body_start + prologue_size);
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
-
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
-                self.shiftPendingRcRefs(body_start, body_end, prologue_size);
-                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
-                self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
-                break :blk prologue_start;
+            const final_offset = self.codegen.currentOffset();
+            const helper_stack_alloc: u32 = if (comptime target.toCpuArch() == .x86_64)
+                @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE)
+            else
+                @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+            const helper_frame_size: u32 = if (comptime target.toCpuArch() == .x86_64) blk: {
+                try self.codegen.emitPrologueWithAlloc(helper_stack_alloc);
+                break :blk helper_stack_alloc;
             } else blk: {
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start = self.codegen.currentOffset();
-                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
-                frame_builder.setStackSize(actual_locals);
+                frame_builder.setStackSize(helper_stack_alloc);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-                helper_prologue_size = @intCast(prologue_size);
-                helper_stack_alloc = actual_locals;
-                helper_frame_size = frame_builder.actual_stack_alloc;
-                helper_callee_saved_mask = self.codegen.callee_saved_used;
-                helper_epilogue_offset = @intCast(body_epilogue_offset - body_start + prologue_size);
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
-
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
-                self.shiftPendingRcRefs(body_start, body_end, prologue_size);
-                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
-                self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
-                break :blk prologue_start;
+                break :blk frame_builder.actual_stack_alloc;
             };
+            const prologue_size = self.codegen.currentOffset() - final_offset;
+            const helper_prologue_size: u32 = @intCast(prologue_size);
+            const helper_callee_saved_mask = self.codegen.callee_saved_used;
+            const helper_epilogue_offset: u32 = @intCast(body_epilogue_offset - body_start + prologue_size);
+
+            self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+            for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                reloc.adjustOffset(prologue_size);
+            }
+
+            self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
+            self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+            if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
+            self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
+            self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
 
             if (self.compiled_rc_helpers.getPtr(cache_key)) |entry| {
                 entry.* = final_offset;
@@ -21105,8 +20917,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const body_end = self.codegen.currentOffset();
 
-            // PHASE 2: Extract body and prepend prologue (x86_64 only - uses deferred pattern)
-            if (comptime target.toCpuArch() == .x86_64) {
+            // PHASE 2: Extract body and prepend prologue.
+            {
                 // Save body bytes
                 const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
@@ -21114,11 +20926,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Truncate buffer back to body_start
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                // Emit prologue using DeferredFrameBuilder (now knows callee_saved_used).
+                // Emit the prologue using DeferredFrameBuilder (now knows callee_saved_used).
                 // Pass only the actual locals size—the builder adds callee-saved space internally.
                 const prologue_start = self.codegen.currentOffset();
-                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                try self.codegen.emitPrologueWithAllocAndStackProbe(actual_locals_x86, stack_probe_required);
+                const actual_locals: u32 = if (comptime target.toCpuArch() == .x86_64)
+                    @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE)
+                else
+                    @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                const frame_size: u32 = if (comptime target.toCpuArch() == .x86_64) blk: {
+                    try self.codegen.emitPrologueWithAllocAndStackProbe(actual_locals, stack_probe_required);
+                    break :blk actual_locals;
+                } else blk: {
+                    var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                    frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    frame_builder.setStackSize(actual_locals);
+                    frame_builder.setStackProbeRequired(stack_probe_required);
+                    if (self.uses_caller_stack_arg_base) {
+                        frame_builder.setCallerStackArgBaseReg(caller_stack_arg_base_reg);
+                    }
+                    _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                    break :blk frame_builder.actual_stack_alloc;
+                };
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -21154,88 +20982,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.early_return_ret_layout = saved_early_return_ret_layout;
 
                 // Update procedure registry with correct code_start (prologue_start)
-                if (self.proc_registry.getPtr(key)) |entry| {
-                    entry.code_start = prologue_start;
-                    entry.code_end = self.codegen.currentOffset();
-                    entry.prologue_size = @intCast(prologue_size);
-                    entry.stack_alloc = actual_locals_x86;
-                    entry.frame_size = actual_locals_x86;
-                    entry.callee_saved_mask = self.codegen.callee_saved_used;
-                    entry.epilogue_offset = @intCast(final_epilogue - prologue_start);
-                    entry.uses_frame_pointer = true;
-                    try self.code_regions.append(self.allocator, .{
-                        .start = entry.code_start,
-                        .end = entry.code_end,
-                        .entry = 0,
-                        .kind = .{ .proc = proc_id },
-                    });
-                }
-                try self.recordUnwindFunction(
-                    prologue_start,
-                    self.codegen.currentOffset(),
-                    @intCast(prologue_size),
-                    actual_locals_x86,
-                    actual_locals_x86,
-                    self.codegen.callee_saved_used,
-                    @intCast(final_epilogue - prologue_start),
-                    true,
-                );
-            } else {
-                // aarch64: Prepend prologue to generated body
-                // Since body was generated without prologue, we need to prepend it.
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit aarch64 prologue using DeferredFrameBuilder with actual stack usage
-                const prologue_start = self.codegen.currentOffset();
-                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                var frame_builder = CodeGen.DeferredFrameBuilder.init();
-                frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
-                frame_builder.setStackSize(actual_locals);
-                frame_builder.setStackProbeRequired(stack_probe_required);
-                if (self.uses_caller_stack_arg_base) {
-                    frame_builder.setCallerStackArgBaseReg(caller_stack_arg_base_reg);
-                }
-                _ = try frame_builder.emitPrologue(&self.codegen.emit);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-                const frame_size = frame_builder.actual_stack_alloc;
-
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
-
-                // Adjust relocation offsets
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                // Nested lambdas compiled while generating this proc body move along with it.
-                // Keep the lambda caches in final coordinates so later call sites resolve correctly.
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
-                self.shiftPendingCalls(body_start, body_end, prologue_size);
-                self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
-                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
-                self.shiftPendingRcRefs(body_start, body_end, prologue_size);
-                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
-
-                // Re-patch internal calls/addr whose targets are outside the shifted body
-                self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
-
-                // Patch return-stmt jumps to the shared epilogue
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
-                    patch.* += prologue_size;
-                }
-                const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    try self.codegen.patchJump(patch, final_epilogue);
-                }
-                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-                self.early_return_ret_layout = saved_early_return_ret_layout;
-
-                // Update procedure registry
                 if (self.proc_registry.getPtr(key)) |entry| {
                     entry.code_start = prologue_start;
                     entry.code_end = self.codegen.currentOffset();
