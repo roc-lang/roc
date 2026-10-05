@@ -4,6 +4,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 const base = @import("base");
 const unbundle = @import("unbundle.zig");
 const localhost = @import("localhost.zig");
@@ -247,7 +248,7 @@ fn downloadToFile(
         }) catch return error.FileError;
 
         // Try to create file with exclusive flag (fails if file already exists)
-        var file = dir.createFile(io, filename, .{ .exclusive = true }) catch |err| switch (err) {
+        var file = dir.createFile(io, filename, .{ .exclusive = true, .permissions = private_file_permissions }) catch |err| switch (err) {
             error.AccessDenied,
             error.AntivirusInterference,
             error.BadPathName,

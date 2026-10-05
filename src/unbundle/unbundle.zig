@@ -6,6 +6,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const private_dir_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o700) else .default_dir;
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 const base58 = @import("base58");
 const zstd = std.compress.zstd;
 const format = @import("format.zig");
@@ -167,6 +169,7 @@ pub const DirExtractWriter = struct {
         while (iter.next()) |component| {
             const next = try current.createDirPathOpen(self.io, component, .{
                 .open_options = .{ .follow_symlinks = false },
+                .permissions = private_dir_permissions,
             });
             current.close(self.io);
             current = next;
@@ -201,6 +204,7 @@ pub const DirExtractWriter = struct {
                 .exclusive = true,
                 .truncate = false,
                 .resolve_beneath = true,
+                .permissions = private_file_permissions,
             }) catch return error.FileCreateFailed,
             else => return error.FileCreateFailed,
         };
