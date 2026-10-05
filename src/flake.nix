@@ -64,7 +64,7 @@
           libdwarf
           (pcConfigAlias "dwarf" libdwarf.dev "libdwarf")
         ];
-        zig = pkgs.zig_0_16;
+        zig = pkgs.callPackage ./zig-0.17.nix { };
         dependencies = [
           zig
           pkgs.zls
@@ -175,9 +175,7 @@
             echo "  zon2nix = nix run github:Cloudef/zig2nix -- zon2nix"
             echo ""
 
-            unset NIX_CFLAGS_COMPILE
-            unset NIX_LDFLAGS
-          ''; # unset to fix: Unrecognized C flag from NIX_CFLAGS_COMPILE: -fmacro-prefix-map
+          '';
         };
         formatter = pkgs.nixfmt-tree;
       }
