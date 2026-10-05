@@ -3723,6 +3723,30 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Err(OutOfRange)" },
     },
     .{
+        .name = "low_level - U128.to_i64_try at I64.highest returns Ok",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 9223372036854775807.U128
+        \\x = U128.to_i64_try(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(9223372036854775807)" },
+    },
+    .{
+        .name = "low_level - U128.to_i64_try one past I64.highest returns Err",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 9223372036854775808.U128
+        \\x = U128.to_i64_try(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
         .name = "low_level - U8.to_f32",
         .source =
         \\{

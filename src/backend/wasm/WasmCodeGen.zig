@@ -6106,7 +6106,7 @@ fn emitI128TryNarrow(
 
         try self.emitLocalGet(low);
         self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-        const max_signed: i64 = (@as(i64, 1) << @intCast(target_bytes * 8 - 1)) - 1;
+        const max_signed: i64 = @as(i64, std.math.maxInt(i64)) >> @intCast(64 - target_bytes * 8);
         WasmModule.leb128WriteI64(self.allocator, self.currentCode(), max_signed) catch return error.OutOfMemory;
         try self.emitOps(.{ Op.i64_le_u, Op.i32_and });
     } else {
@@ -17727,6 +17727,42 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     try std.testing.expectEqual(@as(usize, 1), codegen.precomputed_overflow_results.count());
+}
+
+test "U128 to I64 try conversion bounds the low word by I64's highest value" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // Try(I64, [OutOfRange]): Err carries nothing, Ok carries the I64.
+    const try_layout = try layouts.putTagUnion(&.{ .zst, .i64 });
+    const source = try store.addLocal(.{ .layout_idx = .u128 });
+    const result = try store.addLocal(.{ .layout_idx = try_layout });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const convert = try store.addLowLevelStmt(result, .u128_to_i64_try, &.{source}, ret, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{source}),
+        .body = convert,
+        .ret_layout = try_layout,
+    }, .none);
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+
+    // The value fits when the high word is zero and the low word, compared as
+    // unsigned, is at most I64's highest value.
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(allocator);
+    try expected.append(allocator, Op.i64_const);
+    try WasmModule.leb128WriteI64(allocator, &expected, std.math.maxInt(i64));
+    try expected.append(allocator, Op.i64_le_u);
+    try std.testing.expect(std.mem.find(u8, emittedBody(&codegen.module, 0), expected.items) != null);
 }
 
 /// Find the single relocation of `type_id`, failing if it is not unique.
