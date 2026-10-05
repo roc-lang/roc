@@ -27547,7 +27547,7 @@ const ProcBodyBuilder = struct {
         branches: []const checked.CheckedMatchBranch,
     ) ?checked.CheckedExprId {
         const match = self.listMapCanReuseMatch(cond, branches) orelse return null;
-        const interchangeable = self.listMapLayoutsInterchangeable(match.args);
+        const interchangeable = self.listMapLayoutsInterchangeable(match.args, null);
         if (interchangeable.get(.u32) or interchangeable.get(.u64)) return null;
         return match.zero_branch_body;
     }
@@ -31107,7 +31107,8 @@ const ProcBodyBuilder = struct {
         args: []const checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const interchangeable = self.listMapLayoutsInterchangeable(args);
+        var map_output_elem: ?layout.Idx = null;
+        const interchangeable = self.listMapLayoutsInterchangeable(args, &map_output_elem);
         if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
             return exprDone(try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -31128,6 +31129,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.list_map_can_reuse.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(lowered),
             .interchangeable = interchangeable,
+            .map_output_elem = map_output_elem,
             .next = next,
         } }, self.origin);
         return try self.loweredExprsChain(args, lowered, continuation);
@@ -31136,6 +31138,7 @@ const ProcBodyBuilder = struct {
     fn listMapLayoutsInterchangeable(
         self: *ProcBodyBuilder,
         args: []const checked.CheckedExprId,
+        output_layout: ?*?layout.Idx,
     ) layout.WidthValues(bool) {
         const none = layout.WidthValues(bool).both(false, false);
         if (!self.parent.options.list_in_place_map) return none;
@@ -31168,6 +31171,7 @@ const ProcBodyBuilder = struct {
         const out_elem_idx = self.parent.result.layouts.runtimeRepresentationLayoutIdx(
             self.workerRuntimeLayoutForRep(out_ret_rep).layoutIdx(),
         );
+        if (output_layout) |out| out.* = out_elem_idx;
 
         return layout.WidthValues(bool).both(
             self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
@@ -53119,6 +53123,7 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
 
     const reuse = out.lir_result.store.getCFStmt(transform_arg.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .list_map_can_reuse), reuse.op);
+    try std.testing.expectEqual(@as(?layout.Idx, .u64), reuse.map_output_elem);
     try std.testing.expectEqual(LIR.LowLevel.list_map_can_reuse.rcEffect(), reuse.rc_effect);
     try std.testing.expect(reuse.interchangeable.get(.u32));
     try std.testing.expect(reuse.interchangeable.get(.u64));

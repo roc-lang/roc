@@ -2528,6 +2528,7 @@ const Inserter = struct {
                     .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
+                    .map_output_elem = assign.map_output_elem,
                     .simd_concat_count = assign.simd_concat_count,
                     .next = next,
                 } }, origin);

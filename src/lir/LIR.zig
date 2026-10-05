@@ -1313,6 +1313,10 @@ pub const CFStmt = union(enum) {
         /// so the in-place branch is never taken there. Target-independent
         /// because both widths are stored; ignored by every other op.
         interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
+        /// Committed output element layout for `list_map_can_reuse`. Consumers
+        /// with different storage representations use this explicit fact rather
+        /// than reconstructing the transform function return type.
+        map_output_elem: ?layout.Idx = null,
         /// Exact in-range byte alignment count proved by range analysis.
         /// Only `simd_concat_shift_bytes` uses this; null retains the dynamic
         /// operation. Backends consume this fact without inspecting definitions.

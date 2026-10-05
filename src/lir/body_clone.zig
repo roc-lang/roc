@@ -1632,6 +1632,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .rc_effect = s.rc_effect,
                     .unique_args = s.unique_args,
                     .interchangeable = s.interchangeable,
+                    .map_output_elem = s.map_output_elem,
                     .simd_concat_count = s.simd_concat_count,
                     .args = try self.mapLocalSpan(s.args),
                     .next = s.next,
@@ -2746,4 +2747,23 @@ test "body_clone retained counting returns every lease on allocation failure" {
             try std.testing.expectEqual(@as(u32, 1), retry.get(distant));
         }
     }
+}
+
+test "body cloning preserves committed list map output layout" {
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    const target = try store.addLocal(.{ .layout_idx = .u8 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
+    const source = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = target,
+        .op = .list_map_can_reuse,
+        .rc_effect = LIR.LowLevel.list_map_can_reuse.rcEffect(),
+        .map_output_elem = .u64,
+        .args = try store.addLocalSpan(&.{}),
+        .next = ret,
+    } }, .test_fixture);
+    var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
+    defer cloner.deinit();
+    const cloned = store.getCFStmt(try cloner.cloneStmt(source)).assign_low_level;
+    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), cloned.map_output_elem);
 }

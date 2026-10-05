@@ -20588,3 +20588,8 @@ the pass/fail bar while the language is 128-bit-only.
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later
   without disturbing existing meaning.
+
+Downstream LIR consumers receive the committed output element layout on
+`assign_low_level.map_output_elem` for `list_map_can_reuse`. Lowering records it
+when computing layout compatibility; ARC emission and body cloning preserve it.
+Consumers do not reconstruct transform return types to recover this fact.
