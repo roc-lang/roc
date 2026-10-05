@@ -1832,6 +1832,8 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;
             if (CheckedArithmetic.isFamily(assign.op)) self.shapes.checked_arithmetic = true;
+            if (assign.op == .num_is_eq or assign.op == .num_is_lt or assign.op == .num_is_lte or
+                assign.op == .num_is_gt or assign.op == .num_is_gte) self.shapes.num_comparison = true;
         },
         .switch_stmt => self.shapes.switch_stmt = true,
         .assign_struct => self.shapes.struct_build = true,
