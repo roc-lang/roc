@@ -10080,6 +10080,9 @@ const Builder = struct {
         while (true) {
             switch (backing.view.checked_types.payload(segment)) {
                 .record => |record| {
+                    // The checked empty-row fixpoint is an empty record whose
+                    // extension is itself.
+                    if (record.fields.len == 0 and record.ext == segment) break;
                     try row_fields.appendSlice(self.allocator, record.fields);
                     segment = record.ext;
                 },
