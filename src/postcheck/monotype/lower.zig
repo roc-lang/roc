@@ -377,28 +377,11 @@ pub const Timing = struct {
     }
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
-        return .{
-            .setup_ns = self.setup_ns,
-            .procedure_specialization_ns = self.procedure_specialization_ns,
-            .procedure_root_wrapper_ns = self.procedure_root_wrapper_ns,
-            .procedure_lookup_reservation_ns = self.procedure_lookup_reservation_ns,
-            .procedure_dispatch_evidence_ns = self.procedure_dispatch_evidence_ns,
-            .procedure_body_graph_setup_ns = self.procedure_body_graph_setup_ns,
-            .procedure_body_lowering_ns = self.procedure_body_lowering_ns,
-            .procedure_body_type_graph_ns = self.procedure_body_type_graph_ns,
-            .procedure_body_call_dispatch_ns = self.procedure_body_call_dispatch_ns,
-            .procedure_body_draft_ir_ns = self.procedure_body_draft_ir_ns,
-            .procedure_body_reachability_ns = self.procedure_body_reachability_ns,
-            .procedure_body_source_mapping_ns = self.procedure_body_source_mapping_ns,
-            .procedure_body_local_proc_context_ns = self.procedure_body_local_proc_context_ns,
-            .procedure_body_finalization_ns = self.procedure_body_finalization_ns,
-            .procedure_completion_ns = self.procedure_completion_ns,
-            .procedure_parallel_wait_ns = self.procedure_parallel_wait_ns,
-            .layout_requests_ns = self.layout_requests_ns,
-            .static_data_requests_ns = self.static_data_requests_ns,
-            .finalization_ns = self.finalization_ns,
-            .parallel = self.parallel,
-        };
+        var result: TimingSnapshot = .{};
+        inline for (@typeInfo(TimingSnapshot).@"struct".fields) |field| {
+            @field(result, field.name) = @field(self, field.name);
+        }
+        return result;
     }
 
     fn start(self: *const Timing) i64 {
@@ -11051,6 +11034,28 @@ const Builder = struct {
         }
     }
 
+    /// A body context for the deferred boundary `boundary`: its module view,
+    /// method scope, owner template, evidence, and enclosing function key.
+    inline fn deferredBoundaryContext(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+        boundary: anytype,
+    ) Allocator.Error!BodyContext {
+        var ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            boundary.view,
+            boundary.method_scope,
+            boundary.owner_template,
+            graph,
+            body_draft,
+        );
+        ctx.evidence = boundary.evidence;
+        ctx.current_fn_key = boundary.current_fn_key;
+        return ctx;
+    }
+
     fn finalizeDraftConstUse(
         self: *Builder,
         body_draft: *BodyDraftStore,
@@ -11234,18 +11239,8 @@ const Builder = struct {
         self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
         self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-        var ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            boundary.view,
-            boundary.method_scope,
-            boundary.owner_template,
-            graph,
-            body_draft,
-        );
+        var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
-        ctx.evidence = boundary.evidence;
-        ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
@@ -11272,18 +11267,8 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        var ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            boundary.view,
-            boundary.method_scope,
-            boundary.owner_template,
-            graph,
-            body_draft,
-        );
+        var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
-        ctx.evidence = boundary.evidence;
-        ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
         if (try ctx.deferredInspectHasProvenUninhabitedValueGuard(boundary)) return false;
 
@@ -11301,18 +11286,8 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        var ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            boundary.view,
-            boundary.method_scope,
-            boundary.owner_template,
-            graph,
-            body_draft,
-        );
+        var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
-        ctx.evidence = boundary.evidence;
-        ctx.current_fn_key = boundary.current_fn_key;
         ctx.active_codec_contract = try ctx.instantiateCodecContract(
             boundary.structural,
             boundary.callable_node,
@@ -11346,18 +11321,8 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        var ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            boundary.view,
-            boundary.method_scope,
-            boundary.owner_template,
-            graph,
-            body_draft,
-        );
+        var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
-        ctx.evidence = boundary.evidence;
-        ctx.current_fn_key = boundary.current_fn_key;
         try ctx.inheritActiveConstBindingId(boundary.active_const_binding);
         try ctx.restoreCodecLexicalContext(boundary.lexical);
         try ctx.installRetainedCodecContract(boundary.codec_contract orelse
@@ -11395,18 +11360,8 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        var ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            boundary.view,
-            boundary.method_scope,
-            boundary.owner_template,
-            graph,
-            body_draft,
-        );
+        var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
-        ctx.evidence = boundary.evidence;
-        ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
         try ctx.installRetainedCodecContract(boundary.codec_contract orelse
             Common.invariant("deferred parse-tag-union intrinsic had no enclosing codec contract"));
@@ -11465,18 +11420,8 @@ const Builder = struct {
             self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
             self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-            var ctx = try BodyContext.initWithMethodScope(
-                self.allocator,
-                self,
-                boundary.view,
-                boundary.method_scope,
-                boundary.owner_template,
-                graph,
-                body_draft,
-            );
+            var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
-            ctx.evidence = boundary.evidence;
-            ctx.current_fn_key = boundary.current_fn_key;
             try ctx.restoreCodecLexicalContext(boundary.lexical);
             ctx.frozen_sealed_emission = true;
             ctx.frozen_type_finals = sealer;
@@ -11540,18 +11485,8 @@ const Builder = struct {
             self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
             self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-            var ctx = try BodyContext.initWithMethodScope(
-                self.allocator,
-                self,
-                boundary.view,
-                boundary.method_scope,
-                boundary.owner_template,
-                graph,
-                body_draft,
-            );
+            var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
-            ctx.evidence = boundary.evidence;
-            ctx.current_fn_key = boundary.current_fn_key;
             try ctx.inheritActiveConstBindingId(boundary.active_const_binding);
             try ctx.restoreCodecLexicalContext(boundary.lexical);
             try ctx.installRetainedCodecContract(boundary.codec_contract orelse
@@ -11622,18 +11557,8 @@ const Builder = struct {
             self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
             self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-            var ctx = try BodyContext.initWithMethodScope(
-                self.allocator,
-                self,
-                boundary.view,
-                boundary.method_scope,
-                boundary.owner_template,
-                graph,
-                body_draft,
-            );
+            var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
-            ctx.evidence = boundary.evidence;
-            ctx.current_fn_key = boundary.current_fn_key;
             try ctx.restoreCodecLexicalContext(boundary.lexical);
             ctx.frozen_sealed_emission = true;
             ctx.frozen_type_finals = sealer;
@@ -11708,18 +11633,8 @@ const Builder = struct {
             self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
             self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-            var ctx = try BodyContext.initWithMethodScope(
-                self.allocator,
-                self,
-                boundary.view,
-                boundary.method_scope,
-                boundary.owner_template,
-                graph,
-                body_draft,
-            );
+            var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
-            ctx.evidence = boundary.evidence;
-            ctx.current_fn_key = boundary.current_fn_key;
             try ctx.restoreCodecLexicalContext(boundary.lexical);
             ctx.frozen_inspect_method_calls = &prepared_methods;
 
@@ -11760,18 +11675,8 @@ const Builder = struct {
         self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
         self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-        var ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            boundary.view,
-            boundary.method_scope,
-            boundary.owner_template,
-            graph,
-            body_draft,
-        );
+        var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
-        ctx.evidence = boundary.evidence;
-        ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
         var method_calls = collections.DenseMap(Type.TypeId, DraftFnSlot).init(self.allocator);
@@ -16723,14 +16628,9 @@ const BodyDraftStore = struct {
         return &self.program_type_relocation.?;
     }
 
-    fn deinit(self: *BodyDraftStore) void {
-        self.interface_replay.deinit(self.allocator);
-        for (self.template_specs.items) |*spec| {
-            if (spec.lexical) |lexical| {
-                self.allocator.free(lexical.binders);
-                self.allocator.free(lexical.local_procs);
-            }
-        }
+    /// Free the lexical contexts, source captures, and codec contracts the
+    /// deferred boundaries own, and the local procedure context entries.
+    fn freeDeferredBoundaryPayloads(self: *BodyDraftStore) void {
         for (self.deferred_const_uses.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
@@ -16761,6 +16661,17 @@ const BodyDraftStore = struct {
             if (boundary.codec_contract) |contract| contract.deinit(self.allocator);
         }
         for (self.local_proc_contexts.items) |context| self.allocator.free(context.entries);
+    }
+
+    fn deinit(self: *BodyDraftStore) void {
+        self.interface_replay.deinit(self.allocator);
+        for (self.template_specs.items) |*spec| {
+            if (spec.lexical) |lexical| {
+                self.allocator.free(lexical.binders);
+                self.allocator.free(lexical.local_procs);
+            }
+        }
+        self.freeDeferredBoundaryPayloads();
         self.local_proc_contexts.deinit(self.allocator);
         self.template_spec_lookup.deinit();
         self.closed_direct_specializations.deinit();
@@ -17494,36 +17405,7 @@ const BodyDraftStore = struct {
     fn discardGraphStateAfterSeal(self: *BodyDraftStore) void {
         self.interface_replay.deinit(self.allocator);
         self.interface_replay = InterfaceReplayState.init(self.allocator);
-        for (self.deferred_const_uses.items) |boundary| {
-            self.allocator.free(boundary.lexical.binders);
-            self.allocator.free(boundary.lexical.local_procs);
-        }
-        for (self.deferred_structural_eqs.items) |boundary| {
-            self.allocator.free(boundary.lexical.binders);
-            self.allocator.free(boundary.lexical.local_procs);
-        }
-        for (self.deferred_structural_serializations.items) |boundary| {
-            self.allocator.free(boundary.lexical.binders);
-            self.allocator.free(boundary.lexical.local_procs);
-        }
-        for (self.deferred_callsite_intrinsics.items) |boundary| {
-            self.allocator.free(boundary.lexical.binders);
-            self.allocator.free(boundary.lexical.local_procs);
-            if (boundary.codec_contract) |contract| {
-                contract.deinit(self.allocator);
-            }
-        }
-        for (self.deferred_inspects.items) |boundary| {
-            self.allocator.free(boundary.lexical.binders);
-            self.allocator.free(boundary.lexical.local_procs);
-        }
-        for (self.deferred_stored_codec_restores.items) |boundary| {
-            self.allocator.free(boundary.lexical.binders);
-            self.allocator.free(boundary.lexical.local_procs);
-            self.allocator.free(boundary.source_captures);
-            if (boundary.codec_contract) |contract| contract.deinit(self.allocator);
-        }
-        for (self.local_proc_contexts.items) |context| self.allocator.free(context.entries);
+        self.freeDeferredBoundaryPayloads();
         self.deferred_const_uses.deinit(self.allocator);
         self.deferred_const_uses = .empty;
         self.deferred_structural_eqs.deinit(self.allocator);
@@ -20872,8 +20754,8 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const source_node = try source_cell.toGraphNode(self.graph);
-        const source_root_private = self.isGeneratedPrivateRootNode(source_node);
-        const expected_root_private = self.isGeneratedPrivateRootNode(expected_node);
+        const source_root_private = isGeneratedPrivateRootNode(self.graph, source_node);
+        const expected_root_private = isGeneratedPrivateRootNode(self.graph, expected_node);
         const preserves_distinct_interface = if (source_root_private or expected_root_private)
             source_root_private != expected_root_private
         else
@@ -25413,8 +25295,8 @@ const BodyContext = struct {
         };
 
         if (try self.producedRuntimeValueIsProvenUninhabited(produced_root)) return produced_node;
-        const checked_private_root = self.isGeneratedPrivateRootNode(checked_root);
-        const produced_private_root = self.isGeneratedPrivateRootNode(produced_root);
+        const checked_private_root = isGeneratedPrivateRootNode(self.graph, checked_root);
+        const produced_private_root = isGeneratedPrivateRootNode(self.graph, produced_root);
         if (checked_private_root or produced_private_root) {
             // The structural witness records the representation of the value
             // that was actually produced. Generated-private roots are explicit
@@ -32834,7 +32716,7 @@ const BodyContext = struct {
             // A function value rendered after its evaluation.
             else => return loweredExprStep(try self.finishCallExprAtNode(expected_node, input.?.exprValue())),
         }
-        const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
+        const producer_request = if (isGeneratedPrivateRootNode(self.graph, expected_node)) expected_node else null;
         if (try self.inspectOnlyCallStep(
             expr.ty,
             call,
@@ -34936,16 +34818,6 @@ const BodyContext = struct {
     fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) bool {
         return switch (self.graph.content(node)) {
             .named => |named| named.def.iterator_representation == .forced_dynamic,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
-        };
-    }
-
-    fn isGeneratedPrivateRootNode(self: *BodyContext, node: NodeId) bool {
-        return switch (self.graph.content(node)) {
-            .named => |named| if (named.backing) |backing|
-                backing.authority == .generated_private
-            else
-                false,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
     }
@@ -38506,44 +38378,17 @@ const BodyContext = struct {
             return try self.sequenceTry(end_try, state_try_ty, end_local, done_body, ret_ty);
         }
 
-        const item_ty = item_tys[item_index];
-        const parse_ok_ty = try self.parseResultOkType(item_ty, state_ty);
-        const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
-        const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
-        const rest_name = try self.nameStoreMut().internRecordFieldLabel("rest");
-        const parsed_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-
-        const rest_body = try self.lowerParseTupleElement(
+        const element_body = try self.lowerParseTupleElementAfterSeparator(
             item_tys,
             tuple_ty,
             encoding_expr,
             encoding_ty,
-            parsed_rest_local,
+            cursor_local,
             state_ty,
             ret_ty,
             item_locals,
-            item_index + 1,
+            item_index,
             precomputed_plan,
-        );
-
-        const parse_expr = try self.lowerParseShapeHelperCall(
-            item_ty,
-            encoding_expr,
-            encoding_ty,
-            try self.localExpr(cursor_local, state_ty),
-            state_ty,
-            parse_ret_ty,
-            precomputed_plan,
-        );
-        const element_body = try self.sequenceTryRecord(
-            parse_expr,
-            parse_ret_ty,
-            item_locals[item_index],
-            value_name,
-            parsed_rest_local,
-            rest_name,
-            rest_body,
-            ret_ty,
         );
 
         // Every element after the first is preceded by a separator the format
@@ -48097,29 +47942,46 @@ const BodyContext = struct {
         });
     }
 
+    /// Call the frozen format method `method` of the builtin container shape
+    /// `owner_ty` with one argument of type `arg_ty`, producing `ret_ty`.
+    fn lowerUnaryContainerMethodCall(
+        self: *BodyContext,
+        kind: CodecKind,
+        comptime method: []const u8,
+        comptime label: []const u8,
+        comptime arg_description: []const u8,
+        comptime ret_description: []const u8,
+        owner_ty: Type.TypeId,
+        arg_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        arg_expr: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const prepared = try self.frozenFormatCodecCallForShape(kind, method, owner_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
+        const method_fn = self.functionShape(callable_mono_ty, label ++ " target method was not a function");
+        const arg_tys = self.typeStore().span(method_fn.args);
+        if (arg_tys.len != 1) Common.invariant(label ++ " target method had an unexpected arity");
+        if (!self.sameType(GuardedList.at(arg_tys, 0), arg_ty)) Common.invariant(label ++ " argument type differed from " ++ arg_description);
+        if (!self.sameType(method_fn.ret, ret_ty)) Common.invariant(label ++ " return type differed from " ++ ret_description);
+
+        return try self.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .call_proc = .{
+                .callee = draftProcCalleeForSlot(prepared.callee),
+                .args = try self.addExprSpan(&[_]DraftExprId{arg_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
+            } },
+        });
+    }
+
     fn lowerSetFromList(
         self: *BodyContext,
         set_ty: Type.TypeId,
         list_ty: Type.TypeId,
         list_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const prepared = try self.frozenFormatCodecCallForShape(.parser, "from_list", set_ty);
-        const lookup = prepared.lookup;
-        const callable_mono_ty = prepared.callable_ty;
-        const from_list_fn = self.functionShape(callable_mono_ty, "Set.from_list target method was not a function");
-        const arg_tys = self.typeStore().span(from_list_fn.args);
-        if (arg_tys.len != 1) Common.invariant("Set.from_list target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), list_ty)) Common.invariant("Set.from_list argument type differed from generated List type");
-        if (!self.sameType(from_list_fn.ret, set_ty)) Common.invariant("Set.from_list return type differed from Set type");
-
-        return try self.addExpr(.{
-            .ty = set_ty,
-            .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
-                .args = try self.addExprSpan(&[_]DraftExprId{list_expr}),
-                .captures = try self.methodTargetCaptureSpan(lookup),
-            } },
-        });
+        return try self.lowerUnaryContainerMethodCall(.parser, "from_list", "Set.from_list", "generated List type", "Set type", set_ty, list_ty, set_ty, list_expr);
     }
 
     fn lowerSetToList(
@@ -48128,23 +47990,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         set_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const prepared = try self.frozenFormatCodecCallForShape(.encoder, "to_list", set_ty);
-        const lookup = prepared.lookup;
-        const callable_mono_ty = prepared.callable_ty;
-        const to_list_fn = self.functionShape(callable_mono_ty, "Set.to_list target method was not a function");
-        const arg_tys = self.typeStore().span(to_list_fn.args);
-        if (arg_tys.len != 1) Common.invariant("Set.to_list target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), set_ty)) Common.invariant("Set.to_list argument type differed from Set type");
-        if (!self.sameType(to_list_fn.ret, list_ty)) Common.invariant("Set.to_list return type differed from generated List type");
-
-        return try self.addExpr(.{
-            .ty = list_ty,
-            .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
-                .args = try self.addExprSpan(&[_]DraftExprId{set_expr}),
-                .captures = try self.methodTargetCaptureSpan(lookup),
-            } },
-        });
+        return try self.lowerUnaryContainerMethodCall(.encoder, "to_list", "Set.to_list", "Set type", "generated List type", set_ty, set_ty, list_ty, set_expr);
     }
 
     fn lowerDictWithCapacity(
@@ -48153,23 +47999,7 @@ const BodyContext = struct {
         capacity_expr: DraftExprId,
         capacity_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const prepared = try self.frozenFormatCodecCallForShape(.parser, "with_capacity", dict_ty);
-        const lookup = prepared.lookup;
-        const callable_mono_ty = prepared.callable_ty;
-        const with_capacity_fn = self.functionShape(callable_mono_ty, "Dict.with_capacity target method was not a function");
-        const arg_tys = self.typeStore().span(with_capacity_fn.args);
-        if (arg_tys.len != 1) Common.invariant("Dict.with_capacity target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), capacity_ty)) Common.invariant("Dict.with_capacity argument type differed from generated capacity type");
-        if (!self.sameType(with_capacity_fn.ret, dict_ty)) Common.invariant("Dict.with_capacity return type differed from Dict type");
-
-        return try self.addExpr(.{
-            .ty = dict_ty,
-            .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
-                .args = try self.addExprSpan(&[_]DraftExprId{capacity_expr}),
-                .captures = try self.methodTargetCaptureSpan(lookup),
-            } },
-        });
+        return try self.lowerUnaryContainerMethodCall(.parser, "with_capacity", "Dict.with_capacity", "generated capacity type", "Dict type", dict_ty, capacity_ty, dict_ty, capacity_expr);
     }
 
     fn lowerDictInsert(
@@ -48208,23 +48038,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         dict_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const prepared = try self.frozenFormatCodecCallForShape(.encoder, "to_list", dict_ty);
-        const lookup = prepared.lookup;
-        const callable_mono_ty = prepared.callable_ty;
-        const to_list_fn = self.functionShape(callable_mono_ty, "Dict.to_list target method was not a function");
-        const arg_tys = self.typeStore().span(to_list_fn.args);
-        if (arg_tys.len != 1) Common.invariant("Dict.to_list target method had an unexpected arity");
-        if (!self.sameType(GuardedList.at(arg_tys, 0), dict_ty)) Common.invariant("Dict.to_list argument type differed from Dict type");
-        if (!self.sameType(to_list_fn.ret, list_ty)) Common.invariant("Dict.to_list return type differed from generated List type");
-
-        return try self.addExpr(.{
-            .ty = list_ty,
-            .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
-                .args = try self.addExprSpan(&[_]DraftExprId{dict_expr}),
-                .captures = try self.methodTargetCaptureSpan(lookup),
-            } },
-        });
+        return try self.lowerUnaryContainerMethodCall(.encoder, "to_list", "Dict.to_list", "Dict type", "generated List type", dict_ty, dict_ty, list_ty, dict_expr);
     }
 
     /// The format method (`prefix` plus the scalar's name) that reads or
@@ -51853,7 +51667,7 @@ const BodyContext = struct {
                 .expr = plan.expr,
             } },
             .source_fn_ty = plan.callable_ty,
-            .source_fn_key = generatedParserRuntimeKey(self.current_fn_key, plan.expr),
+            .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
         });
@@ -51922,7 +51736,7 @@ const BodyContext = struct {
             str_ty,
         );
 
-        const runtime_source_fn_key = generatedEncoderForRuntimeKey(self.current_fn_key, plan.expr);
+        const runtime_source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_encoder_for_runtime", self.current_fn_key, plan.expr);
         const saved_current_fn_key = self.current_fn_key;
         const saved_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
         const saved_encoder_source_expr = self.generated_encoder_source_expr;
@@ -54279,10 +54093,9 @@ const BodyContext = struct {
         return .{ .ok = ok.payloads[0], .err = err.payloads[0] };
     }
 
-    fn graphParserResultNodes(
-        self: *BodyContext,
-        try_node: NodeId,
-    ) Allocator.Error!struct { value: NodeId, rest: NodeId, err: NodeId } {
+    const ParserResultNodes = struct { value: NodeId, rest: NodeId, err: NodeId };
+
+    fn graphParserResultNodes(self: *BodyContext, try_node: NodeId) Allocator.Error!ParserResultNodes {
         const payloads = try self.graphTryPayloads(try_node);
         const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
         const rest_name = try self.nameStoreMut().internRecordFieldLabel("rest");
@@ -55624,6 +55437,17 @@ const BodyContext = struct {
         );
     }
 
+    /// The encoding argument, state argument, and result nodes of a structural
+    /// parser constructor: a function of the encoding returning the runtime
+    /// function of the state.
+    fn parserBoundaryNodes(self: *BodyContext, boundary_callable_node: NodeId) Allocator.Error!struct { NodeId, NodeId, ParserResultNodes } {
+        const boundary = try self.graph.functionNodes(boundary_callable_node);
+        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
+        const runtime = try self.graph.functionNodes(boundary.ret);
+        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
+        return .{ boundary.args[0], runtime.args[0], try self.graphParserResultNodes(runtime.ret) };
+    }
+
     fn prepareParseRecordFieldCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -55634,13 +55458,7 @@ const BodyContext = struct {
         contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget("parse_record_field", contract_subject_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
@@ -55727,13 +55545,7 @@ const BodyContext = struct {
         shape_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget("skip_record_field", null);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -55759,13 +55571,7 @@ const BodyContext = struct {
         contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
 
         const exact = try self.requiredGeneratedCodecTarget("parse_tag_union", contract_subject_node);
         const lookup = exact.lookup;
@@ -55869,13 +55675,7 @@ const BodyContext = struct {
         boundary_callable_node: NodeId,
         method_name: []const u8,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget(method_name, shape_node);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -55902,13 +55702,7 @@ const BodyContext = struct {
         method_name: []const u8,
         result_is_state: bool,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -55931,13 +55725,7 @@ const BodyContext = struct {
         shape_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget("invalid_value", null);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -56173,13 +55961,7 @@ const BodyContext = struct {
         method_name: []const u8,
         arity_arg_count: usize,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -56207,13 +55989,7 @@ const BodyContext = struct {
         boundary_callable_node: NodeId,
         method_name: []const u8,
     ) Allocator.Error!bool {
-        const boundary = try self.graph.functionNodes(boundary_callable_node);
-        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(boundary.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const encoding_node = boundary.args[0];
-        const state_node = runtime.args[0];
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const encoding_node, const state_node, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
         const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -64798,24 +64574,13 @@ fn generatedInterpolationStepKey(
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn generatedParserRuntimeKey(
+fn generatedCodecRuntimeKey(
+    comptime domain: []const u8,
     current_fn_key: names.TypeDigest,
     source_expr_id: checked.CheckedExprId,
 ) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.generated_structural_parser_runtime");
-    hasher.update(&current_fn_key.bytes);
-    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
-    hasher.update(std.mem.asBytes(&source_expr_bytes));
-    return .{ .bytes = hasher.finalResult() };
-}
-
-fn generatedEncoderForRuntimeKey(
-    current_fn_key: names.TypeDigest,
-    source_expr_id: checked.CheckedExprId,
-) names.TypeDigest {
-    var hasher = TypeDigestHasher.init();
-    hasher.update("roc.generated_structural_encoder_for_runtime");
+    hasher.update(domain);
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));

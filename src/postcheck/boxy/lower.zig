@@ -10396,11 +10396,7 @@ const ProcedureBuilder = struct {
                     value.* = proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep) orelse materialized: {
                         const materialization = try proc.descriptorMaterializationForSourceRep(capture.rep);
                         const local = try proc.addFrameLocal(.opaque_ptr);
-                        try descriptor_initializers.append(self.allocator, .{
-                            .local = local,
-                            .materialize = materialization.desc,
-                            .captures = materialization.captures,
-                        });
+                        try descriptor_initializers.append(self.allocator, materialization.initializer(local));
                         break :materialized local;
                     };
                 },
@@ -15630,6 +15626,11 @@ const ProcBodyBuilder = struct {
     const DescriptorMaterialization = struct {
         desc: LIR.BoxyDescRef,
         captures: LIR.LocalSpan = .{ .start = 0, .len = 0 },
+
+        /// The initializer that materializes this descriptor into `local`.
+        fn initializer(self: DescriptorMaterialization, local: LIR.LocalId) DescriptorArgLocal {
+            return .{ .local = local, .materialize = self.desc, .captures = self.captures };
+        }
     };
 
     const StoredCaptureInitializer = struct {
@@ -16303,11 +16304,7 @@ const ProcBodyBuilder = struct {
                 const root_param = params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
-                try self.worker_argument_desc_initializers.append(self.parent.allocator, .{
-                    .local = rebuilt,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                });
+                try self.worker_argument_desc_initializers.append(self.parent.allocator, materialization.initializer(rebuilt));
                 try appendUniqueLocal(self.parent.allocator, &self.runtime_initialized_descriptor_locals, rebuilt);
                 try self.recordDescriptorLocalTemplate(rebuilt, materialization);
                 try self.bindDescriptorRequirementLocalForRep(root_param.desc, root_param.rep, rebuilt, true);
@@ -16775,11 +16772,7 @@ const ProcBodyBuilder = struct {
                 const root_param = all_params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
-                try self.worker_argument_desc_initializers.append(self.parent.allocator, .{
-                    .local = rebuilt,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                });
+                try self.worker_argument_desc_initializers.append(self.parent.allocator, materialization.initializer(rebuilt));
                 try appendUniqueLocal(self.parent.allocator, &self.runtime_initialized_descriptor_locals, rebuilt);
                 try self.recordDescriptorLocalTemplate(rebuilt, materialization);
                 try self.bindDescriptorRequirementLocalForRep(root_param.desc, root_param.rep, rebuilt, true);
@@ -23788,11 +23781,7 @@ const ProcBodyBuilder = struct {
         for (captures, field_locals, capture_desc_sources, hidden_desc_initializers) |capture, field_local, desc_source, *hidden_desc_initializer| {
             if (capture.kind != .hidden_desc) continue;
             const materialization = try self.descriptorMaterializationForSourceRep(desc_source.rep);
-            hidden_desc_initializer.* = .{
-                .local = field_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            };
+            hidden_desc_initializer.* = materialization.initializer(field_local);
         }
 
         // Each hidden descriptor field copies a descriptor from the enclosing
@@ -23842,11 +23831,7 @@ const ProcBodyBuilder = struct {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
             self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
-            capture_desc_initializer = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            };
+            capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
         const capture_fields = if (capture_desc_initializer) |initializer| blk: {
@@ -24182,11 +24167,7 @@ const ProcBodyBuilder = struct {
                 .reuse_existing => self.parent.result.store.setLocalBoxyDesc(field_local, .{ .local = desc_local }),
                 .snapshot_existing => descriptor_overrides.?[index] = .{ .local = desc_local },
             }
-            try initializers.append(self.parent.allocator, .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
+            try initializers.append(self.parent.allocator, materialization.initializer(desc_local));
         }
     }
 
@@ -24440,11 +24421,7 @@ const ProcBodyBuilder = struct {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
             self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
-            capture_desc_initializer = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            };
+            capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
 
@@ -24845,11 +24822,7 @@ const ProcBodyBuilder = struct {
             if (materialization.desc.localOrNull()) |local| return local;
         }
         const local = try self.addFrameLocal(.opaque_ptr);
-        try initializers.append(self.parent.allocator, .{
-            .local = local,
-            .materialize = materialization.desc,
-            .captures = materialization.captures,
-        });
+        try initializers.append(self.parent.allocator, materialization.initializer(local));
         return local;
     }
 
@@ -25202,11 +25175,7 @@ const ProcBodyBuilder = struct {
             if (arg.source_arg_index == null or !self.repIsBareDynamic(arg.rep)) continue;
             const materialization = try self.descriptorMaterializationForKnownRep(part_rep);
             const local = try self.addFrameLocal(.opaque_ptr);
-            try initializers.append(self.parent.allocator, .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
+            try initializers.append(self.parent.allocator, materialization.initializer(local));
             try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
         }
     }
@@ -25852,21 +25821,7 @@ const ProcBodyBuilder = struct {
                 .template = template,
             };
         }
-        const materialization = try self.descriptorMaterializationForSourceRep(source_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        const desc = LIR.BoxyDescRef{ .local = local };
-        return .{
-            .desc = desc,
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(source_rep));
     }
 
     fn adapterDescriptorForKnownRep(
@@ -25886,11 +25841,7 @@ const ProcBodyBuilder = struct {
         const local = try self.addFrameLocal(.opaque_ptr);
         return .{
             .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
+            .materialize = materialization.initializer(local),
         };
     }
 
@@ -27934,43 +27885,8 @@ const ProcBodyBuilder = struct {
         var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer seen.deinit();
 
-        return try self.dynamicTagPayloadsForNameInner(rep_id, name, &seen) orelse
+        return try self.dynamicTagPayloadsForTextInner(rep_id, self.module.canonical_names.tagLabelText(name), &seen) orelse
             boxyLowerInvariant("dynamic tag expression referenced a variant outside its checked row representation");
-    }
-
-    /// The payloads of the first variant along the tag row `root` whose
-    /// name matches, searching the row and its extensions in order.
-    fn dynamicTagPayloadsForNameInner(
-        self: *ProcBodyBuilder,
-        root: Plan.TypeRepId,
-        name: names.TagNameId,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!?[]const Plan.RepChild {
-        const allocator = self.parent.allocator;
-        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
-        defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |rep_id| {
-            const tag_rep_id = self.tagDomainRep(rep_id) orelse continue;
-            const entry = try seen.getOrPut(tag_rep_id);
-            if (entry.found_existing) continue;
-
-            const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-            for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-                if (self.tagVariantNameMatches(variant, self.module, name)) {
-                    return self.parent.plan.childSlice(variant.payloads);
-                }
-            }
-
-            const children = self.parent.plan.childSlice(rep.children);
-            var index = children.len;
-            while (index > 0) {
-                index -= 1;
-                if (children[index].role != .tag_ext) continue;
-                try pending.append(allocator, children[index].rep);
-            }
-        }
-        return null;
     }
 
     fn dynamicTagPayloadsForVariantName(
@@ -31921,20 +31837,7 @@ const ProcBodyBuilder = struct {
         defer self.restoreDescriptorBindings(snapshot);
 
         try self.bindDirectCallHiddenDescriptorLocals(hidden_args, hidden_locals, true);
-        const materialization = try self.descriptorMaterializationForSourceRep(identity_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(identity_rep));
     }
 
     fn dictionaryCallResultDescriptorRef(
@@ -31980,20 +31883,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         result_rep: Plan.TypeRepId,
     ) Allocator.Error!ResultDescriptorSource {
-        const materialization = try self.descriptorMaterializationForExactResultRep(result_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForExactResultRep(result_rep));
     }
 
     fn descriptorMaterializationForExactResultRep(
@@ -32144,11 +32034,7 @@ const ProcBodyBuilder = struct {
                     try self.recordDescriptorLocalTemplate(existing_local, materialization);
                     return .{
                         .desc = existing,
-                        .materialize = .{
-                            .local = existing_local,
-                            .materialize = materialization.desc,
-                            .captures = materialization.captures,
-                        },
+                        .materialize = materialization.initializer(existing_local),
                     };
                 }
             }
@@ -32161,11 +32047,7 @@ const ProcBodyBuilder = struct {
         try self.recordDescriptorLocalTemplate(desc_local, materialization);
         return .{
             .desc = desc_ref,
-            .materialize = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
+            .materialize = materialization.initializer(desc_local),
         };
     }
 
@@ -32245,20 +32127,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!ResultDescriptorSource {
         const desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(rep_id) orelse return .{};
-        const materialization = try self.descriptorMaterializationForSourceRep(desc_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(desc_rep));
     }
 
     fn descriptorRefForPayloadStorageTarget(
@@ -32877,17 +32746,7 @@ const ProcBodyBuilder = struct {
     /// The static-field view of an open record: the record its row names,
     /// which a field read or update projects the complete record onto.
     fn openRecordViewDescriptorSource(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!ResultDescriptorSource {
-        const materialization = try self.descriptorTemplateMaterializationForRep(rep_id, &.{});
-        if (materialization.captures.len == 0) return .{ .desc = materialization.desc };
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorTemplateMaterializationForRep(rep_id, &.{}));
     }
 
     fn descriptorTemplateMaterializationForRep(
@@ -37192,11 +37051,7 @@ const ProcBodyBuilder = struct {
         if (self.localIsReadOnlyDescriptorInput(target_desc_local)) return continuation;
 
         const materialization = try self.descriptorMaterializationForSourceStorageLocalRep(source, source_rep);
-        continuation = try self.prependDescriptorArgMaterialization(.{
-            .local = target_desc_local,
-            .materialize = materialization.desc,
-            .captures = materialization.captures,
-        }, materialization.desc, continuation);
+        continuation = try self.prependDescriptorArgMaterialization(materialization.initializer(target_desc_local), materialization.desc, continuation);
         return continuation;
     }
 
@@ -37398,11 +37253,7 @@ const ProcBodyBuilder = struct {
                 ) }
             else
                 try self.descriptorMaterializationForSourceRep(capture.materialize_rep);
-            try descriptor_materializations.append(self.parent.allocator, .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
+            try descriptor_materializations.append(self.parent.allocator, materialization.initializer(local));
         }
         for (descriptor_captures, capture_fields[1..], capture_needs_materialization) |capture, local, needs_materialization| {
             if (!needs_materialization) continue;
@@ -38195,11 +38046,7 @@ const ProcBodyBuilder = struct {
                 switch (nested.parent_desc) {
                     .static => {
                         const materialization = try self.descriptorMaterializationForKnownRep(nested.nested_rep);
-                        try initializers.append(allocator, .{
-                            .local = nested_local,
-                            .materialize = materialization.desc,
-                            .captures = materialization.captures,
-                        });
+                        try initializers.append(allocator, materialization.initializer(nested_local));
                     },
                     .local, .runtime, .dict_method_arg, .dict_method_hidden => try initializers.append(allocator, .{
                         .local = nested_local,
@@ -38900,21 +38747,8 @@ const ProcBodyBuilder = struct {
                     if (try self.beginConcreteTagUnionToDynamicBoundary(frames, identity_request)) |step| return step;
                     const source_info = if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                         ResultDescriptorSource{ .desc = desc }
-                    else blk_source: {
-                        const materialization = try self.descriptorMaterializationForSourceRep(identity_source_rep);
-                        if (materialization.captures.len == 0) {
-                            break :blk_source ResultDescriptorSource{ .desc = materialization.desc };
-                        }
-                        const local = try self.addFrameLocal(.opaque_ptr);
-                        break :blk_source ResultDescriptorSource{
-                            .desc = .{ .local = local },
-                            .materialize = .{
-                                .local = local,
-                                .materialize = materialization.desc,
-                                .captures = materialization.captures,
-                            },
-                        };
-                    };
+                    else
+                        try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(identity_source_rep));
                     const source_desc = source_info.desc orelse
                         boxyLowerInvariant("boxy concrete-to-dynamic source descriptor was not available");
                     const rep_payload_desc = if (self.descriptorBindingIsBoundForRep(identity_target_rep))
@@ -40239,11 +40073,7 @@ const ProcBodyBuilder = struct {
         const desc_local = try self.addFrameLocal(.opaque_ptr);
         return .{
             .desc = .{ .local = desc_local },
-            .materialize = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
+            .materialize = materialization.initializer(desc_local),
         };
     }
 
@@ -40811,11 +40641,7 @@ const ProcBodyBuilder = struct {
         const target_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return continuation;
         const target_desc_local = target_desc.localOrNull() orelse return continuation;
         const materialization = try self.descriptorMaterializationForSourceStorageLocalRep(source, source_rep);
-        continuation = try self.prependDescriptorArgMaterialization(.{
-            .local = target_desc_local,
-            .materialize = materialization.desc,
-            .captures = materialization.captures,
-        }, materialization.desc, continuation);
+        continuation = try self.prependDescriptorArgMaterialization(materialization.initializer(target_desc_local), materialization.desc, continuation);
         return continuation;
     }
 
@@ -41252,11 +41078,7 @@ const ProcBodyBuilder = struct {
                     if (materialization.desc.localOrNull() == desc_local) {
                         boxyLowerInvariant("boxy worker return descriptor initializer referenced its own target");
                     }
-                    try self.worker_return_descriptor_initializers.append(self.parent.allocator, .{
-                        .local = desc_local,
-                        .materialize = materialization.desc,
-                        .captures = materialization.captures,
-                    });
+                    try self.worker_return_descriptor_initializers.append(self.parent.allocator, materialization.initializer(desc_local));
                     try appendUniqueLocal(
                         self.parent.allocator,
                         &self.runtime_initialized_descriptor_locals,
