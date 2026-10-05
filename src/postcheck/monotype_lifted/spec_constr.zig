@@ -7717,7 +7717,12 @@ const Cloner = struct {
                     return .{ .call = .{ .materialize = .{ .value = value } } };
                 }
                 task.budget.* -= 1;
-                if (try self.valueCanSubstitute(value)) return retValue(value);
+                // A value whose every part is substitutable is already
+                // reusable: decomposing it would return each part unchanged
+                // and rebuild the same value. Its expanded size bounds
+                // substitution at use sites, not reuse, so it does not
+                // decide this.
+                if (try valueIsSubstitutable(self.pass.program, self.pass.allocator, value)) return retValue(value);
                 switch (value) {
                     .expr => |expr| {
                         const ty = self.pass.program.getExpr(expr).ty;
@@ -17960,6 +17965,42 @@ test "value substitutability is exact at any depth" {
     try std.testing.expect(try valueIsSubstitutable(&program, allocator, reads));
     try std.testing.expect(!try valueIsSubstitutable(&program, allocator, works));
     try std.testing.expectEqual(@as(usize, depth + 1), valueExpandedSize(reads));
+}
+
+test "making a substitutable value reusable keeps it whole at any size" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const foo = try program.names.internTagLabel("Foo");
+    const read = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = try program.addLocal(@enumFromInt(1), u8_ty) } });
+
+    // A chain of reads past both the substitution expansion limit and the
+    // reuse work budget, like a long interpolation's iterator. Every part of
+    // it is already reusable, so making it reusable binds nothing and
+    // returns the value itself instead of rebuilding or materializing it.
+    var reads: Value = .{ .expr = read };
+    for (0..3 * Cloner.make_reusable_work_budget) |_| {
+        const payload = try arena.allocator().alloc(Value, 1);
+        payload[0] = reads;
+        reads = try tagValue(&program, allocator, union_ty, foo, payload);
+    }
+    try std.testing.expect(!try cloner.valueCanSubstitute(reads));
+
+    const chain = try cloner.newChain();
+    const reusable = (try cloner.runClone(try cloner.makeReusableTask(reads, chain))).get(.value);
+    try std.testing.expect(chain.isEmpty());
+    try std.testing.expectEqual(reads.tag.payloads.ptr, reusable.tag.payloads.ptr);
 }
 
 test "value substitution bounds the expansion of shared sub-values" {
