@@ -958,6 +958,18 @@ intentionally phantom parameter; aliases and where aliases reject those names.
 This keeps every valid declaration formal's identity explicit through checking and
 `CheckedModule` construction.
 
+A declaration body binds every type variable it mentions: an undeclared
+variable or a written `_` there is an error. A bare reference to a type
+constructor that takes arguments would leave its formals unbound just the
+same, so inside a type declaration body it is an arity mismatch (`Too Few
+Args`), whether the constructor declares the formals itself or is an alias
+re-exporting one (an alias whose whole body is a bare reference to a
+parameterized type, the one bare reference a declaration body may hold).
+Checking reads a re-export's arity by following its solved alias backing to
+the re-exported application, whose unbound arguments are exactly its
+unapplied formals. A value annotation is not a declaration body: a bare
+reference there instantiates the missing formals fresh, as `_` would.
+
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
 finalization is linear in the number of declarations plus recorded references,
@@ -11663,6 +11675,18 @@ application, it must build that application from the arguments translated in
 the current declaration's formal scope. Reusing the original annotation's
 nominal instance would retain the alias declaration's independent parameters
 inside an otherwise correctly substituted outer backing template.
+
+Declaration output expands every local alias reference, applied or bare, by
+walking the alias body syntax; a bare reference is an application with no
+arguments, since checking rejects one that leaves formals unapplied (Type
+Declaration Template Validity). An expansion depends only on the alias and the
+roots bound to its formals, so a module outputs it once and every later
+reference shares that root. A nominal backing has no use-site polarity, so
+every extensionless tag union it reaches closes as written, exactly as the
+checker closes it. The alias declaration's own root is never the backing's
+content: it keeps its output rows' polarity markers deferred for the alias's
+use sites, and a marker in a backing template would leave every instantiation
+of the nominal with an open row that no use can close.
 
 Monotype must use the declaration backing template for ordinary local nominal
 declarations. For local declarations, the `backing` root on a nominal-use
