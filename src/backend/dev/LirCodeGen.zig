@@ -2313,8 +2313,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(cap_reg);
                     self.codegen.freeGeneral(cap_reg);
-                    try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                    try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                    try addListElemAbiArgs(&builder, list_abi);
                     try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
                     try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_with_capacity));
 
@@ -2821,18 +2820,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addThreeWordMemArg(base_reg, list_a_off);
                         try builder.addThreeWordMemArg(base_reg, list_b_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try addListElemAbiArgs(&builder, list_abi);
                         try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(@intCast(ll.unique_args & 0b11));
 
                         try self.callBoxyBuiltin(&builder, .list_concat);
                     } else {
-                        const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                        defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                        const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                        defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                        const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                        defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                         // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, update_modes, roc_ops)
                         const base_reg = frame_ptr;
@@ -2842,11 +2838,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addThreeWordMemArg(base_reg, list_a_off);
                         try builder.addThreeWordMemArg(base_reg, list_b_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemAbiArgs(&builder, list_abi);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         try builder.addImmArg(@intCast(ll.unique_args & 0b11));
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_concat));
@@ -2867,10 +2860,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const start_off = try self.ensureOnStack(start_loc, 8);
                     const count_off = try self.ensureOnStack(count_loc, 8);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                    defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                     {
                         // wrap(out, list_bytes, list_len, list_cap, start, count, alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
@@ -2882,11 +2873,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addThreeWordMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, start_off);
                         try builder.addMemArg(base_reg, count_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemAbiArgs(&builder, list_abi);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         try builder.addImmArg(if (ll.unique_args & 1 != 0) @as(usize, 1) else 0);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_append_range_within));
@@ -2908,10 +2896,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_off = try self.ensureOnStack(src_loc, 8);
                     const count_off = try self.ensureOnStack(count_loc, 8);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                    defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                     {
                         // wrap(out, list_bytes, list_len, list_cap, dest_index, src_index, count, alignment, element_width, elements_refcounted, element_incref, element_decref, roc_ops)
@@ -2924,11 +2910,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, dest_off);
                         try builder.addMemArg(base_reg, src_off);
                         try builder.addMemArg(base_reg, count_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemAbiArgs(&builder, list_abi);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_copy_range_within));
                     }
@@ -3044,10 +3027,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const start_off = try self.ensureOnStack(start_loc, 8);
                     const len_off = try self.ensureOnStack(len_loc, 8);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                    defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                     {
                         // wrap(out, list_bytes, list_len, list_cap, src_bytes, src_len, src_cap, start, len, alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
@@ -3060,11 +3041,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addThreeWordMemArg(base_reg, src_off);
                         try builder.addMemArg(base_reg, start_off);
                         try builder.addMemArg(base_reg, len_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemAbiArgs(&builder, list_abi);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         try builder.addImmArg(if (ll.unique_args & 1 != 0) @as(usize, 1) else 0);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_append_sublist));
@@ -3111,10 +3089,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callBoxyBuiltin(&builder, .list_prepend);
                         return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                     }
-                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                    defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                     {
                         // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
@@ -3127,9 +3103,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_prepend));
@@ -4333,10 +4307,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return .{ .stack = .{ .offset = result_offset } };
                     }
 
-                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                    defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                     {
                         // wrapListReplace(out_list, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
@@ -4351,9 +4323,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                         try builder.addLeaArg(base_reg, result_offset + value_field_offset);
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_replace_unsafe));
@@ -4404,10 +4374,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         try self.callBoxyBuiltin(&builder, .list_set);
                     } else {
-                        const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                        defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                        const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                        defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                        const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                        defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
@@ -4417,9 +4385,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(frame_ptr, index_off);
                         try builder.addLeaArg(frame_ptr, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         if (ll.op == .list_set_in_place_unsafe) {
                             try builder.addImmArg(@intFromEnum(builtins.utils.UpdateMode.InPlace));
                         } else {
@@ -4459,8 +4425,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addThreeWordMemArg(base_reg, list_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try addListElemAbiArgs(&builder, list_abi);
                         try builder.addMemArg(base_reg, index_1_off);
                         try builder.addMemArg(base_reg, index_2_off);
                         try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
@@ -4469,22 +4434,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         try self.callBoxyBuiltin(&builder, .list_swap);
                     } else {
-                        const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                        defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                        const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                        defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                        const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                        defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
                         try builder.addLeaArg(frame_ptr, result_offset);
                         try builder.addThreeWordMemArg(frame_ptr, list_off);
-                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try addListElemAbiArgs(&builder, list_abi);
                         try builder.addMemArg(frame_ptr, index_1_off);
                         try builder.addMemArg(frame_ptr, index_2_off);
-                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_swap));
                     }
@@ -8598,8 +8558,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, start_slot);
                 try builder.addMemArg(frame_ptr, len_slot);
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
@@ -8616,8 +8575,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, start_slot);
                 try builder.addMemArg(frame_ptr, len_slot);
                 try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
@@ -8692,8 +8650,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, record_off + start_field_off);
                 try builder.addMemArg(frame_ptr, record_off + len_field_off);
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
@@ -8710,8 +8667,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, record_off + start_field_off);
                 try builder.addMemArg(frame_ptr, record_off + len_field_off);
                 try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
@@ -8737,8 +8693,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addImmArg(0);
                 try builder.addImmArg(0);
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
@@ -8752,8 +8707,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addImmArg(0);
                 try builder.addImmArg(0);
                 try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
@@ -8783,29 +8737,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, index_off);
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_drop_at);
             } else {
-                const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, index_off);
-                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_drop_at));
             }
@@ -9070,17 +9018,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addThreeWordMemArg(base_reg, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                 try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_reverse);
             } else {
-                const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                 // roc_builtins_list_reverse(out, list_bytes, list_len, list_cap,
                 // alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
@@ -9089,11 +9034,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addThreeWordMemArg(base_reg, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                try addListElemAbiArgs(&builder, list_abi);
+                try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_reverse));
             }
@@ -9122,8 +9064,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, callable_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addImmArg(1);
                 try builder.addImmArg(0);
                 try builder.addImmArg(0);
@@ -9133,20 +9074,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.callBoxyBuiltin(&builder, .list_sort_with);
                 return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
             }
-            const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+            const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+            defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addThreeWordMemArg(frame_ptr, list_off);
             try builder.addMemArg(frame_ptr, callable_off);
-            try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-            try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-            try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-            if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-            if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+            try addListElemAbiArgs(&builder, list_abi);
+            try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
             try builder.addImmArg(@intFromEnum(list_abi.elem_layout_idx orelse unreachable));
             try builder.addImmArg(0);
             try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
@@ -9183,10 +9119,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, boxy_fn);
             } else {
-                const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                 // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -9196,9 +9130,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                 try builder.addMemArg(frame_ptr, spare_off);
                 try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
                 try self.callBuiltin(&builder, builtin_fn);
@@ -9226,28 +9158,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try addListElemAbiArgs(&builder, list_abi);
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_release_excess_capacity);
             } else {
-                const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                const elem_incref_reg, const elem_decref_reg = try self.listElemRcHelperRegs(list_abi);
+                defer self.freeListElemRcHelperRegs(elem_incref_reg, elem_decref_reg);
 
                 // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
-                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                try addListElemAbiArgs(&builder, list_abi);
+                try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
                 try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_release_excess_capacity));
@@ -14426,6 +14352,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// runtime-checked list op's element callback. That RC is internal to
         /// the op, which serves both modes and makes no thread-confinement
         /// claim, so the helper is always the atomic variant.
+        /// Load the incref and decref helper addresses for a list's elements,
+        /// or null for each when the elements need no reference counting.
+        fn listElemRcHelperRegs(self: *Self, list_abi: BuiltinListAbi) Allocator.Error![2]?GeneralReg {
+            const incref = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+            const decref = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+            return .{ incref, decref };
+        }
+
+        fn freeListElemRcHelperRegs(self: *Self, incref: ?GeneralReg, decref: ?GeneralReg) void {
+            if (decref) |reg| self.codegen.freeGeneral(reg);
+            if (incref) |reg| self.codegen.freeGeneral(reg);
+        }
+
+        /// Add a list builtin's element alignment and element width arguments.
+        fn addListElemAbiArgs(builder: *Builder, list_abi: BuiltinListAbi) Allocator.Error!void {
+            try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+            try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+        }
+
+        /// Add a list builtin's elements-refcounted flag and its element
+        /// incref and decref callbacks (zero when there is none).
+        fn addListElemRcArgs(builder: *Builder, list_abi: BuiltinListAbi, incref: ?GeneralReg, decref: ?GeneralReg) Allocator.Error!void {
+            try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+            if (incref) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+            if (decref) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+        }
+
         fn emitBuiltinInternalOptionalRcHelperAddress(
             self: *Self,
             op: RcOp,
