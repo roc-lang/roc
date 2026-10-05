@@ -6,8 +6,8 @@ bundle containing LLVM/Clang/LLD 22.1.8. A compatible LLVM 22 musl/libc++
 bundle has been built locally and passed its static C++ LLVM/LLD, Binaryen,
 zlib, and zstd probe. The full native Debug Roc build passes all 152 build
 steps, and the native, generated Zig glue, and small WASM gates below pass.
-A published roc-bootstrap release and ReleaseFast performance measurements
-are still pending.
+A published roc-bootstrap release is still pending. ReleaseFast measurements
+and their source checkpoint are recorded below.
 
 ## Source and compiler correctness
 
@@ -139,6 +139,55 @@ This public formatting leaf passes. `ReleaseFast` and `ReleaseSafe` remain
 accepted CLI values in Zig 0.17; their internal enum tags are now `.fast`
 and `.safe`.
 
+## Parallel backend evaluator
+
+The complete default parallel evaluator passes in ReleaseSafe at
+`2284e3455f`: 2,435 passed, 42 skipped, zero failed/crashed/timed-out cases
+out of 2,477. All 42 skipped cases have other backends passing. LLVM's 37
+skipped rows are allocation-statistics cases, which that backend does not
+implement; WASM retains 42 existing case exclusions. Backend results are:
+
+| Backend | Passed | Skipped | Failed |
+| --- | ---: | ---: | ---: |
+| interpreter | 2,337 | 0 | 0 |
+| dev | 2,337 | 0 | 0 |
+| WASM | 2,295 | 42 | 0 |
+| LLVM | 2,300 | 37 | 0 |
+
+Another 140 cases have no backend rows and validate compiler diagnostics.
+
+This gate is separate from the 69-test eval module suite. It runs every
+default case without filters, with LLVM enabled and two workers; opt-in
+cases still require their explicit filters. The general timeout is 120
+seconds, while LLVM keeps its separate 420-second budget.
+
+```sh
+zig build run-test-eval -Doptimize=ReleaseSafe \
+    -Droc-deps-path=/path/to/compatible-bundle -j2 \
+    --cache-poison=disallowed --summary all -- \
+    --threads 2 --timeout 120000 --llvm --verbose \
+    --stats-json /private/eval-stats.json
+```
+
+The first complete run exposed 29 LLVM signed-integer formatting failures.
+The updated Zig LLVM builder adds `nuw`/`nsw` promises when narrowing
+integers, but Roc's scalar helper also narrows to extract raw limbs and
+implement wrapping casts. Restoring plain `trunc` avoids invalid poison
+values while retaining signedness for extensions and float conversions.
+A new case covers signed 16/32-bit formatting and signed/unsigned 128-bit
+limb extraction. All 29 original failures and the new case pass on all
+four backends in the focused 30-case run before the complete retry.
+
+The final full graph passes all 42 steps with the corrected evaluator
+compilation cached. Exact commands, source checkpoint, full statistics,
+classified backend counts, original failures, and logs are retained under
+`/tmp/roc-017-full-parallel-eval/`; the final files are
+`command-retry-2.json`, `stats-retry-2.json`,
+`classified-retry-2-results.json`, and `run-test-eval-retry-2.log`.
+The small actual-helper LLVM 22 proof is retained at
+`/tmp/roc-017-signed-llvm-debug-lqsffvjk/coerce-results.json`.
+These ReleaseSafe runs validate correctness, not performance.
+
 ## Build graph, caching, and fixture isolation
 
 The following integration scripts exercise the actual Zig build graph:
@@ -172,6 +221,32 @@ results; a following unchanged run confirms all stages cached. Relocating
 an identical stdlib copy preserves identity, while adding a stdlib file
 changes identity and only its toolchain digest. These are build graph
 correctness checks, not full native cross-target runtime measurements.
+
+The final artifact identity is also checked through the actual generated
+Options and Identity modules, rather than only their shared source digest:
+
+```sh
+python3 ci/test_compiler_artifact_identity.py /path/to/zig-0.17.0 \
+    --work-dir /new/artifact-validation/path \
+    -Droc-deps-path=/path/to/compatible-bundle
+```
+
+Six focused tests pass for complete OS-version range encoding. Their
+negative control reproduces the old formatter's truncation collision:
+Linux kernel minima 5.10 and 6.0 produced identical `{any}` text and
+identical compiler IDs. The corrected encoding includes all kernel bounds,
+glibc versions, Android API levels, Hurd ranges, optional semantic-version
+strings, Windows bounds, and union tags. Nineteen constant-only objects
+using the real generated modules retain one common source identity and
+produce distinct artifact IDs for mode, CPU features, target, ABI, and
+OS-version changes. These are compile-only cross-target checks. Exact
+commands, case IDs, six-test output, and results are retained at
+`/tmp/roc-017-artifact-identity-corrected/` for checkpoint `6b3ff0b659`.
+The existing Ubuntu static-checks CI job now runs this regression with a
+controlled empty dependency bundle, without compiling the Roc CLI or
+requiring published LLVM assets. That exact invocation passes all six
+range tests and 19 identity cases; its workflow passes actionlint. Evidence
+is retained at `/tmp/roc-017-workflow-identity-validation/`.
 
 Mutable dependency bundles and relocated stdlib copies are identified by
 their bytes. Verified immutable Nix dependency bundles use their complete
@@ -233,6 +308,18 @@ durations are diagnostic logs, not performance measurements.
 | Actual Zig glue generation and seven target ABI locks | 8 commands passed | `/tmp/roc-017-generated-glue-gates-fikkc8xk/results.json` |
 | Small WASM dev/size/speed build and explicit-artifact Bytebox execution | 6 commands passed | `/tmp/roc-017-small-wasm-gates-fb5qfsdp/runtime-results.json` |
 | Imported Roc module baseline/create/edit/delete/restore/revert with warm caches | 11 commands passed, including two expected missing-module failures | `/tmp/roc-017-imported-module-gates-3crglyjc/results.json` |
+
+After the OS-range identity and LLVM narrowing corrections, the full Debug
+compiler at `2284e3455f` again passes all 152 steps. Ten native CLI and
+execution controls pass: uncached interpreter/dev runs, repeated cached dev
+builds, native dev/speed execution, and the combined signed-16/signed-32/
+signed-128/unsigned-128 formatting case in interpreter, dev, and speed
+modes. The resulting namespace is `compat-a9cfa576...`. Exact commands and
+artifact hashes are retained at
+`/tmp/roc-017-final-llvm-native-71chshk_/results.json`, with the build log at
+`/tmp/roc-zig-017-validation/upgrade-roc-debug-validation-5.log`. These are
+correctness checks. This narrower final rerun does not repeat all earlier
+native, glue, and WASM checks.
 
 Each record includes the exact argv, working directory, cache environment,
 exit status, and output log paths. Fixtures and generated artifacts were
@@ -354,13 +441,26 @@ not establish a general application speedup. Exact application and
 preservation evidence is retained under
 `/tmp/roc-zig-017-validation/application-cache-measurement/`.
 
+A tiny witness compiled with the measured ReleaseFast compiler's actual
+Options, Identity, target, and CPU arguments reproduces its compatibility
+ID `27cc3900...` and matches the namespace containing all 13 application
+artifacts. Switching its mode or target changes the final ID while retaining
+the common source identity. Evidence is retained at
+`/tmp/roc-017-small-cache-gates-tplz59o0/production-identity-witness-results.json`.
+These measurements use checkpoint `06d8403a4f`; the subsequent OS-range
+encoding correction changes compatibility IDs and was validated separately
+with the Debug compiler and the permanent identity matrix above. The later
+LLVM narrowing correction also changes the source identity and passes the
+final Debug native controls recorded above.
+
 Renaming the installed 0.17 Roc executable and rebuilding restores
 byte-identical output while the native compiler remains cached. Evidence:
 `/tmp/roc-zig-017-validation/upgrade-roc-missing-installed-control.json`.
 
 Remaining validation includes broader native platforms, full echo/REPL WASM,
-and multi-language glue runtime suites. The parallel backend eval harness
-is a separate gate from the already-passing eval module suite.
+multi-language glue runtime suites, the filtered Zig aggregate summary,
+and native Windows MiniCI isolation. Windows/macOS graph and cross-compile
+checks do not substitute for those native CI gates.
 
 ```sh
 zig build roc -Doptimize=ReleaseFast -Dstrip=false \
