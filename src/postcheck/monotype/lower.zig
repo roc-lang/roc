@@ -47063,8 +47063,19 @@ const BodyContext = struct {
         capture_entry_guards: []const NodeId,
     ) Allocator.Error!DraftFnTarget {
         const lambda = self.view.bodies.expr(closure.lambda);
-        const source_fn_ty = lambda.ty;
         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
+        return try self.ensureNestedFnAtNode(expr_id, lambda.ty, request_fn_node, capture_entry_guards);
+    }
+
+    /// Lower the nested function at `expr_id`, whose checked function type is
+    /// `source_fn_ty`, as a draft function requested at `request_fn_node`.
+    fn ensureNestedFnAtNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        source_fn_ty: checked.CheckedTypeId,
+        request_fn_node: NodeId,
+        capture_entry_guards: []const NodeId,
+    ) Allocator.Error!DraftFnTarget {
         const nested = try self.builder.nestedFnForExpr(
             self.view,
             self.owner_template,
@@ -47199,31 +47210,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
-        const source_fn_ty = self.view.bodies.expr(expr_id).ty;
-        const nested = try self.builder.nestedFnForExpr(
-            self.view,
-            self.owner_template,
-            expr_id,
-            self.current_fn_key,
-            try self.localProcContextsDigest(),
-            self.in_default_expr,
-        );
-        const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
-        return try self.builder.lowerDraftNestedFromContext(
-            self,
-            self.draft.current_owner,
-            expr_id,
-            nested,
-            source_fn_ty,
-            self.view.types.rootKey(source_fn_ty),
-            request_fn_node,
-            &.{},
-            nested_evidence.chain,
-            nested_evidence.owned_scope,
-            false,
-            .exact_graph,
-            .inherit,
-        );
+        return try self.ensureNestedFnAtNode(expr_id, self.view.bodies.expr(expr_id).ty, request_fn_node, &.{});
     }
 
     const NestedSiteEvidence = struct {

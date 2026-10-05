@@ -4800,7 +4800,7 @@ const ProcedureBuilder = struct {
                         }
                     }
                     if (!has_call_supplied_desc) continue;
-                    if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
+                    if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                         return .{ worker_child.rep, requirement_rep_id };
                     }
                     if (worker_child.role == .tag_ext and requirement_structure_children.len == 0 and requirement_rep.descriptor != null) {
@@ -4826,7 +4826,7 @@ const ProcedureBuilder = struct {
                             return .{ worker_child.rep, requirement_child.rep };
                         }
                     }
-                    if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
+                    if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(requirement_rep_id, requirement_child)) {
                         return .{ worker_rep_id, requirement_child.rep };
                     }
                     if (requirement_child.role == .tag_ext and worker_children.len == 0 and worker_rep.descriptor != null) {
@@ -5038,7 +5038,7 @@ const ProcedureBuilder = struct {
                     continue;
                 }
             }
-            if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
+            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 try pending.append(self.allocator, .{ worker_child.rep, source_rep_id });
                 continue;
             }
@@ -6567,15 +6567,6 @@ const ProcedureBuilder = struct {
             found = child.rep;
         }
         return found;
-    }
-
-    fn workerChildCanMatchUnwrappedSourceRep(
-        self: *ProcedureBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        worker_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const worker_backing = self.repQuery().structuralWrapperBackingRep(worker_rep_id) orelse return false;
-        return worker_child.rep == worker_backing and !try self.repQuery().repSubtreeHasDescriptorInOtherChildren(worker_rep_id, worker_child);
     }
 
     fn findMatchingTagVariant(
