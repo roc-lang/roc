@@ -34,6 +34,11 @@ pub const FormatParseError = Allocator.Error || FormatAstError || error{ParseFai
 /// Errors that can occur in formatting tests.
 pub const FormatTestError = FormatParseError || error{ SecondParseFailed, FormattingNotStable };
 
+/// The source spelling of a keyword, read from the tokenizer's keyword table.
+inline fn kw(comptime tag: Token.Tag) []const u8 {
+    return comptime Token.keywordText(tag) orelse @compileError(@tagName(tag) ++ " is not a keyword token");
+}
+
 const FormatFlags = enum {
     debug_binop,
     no_debug,
@@ -832,7 +837,7 @@ const Formatter = struct {
             },
             .@"var" => |v| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("var");
+                try fmt.pushAll(kw(.KwVar));
                 if (multiline and try fmt.flushContinuationComments(v.name)) {
                     try fmt.pushIndent();
                 } else {
@@ -865,7 +870,7 @@ const Formatter = struct {
             },
             .import => |i| {
                 var flushed = false;
-                try fmt.pushAll("import");
+                try fmt.pushAll(kw(.KwImport));
                 if (multiline) {
                     flushed = try fmt.flushCommentsBefore(i.target.start_tok);
                 }
@@ -886,7 +891,7 @@ const Formatter = struct {
                         if (flushed) {
                             fmt.curr_indent += 1;
                             try fmt.pushIndent();
-                            try fmt.pushAll("as");
+                            try fmt.pushAll(kw(.KwAs));
                         } else {
                             try fmt.pushAll(" as");
                         }
@@ -920,7 +925,7 @@ const Formatter = struct {
                     if (flushed) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                        try fmt.pushAll("exposing ");
+                        try fmt.pushAll(kw(.KwExposing) ++ " ");
                     } else {
                         try fmt.pushAll(" exposing ");
                     }
@@ -935,13 +940,13 @@ const Formatter = struct {
                 return fmt.finishStatement(f);
             },
             .file_import => |fi| {
-                try fmt.pushAll("import");
+                try fmt.pushAll(kw(.KwImport));
                 try fmt.commentBoundary(fi.path_tok - 1, true);
                 try fmt.push('"');
                 try fmt.pushTokenText(fi.path_tok);
                 try fmt.push('"');
                 try fmt.commentBoundary(fi.name_tok - 1, true);
-                try fmt.pushAll("as");
+                try fmt.pushAll(kw(.KwAs));
                 try fmt.commentBoundary(fi.name_tok, true);
                 try fmt.pushTokenText(fi.name_tok);
                 try fmt.commentBoundary(fi.name_tok + 1, true);
@@ -1081,7 +1086,7 @@ const Formatter = struct {
             .type_anno => |t| switch (f.phase) {
                 0 => {
                     if (t.is_var) {
-                        try fmt.pushAll("var ");
+                        try fmt.pushAll(kw(.KwVar) ++ " ");
                     }
                     try fmt.pushTokenText(t.name);
                     if (multiline and try fmt.flushCommentsAfter(t.name)) {
@@ -1120,7 +1125,7 @@ const Formatter = struct {
             },
             .expect => |e| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("expect");
+                try fmt.pushAll(kw(.KwExpect));
                 const body_region = fmt.nodeRegion(@intFromEnum(e.body));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1151,7 +1156,7 @@ const Formatter = struct {
                         } else {
                             try fmt.push(' ');
                         }
-                        try fmt.pushAll("in");
+                        try fmt.pushAll(kw(.KwIn));
                         if (multiline and try fmt.flushContinuationComments(expr_region.start)) {
                             try fmt.pushIndent();
                         } else {
@@ -1176,7 +1181,7 @@ const Formatter = struct {
                 const cond_region = fmt.nodeRegion(@intFromEnum(w.cond));
                 switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("while");
+                        try fmt.pushAll(kw(.KwWhile));
                         if (multiline and try fmt.flushContinuationComments(cond_region.start)) {
                             try fmt.pushIndent();
                         } else {
@@ -1199,7 +1204,7 @@ const Formatter = struct {
             },
             .crash => |c| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("crash");
+                try fmt.pushAll(kw(.KwCrash));
                 const body_region = fmt.nodeRegion(@intFromEnum(c.expr));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1211,7 +1216,7 @@ const Formatter = struct {
             },
             .dbg => |d| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("dbg");
+                try fmt.pushAll(kw(.KwDbg));
                 const body_region = fmt.nodeRegion(@intFromEnum(d.expr));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1223,7 +1228,7 @@ const Formatter = struct {
             },
             .@"return" => |r| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("return");
+                try fmt.pushAll(kw(.KwReturn));
                 const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1234,7 +1239,7 @@ const Formatter = struct {
                 return call(exprFrame(r.expr, .{}));
             },
             .@"break" => {
-                try fmt.pushAll("break");
+                try fmt.pushAll(kw(.KwBreak));
                 return fmt.finishStatement(f);
             },
             .malformed => {
@@ -1265,7 +1270,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
 
-                try fmt.pushAll("where");
+                try fmt.pushAll(kw(.KwWhere));
 
                 // Add opening bracket
                 try fmt.commentBoundary(clause_coll.region.start + 1, true);
@@ -2718,7 +2723,7 @@ const Formatter = struct {
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("if");
+                        try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
                         const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                         if (try fmt.flushCommentsBefore(cond_region.start)) {
@@ -2751,7 +2756,7 @@ const Formatter = struct {
                         } else {
                             try fmt.push(' ');
                         }
-                        try fmt.pushAll("else");
+                        try fmt.pushAll(kw(.KwElse));
                         if (!has_blocks) fmt.curr_indent = base_indent;
                         const else_region = fmt.nodeRegion(@intFromEnum(i.@"else"));
                         if (try fmt.flushCommentsBefore(else_region.start)) {
@@ -2772,7 +2777,7 @@ const Formatter = struct {
                 const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
                 switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("if");
+                        try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
                         const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                         if (try fmt.flushCommentsBefore(cond_region.start)) {
@@ -2803,7 +2808,7 @@ const Formatter = struct {
                 const branches = fmt.ast.store.matchBranchSlice(m.branches);
                 sw: switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("match");
+                        try fmt.pushAll(kw(.KwMatch));
                         try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(m.expr)).start, true);
                         f.phase = 1;
                         return call(exprFrame(m.expr, .{}));
@@ -2848,7 +2853,7 @@ const Formatter = struct {
                             } else {
                                 try fmt.push(' ');
                             }
-                            try fmt.pushAll("if");
+                            try fmt.pushAll(kw(.KwIf));
                             const guard_region = fmt.nodeRegion(@intFromEnum(guard));
                             if (try fmt.flushCommentsBefore(guard_region.start)) {
                                 try fmt.pushIndent();
@@ -2877,7 +2882,7 @@ const Formatter = struct {
             },
             .dbg => |d| switch (f.phase) {
                 0 => {
-                    try fmt.pushAll("dbg");
+                    try fmt.pushAll(kw(.KwDbg));
                     const expr_node = fmt.nodeRegion(@intFromEnum(d.expr));
                     if (multiline and try fmt.flushContinuationComments(expr_node.start)) {
                         try fmt.pushIndent();
@@ -2891,7 +2896,7 @@ const Formatter = struct {
             },
             .crash => |c| switch (f.phase) {
                 0 => {
-                    try fmt.pushAll("crash");
+                    try fmt.pushAll(kw(.KwCrash));
                     const expr_node = fmt.nodeRegion(@intFromEnum(c.expr));
                     if (multiline and try fmt.flushContinuationComments(expr_node.start)) {
                         try fmt.pushIndent();
@@ -2990,7 +2995,7 @@ const Formatter = struct {
             },
             .@"return" => |r| switch (f.phase) {
                 0 => {
-                    try fmt.pushAll("return");
+                    try fmt.pushAll(kw(.KwReturn));
                     const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
                     if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                         try fmt.pushIndent();
@@ -3003,7 +3008,7 @@ const Formatter = struct {
                 else => return fmt.finishExpr(f),
             },
             .@"break" => {
-                try fmt.pushAll("break");
+                try fmt.pushAll(kw(.KwBreak));
                 return fmt.finishExpr(f);
             },
             .record_builder => |rb| {
@@ -3307,7 +3312,7 @@ const Formatter = struct {
                 return done;
             },
             .var_ident => |i| {
-                try fmt.pushAll("var ");
+                try fmt.pushAll(kw(.KwVar) ++ " ");
                 try fmt.formatIdent(i.ident_tok, null);
                 return done;
             },
@@ -3388,7 +3393,7 @@ const Formatter = struct {
                     } else {
                         try fmt.push(' ');
                     }
-                    try fmt.pushAll("as");
+                    try fmt.pushAll(kw(.KwAs));
                     if (multiline and try fmt.flushContinuationComments(n)) {
                         try fmt.pushIndent();
                     } else {
@@ -3450,7 +3455,7 @@ const Formatter = struct {
                 }
                 Formatter.discardRegion(result.region);
                 try fmt.commentBoundary(a.name - 1, true);
-                try fmt.pushAll("as");
+                try fmt.pushAll(kw(.KwAs));
                 try fmt.commentBoundary(a.name, true);
                 try fmt.pushTokenText(a.name);
                 return done;
@@ -3475,7 +3480,7 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
                     try fmt.commentBoundary(a - 1, true);
-                    try fmt.pushAll("as");
+                    try fmt.pushAll(kw(.KwAs));
                     try fmt.commentBoundary(a, true);
                     try fmt.pushTokenText(a);
                 }
@@ -3505,7 +3510,7 @@ const Formatter = struct {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
 
-        try fmt.pushAll("targets: {");
+        try fmt.pushAll(kw(.KwTargets) ++ ": {");
 
         var has_content = false;
 
@@ -3738,7 +3743,7 @@ const Formatter = struct {
             try fmt.commentBoundary(field.name + 1, false);
             try fmt.push(':');
             try fmt.commentBoundary(field.name + 2, true);
-            try fmt.pushAll("platform");
+            try fmt.pushAll(kw(.KwPlatform));
             try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(field.value.supplied)).start, true);
             try fmt.formatExprDiscard(field.value.supplied);
             return field.region;
@@ -3759,7 +3764,7 @@ const Formatter = struct {
         switch (header) {
             .app => |a| {
                 const provides = fmt.ast.store.getCollection(a.provides);
-                try fmt.pushAll("app");
+                try fmt.pushAll(kw(.KwApp));
                 if (multiline and try fmt.flushCommentsAfter(a.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -3788,7 +3793,7 @@ const Formatter = struct {
                 try fmt.formatPackageDependencyRecord(a.packages, a.platform_idx);
             },
             .module => |m| {
-                try fmt.pushAll("module");
+                try fmt.pushAll(kw(.KwModule));
                 const exposes = fmt.ast.store.getCollection(m.exposes);
                 if (multiline and try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
@@ -3806,7 +3811,7 @@ const Formatter = struct {
                 );
             },
             .hosted => |h| {
-                try fmt.pushAll("hosted");
+                try fmt.pushAll(kw(.KwHosted));
                 const exposes = fmt.ast.store.getCollection(h.exposes);
                 if (multiline and try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
@@ -3824,7 +3829,7 @@ const Formatter = struct {
                 );
             },
             .package => |p| {
-                try fmt.pushAll("package");
+                try fmt.pushAll(kw(.KwPackage));
                 if (multiline) {
                     try fmt.flushCommentsAfterDiscard(p.region.start);
                     try fmt.ensureNewline();
@@ -3855,7 +3860,7 @@ const Formatter = struct {
                 try fmt.formatPackageDependencyRecord(p.packages, p.platform_idx);
             },
             .platform => |p| {
-                try fmt.pushAll("platform");
+                try fmt.pushAll(kw(.KwPlatform));
                 if (try fmt.flushCommentsAfter(p.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -3871,11 +3876,11 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("requires ");
+                try fmt.pushAll(kw(.KwRequires) ++ " ");
                 try fmt.formatOrderedCollection(p.requires_entries.region, .expanded, .curly, AST.RequiresEntry.Idx, fmt.ast.store.requiresEntrySlice(p.requires_entries), Formatter.formatRequiresEntry, false);
                 const exposes = fmt.ast.store.getCollection(p.exposes);
                 try fmt.formatSectionBoundary(exposes.region.start - 1, start_indent + 1);
-                try fmt.pushAll("exposes");
+                try fmt.pushAll(kw(.KwExposes));
                 if (try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
                 } else {
@@ -3896,7 +3901,7 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("packages");
+                try fmt.pushAll(kw(.KwPackages));
                 const packages = fmt.ast.store.getCollection(p.packages);
                 if (try fmt.flushContinuationComments(packages.region.start)) {
                     try fmt.pushIndent();
@@ -3910,12 +3915,12 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("provides ");
+                try fmt.pushAll(kw(.KwProvides) ++ " ");
                 try fmt.formatSymbolMapSection(p.provides, start_indent + 1);
 
                 if (p.hosted.span.len > 0 or fmt.regionHasInteriorComment(p.hosted.region)) {
                     try fmt.formatSectionBoundary(p.hosted.region.start - 1, start_indent + 1);
-                    try fmt.pushAll("hosted ");
+                    try fmt.pushAll(kw(.KwHosted) ++ " ");
                     try fmt.formatSymbolMapSection(p.hosted, start_indent + 1);
                 }
 
@@ -5614,8 +5619,8 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
 
 fn forKeyword(kind: AST.ForKind) []const u8 {
     return switch (kind) {
-        .iter => "for",
-        .stream => "for!",
+        .iter => kw(.KwFor),
+        .stream => kw(.KwForBang),
     };
 }
 
