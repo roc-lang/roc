@@ -19209,6 +19209,15 @@ One-shot build pipelines return the linked output path and explicit checking
 diagnostic counts to command orchestration; code generation and linking do not
 decide process status.
 
+Every intermediate file a build writes, such as generated bitcode and objects,
+extracted runtime objects, and linker scratch files, lies in a scratch
+directory that only that build writes to. The build removes the directory when
+it finishes unless `--keep-temp` is given. A directory that builds share holds
+only content-addressed cache entries. A build publishes such an entry by
+writing it in full inside its own scratch directory and renaming it into place,
+so no build ever reads a file that another build is still writing or a file
+that belongs to a different program.
+
 A platform's `targets:` header section declares, per target, both the link
 inputs and the output kind the build produces. The application author never
 chooses the output kind; `roc build` produces what the platform declares for

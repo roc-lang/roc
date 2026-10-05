@@ -448,6 +448,7 @@ const CustomCase = enum {
     issue_11355_boxy_built_platform_codec_root,
     issue_11355_boxy_built_try_low_levels,
     build_default_app_interpreter_args,
+    build_interpreter_owns_intermediates,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
     cache_passing_results,
@@ -2380,6 +2381,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10492: roc build default-platform executable receives args", .body = .{ .custom = .issue_10492_build_default_app_args } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11995: roc build --opt=dev default-platform executable for a glibc target runs", .body = .{ .custom = .issue_11995_build_default_app_glibc_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default-platform executable receives args (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_default_app_interpreter_args } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build writes intermediates only to its own scratch directory (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_interpreter_owns_intermediates } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -3914,6 +3916,7 @@ fn runCustomCase(
             .stdout_exact = boxy_try_low_levels_built_expected_stdout,
         }),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter, null),
+        .build_interpreter_owns_intermediates => customBuildInterpreterOwnsIntermediates(io, allocator, &env, &timer, timeout_ms),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -8406,6 +8409,104 @@ fn customBuildDefaultAppArgs(
         .stdout_exact = "[aaa][bbb][ccc]",
         .stderr_exact = "",
     })) |failure| return failure;
+
+    return null;
+}
+
+/// Where the object and bitcode files under a compiler cache root lie.
+const CacheIntermediates = struct {
+    /// Files inside the per-invocation scratch section, `<version>/tmp/`.
+    in_scratch: usize = 0,
+    /// The first file found in a section that builds share, if any.
+    first_shared: ?[]const u8 = null,
+};
+
+/// Find every object and bitcode file under `cache_path`. Those are build
+/// intermediates: the sections that concurrent builds share hold only
+/// content-addressed entries, none of which is an object or bitcode file.
+fn findCacheIntermediates(io: std.Io, allocator: Allocator, cache_path: []const u8) CliRunnerError!CacheIntermediates {
+    var cache_dir = try std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true });
+    defer cache_dir.close(io);
+
+    var walker = try cache_dir.walk(allocator);
+    defer walker.deinit();
+
+    var found: CacheIntermediates = .{};
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        const extension = std.fs.path.extension(entry.basename);
+        const is_intermediate = std.mem.eql(u8, extension, ".o") or
+            std.mem.eql(u8, extension, ".obj") or
+            std.mem.eql(u8, extension, ".bc");
+        if (!is_intermediate) continue;
+        if (cachePathIsInSection(entry.path, "tmp")) {
+            found.in_scratch += 1;
+        } else if (found.first_shared == null) {
+            found.first_shared = try allocator.dupe(u8, entry.path);
+        }
+    }
+    return found;
+}
+
+/// Concurrent interpreter builds share one compiler cache, so every file a
+/// build writes while it works must lie in a directory that build owns. A
+/// build leaves no intermediate in a shared cache section and removes its
+/// scratch directory when it finishes; `--keep-temp` keeps one scratch
+/// directory per build, so two builds never write the same intermediate path.
+fn customBuildInterpreterOwnsIntermediates(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "owns_intermediates" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=interpreter", "--no-cache", out_arg },
+        .roc_file = "test/echo/hello.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+
+    const after_build = findCacheIntermediates(io, allocator, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to walk the compiler cache: {}", .{err});
+    if (after_build.first_shared) |path| {
+        return customFailure(allocator, timer, "interpreter build wrote the intermediate {s} into a cache section that concurrent builds share", .{path});
+    }
+    if (after_build.in_scratch != 0) {
+        return customFailure(allocator, timer, "interpreter build left {d} intermediate files in its scratch directory", .{after_build.in_scratch});
+    }
+
+    var kept_after_first: usize = 0;
+    for (0..2) |build_index| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=interpreter", "--no-cache", "--keep-temp", out_arg },
+            .roc_file = "test/echo/hello.roc",
+            .contains = &.{
+                .{ .stream = .stdout, .text = "successfully building" },
+                .{ .stream = .stderr, .text = "Kept temporary directory" },
+            },
+        })) |failure| return failure;
+
+        const kept = findCacheIntermediates(io, allocator, env.dirs.roc_cache_dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to walk the compiler cache: {}", .{err});
+        if (kept.first_shared) |path| {
+            return customFailure(allocator, timer, "interpreter build wrote the intermediate {s} into a cache section that concurrent builds share", .{path});
+        }
+        if (build_index == 0) {
+            if (kept.in_scratch == 0) {
+                return customFailure(allocator, timer, "interpreter build with --keep-temp kept no intermediate files in a scratch directory", .{});
+            }
+            kept_after_first = kept.in_scratch;
+        } else if (kept.in_scratch != 2 * kept_after_first) {
+            // A second build that reused the first build's paths would
+            // overwrite its files rather than add its own.
+            return customFailure(allocator, timer, "expected two --keep-temp builds to keep {d} intermediate files in separate scratch directories, found {d}", .{ 2 * kept_after_first, kept.in_scratch });
+        }
+    }
 
     return null;
 }

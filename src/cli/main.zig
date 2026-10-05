@@ -1669,9 +1669,14 @@ fn buildShimEntrypoints(
 /// If `embedded_lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
+///
+/// The bitcode and object are intermediates written into `scratch_dir`, which
+/// must be a directory only the calling build writes to. Their names do not
+/// identify the program, so two builds sharing a directory would compile and
+/// link each other's files.
 fn generatePlatformHostShimFromLirData(
     ctx: *CliCtx,
-    cache_dir: []const u8,
+    scratch_dir: []const u8,
     entrypoint_names: []const []const u8,
     checked_hosted_symbols: ?[]const []const u8,
     target: RocTarget,
@@ -1764,11 +1769,11 @@ fn generatePlatformHostShimFromLirData(
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
-    const bitcode_path = std.fs.path.join(ctx.arena, &.{ cache_dir, bitcode_filename }) catch |err| {
+    const bitcode_path = std.fs.path.join(ctx.arena, &.{ scratch_dir, bitcode_filename }) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
-    const object_path = std.fs.path.join(ctx.arena, &.{ cache_dir, object_filename }) catch |err| {
+    const object_path = std.fs.path.join(ctx.arena, &.{ scratch_dir, object_filename }) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
@@ -1815,9 +1820,10 @@ fn generatePlatformHostShimFromLirData(
 /// If `lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
+/// `scratch_dir` must be a directory only the calling build writes to.
 fn generatePlatformHostShim(
     ctx: *CliCtx,
-    cache_dir: []const u8,
+    scratch_dir: []const u8,
     entrypoint_names: []const []const u8,
     checked_hosted_symbols: ?[]const []const u8,
     target: RocTarget,
@@ -1848,7 +1854,7 @@ fn generatePlatformHostShim(
 
     return generatePlatformHostShimFromLirData(
         ctx,
-        cache_dir,
+        scratch_dir,
         entrypoint_names,
         checked_hosted_symbols,
         target,
@@ -7674,6 +7680,33 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
     };
 }
 
+/// Path of a complete copy of the selected shim library that the calling build
+/// may link: `cache_path` or `staged_path`.
+///
+/// `cache_path` names the library's content-addressed entry in the shared
+/// build cache. An entry is published by writing it in full at `staged_path`,
+/// which must lie in a directory only the calling build writes to, and
+/// renaming it into the cache, so a build that finds the entry never reads one
+/// that is still being written. When the rename is refused, the staged copy
+/// is itself complete and is the path returned.
+fn publishedShimLibraryPath(
+    ctx: *CliCtx,
+    kind: ShimLibraryKind,
+    target: RocTarget,
+    cache_path: []const u8,
+    staged_path: []const u8,
+) (std.Io.File.OpenError || std.Io.File.Writer.Error)![]const u8 {
+    const published = blk: {
+        std.Io.Dir.cwd().access(ctx.io.std_io, cache_path, .{}) catch break :blk false;
+        break :blk true;
+    };
+    if (published) return cache_path;
+
+    try extractShimLibrary(ctx, kind, staged_path, target);
+    std.Io.Dir.cwd().rename(staged_path, std.Io.Dir.cwd(), cache_path, ctx.io.std_io) catch return staged_path;
+    return cache_path;
+}
+
 /// Extract the selected embedded shim library to the specified path for the given target.
 fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) (std.Io.File.OpenError || std.Io.File.Writer.Error)!void {
     if (builtin.is_test) {
@@ -11322,18 +11355,37 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
+    // Every intermediate file of this build is written into a directory only
+    // this build writes to. The shared build cache holds nothing but
+    // content-addressed entries that are complete whenever they are visible.
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    if (args.keep_temp) {
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{build_scratch_dir});
+        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+    }
+    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
+
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
-    const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
-    std.Io.Dir.cwd().access(ctx.io.std_io, shim_path, .{}) catch {
-        extractShimLibrary(ctx, .lir, shim_path, target) catch |err| {
-            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-        };
+    const shim_path = publishedShimLibraryPath(
+        ctx,
+        .lir,
+        target,
+        try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename }),
+        try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, shim_filename }),
+    ) catch |err| {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     const enable_debug = args.debug or (builtin.mode == .Debug);
     const platform_shim_path = try generatePlatformHostShim(
         ctx,
-        build_cache_dir,
+        build_scratch_dir,
         entrypoint_names,
         null,
         target,
@@ -11349,7 +11401,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         try object_files.append(path);
     }
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformExecutableObject(ctx, build_cache_dir, target)) |runtime_path| {
+        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
             try object_files.append(runtime_path);
         } else {
             return error.UnsupportedTarget;
@@ -11390,7 +11442,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .wasm_cpu_level = target.cpuLevel(),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .platform_files_dir = link_inputs.platform_files_dir,
-            .scratch_dir = build_cache_dir,
+            .scratch_dir = build_scratch_dir,
         };
 
         linker.link(ctx, link_config) catch |err| {
