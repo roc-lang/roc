@@ -65,6 +65,9 @@ test "getTestCacheDir returns test subdirectory" {
 
     const version_dir = try config.getVersionCacheDir(allocator);
     defer allocator.free(version_dir);
+    const namespace = std.fs.path.basename(version_dir);
+    try testing.expect(std.mem.startsWith(u8, namespace, "compat-"));
+    try testing.expectEqualStrings(@import("build_options").compiler_compatibility_id, namespace["compat-".len..]);
 
     const test_dir = try config.getTestCacheDir(allocator);
     defer allocator.free(test_dir);
