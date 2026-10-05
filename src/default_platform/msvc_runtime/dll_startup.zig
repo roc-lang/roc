@@ -11,9 +11,7 @@ const initializers = @import("initializers.zig");
 
 const dll_process_attach = 1;
 
-export fn _DllMainCRTStartup(instance: ?*anyopaque, reason: u32, reserved: ?*anyopaque) callconv(.winapi) c_int {
-    _ = instance;
-    _ = reserved;
+export fn _DllMainCRTStartup(_: ?*anyopaque, reason: u32, _: ?*anyopaque) callconv(.winapi) c_int {
     if (reason == dll_process_attach and initializers.run() != 0) return 0;
     return 1;
 }

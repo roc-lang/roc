@@ -106,11 +106,15 @@ fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
             .link_libc = false,
         }),
     });
-    for ([_][]const u8{ "dll_startup", "tls" }) |member| {
+    const Member = struct { name: []const u8, source: std.Build.LazyPath };
+    for ([_]Member{
+        .{ .name = "dll_startup", .source = b.path("src/default_platform/msvc_runtime/dll_startup.zig") },
+        .{ .name = "tls", .source = b.path("src/default_platform/msvc_runtime/tls.zig") },
+    }) |member| {
         const obj = b.addObject(.{
-            .name = b.fmt("msvc_runtime_{s}_{s}", .{ member, arch_name }),
+            .name = b.fmt("msvc_runtime_{s}_{s}", .{ member.name, arch_name }),
             .root_module = b.createModule(.{
-                .root_source_file = b.path(b.fmt("src/default_platform/msvc_runtime/{s}.zig", .{member})),
+                .root_source_file = member.source,
                 .target = target,
                 .optimize = .ReleaseFast,
                 .strip = true,
