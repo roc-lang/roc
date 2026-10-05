@@ -216,15 +216,13 @@ fn assertValidTitleAndDescription(title: []const u8, description: []const u8) vo
     if (titleContainsIgnoreCase(title, "annotation") and
         (titleContainsIgnoreCase(title, "need") or titleContainsIgnoreCase(title, "miss")))
     {
-        @panic(
-            "Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
-                "users they NEED to annotate their types: unlike many languages, type annotations " ++
-                "are never required as a matter of course, so no part of a diagnostic report should " ++
-                "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
-                "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
-                "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
-                "body to describe the ambiguity rather than to demand an annotation.",
-        );
+        base.invariant("{s}", .{"Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
+            "users they NEED to annotate their types: unlike many languages, type annotations " ++
+            "are never required as a matter of course, so no part of a diagnostic report should " ++
+            "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
+            "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
+            "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
+            "body to describe the ambiguity rather than to demand an annotation."});
     }
 }
 

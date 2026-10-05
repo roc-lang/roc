@@ -1034,7 +1034,7 @@ pub const RuntimeValueSchemaStore = struct {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
         if (builtin.mode == .Debug) {
-            std.debug.panic("runtime schema invariant violated: missing record schema for {s}", .{type_name});
+            base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
         }
         unreachable;
     }
@@ -1044,7 +1044,7 @@ pub const RuntimeValueSchemaStore = struct {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
         if (builtin.mode == .Debug) {
-            std.debug.panic("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
+            base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
         }
         unreachable;
     }
@@ -2047,7 +2047,7 @@ fn convertRuntimeSchemas(
 
 fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("checked pipeline invariant violated: {s}", .{message});
+        base.invariant("checked pipeline invariant violated: {s}", .{message});
     }
     unreachable;
 }

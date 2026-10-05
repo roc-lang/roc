@@ -839,7 +839,7 @@ fn copyReturnedRocStr(
     const is_str = ret_layout == .str or
         (layout_val.tag == .scalar and layout_val.getScalar().tag == .str);
     if (!is_str) {
-        std.debug.panic(
+        base.invariant(
             "eval inspect invariant violated: expected Str return layout, found {s}",
             .{@tagName(layout_val.tag)},
         );

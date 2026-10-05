@@ -12205,7 +12205,7 @@ const Lowerer = struct {
         }
 
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
                 .{
                     @intFromEnum(target_layout),
@@ -12465,7 +12465,7 @@ const Lowerer = struct {
         }
 
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "postcheck invariant violated: LIR lowering expected layouts to match or differ by an explicit Box edge, target={d} ({s}) source={d} ({s})",
                 .{
                     @intFromEnum(target_layout),

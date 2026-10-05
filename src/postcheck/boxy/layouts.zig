@@ -7,6 +7,7 @@
 //! alignment, and aggregate placement.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
@@ -1033,7 +1034,7 @@ fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresenta
 
 fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("boxy layout invariant violated: {s}", .{message});
+        base.invariant("boxy layout invariant violated: {s}", .{message});
     }
     unreachable;
 }

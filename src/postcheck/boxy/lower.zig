@@ -15340,14 +15340,14 @@ const ProcedureBuilder = struct {
                     const call_args = self.result.store.getLocalSpan(assign.args);
                     const callee_args = self.result.store.getLocalSpan(callee.args);
                     if (call_args.len != callee_args.len) {
-                        std.debug.panic(
+                        base.invariant(
                             "boxy lower invariant violated: direct-call argument count disagreed with finalized callee ABI: stmt={d} callee={d} call_args={d} callee_args={d}",
                             .{ stmt_index, @intFromEnum(assign.proc), call_args.len, callee_args.len },
                         );
                     }
                     if (!unused_static_calls.contains(stmt_id)) {
                         if ((assign.out_desc != null) != (callee.runtime_ret_desc != null)) {
-                            std.debug.panic(
+                            base.invariant(
                                 "boxy lower invariant violated: direct-call descriptor output disagreed with finalized callee ABI: stmt={d} callee={d} call_out={any} callee_out={any}",
                                 .{ stmt_index, @intFromEnum(assign.proc), assign.out_desc != null, callee.runtime_ret_desc != null },
                             );
@@ -25594,7 +25594,7 @@ const ProcBodyBuilder = struct {
             const identity_rep = self.descriptorStorageRep(worker_ret_rep);
             const identity = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
             const return_layout = self.workerRuntimeLayoutForRep(worker_ret_rep).layoutIdx();
-            std.debug.panic(
+            base.invariant(
                 "boxy lower invariant violated: runtime direct-call result had no descriptor output local: worker={d} callee={d} rep={d} identity={d} descriptor={any} dynamic={any} layout={d} nested={any} target_desc={any}",
                 .{
                     @intFromEnum(worker_id),
@@ -44526,9 +44526,9 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
 
 fn boxyLowerInvariant(comptime message: []const u8) noreturn {
     if (comptime zig_builtin.mode == .Debug and zig_builtin.target.os.tag == .freestanding) {
-        @panic("boxy lower invariant violated: " ++ message);
+        base.invariant("{s}", .{"boxy lower invariant violated: " ++ message});
     } else if (comptime zig_builtin.mode == .Debug) {
-        std.debug.panic("boxy lower invariant violated: {s}", .{message});
+        base.invariant("boxy lower invariant violated: {s}", .{message});
     }
     unreachable;
 }

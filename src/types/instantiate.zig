@@ -958,7 +958,7 @@ pub const Instantiator = struct {
                         const positive = switch (self.polarity_var_behavior) {
                             .close, .preserve => false,
                             .resolve_by_polarity, .preserve_output, .defer_open => self.marker_choices.?.get(resolved_var) orelse
-                                std.debug.panic("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
+                                base.invariant("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
                         };
                         const opened = self.polarity_var_behavior == .resolve_by_polarity and positive;
                         const marker_content: Content = switch (self.polarity_var_behavior) {

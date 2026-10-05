@@ -24,6 +24,7 @@
 //! layout, and stores the result's descriptor (or null) through `ret_desc`.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const backend = @import("backend");
 const layout_mod = @import("layout");
@@ -192,7 +193,7 @@ const ActiveRuntimeSelection = if (builtin.os.tag == .linux and !builtin.link_li
         };
         const entry = selected.gpa.create(Entry) catch {
             lock.unlock();
-            @panic("boxy runtime could not record the active freestanding thread");
+            invariant("{s}", .{"boxy runtime could not record the active freestanding thread"});
         };
         entry.* = .{
             .tid = tid,
@@ -223,7 +224,7 @@ fn currentRuntime() ?*GlobalBoxyRuntime {
 }
 
 fn requireGlobal() *GlobalBoxyRuntime {
-    return currentRuntime() orelse @panic("boxy ABI wrapper called before roc_boxy runtime initialization");
+    return currentRuntime() orelse invariant("{s}", .{"boxy ABI wrapper called before roc_boxy runtime initialization"});
 }
 
 /// Select `runtime` for boxy ABI calls on the current thread and return the
@@ -1098,7 +1099,7 @@ pub fn roc_boxy_call_erased(
     arg_layouts_start: u32,
     arg_layouts_len: u32,
 ) callconv(.c) void {
-    const raw = fn_ptr orelse @panic("boxy erased call with null function pointer");
+    const raw = fn_ptr orelse invariant("{s}", .{"boxy erased call with null function pointer"});
     const expected = layoutIdx(expected_layout);
 
     // Without an installed runtime there are no registered erased procs, so
@@ -1118,7 +1119,7 @@ pub fn roc_boxy_call_erased(
         return;
     }
 
-    const capture_ptr = capture orelse @panic("registered boxy erased callable had no capture pointer");
+    const capture_ptr = capture orelse invariant("{s}", .{"registered boxy erased callable had no capture pointer"});
     const metadata = builtins.erased_callable.compilerMetadataPtr(capture_ptr, actual.?.metadata_offset);
     const metadata_desc: ?*const BoxyTypeDesc = if (metadata.result_desc) |ptr| @ptrCast(@alignCast(ptr)) else null;
     enter(g);

@@ -646,7 +646,7 @@ pub const Store = struct {
     /// In-place descriptor write. See setSlot.
     fn setDesc(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
         if (std.debug.runtime_safety and self.descs.get(idx).flags.frozen) {
-            std.debug.panic("a frozen type class was written in place", .{});
+            base.invariant("a frozen type class was written in place", .{});
         }
         try self.setDescUnguarded(idx, val);
     }
@@ -843,7 +843,7 @@ pub const Store = struct {
         var class = self.resolveStorageRoot(target_var);
         if (!class.desc.flags.frozen) return true;
         const anchor = self.frozen_anchors.get(@intFromEnum(class.desc_idx)) orelse
-            std.debug.panic("a frozen type class has no anchor", .{});
+            base.invariant("a frozen type class has no anchor", .{});
         if (target_var == anchor) return false;
         if (class.meta.checked_var == target_var) {
             try self.setRootMeta(class.desc_idx, .{ .checked_var = anchor });
@@ -873,7 +873,7 @@ pub const Store = struct {
     /// `isolateFromFrozenClass` for a write that must not reach an anchor.
     fn isolateWriteTarget(self: *Self, target_var: Var) Allocator.Error!void {
         if (!try self.isolateFromFrozenClass(target_var)) {
-            std.debug.panic("a write was aimed at the anchor of a frozen type class", .{});
+            base.invariant("a write was aimed at the anchor of a frozen type class", .{});
         }
     }
 
@@ -1074,7 +1074,7 @@ pub const Store = struct {
         // solver-mutating rewrite, even if the two source vars differ.
         if (target_storage.storage_var == redirect_storage.storage_var) {
             if (std.debug.runtime_safety) {
-                std.debug.panic("self-redirect of equivalent vars {d} and {d} under rule {s}", .{
+                base.invariant("self-redirect of equivalent vars {d} and {d} under rule {s}", .{
                     @intFromEnum(target_var),
                     @intFromEnum(redirect_to),
                     @tagName(rule),
@@ -1318,7 +1318,7 @@ pub const Store = struct {
         // result) would dangle if the append reallocated the list, so callers
         // must copy such a slice out first. Debug builds check that here.
         if (builtin.mode == .Debug and self.sliceAliasesVars(s)) {
-            std.debug.panic("appendVars: source slice aliases the var list it is appended to", .{});
+            base.invariant("appendVars: source slice aliases the var list it is appended to", .{});
         }
         return try self.vars.appendSlice(self.gpa, s);
     }
@@ -1855,7 +1855,7 @@ pub const Store = struct {
         const frozen = if (b.desc.flags.frozen) b else a;
         const other = if (b.desc.flags.frozen) a else b;
         if (std.debug.runtime_safety and other.desc.flags.static_dispatch_rejected and !frozen.desc.flags.static_dispatch_rejected) {
-            std.debug.panic("a rejected dispatch callable was related to a frozen type class", .{});
+            base.invariant("a rejected dispatch callable was related to a frozen type class", .{});
         }
         try self.linkStorageRoots(a, b, frozen.desc_idx, b.meta.checked_var);
     }

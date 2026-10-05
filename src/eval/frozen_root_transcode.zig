@@ -2,6 +2,7 @@
 //! Symbol relocations are the only pointer authority; source bytes are never
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
+const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -443,7 +444,7 @@ const Builder = struct {
     }
 };
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic("frozen root transcode invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .Debug) compilerInvariant("frozen root transcode invariant violated: {s}", .{message});
     unreachable;
 }
 

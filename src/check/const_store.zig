@@ -1,6 +1,7 @@
 //! Checked compile-time constant store.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
@@ -1226,7 +1227,7 @@ pub const ConstStore = struct {
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
         if (@import("builtin").mode != .Debug) return;
         for (self.values.items) |value| {
-            if (value == .pending) std.debug.panic("const store invariant violated: completed store contains a pending node", .{});
+            if (value == .pending) base.invariant("const store invariant violated: completed store contains a pending node", .{});
         }
         const value_state = try self.allocator.alloc(VisitState, self.values.items.len);
         defer self.allocator.free(value_state);
@@ -1389,7 +1390,7 @@ pub const ConstStore = struct {
 
 fn constStoreInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("const store invariant violated: {s}", .{message});
+        base.invariant("const store invariant violated: {s}", .{message});
     }
     unreachable;
 }

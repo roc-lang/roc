@@ -7,6 +7,7 @@
 //! Reference: https://docs.microsoft.com/en-us/windows/win32/debug/pe-format
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
@@ -497,7 +498,7 @@ pub const CoffWriter = struct {
 
     fn appendArm64AllocCode(self: *Self, codes: *std.ArrayList(u8), size: u32) Allocator.Error!void {
         if (builtin.mode == .Debug and (size == 0 or size % 16 != 0)) {
-            std.debug.panic("COFF invariant violated: ARM64 stack allocation must be non-zero and 16-byte aligned, got {d}", .{size});
+            invariant("COFF invariant violated: ARM64 stack allocation must be non-zero and 16-byte aligned, got {d}", .{size});
         }
         if (size == 0 or size % 16 != 0) unreachable;
 
@@ -509,7 +510,7 @@ pub const CoffWriter = struct {
             try codes.append(self.allocator, @truncate(scaled));
         } else {
             if (builtin.mode == .Debug and scaled >= (1 << 24)) {
-                std.debug.panic("COFF invariant violated: ARM64 stack allocation too large for one unwind code, got {d}", .{size});
+                invariant("COFF invariant violated: ARM64 stack allocation too large for one unwind code, got {d}", .{size});
             }
             if (scaled >= (1 << 24)) unreachable;
             try codes.append(self.allocator, 0xE0);
@@ -522,7 +523,7 @@ pub const CoffWriter = struct {
     fn appendArm64SaveFplr(self: *Self, codes: *std.ArrayList(u8), frame_size: u32) Allocator.Error!void {
         if (frame_size <= 504) {
             if (builtin.mode == .Debug and (frame_size == 0 or frame_size % 8 != 0)) {
-                std.debug.panic("COFF invariant violated: ARM64 small frame must be a non-zero multiple of 8, got {d}", .{frame_size});
+                invariant("COFF invariant violated: ARM64 small frame must be a non-zero multiple of 8, got {d}", .{frame_size});
             }
             if (frame_size == 0 or frame_size % 8 != 0) unreachable;
             try codes.append(self.allocator, @as(u8, 0x80) | @as(u8, @intCast(frame_size / 8 - 1)));
@@ -559,7 +560,7 @@ pub const CoffWriter = struct {
 
     fn appendArm64RegPair(self: *Self, codes: *std.ArrayList(u8), reg: u8, offset: u32) Allocator.Error!void {
         if (builtin.mode == .Debug and (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63)) {
-            std.debug.panic("COFF invariant violated: ARM64 saved register pair x{d} at offset {d} is not encodable", .{ reg, offset });
+            invariant("COFF invariant violated: ARM64 saved register pair x{d} at offset {d} is not encodable", .{ reg, offset });
         }
         if (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63) unreachable;
 
@@ -640,7 +641,7 @@ pub const CoffWriter = struct {
 
     fn buildArm64UnwindData(self: *Self, func: FunctionInfo) Allocator.Error!Arm64UnwindData {
         if (builtin.mode == .Debug and func.frame_size == 0) {
-            std.debug.panic("COFF invariant violated: ARM64 function {d}-{d} has no frame size", .{ func.start_offset, func.end_offset });
+            invariant("COFF invariant violated: ARM64 function {d}-{d} has no frame size", .{ func.start_offset, func.end_offset });
         }
         if (func.frame_size == 0) unreachable;
 
@@ -654,7 +655,7 @@ pub const CoffWriter = struct {
 
         const code_words = @as(u32, @intCast((codes.items.len + 3) / 4));
         if (builtin.mode == .Debug and code_words > 255) {
-            std.debug.panic("COFF invariant violated: ARM64 unwind code words exceed xdata limit: {d}", .{code_words});
+            invariant("COFF invariant violated: ARM64 unwind code words exceed xdata limit: {d}", .{code_words});
         }
         if (code_words > 255) unreachable;
 
@@ -685,7 +686,7 @@ pub const CoffWriter = struct {
                 defer unwind_codes.deinit(self.allocator);
 
                 if (builtin.mode == .Debug and func.prologue_size > std.math.maxInt(u8)) {
-                    std.debug.panic("COFF invariant violated: x64 prologue too large for UNWIND_INFO: {d}", .{func.prologue_size});
+                    invariant("COFF invariant violated: x64 prologue too large for UNWIND_INFO: {d}", .{func.prologue_size});
                 }
                 if (func.prologue_size > std.math.maxInt(u8)) unreachable;
                 const prolog_offset: u8 = @intCast(func.prologue_size);
@@ -740,7 +741,7 @@ pub const CoffWriter = struct {
 
                 const function_bytes = func.end_offset - func.start_offset;
                 if (builtin.mode == .Debug and (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff)) {
-                    std.debug.panic("COFF invariant violated: ARM64 function length is not encodable: {d}", .{function_bytes});
+                    invariant("COFF invariant violated: ARM64 function length is not encodable: {d}", .{function_bytes});
                 }
                 if (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff) unreachable;
 
@@ -766,7 +767,7 @@ pub const CoffWriter = struct {
                 }
 
                 if (builtin.mode == .Debug and (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023)) {
-                    std.debug.panic("COFF invariant violated: ARM64 epilogue scope is not encodable: offset={d} index={d}", .{ func.epilogue_offset, data.epilogue_index });
+                    invariant("COFF invariant violated: ARM64 epilogue scope is not encodable: offset={d} index={d}", .{ func.epilogue_offset, data.epilogue_index });
                 }
                 if (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023) unreachable;
 

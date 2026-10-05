@@ -133,7 +133,7 @@ const wasm_erased_callable_on_drop_offset: u32 = 4;
 const Self = @This();
 
 fn wasmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .Debug) std.debug.panic(fmt, args);
+    if (builtin.mode == .Debug) base.invariant(fmt, args);
     unreachable;
 }
 
@@ -667,7 +667,7 @@ fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!voi
     const gop = try self.pending_bodies.getOrPut(local_idx);
     if (gop.found_existing) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("WasmCodeGen invariant violated: duplicate body for local function {d}", .{local_idx.raw()});
+            base.invariant("WasmCodeGen invariant violated: duplicate body for local function {d}", .{local_idx.raw()});
         }
         unreachable;
     }
@@ -678,7 +678,7 @@ fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!voi
 fn currentBody(self: *Self) *CodeBuilder {
     if (self.active_fn_stack.items.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("WasmCodeGen invariant violated: no active function body", .{});
+            base.invariant("WasmCodeGen invariant violated: no active function body", .{});
         }
         unreachable;
     }
@@ -1762,7 +1762,7 @@ fn emitCallIndirect(self: *Self, type_idx: u32) Allocator.Error!void {
         const table_pos: u32 = @intCast(self.currentCode().items.len);
         const table_symbol = self.indirect_table_symbol orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("WasmCodeGen invariant violated: relocatable call_indirect without table symbol", .{});
+                base.invariant("WasmCodeGen invariant violated: relocatable call_indirect without table symbol", .{});
             }
             unreachable;
         };
@@ -1873,7 +1873,7 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
         const expected: u32 = @intCast(self.module.function_offsets.items.len);
         if (local_idx.raw() != expected) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "WasmCodeGen invariant violated: pending body local index {d}, expected {d}",
                     .{ local_idx.raw(), expected },
                 );
@@ -2289,7 +2289,7 @@ pub fn generateEntrypointWrapper(
     const root_key: u32 = @intFromEnum(entry_proc);
     const root_func_idx = self.registered_procs.get(root_key) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("WASM/codegen invariant violated: missing compiled entry proc {d}", .{@intFromEnum(entry_proc)});
+            base.invariant("WASM/codegen invariant violated: missing compiled entry proc {d}", .{@intFromEnum(entry_proc)});
         }
         unreachable;
     };
@@ -2562,7 +2562,7 @@ pub fn generateModule(
     const root_proc = self.store.getProcSpec(root_proc_id);
     if (!root_proc.args.isEmpty()) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: synthetic main expects a zero-arg root proc, got {d} args",
                 .{self.store.getLocalSpan(root_proc.args).len},
             );
@@ -2573,7 +2573,7 @@ pub fn generateModule(
     const root_key: u32 = @intFromEnum(root_proc_id);
     const root_func_idx = self.registered_procs.get(root_key) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("WASM/codegen invariant violated: missing compiled root proc {d}", .{@intFromEnum(root_proc_id)});
+            base.invariant("WASM/codegen invariant violated: missing compiled root proc {d}", .{@intFromEnum(root_proc_id)});
         }
         unreachable;
     };
@@ -3529,7 +3529,7 @@ fn emitRawRcHelperCallByKey(
 fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) u32 {
     return self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: RC helper for layout {d} op {s} atomicity {s} was not reserved before body emission",
                 .{ @intFromEnum(helper_key.layout_idx), @tagName(helper_key.op), @tagName(atomicity) },
             );
@@ -3851,7 +3851,7 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomic
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("WASM/codegen invariant violated: attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+            base.invariant("WASM/codegen invariant violated: attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
         }
         unreachable;
     }
@@ -3938,7 +3938,7 @@ pub fn compileStaticDataRcHelpers(self: *Self, helpers: []const RcHelperKey) All
     for (helpers) |helper_key| {
         if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "WASM/codegen invariant violated: static data requested noop RC helper for layout {d}",
                     .{@intFromEnum(helper_key.layout_idx)},
                 );
@@ -4065,7 +4065,7 @@ fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.Loc
         if (builtin.mode == .Debug) {
             const expected = try self.procLocalValType(value);
             if (info.val_type != expected) {
-                std.debug.panic(
+                base.invariant(
                     "WASM/codegen invariant violated: LIR local {d} is bound as {s} but its layout requires {s}",
                     .{ @intFromEnum(value), @tagName(info.val_type), @tagName(expected) },
                 );
@@ -4098,7 +4098,7 @@ fn bindProcParamLocal(self: *Self, param: ProcLocalId) Allocator.Error!Storage.L
 fn bindProcParamLocalAs(self: *Self, param: ProcLocalId, expected: ValType) Allocator.Error!u32 {
     const binding = try self.bindProcParamLocal(param);
     if (builtin.mode == .Debug and binding.val_type != expected) {
-        std.debug.panic(
+        base.invariant(
             "WASM/codegen invariant violated: ABI parameter {d} is read as {s} but its LIR layout is {s}",
             .{ @intFromEnum(param), @tagName(expected), @tagName(binding.val_type) },
         );
@@ -8508,7 +8508,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     if (proc.hosted) |hosted| {
         if (builtin.mode == .Debug and proc.body != null) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
                 .{proc.name.raw()},
             );
@@ -9315,7 +9315,7 @@ fn emitHostedCall(
     // proc compilation by registerHostedSymbolTargets.
     const target = self.hosted_symbol_targets.get(hosted.dispatch_index) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: hosted dispatch index {d} has no registered symbol target",
                 .{hosted.dispatch_index},
             );
@@ -9378,7 +9378,7 @@ fn bindErasedCallableAdapterParams(
 ) Allocator.Error!void {
     if (args.len < 2) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("WASM/codegen invariant violated: erased callable adapter lacks hidden capture/reuse args", .{});
+            base.invariant("WASM/codegen invariant violated: erased callable adapter lacks hidden capture/reuse args", .{});
         }
         unreachable;
     }
@@ -9590,7 +9590,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
 fn restoreState(self: *Self, saved: SavedState) void {
     if (self.active_fn_stack.items.len != saved.active_fn_stack_len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "WasmCodeGen invariant violated: active function stack len {d}, expected {d}",
                 .{ self.active_fn_stack.items.len, saved.active_fn_stack_len },
             );
@@ -9761,7 +9761,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             gop.value_ptr.* += 1;
             if (gop.value_ptr.* > 32) {
                 const stmt = self.store.getCFStmt(stmt_id);
-                std.debug.panic(
+                base.invariant(
                     "WASM/codegen excessive generateCFStmt duplication on stmt {d} kind {s} count {d}",
                     .{ stmt_key, @tagName(stmt), gop.value_ptr.* },
                 );
@@ -9770,7 +9770,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             gop.value_ptr.* = 1;
         }
         if (self.active_stmt_generations.contains(stmt_key)) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen recursive generateCFStmt re-entry on stmt {d}",
                 .{stmt_key},
             );
@@ -10239,7 +10239,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             var msg_buf: [64]u8 = undefined;
             const proc_id = self.current_proc_id orelse {
                 if (comptime builtin.mode == .Debug) {
-                    std.debug.panic("runtime_error emitted without current proc", .{});
+                    base.invariant("runtime_error emitted without current proc", .{});
                 }
                 unreachable;
             };
@@ -10272,7 +10272,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .loop_continue => {
             if (builtin.mode == .Debug and self.loop_continue_target_depths.items.len == 0) {
-                std.debug.panic(
+                base.invariant(
                     "WasmCodeGen invariant violated: loop_continue encountered outside a loop",
                     .{},
                 );
@@ -10284,7 +10284,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .loop_break => {
             if (builtin.mode == .Debug and self.loop_break_target_depths.items.len == 0) {
-                std.debug.panic(
+                base.invariant(
                     "WasmCodeGen invariant violated: loop_break encountered outside a loop",
                     .{},
                 );
@@ -10488,7 +10488,7 @@ fn emitRocDbg(self: *Self, message: ProcLocalId) Allocator.Error!void {
 /// Call a diagnostic runtime symbol with the contents of a Str-layout proc local.
 fn emitRocStrCall(self: *Self, message: ProcLocalId, diagnostic: RuntimeDiagnostic) Allocator.Error!void {
     if (builtin.mode == .Debug and self.procLocalLayoutIdx(message) != .str) {
-        std.debug.panic(
+        base.invariant(
             "WasmCodeGen invariant violated: message local {d} did not have Str layout",
             .{@intFromEnum(message)},
         );
@@ -10673,7 +10673,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
             } else if (builtin.mode == .Debug and payload.payload_idx != 0) {
-                std.debug.panic(
+                base.invariant(
                     "LIR/wasm invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload",
                     .{payload.payload_idx},
                 );
@@ -10704,7 +10704,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             if (builtin.mode == .Debug and payload_layout_idx != target_layout) {
                 const payload_layout = ls.getLayout(payload_layout_idx);
                 const target_layout_val = ls.getLayout(target_layout);
-                std.debug.panic(
+                base.invariant(
                     "LIR/wasm invariant violated: tag_payload_struct payload layout {d} ({s}) did not match target layout {d} ({s})",
                     .{
                         @intFromEnum(payload_layout_idx),
@@ -10790,7 +10790,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         if (call_args.len != callee_args.len) {
             const caller_proc = self.current_proc_id orelse
                 wasmInvariantFmt("WASM/codegen invariant violated: direct call emitted outside a procedure", .{});
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: direct call from proc {d} to proc {d} passed {d} args but callee expects {d}",
                 .{ @intFromEnum(caller_proc), proc_key, call_args.len, callee_args.len },
             );
@@ -10798,7 +10798,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         if ((c.out_desc != null) != (proc.runtime_ret_desc != null)) {
             const caller_proc = self.current_proc_id orelse
                 wasmInvariantFmt("WASM/codegen invariant violated: direct call emitted outside a procedure", .{});
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: direct call from proc {d} to proc {d} descriptor output ({}) did not match callee ABI ({})",
                 .{ @intFromEnum(caller_proc), proc_key, c.out_desc != null, proc.runtime_ret_desc != null },
             );
@@ -10806,7 +10806,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     }
     const func_idx = self.registered_procs.get(proc_key) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
+            base.invariant("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
         }
         unreachable;
     };
@@ -10838,7 +10838,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         const closure_layout = self.procLocalLayoutIdx(c.closure);
         const closure_layout_val = self.getLayoutStore().getLayout(closure_layout);
         if (closure_layout_val.tag != .erased_callable) {
-            std.debug.panic(
+            base.invariant(
                 "WasmCodeGen invariant violated: erased call closure layout {d} is not erased_callable",
                 .{@intFromEnum(closure_layout)},
             );
@@ -10864,7 +10864,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(c.args);
     const arg_desc_refs = self.store.getLocalSpan(c.arg_descs);
     if (builtin.mode == .Debug and arg_desc_refs.len != c.arg_desc_keys.len) {
-        std.debug.panic(
+        base.invariant(
             "WasmCodeGen invariant violated: erased call passed {d} descriptors but {d} descriptor keys",
             .{ arg_desc_refs.len, c.arg_desc_keys.len },
         );
@@ -10956,14 +10956,14 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     if (builtin.mode == .Debug) {
         const target_layout_val = self.getLayoutStore().getLayout(c.target_layout);
         if (target_layout_val.tag != .erased_callable) {
-            std.debug.panic(
+            base.invariant(
                 "WasmCodeGen invariant violated: packed erased fn target layout {d} is not erased_callable",
                 .{@intFromEnum(c.target_layout)},
             );
         }
     }
     if (builtin.mode == .Debug and (c.capture != null) != (c.capture_layout != null)) {
-        std.debug.panic("WasmCodeGen invariant violated: packed erased fn capture value/layout presence differed", .{});
+        base.invariant("WasmCodeGen invariant violated: packed erased fn capture value/layout presence differed", .{});
     }
 
     const capture_size = if (c.capture_layout) |capture_layout| try self.layoutStorageByteSize(capture_layout) else 0;
@@ -10971,7 +10971,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         if (c.capture_layout) |capture_layout| {
             const capture_align = try self.layoutStorageByteAlign(capture_layout);
             if (capture_align > builtins.erased_callable.capture_alignment) {
-                std.debug.panic(
+                base.invariant(
                     "WasmCodeGen invariant violated: erased callable capture layout alignment {d} exceeds fixed capture alignment {d}",
                     .{ capture_align, builtins.erased_callable.capture_alignment },
                 );
@@ -11165,7 +11165,7 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
         .boxy_capture => |drop| try self.boxyCaptureDropTableIndex(drop.capture_layout, drop.desc_field_offset),
         .interpreter_context_drop => {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "WasmCodeGen invariant violated: interpreter_context_drop reached wasm backend",
                     .{},
                 );
@@ -11773,7 +11773,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     if (l.tag == .zst) {
         if (t.discriminant != 0) {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "WASM/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
                     .{t.discriminant},
                 );
@@ -11787,7 +11787,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 
     if (l.tag != .tag_union) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: tag assignment target must be tag_union or zst, got {s}",
                 .{@tagName(l.tag)},
             );
@@ -11802,7 +11802,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const variants = ls.getTagUnionVariants(tu_data);
     if (@as(usize, t.variant_index) >= variants.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
                 .{ t.variant_index, variants.len },
             );
@@ -11832,7 +11832,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     if (t.payload) |payload_local| {
         const payload_byte_size = try self.layoutByteSize(variant_payload_layout);
         if (builtin.mode == .Debug and self.procLocalLayoutIdx(payload_local) != variant_payload_layout) {
-            std.debug.panic(
+            base.invariant(
                 "WASM/codegen invariant violated: tag payload local layout {d} did not match variant payload layout {d}",
                 .{ @intFromEnum(self.procLocalLayoutIdx(payload_local)), @intFromEnum(variant_payload_layout) },
             );
@@ -13395,7 +13395,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const sd = ls.getStructData(record_idx);
                 const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
                 if (sorted_fields.len != 2) {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/wasm invariant violated: list_sublist record expected 2 fields, got {d}",
                         .{sorted_fields.len},
                     );
@@ -13407,7 +13407,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.structFieldSizeByOriginalIndexWasm(record_idx, 1) != 8 or
                     record_size != 16)
                 {
-                    std.debug.panic(
+                    base.invariant(
                         "LIR/wasm invariant violated: list_sublist record expected canonical fields len/start as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
                         .{
                             ls.getStructFieldLayoutByOriginalIndex(record_idx, 0),
@@ -16385,7 +16385,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                 return;
             }
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "wasm numeric lowering invariant violated: operand layouts differ for {s}: lhs={s} rhs={s}",
                     .{ @tagName(plain_op), @tagName(operand_layout), @tagName(rhs_layout) },
                 );

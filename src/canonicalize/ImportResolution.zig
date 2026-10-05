@@ -212,7 +212,7 @@ const ValueTarget = union(enum) {
 
 /// The import a deferred reference whose kind always names one goes through.
 fn entryImport(entry: DeferredImportRef) CIR.Import.Idx {
-    return entry.importIdx() orelse std.debug.panic(
+    return entry.importIdx() orelse base.invariant(
         "compiler invariant violated: a deferred reference of kind {s} names a module import",
         .{@tagName(entry.kind)},
     );
@@ -1156,7 +1156,7 @@ const Resolver = struct {
             .builtin, .pending => return,
         };
 
-        const binding = entry.methodBinding() orelse std.debug.panic(
+        const binding = entry.methodBinding() orelse base.invariant(
             "compiler invariant violated: a receiver method owner reference carries its method binding",
             .{},
         );

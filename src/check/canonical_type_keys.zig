@@ -1097,7 +1097,7 @@ fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
 
 fn invariantViolation(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic(message, .{});
+        base.invariant(message, .{});
     }
     unreachable;
 }

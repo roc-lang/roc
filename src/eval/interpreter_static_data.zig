@@ -1,5 +1,6 @@
 //! Relocated immutable data and explicit callable registry for an interpreter.
 const std = @import("std");
+const base = @import("base");
 const backend = @import("backend");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const Allocator = std.mem.Allocator;
@@ -68,5 +69,5 @@ pub fn appendCallableMetadata(allocator: Allocator, exports: []const backend.Sta
 }
 
 fn invariant(message: []const u8) noreturn {
-    std.debug.panic("interpreter static-data invariant violated: {s}", .{message});
+    base.invariant("interpreter static-data invariant violated: {s}", .{message});
 }

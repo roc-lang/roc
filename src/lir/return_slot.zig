@@ -23,6 +23,7 @@
 //! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -57,7 +58,7 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
         const admitted = store.getProcSpec(proc_id).shapes.interned_call_result;
         if (!admitted and builtin.mode != .Debug) continue;
         const rewrote = try pass.transformProc(proc_id);
-        if (rewrote and !admitted) @panic("return-slot pass rewrote a procedure whose shapes excluded it");
+        if (rewrote and !admitted) invariant("{s}", .{"return-slot pass rewrote a procedure whose shapes excluded it"});
     }
 }
 

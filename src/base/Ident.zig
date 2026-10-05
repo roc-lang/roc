@@ -6,6 +6,7 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
@@ -164,7 +165,7 @@ pub const Store = struct {
     fn verifyIdx(self: *const Store, idx: Idx) void {
         if (enable_store_tracking) {
             if (!self.interner.isInBounds(@enumFromInt(@as(u32, idx.idx)))) {
-                std.debug.panic(
+                invariant(
                     "Ident.Idx lookup in wrong store: offset {d} is not a valid " ++
                         "entry in this interner. It was created by a different store.",
                     .{idx.idx},

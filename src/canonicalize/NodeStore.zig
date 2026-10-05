@@ -935,7 +935,7 @@ fn setLiteralDispatchPlanPlusOne(store: *NodeStore, node_idx: Node.Idx, plan_plu
     var node = store.nodes.get(node_idx);
     const payload = node.getPayload();
     const tag = narrowNodeTag(LiteralNodeTag, node.tag) orelse
-        std.debug.panic("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
+        base.invariant("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
     switch (tag) {
         .expr_num => {
             var data = payload.expr_num;
@@ -1081,7 +1081,7 @@ pub fn finalizeLiteralDispatchResolution(
     var plan = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).*;
     const previous = plan.dispatchResolution();
     if (previous != .unresolved and previous != resolution) {
-        std.debug.panic(
+        base.invariant(
             "literal dispatch plan for node {d} finalized twice ({s}, then {s})",
             .{ @intFromEnum(node_idx), @tagName(previous), @tagName(resolution) },
         );
@@ -1260,7 +1260,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a statement tag: {}", .{node.tag});
     switch (tag) {
         .statement_decl => {
             const p = payload.statement_decl;
@@ -1472,7 +1472,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not an expression tag: {}", .{node.tag});
     switch (tag) {
         .expr_var => {
             const p = payload.expr_var;
@@ -2733,7 +2733,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(WhereNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a where tag: {}", .{node.tag});
     switch (tag) {
         .where_method => {
             const p = payload.where_clause;
@@ -2792,7 +2792,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a pattern tag: {}", .{node.tag});
     switch (tag) {
         .pattern_identifier => {
             const p = payload.pattern_identifier;
@@ -2987,7 +2987,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(TypeAnnoNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a type annotation tag: {}", .{node.tag});
     switch (tag) {
         .ty_apply => {
             const p = payload.ty_apply;
@@ -3197,7 +3197,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
-        std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
+        base.invariant("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
     switch (tag) {
         .exposed_item => {
             const p = payload.exposed_item;
@@ -6139,7 +6139,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(DiagnosticNodeTag, node.tag) orelse
-        @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
+        base.invariant("{s}", .{"getDiagnostic called with non-diagnostic node - this indicates a compiler bug"});
     switch (tag) {
         .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
             .feature = @enumFromInt(payload.diag_single_value.value),

@@ -4,6 +4,7 @@
 //! Roc expressions compiled to WebAssembly via the Bytebox runtime.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
@@ -3042,13 +3043,13 @@ fn hostFloatFromUtf8Prefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, pa
 const WasmRocOps = builtins.host_abi.RocOps;
 
 fn wasmDecAlloc(_: *WasmRocOps, _: usize, _: usize) callconv(.c) *anyopaque {
-    @panic("wasm runner invariant violated: a Dec builtin allocated");
+    invariant("{s}", .{"wasm runner invariant violated: a Dec builtin allocated"});
 }
 
 fn wasmDecDealloc(_: *WasmRocOps, _: *anyopaque, _: usize) callconv(.c) void {}
 
 fn wasmDecRealloc(_: *WasmRocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
-    @panic("wasm runner invariant violated: a Dec builtin reallocated");
+    invariant("{s}", .{"wasm runner invariant violated: a Dec builtin reallocated"});
 }
 
 fn wasmDecDbg(_: *WasmRocOps, _: [*]const u8, _: usize) callconv(.c) void {}
@@ -3062,7 +3063,7 @@ fn wasmDecCrashed(ops: *WasmRocOps, bytes: [*]const u8, len: usize) callconv(.c)
     const state: *WasmRunState = @ptrCast(@alignCast(ops.env));
     state.recordCrash(bytes[0..len]);
     const jmp_buf = state.dec_crash_jmp_buf orelse
-        @panic("wasm runner invariant violated: a Dec builtin crashed outside callDecBuiltin");
+        invariant("{s}", .{"wasm runner invariant violated: a Dec builtin crashed outside callDecBuiltin"});
     state.dec_crash_jmp_buf = null;
     sljmp.longjmp(jmp_buf, 1);
 }

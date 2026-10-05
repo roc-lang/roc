@@ -349,7 +349,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_break,
                 .e_bytes_literal,
                 => {},
-                .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+                .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
             }
 
             if (self.stopped) return;
@@ -557,7 +557,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .underscore,
                 .runtime_error,
                 => {},
-                .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+                .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
             }
 
             if (self.stopped) return;

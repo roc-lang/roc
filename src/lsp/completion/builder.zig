@@ -57,7 +57,7 @@ fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 

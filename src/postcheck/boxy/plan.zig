@@ -6,6 +6,7 @@
 //! arguments. It only consumes checked type data.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
@@ -6955,7 +6956,7 @@ const Builder = struct {
                     }
                     const ext = extension orelse {
                         if (@import("builtin").mode == .Debug) {
-                            std.debug.panic(
+                            base.invariant(
                                 "boxy plan invariant violated: static tag {s} was absent from {s} representation {d} for checked type {d}",
                                 .{ tag.tag_name, @tagName(rep.kind), @intFromEnum(rep_id), @intFromEnum(rep.source_type.ty) },
                             );
@@ -20615,7 +20616,7 @@ fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {
 
 fn boxyPlanInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("boxy plan invariant violated: {s}", .{message});
+        base.invariant("boxy plan invariant violated: {s}", .{message});
     }
     unreachable;
 }

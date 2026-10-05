@@ -11,6 +11,7 @@
 //! procedure task independently of the store receiving its cloned output.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -125,7 +126,7 @@ pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
         const stmt = store.getCFStmt(@enumFromInt(index));
         if (stmt != .join) continue;
         const raw = @intFromEnum(stmt.join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         next = @max(next, raw + 1);
     }
     return next;
@@ -157,13 +158,13 @@ pub const JoinParamIndex = struct {
     pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
         try self.params.put(join.id, join.params);
         const raw = @intFromEnum(join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         self.next_join_point = @max(self.next_join_point, raw + 1);
     }
 
     /// Reserve an identity in the same domain used by subtree clones.
     pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
-        if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;
         return id;
@@ -1041,7 +1042,7 @@ pub fn collectCopiedStmts(
         forEachStmtRead(store, stmt, &collector, ReaderCollector.note);
         if (stmt == .jump) {
             const params = join_params.get(stmt.jump.target) orelse
-                @panic("subtree copy plan found a jump to an unknown join");
+                base.invariant("{s}", .{"subtree copy plan found a jump to an unknown join"});
             emitSpan(store, &collector, ReaderCollector.note, params);
             try jumps.append(allocator, .{ .key = @intFromEnum(stmt.jump.target), .stmt = stmt_id });
         }
@@ -1128,7 +1129,7 @@ pub fn cloneCallVariant(
 ) Allocator.Error!LIR.LirProcSpecId {
     const source_spec = store.getProcSpec(source);
     const source_body = source_spec.body orelse
-        @panic("call-variant clone reached a proc with no body");
+        base.invariant("{s}", .{"call-variant clone reached a proc with no body"});
     const source_args = store.getLocalSpan(source_spec.args);
 
     var variant_args = try std.ArrayList(LocalId).initCapacity(
@@ -1941,7 +1942,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             if (self.join_remap != .declared or self.declared_joins.contains(jump.target)) return next;
 
             const params = self.join_params.?.get(jump.target) orelse
-                @panic("subtree clone jumped to an unknown external join");
+                base.invariant("{s}", .{"subtree clone jumped to an unknown external join"});
             next = try self.bridgeExternalJoinParams(params, origin, next);
             return next;
         }
@@ -2049,7 +2050,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return switch (dict) {
                 .static => |id| .{ .static = id },
                 .local => |local| .{ .local = try self.mapLocal(local) },
-                .runtime => std.debug.panic("LIR invariant violated: a runtime dictionary reference reached LIR cloning", .{}),
+                .runtime => base.invariant("LIR invariant violated: a runtime dictionary reference reached LIR cloning", .{}),
             };
         }
 
@@ -2143,7 +2144,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 if (self.join_params) |params| {
                     entry.value_ptr.* = params.freshJoinPoint();
                 } else {
-                    if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+                    if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
                     entry.value_ptr.* = @enumFromInt(self.next_join_point);
                     self.next_join_point += 1;
                 }
