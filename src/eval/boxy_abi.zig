@@ -367,6 +367,11 @@ pub fn roc_boxy_caller_drives() callconv(.c) u8 {
     return @intFromBool(drives);
 }
 
+/// Whether an erased call is pending on this thread.
+pub fn roc_boxy_call_pending() callconv(.c) u8 {
+    return @intFromBool(TailStateSelection.get().pending != null);
+}
+
 fn requireGlobal() *GlobalBoxyRuntime {
     return currentRuntime() orelse @panic("boxy ABI wrapper called before roc_boxy runtime initialization");
 }

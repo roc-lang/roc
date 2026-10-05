@@ -32,9 +32,20 @@ const DirectCall = struct {
     caller: u32,
     callee: u32,
     stmt: LIR.CFStmtId,
-    /// The caller returns this call's value with nothing but reference-count
-    /// statements in between.
-    returns_unchanged: bool,
+    /// How this call's value reaches the caller's return, if it does.
+    returns: Returns,
+};
+
+const Returns = enum {
+    /// Something other than returning it reads the value.
+    no,
+    /// Nothing but reference-count statements and jumps into a join body
+    /// separates the call from the return of its value.
+    unchanged,
+    /// The value is returned after representation conversions only. The
+    /// only reference counts adjusted in between are the value's own, so
+    /// returning right after the call leaves nothing the frame owns behind.
+    converted,
 };
 
 const DeferredCall = struct {
@@ -89,7 +100,7 @@ pub fn run(
                     .caller = @intCast(proc_index),
                     .callee = @intFromEnum(stmt.assign_call.proc),
                     .stmt = stmt_id,
-                    .returns_unchanged = returnsUnchanged(store, join_bodies.items, stmt.assign_call.target, stmt.assign_call.next),
+                    .returns = returnOf(store, join_bodies.items, stmt.assign_call.target, stmt.assign_call.next),
                 });
             } else if (stmt == .assign_call_erased) {
                 if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
@@ -117,7 +128,7 @@ pub fn run(
         for (direct_calls.items) |call| {
             if (may_pend.isSet(call.caller) or !may_pend.isSet(call.callee)) continue;
             if (handsUp(store, &outside, call.caller) == .never) continue;
-            if (!call.returns_unchanged) continue;
+            if (call.returns == .no) continue;
             may_pend.set(call.caller);
             changed = true;
         }
@@ -130,9 +141,13 @@ pub fn run(
     }
     for (direct_calls.items) |call| {
         if (!may_pend.isSet(call.callee)) continue;
-        const drive = driveAfter(store, &outside, call.caller, call.returns_unchanged);
+        const drive = driveAfter(store, &outside, call.caller, call.returns != .no);
         const updated = &store.getCFStmtPtr(call.stmt).assign_call;
         updated.drive = drive;
+        // Whatever is still pending once this statement has run its drive is
+        // the caller's to make, before the conversions that follow read a
+        // value that is not there yet.
+        updated.returns_pending = call.returns == .converted and drive != .always;
         // A call that runs pending calls afterwards keeps its frame to do so.
         if (drive != .none) updated.replaces_frame = false;
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@enumFromInt(call.caller)).reads_caller_drives = true;
@@ -164,33 +179,65 @@ fn driveAfter(
     };
 }
 
-/// Whether the procedure returns `value` after `start` with nothing but
-/// reference-count statements and jumps to a join's body in between.
-fn returnsUnchanged(store: *const LirStore, join_bodies: []const ?LIR.CFStmtId, value: LIR.LocalId, start: LIR.CFStmtId) bool {
+/// How the procedure returns `value` after `start`. A conversion consumes the
+/// value it converts, and a descriptor reference reads no value, so a path
+/// made of those, and of reference counts on the value being converted, owns
+/// nothing but the value on the way to the return.
+fn returnOf(store: *const LirStore, join_bodies: []const ?LIR.CFStmtId, value: LIR.LocalId, start: LIR.CFStmtId) Returns {
     var current = start;
+    var returned = value;
+    // The value the latest conversion consumed; its counts bracket that
+    // conversion.
+    var converted_from = value;
+    var converts = false;
+    var counts_other = false;
     // Each jump enters a join body, and a body that jumps back to its own
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
     while (true) {
         const stmt = store.getCFStmt(current);
-        if (stmt == .ret) return stmt.ret.value == value;
+        if (stmt == .ret) {
+            if (stmt.ret.value != returned) return .no;
+            if (!converts) return .unchanged;
+            return if (counts_other) .no else .converted;
+        }
         if (stmt == .jump) {
             const join_index = @intFromEnum(stmt.jump.target);
-            if (jumps == join_bodies.len or join_index >= join_bodies.len) return false;
+            if (jumps == join_bodies.len or join_index >= join_bodies.len) return .no;
             jumps += 1;
-            current = join_bodies[join_index] orelse return false;
+            current = join_bodies[join_index] orelse return .no;
             continue;
         }
-        current = if (stmt == .incref)
-            stmt.incref.next
-        else if (stmt == .decref)
-            stmt.decref.next
-        else if (stmt == .decref_if_initialized)
-            stmt.decref_if_initialized.next
-        else if (stmt == .free)
-            stmt.free.next
-        else
-            return false;
+        if (stmt == .assign_boxy_adapt) {
+            const adapt = stmt.assign_boxy_adapt;
+            if (adapt.source != returned or adapt.source_mode != .move) return .no;
+            converted_from = returned;
+            returned = adapt.target;
+            converts = true;
+            current = adapt.next;
+            continue;
+        }
+        if (stmt == .assign_boxy_desc_ref) {
+            current = stmt.assign_boxy_desc_ref.next;
+            continue;
+        }
+        var counted: LIR.LocalId = undefined;
+        if (stmt == .incref) {
+            counted = stmt.incref.value;
+            current = stmt.incref.next;
+        } else if (stmt == .decref) {
+            counted = stmt.decref.value;
+            current = stmt.decref.next;
+        } else if (stmt == .decref_if_initialized) {
+            counted = stmt.decref_if_initialized.value;
+            current = stmt.decref_if_initialized.next;
+        } else if (stmt == .free) {
+            counted = stmt.free.value;
+            current = stmt.free.next;
+        } else {
+            return .no;
+        }
+        if (counted != returned and counted != converted_from) counts_other = true;
     }
 }
 

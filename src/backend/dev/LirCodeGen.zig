@@ -429,6 +429,7 @@ pub const BoxyBuiltinFn = enum {
     defer_erased,
     drive_pending,
     caller_drives,
+    call_pending,
     list_concat,
     list_prepend,
     list_sublist,
@@ -486,6 +487,7 @@ pub const BoxyBuiltinFn = enum {
             .defer_erased => "roc_boxy_defer_erased",
             .drive_pending => "roc_boxy_drive_pending",
             .caller_drives => "roc_boxy_caller_drives",
+            .call_pending => "roc_boxy_call_pending",
             .list_concat => "roc_boxy_list_concat",
             .list_prepend => "roc_boxy_list_prepend",
             .list_sublist => "roc_boxy_list_sublist",
@@ -555,6 +557,7 @@ pub const BoxyBuiltinFn = enum {
             .register_proc,
             .drive_pending,
             .caller_drives,
+            .call_pending,
             => null,
         };
     }
@@ -17193,6 +17196,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.stackLocationForLayout(runtime_layout, result_slot);
         }
 
+        /// Return from the procedure without a value while an erased call is
+        /// pending, as the tail-drive pass marked the statement just emitted.
+        /// The caller makes the pending call and never reads this return.
+        fn emitReturnIfCallPending(self: *Self) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const slot = self.codegen.allocStackSlot(8);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try self.callBoxyBuiltin(&builder, .call_pending);
+            try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+            const flag_reg = try self.allocTempGeneral();
+            // The runtime returns one byte; the rest of the slot is unspecified.
+            try self.emitLoadW8(flag_reg, frame_ptr, slot);
+            try self.emitCmpImm(flag_reg, 1);
+            self.codegen.freeGeneral(flag_reg);
+            const continue_patch = try self.emitJumpIfNotEqual();
+            const return_patch = try self.codegen.emitJump();
+            try self.early_return_patches.append(self.allocator, return_patch);
+            try self.codegen.patchJump(continue_patch, self.codegen.currentOffset());
+        }
+
         fn generatePackedErasedFn(
             self: *Self,
             proc_id: lir.LIR.LirProcSpecId,
@@ -23413,6 +23437,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             });
                             const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
                             try self.bindAssignedLocal(assign.target, driven_loc);
+                            if (assign.returns_pending) try self.emitReturnIfCallPending();
                             try work.append(wa, .{ .node = assign.next });
                         },
 

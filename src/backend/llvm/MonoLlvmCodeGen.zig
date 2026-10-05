@@ -2181,6 +2181,27 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Return from the procedure without a value while an erased call is
+    /// pending, as the tail-drive pass marked the statement just emitted. The
+    /// caller makes the pending call and never reads this return.
+    fn emitReturnIfCallPending(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const flag = try self.callBoxy("roc_boxy_call_pending", .i8, &.{}, &.{});
+        const pending = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
+        const return_block = wip.block(0, "return_pending") catch return error.OutOfMemory;
+        const continue_block = wip.block(0, "none_pending") catch return error.OutOfMemory;
+        _ = wip.brCond(pending, return_block, continue_block, .none) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = return_block };
+        if (self.fast_ret_registers) |registers| {
+            const ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
+            _ = wip.ret((builder.zeroInitConst(ret_ty) catch return error.OutOfMemory).toValue()) catch return error.OutOfMemory;
+        } else {
+            _ = wip.retVoid() catch return error.OutOfMemory;
+        }
+        wip.cursor = .{ .block = continue_block };
+    }
+
     /// The calling convention of register-passing functions. `tailcc`
     /// guarantees a `musttail` call between functions of different
     /// signatures; WebAssembly has no such convention.
@@ -3821,6 +3842,7 @@ pub const MonoLlvmCodeGen = struct {
             } else {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
                 try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
+                if (assign.returns_pending) try self.emitReturnIfCallPending();
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {

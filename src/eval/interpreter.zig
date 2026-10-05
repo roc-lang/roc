@@ -598,6 +598,8 @@ pub const Interpreter = struct {
 
     const ExecOutcome = union(enum) {
         returned: LocalId,
+        /// The procedure returned without a value because a call is pending.
+        returned_pending,
         loop_continue,
         loop_break,
         /// A frame-replacing call: the procedure's result is whatever this
@@ -2566,6 +2568,10 @@ pub const Interpreter = struct {
         const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
             .tail_call => |call| .{ .tail_call = call },
+            .returned_pending => .{ .result = .{
+                .value = try self.poisonUninitializedValue(proc_spec.ret_layout),
+                .layout = proc_spec.ret_layout,
+            } },
             .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
@@ -2780,6 +2786,10 @@ pub const Interpreter = struct {
                     };
                     if (self.pending_erased != null) {
                         if (!drivesHere(frame, assign.drive)) {
+                            // The conversions that follow would read a value
+                            // that is not there yet, so the procedure returns
+                            // now to whoever makes the pending call.
+                            if (assign.returns_pending) return .returned_pending;
                             // The pending call produces this statement's
                             // value; this procedure returns to whoever makes
                             // it without reading the value.

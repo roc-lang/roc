@@ -1149,6 +1149,12 @@ pub const CFStmt = union(enum) {
         /// Set by the tail-drive pass on a call whose callee can return with
         /// an erased call pending.
         drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a call whose value reaches the
+        /// procedure's return only through representation conversions. When
+        /// a call is still pending after this statement, the procedure
+        /// returns at once without a value: the caller that makes the pending
+        /// call stores its result in the representation that caller reads.
+        returns_pending: bool = false,
         next: CFStmtId,
     },
     assign_call_erased: struct {

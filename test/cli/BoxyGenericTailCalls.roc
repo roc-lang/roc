@@ -35,7 +35,22 @@ decrement = |n| n - 1
 
 through_lambda_calling_generic = |n| if n == 0 0 else (|m| through_lambda_calling_generic(decrement(m)))(n)
 
+# A function with a concrete type that reaches itself through a generic one
+# has its result converted between the two representations on the way back.
+concrete_through_apply : U64 -> U64
+concrete_through_apply = |n| if n == 0 0 else apply(|m| concrete_through_apply(m - 1), n)
+
+# A generic function used as a value at a concrete type is wrapped in an
+# adapter that converts its result.
+call_with : ((U64 -> U64), U64 -> U64), U64 -> U64
+call_with = |g, x| g(|j| through_generic_value(j), x)
+
+through_generic_value : U64 -> U64
+through_generic_value = |n| if n == 0 0 else call_with(apply, n - 1)
+
 expect ping(20_000, wider(1), "done") == "done"
 expect countdown(20_000, wider(1), "done") == "done"
 expect through_apply(30_000, "done") == "done"
 expect through_lambda_calling_generic(30_000) == 0
+expect concrete_through_apply(30_000) == 0
+expect through_generic_value(30_000) == 0

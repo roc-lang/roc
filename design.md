@@ -6032,6 +6032,13 @@ only by the descriptor its value arrives with. A callable adapter does the
 same with the result of the callable it wraps. No conversion statement then
 follows the call.
 
+An erased call also stores its result straight into a target of a different
+representation when the erased-call runtime's own conversion is the whole
+conversion: into a bare type variable, which takes the descriptor of whatever
+the runtime stored, or into a fully concrete target, whose static descriptor
+the call names as its result descriptor. Neither applies to a value that
+holds a callable, which crosses through an adapter instead.
+
 The producer records a linked list of proven sites in the call nodes and a
 fresh loop join identity in the procedure. Body shards relocate these statement
 references with the rest of the body. Ordinary TCE consumes the list directly:
@@ -16582,9 +16589,20 @@ callee can return with a call pending, and on each deferred call:
   erased callable directly does not make pending calls, so then the
   procedure makes them itself.
 
+A direct call cannot hand its conversion to the callee, so a generic callee's
+result may still be converted before it is returned. The pass marks such a
+call `returns_pending` when its value reaches the return through conversions
+alone and the only reference counts adjusted on the way are that value's own.
+If a call is still pending once the statement has run its drive, the
+procedure returns at once without a value, and nothing it owns is left
+behind. Skipping the conversions is sound because each one only changes how
+the same value is represented: whoever makes the pending call stores the
+final result in the representation its own statement reads.
+
 Backends follow these marks and nothing else: a deferred call becomes a call
-to the runtime's record function, and a drive becomes a call to its drive
-function. The pending call is per-thread runtime state, held the same way the
+to the runtime's record function, a drive becomes a call to its drive
+function, and `returns_pending` becomes a query of the pending record
+followed by a return. The pending call is per-thread runtime state, held the same way the
 runtime holds its active-runtime selection.
 
 ### RC Planning and Materialization
