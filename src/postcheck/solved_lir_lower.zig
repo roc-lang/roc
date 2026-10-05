@@ -14953,6 +14953,7 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     cloned.equality_digests = @TypeOf(source.equality_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.equality_digests.unsafeRawItemsForView()));
     cloned.constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView()));
     cloned.iterator_interface_cache = @TypeOf(source.iterator_interface_cache).fromArrayList(try cloneSlice(?bool, allocator, source.iterator_interface_cache.unsafeRawItemsForView()));
+    cloned.generated_private_cache = @TypeOf(source.generated_private_cache).fromArrayList(try cloneSlice(?bool, allocator, source.generated_private_cache.unsafeRawItemsForView()));
     var iterator_interface_visit_epochs: std.ArrayList(u32) = .empty;
     errdefer iterator_interface_visit_epochs.deinit(allocator);
     try iterator_interface_visit_epochs.resize(allocator, view.types.len);

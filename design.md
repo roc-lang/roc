@@ -5476,7 +5476,10 @@ for specialization reuse. Type-role keys and call metadata select candidates; eq
 compares all source and frozen roles, every method selection, and nested
 evidence and substitutions. One alpha-equivalence bijection
 covers all type roots, including cross-root sharing. Cycles are compared as
-finite proof graphs. Source contracts remain intact for replay; specialization
+finite proof graphs. Contracts intern in table order, and a nested contract
+that already holds its identity is compared by that identity rather than by
+walking its proof graph again, so interning a chain of nested contracts costs
+one comparison per contract rather than one per contract below it. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
 
 The checker's derived-codec walk records each nominal application whose
