@@ -772,13 +772,21 @@ pub const SidecarBlob = struct {
     }
 };
 
+/// Make the raw bytes of sidecar items a function of their values alone. The
+/// sidecar persists `items` byte for byte, so each byte of `T` must either
+/// belong to a declared field or be one the value itself identifies, which
+/// `zeroValuePadding` canonicalizes. Any other shape, such as an `extern
+/// struct` with implicit alignment bytes, is a compile error here.
+fn canonicalizeSidecarItems(comptime T: type, items: []T) void {
+    if (comptime collections.serde_validation.byteDetermination(T) == .fully_defined) return;
+    for (items) |*item| collections.CompactWriter.zeroValuePadding(T, @ptrCast(item));
+}
+
 fn cloneStdArrayList(comptime T: type, gpa: std.mem.Allocator, list: std.ArrayList(T)) std.mem.Allocator.Error!std.ArrayList(T) {
     var out: std.ArrayList(T) = .empty;
     try out.ensureTotalCapacity(gpa, list.items.len);
-    for (list.items) |item| {
-        out.appendAssumeCapacity(item);
-        collections.CompactWriter.zeroValuePadding(T, @ptrCast(&out.items[out.items.len - 1]));
-    }
+    out.appendSliceAssumeCapacity(list.items);
+    canonicalizeSidecarItems(T, out.items);
     return out;
 }
 
@@ -801,6 +809,9 @@ fn cloneStructFields(
             .is_padding = is_padding,
         });
     }
+    canonicalizeSidecarItems(u32, result.field(.index));
+    canonicalizeSidecarItems(layout_mod.Idx, result.field(.layout));
+    canonicalizeSidecarItems(bool, result.field(.is_padding));
     return result;
 }
 
@@ -813,6 +824,7 @@ fn cloneTagUnionVariants(
     for (payload_layouts) |payload_layout| {
         _ = result.appendAssumeCapacity(.{ .payload_layout = payload_layout });
     }
+    canonicalizeSidecarItems(layout_mod.Idx, result.field(.payload_layout));
     return result;
 }
 
@@ -1457,6 +1469,41 @@ test "boxy sidecar blob carries only the names its tables reach" {
     }
     try std.testing.expectEqual(@as(?usize, null), std.mem.find(u8, blob.bytes, &folded_table));
     try std.testing.expectEqual(@as(u64, 7), blob.sidecar.names.bytes.len);
+}
+
+test "erased argument descriptor params declare every byte they occupy" {
+    try std.testing.expect(collections.serde_validation.isFullyDefined(LIR.ErasedArgDescParam));
+}
+
+test "boxy sidecar bytes do not depend on what table storage held before" {
+    const gpa = std.testing.allocator;
+    var blobs: [2]SidecarBlob = undefined;
+    var built: usize = 0;
+    defer for (blobs[0..built]) |*blob| blob.deinit(gpa);
+
+    for ([_]u8{ 0x00, 0xff }) |stale| {
+        var lowered = try Program.Result.init(gpa, .u64);
+        defer lowered.deinit();
+
+        // Write the same parameter over storage that held different bytes, so
+        // any byte the value does not define keeps what was there.
+        try lowered.boxy_erased_arg_desc_params.ensureTotalCapacity(gpa, 1);
+        const slot = lowered.boxy_erased_arg_desc_params.addOneAssumeCapacity();
+        @memset(std.mem.asBytes(slot), stale);
+        slot.* = .{
+            .key = .{ .arg_index = 1, .descriptor_index = 2 },
+            .local = @enumFromInt(3),
+            .source_descriptor_index = 4,
+            .source_nested_index = 5,
+            .source_tag_name = @enumFromInt(6),
+            .read = .tag_payload,
+        };
+
+        blobs[built] = try buildSidecarBlob(gpa, &lowered);
+        built += 1;
+    }
+
+    try std.testing.expectEqualSlices(u8, blobs[0].bytes, blobs[1].bytes);
 }
 
 test "LIR image declarations are referenced" {

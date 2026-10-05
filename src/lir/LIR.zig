@@ -617,6 +617,9 @@ pub const ErasedArgDescParam = extern struct {
     /// Tag whose payload a `tag_payload` read names.
     source_tag_name: BoxyNameId,
     read: ErasedArgDescRead,
+    /// The bytes alignment adds after `read`, declared so that every byte of
+    /// the struct is defined wherever its raw bytes are persisted.
+    _padding: [3]u8 = [_]u8{0} ** 3,
 };
 
 /// How a boxy operation observes or transfers its source value.
