@@ -493,7 +493,13 @@ const TestsSummaryStep = struct {
 
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
-        const report = run.addPrefixedOutputFileArg("--roc-test-report=", "tests.tsv");
+        // Dynamic passthrough deliberately keeps tests runnable on every
+        // invocation. Zig 0.17 uses the argument hash for those output paths,
+        // so the basename must also distinguish unrelated test producers.
+        const report = run.addPrefixedOutputFileArg(
+            "--roc-test-report=",
+            run.step.owner.fmt("{s}.tsv", .{run.producer.?.name}),
+        );
         self.run.addArg(run.producer.?.name);
         self.run.addFileArg(report);
         if (self.serialize_runs) {
@@ -4859,23 +4865,41 @@ pub fn build(b: *std.Build) void {
     }
 
     // MiniCI output-filter tests.
+    const minici_compile = b.addTest(.{
+        .name = "minici_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/minici.zig"),
+            .target = b.graph.host,
+            .optimize = .debug,
+            .imports = &.{
+                .{ .name = "build_options", .module = roc_modules.build_options },
+                .{ .name = "roc_target", .module = roc_modules.roc_target },
+            },
+        }),
+        .filters = test_filters,
+    });
     test_suites.register(.{
         .step_suffix = "minici",
         .description = "Run MiniCI output-filter Zig tests",
-        .compile = b.addTest(.{
-            .name = "minici_test",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/build/minici.zig"),
-                .target = b.graph.host,
-                .optimize = .debug,
-                .imports = &.{
-                    .{ .name = "build_options", .module = roc_modules.build_options },
-                    .{ .name = "roc_target", .module = roc_modules.roc_target },
-                },
-            }),
-            .filters = test_filters,
-        }),
+        .compile = minici_compile,
     });
+
+    // Exercise two real registry runs without compiling the full aggregate.
+    // ci/test_unit_report_isolation.py checks their distinct declared reports
+    // and summaries under unchanged and runtime-filtered invocations.
+    const report_isolation_summary = TestsSummaryStep.create(b, test_filters, 0);
+    report_isolation_summary.addRun(&test_suites.configuredRun(.{
+        .step_suffix = "minici",
+        .description = "MiniCI report isolation fixture",
+        .compile = minici_compile,
+    }).step);
+    report_isolation_summary.addRun(&test_suites.configuredRun(.{
+        .step_suffix = "build-helpers",
+        .description = "Build helper report isolation fixture",
+        .compile = build_helpers_test,
+    }).step);
+    b.step("run-check-zig-test-reports", "Check isolated declared reports from two Zig test producers")
+        .dependOn(report_isolation_summary.step);
 
     // Add check for forbidden patterns in type checker code
     const check_patterns = CheckTypeCheckerPatternsStep.create(b);
