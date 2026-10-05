@@ -7517,6 +7517,50 @@ fn customWasmPostLlvmPipeline(
     return null;
 }
 
+/// Whether a WebAssembly module's export section names `name`. A name can
+/// also appear in the module's data, which exports nothing.
+fn wasmExports(bytes: []const u8, name: []const u8) bool {
+    const readLeb = struct {
+        fn read(data: []const u8, pos: *usize) ?u32 {
+            var result: u32 = 0;
+            var shift: u5 = 0;
+            while (pos.* < data.len) {
+                const byte = data[pos.*];
+                pos.* += 1;
+                result |= @as(u32, byte & 0x7f) << shift;
+                if (byte & 0x80 == 0) return result;
+                if (shift >= 28) return null;
+                shift += 7;
+            }
+            return null;
+        }
+    }.read;
+
+    const export_section_id = 7;
+    var pos: usize = 8;
+    while (pos < bytes.len) {
+        const id = bytes[pos];
+        pos += 1;
+        const size = readLeb(bytes, &pos) orelse return false;
+        const end = pos + size;
+        if (end > bytes.len) return false;
+        if (id != export_section_id) {
+            pos = end;
+            continue;
+        }
+        const count = readLeb(bytes, &pos) orelse return false;
+        for (0..count) |_| {
+            const len = readLeb(bytes, &pos) orelse return false;
+            if (pos + len + 1 > end) return false;
+            if (std.mem.eql(u8, bytes[pos..][0..len], name)) return true;
+            pos += len + 1;
+            _ = readLeb(bytes, &pos) orelse return false;
+        }
+        return false;
+    }
+    return false;
+}
+
 fn customIssue10733WasmBoxyDevSealedObject(
     io: std.Io,
     allocator: Allocator,
@@ -7570,12 +7614,10 @@ fn customIssue10733WasmBoxyDevSealedObject(
     if (!std.mem.eql(u8, first_bytes, second_bytes)) {
         return customFailure(allocator, timer, "sealed Roc object changed the final wasm bytes", .{});
     }
-    if (std.mem.find(u8, first_bytes, "wasm_main") == null) {
+    if (!wasmExports(first_bytes, "wasm_main")) {
         return customFailure(allocator, timer, "final wasm lost its declared platform export", .{});
     }
-    if (std.mem.find(u8, first_bytes, "roc_boxy_init_embedded") != null or
-        std.mem.find(u8, first_bytes, "roc_builtins_str_concat") != null)
-    {
+    if (wasmExports(first_bytes, "roc_boxy_init_embedded") or wasmExports(first_bytes, "roc_builtins_str_concat")) {
         return customFailure(allocator, timer, "sealed Roc object leaked runtime internals into final wasm exports", .{});
     }
 
