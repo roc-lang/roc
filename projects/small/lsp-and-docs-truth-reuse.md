@@ -129,5 +129,3 @@ file unchanged (spot-check).
 
 - [severity-and-report-collection.md](severity-and-report-collection.md)—
   the LSP's other re-derived classification.
-- [syntax-fact-single-sourcing.md](syntax-fact-single-sourcing.md)—
-  the same reuse discipline inside the parser/formatter.

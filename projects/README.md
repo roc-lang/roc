@@ -72,10 +72,6 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/syntax-fact-single-sourcing.md](small/syntax-fact-single-sourcing.md)—
-  keyword spellings (tokenizer vs ~25 fmt literals), the
-  numeric-suffix bidirectional pair, the twice-scanned number
-  grammar.
 - [small/severity-and-report-collection.md](small/severity-and-report-collection.md)—
   `Severity.isError`/`toLspSeverity` helpers; snapshot tool and
   playground call the compiler's report-collection loop instead of
