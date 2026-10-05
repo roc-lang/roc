@@ -419,7 +419,7 @@ test "boxy residual tags preserve runtime source and target spans while growing"
         .payload_layout = .u64,
         .payload_count = 1,
     };
-    runtime.runtime_boxy_tag_variants = .{ .items = variants, .capacity = variants.len };
+    runtime.runtime_boxy_tag_variants = .{ .items = variants, .capacity = variants.len, .pointer_stability = .{} };
     const source = BoxyTypeDesc{
         .payload_layout = union_layout,
         .contains_refcounted = false,

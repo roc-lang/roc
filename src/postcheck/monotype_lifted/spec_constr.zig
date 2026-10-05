@@ -16961,7 +16961,7 @@ test "SpecConstr retained local compaction ignores raw ID gaps and keeps first t
     var retained: std.ArrayList(Ast.TypedLocal) = .empty;
     try Cloner.compactRetainedLocals(bounded.allocator(), &retained);
     try std.testing.expectEqual(@as(usize, 0), bounded.end_index);
-    retained = .{ .items = &leaves, .capacity = leaves.len };
+    retained = .{ .items = &leaves, .capacity = leaves.len, .pointer_stability = .{} };
     try Cloner.compactRetainedLocals(bounded.allocator(), &retained);
     try std.testing.expectEqualSlices(Ast.TypedLocal, &.{
         .{ .local = high, .ty = first_ty },

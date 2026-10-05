@@ -1021,8 +1021,8 @@ fn crossCompileDispatch(
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
-    inline for (enum_info.fields) |field| {
-        const comptime_target: RocTarget = @fromBackingInt(@intCast(field.value));
+    inline for (enum_info.field_values) |field_value| {
+        const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
         if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
         if (default_target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();

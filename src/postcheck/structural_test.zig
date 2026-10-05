@@ -276,13 +276,13 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
         .optional => |optional| assertNoPostCheckType(optional.child, path ++ "?"),
         .pointer => |pointer| assertNoPostCheckType(pointer.child, path ++ ".*"),
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                assertNoPostCheckType(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                assertNoPostCheckType(field_type, path ++ "." ++ field_name);
             }
         },
         .@"union" => |info| {
-            inline for (info.fields) |field| {
-                assertNoPostCheckType(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                assertNoPostCheckType(field_type, path ++ "." ++ field_name);
             }
         },
         .type,

@@ -159,6 +159,12 @@ pub fn aarch64Target(os: std.Target.Os.Tag) Target {
     return switch (os) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .aarch64_macho,
         .windows => .aarch64_windows,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,
@@ -885,8 +891,8 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
     var elem_idx_opt: ?Idx = null;
     var i: u32 = 0;
     while (store.layouts.len() <= target_elem_idx_int) : (i += 1) {
-        const idx = try store.insertLayout(layout.Layout.list(@enumFromInt(i)));
-        if (@intFromEnum(idx) == target_elem_idx_int) elem_idx_opt = idx;
+        const idx = try store.insertLayout(layout.Layout.list(@fromBackingInt(@intCast(i))));
+        if (@backingInt(idx) == target_elem_idx_int) elem_idx_opt = idx;
     }
     const elem_idx = elem_idx_opt.?;
 

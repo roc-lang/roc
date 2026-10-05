@@ -1622,12 +1622,12 @@ test "LIR image copies and round-trips every populated store field" {
         fn guarded(comptime FieldT: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!FieldT {
             const T = std.meta.Child(FieldT.Slice);
             const slice = try distinct(T, alloc, count, seed);
-            return FieldT.fromArrayList(.{ .items = slice, .capacity = count });
+            return FieldT.fromArrayList(.{ .items = slice, .capacity = count, .pointer_stability = .{} });
         }
         /// Build a populated `SafeList(T)` backed by the fixed buffer.
         fn safeList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeList(T) {
             const slice = try distinct(T, alloc, count, seed);
-            return .{ .items = .{ .items = slice, .capacity = count } };
+            return .{ .items = .{ .items = slice, .capacity = count, .pointer_stability = .{} } };
         }
         /// A per-field-and-index distinctive *value* of `T`. Filling raw bytes
         /// instead would write bit patterns no value of the type can hold—an
@@ -1677,7 +1677,7 @@ test "LIR image copies and round-trips every populated store field" {
         @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), source_allocator, 2 + i, @intCast(0x20 + i));
     }
     store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
-    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24 } } };
+    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24, .pointer_stability = .{} } } };
 
     const boxy_name = try store.insertBoxyName("Only");
     const unicode_name = try store.insertBoxyName("étiquette");
@@ -1689,7 +1689,7 @@ test "LIR image copies and round-trips every populated store field" {
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
-        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4 },
+        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4, .pointer_stability = .{} },
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
         .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),
@@ -1713,7 +1713,7 @@ test "LIR image copies and round-trips every populated store field" {
     var lowered = try Program.Result.init(source_allocator, target_usize);
     lowered.store = store;
     lowered.layouts = layouts;
-    lowered.root_procs = .{ .items = root_procs, .capacity = root_procs.len };
+    lowered.root_procs = .{ .items = root_procs, .capacity = root_procs.len, .pointer_stability = .{} };
     const copied = try copyProgramIntoBuffer(fba, base_ptr, buffer.len, &lowered, entrypoints);
     try copied.fillHeader(header, fba_state.end_index);
 

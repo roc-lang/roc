@@ -2438,7 +2438,7 @@ test "dangerousSetVarRedirect requires a declared rule by signature" {
     const fn_info = @typeInfo(@TypeOf(Store.dangerousSetVarRedirect)).@"fn";
     try std.testing.expectEqual(4, fn_info.param_types.len);
     try std.testing.expectEqual(Store.RedirectRule, fn_info.param_types[1].?);
-    comptime std.debug.assert(@typeInfo(Store.RedirectRule).@"enum".is_exhaustive);
+    comptime std.debug.assert(@typeInfo(Store.RedirectRule).@"enum".mode == .exhaustive);
 }
 
 test "savepoint clone cross-check is compiled in for test builds" {

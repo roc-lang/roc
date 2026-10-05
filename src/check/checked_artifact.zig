@@ -39027,7 +39027,7 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
         const buf = try gpa.alloc(Elem, if (slice) 3 else 7);
         artifact_serialize.poisonSlice(Elem, buf, 0x5A);
         artifact_serialize.zeroSlicePadding(Elem, buf);
-        @field(store, field_name) = if (slice) buf else .{ .items = buf[0..3], .capacity = buf.len };
+        @field(store, field_name) = if (slice) buf else .{ .items = buf[0..3], .capacity = buf.len, .pointer_stability = .{} };
     }
     defer inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         if (comptime isSliceField(@FieldType(Store, field_name))) {

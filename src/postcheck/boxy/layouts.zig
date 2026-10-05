@@ -1250,7 +1250,7 @@ test "boxy layout planner records private worker function arg and return layouts
         .nested_proc_sites = .{},
         .target = .roc,
     }};
-    var template_table = checked.CheckedProcedureTemplateTable{ .templates = .{ .items = &templates, .capacity = templates.len } };
+    var template_table = checked.CheckedProcedureTemplateTable{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
     var bindings = [_]checked.TopLevelProcedureBinding{.{
         .source_scheme = .{},
         .body = .{ .direct_template = .{
@@ -1260,7 +1260,7 @@ test "boxy layout planner records private worker function arg and return layouts
             .template = .{ .checked = template_ref },
         } },
     }};
-    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = .{ .items = &bindings, .capacity = bindings.len } };
+    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
     const root_view = Plan.ModuleView{
         .checked_types = view,
         .checked_procedure_templates = &template_table,
