@@ -15473,8 +15473,9 @@ partially rewritten bodies.
 A phase visits only the procedures whose recorded shapes admit it.
 `LirProcSpec.shapes` is a superset of what a body contains: the store records
 each statement-level shape as the statement is appended, lowering and TRMC
-record the loops they build, and a rewrite's commit merges the shapes of
-everything it appended. A phase's admission names every shape one of its
+record the loops they build, a rewrite's commit merges the shapes of
+everything it appended, and single-use inlining gives the caller the shapes of
+the body it receives. A phase's admission names every shape one of its
 rewrites can start from, not only the shape the phase exists for. Range
 proving decides a switch or a checked-arithmetic operation, and equally a
 comparison of unsigned integers with no branch beside it and the count of a
