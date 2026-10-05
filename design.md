@@ -72,6 +72,15 @@ lowerer.
 Compiler stages after parsing and error reporting must not use workarounds,
 fallbacks, heuristics, or best-effort reconstruction.
 
+A method may have any name. The compiler reports problems with a method only
+for the reasons it reports problems with any other definition, such as a type
+mismatch or shadowing, never because of the method's name. Behavior the
+language attaches to particular method names, such as `to_inspect` replacing
+inspection's default rendering, only ever gives something for free: a method
+that cannot provide that behavior is silently ineligible for it and remains an
+ordinary method, rather than producing an error or a warning that could break
+or clutter a build.
+
 Every stage after checking consumes explicit data produced by earlier stages.
 If a stage needs checked data that was not produced, the producer is
 incomplete. A consumer must not recover missing data from source syntax, names,
@@ -4251,12 +4260,20 @@ of other already-sorted compile-time constants may still restore their stored
 
 A block-local function binding whose body refers to nothing bound inside its
 enclosing function—no outer local, no outer rigid type variable, no local type
-declaration—is a promoted local procedure. Checking decides promotion while it
-already walks the body: each `s_decl` of a lambda or closure is a candidate,
-every local lookup, rigid-variable use, and local type-declaration reference
-records the candidate depths it crosses, and the greatest fixpoint over
-references between candidates removes every candidate that reaches a
-contextual one. The capture list is not that proof: canonicalization omits
+declaration that names one—is a promoted local procedure. Checking decides
+promotion while it already walks the body: each `s_decl` of a lambda or
+closure is a candidate, every local lookup, rigid-variable use, and reference
+to a local type declaration naming an enclosing rigid variable records the
+candidate depths it crosses, and the greatest fixpoint over references between
+candidates removes every candidate that reaches a contextual one. A local type
+declaration names an enclosing rigid variable when its own annotation looks one
+up, other than its own parameters, or names another local declaration that
+does; any other local type declaration is context free. Naming a method of a
+local type through the type is a lookup of the method's binding, and a
+dispatch is a reference to the local procedure it selects: once targets
+settle, each lineage selecting one adds that reference for the candidates
+enclosing the lineage's outermost dispatch site, recorded when the site's
+constraint was created. The capture list is not that proof: canonicalization omits
 local functions and globally resolvable patterns from captures. A promoted
 local procedure outputs a `promoted_proc` checked statement in place of its
 binding, its own procedure template (`ProcBaseKind.promoted_local`), and its
@@ -4264,6 +4281,48 @@ pattern's scheme; references resolve to `promoted_top_level_proc`, so it
 specializes exactly like a top-level procedure. Hoisting treats a lookup of it
 as known, so a top-level-equivalent call through a local helper is selected
 as a hoisted root. Lexically context-dependent local procedures are unchanged.
+A method declared by a type in a function body is such a local binding: the
+method registry resolves its dispatch target to the promoted template when
+checking promoted it, and to the local procedure otherwise. A dispatch whose
+selected target is an unpromoted local procedure, or derives a dispatch that
+selects one, needs that procedure's declaration context, so post-solve root
+pruning never keeps a root containing one. The same holds for a structural
+comparison or hash whose component dispatch selects one, and for a lookup
+whose instantiated scheme requirement resolves to one. A method's local
+procedure is the binding's own lambda or closure, or the local function its
+chain of local bindings reaches, as the method registry resolves it.
+
+Conditional diagnostics treat a dispatch as a reference to everything it
+selects. Only a module that declares a method in a function body can select a
+local procedure, so elsewhere a dispatch records nothing. In such a module, a
+receiver already of nominal type whose method binding is a local procedure
+records the promotion dependency a lookup of that procedure's binding would.
+Every other dispatch, including a lookup's instantiated scheme requirement,
+records a dispatch proof keyed by its constraint callable. Once targets and
+promotion settle, the proof is unavailable exactly when that dispatch, or a
+dispatch derived from it, selects an unpromoted local procedure. Derivation
+follows each selected target's parent, recorded derivation edges, and the
+component edges that link each component dispatch of a structural
+comparison or hash to that operation's constraint callable.
+
+A type declared in a block whose methods include an unpromoted local procedure
+is a capturing local type, and it stays in that block: no expression outside
+the block may have a type that mentions it, directly, through a type argument,
+or through the backing of another type declared in a function body. Only code
+inside the block has the declaration context such a method needs; a closure
+created inside the block may still use the type and leave the block, because
+its own type does not mention it. Checking enforces this once promotion
+settles. It reports each escaping type once, at the first point where a value
+leaves the block in source order: the block's own value, a reference to or
+reassignment of a binding from outside the block, or a return to a lambda
+outside it, and otherwise at the outermost outside expression whose type
+mentions the capturing local type. That point becomes a runtime error, and
+so does every live dispatch outside the block whose lineage selects one of the
+type's capturing methods. A lineage's evaluation site is its outermost
+dispatch with a site: a target's introducing expression, or the lookup that
+instantiated the requirement. Such a site outside the block exists only if
+the type escaped, so later stages never meet a local method call without its
+declaration context.
 
 A local procedure candidate is not proof of compile-time availability before
 that greatest fixpoint settles. Conditional diagnostics retain any pending
@@ -5063,7 +5122,13 @@ registry target as structural behavior.
 
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
-concrete monomorphic dispatcher type has already determined the owner.
+concrete monomorphic dispatcher type has already determined the owner. A
+method of a type declared in a function body is registered only by the
+declaring module, so a local procedure target found in any module of a lookup
+scope is that owner's exact target. Specialization-interface evidence uses its
+checked declaration; body-lowering evidence carries the declaration context of
+the body that declares it, so a generic procedure specialized with such
+evidence lowers with that context as an explicit input.
 
 Some method registry targets are generated structural targets rather than
 procedure bodies. A nominal or opaque type can opt in to a compiler-derived
@@ -6570,6 +6635,10 @@ public and private structure while retaining both sealed Monotype roots, and it
 unifies only callable slots and still-open Lambda Solved slots. This makes a
 SpecConstr-authored callable worker visible in the exact private representation
 that contains it without using the public representation as a replacement.
+When the walk reaches a public iterator viewing a minted or forced-dynamic
+representation, it continues from the public backing into the generated
+backing, exactly as the unifying relation does, so the public view's step slot
+receives the callable evidence of the value it views.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark
@@ -6577,6 +6646,14 @@ runs only after the clone is structurally complete, so the erased callable's
 source-function digest never observes a partially built type. The erased
 callable then accumulates exact finite members through normal Lambda Solved
 unification.
+
+The erased callable also records the function type it was erased from, and that
+type's arguments and result are its ABI. Function types that view the callable
+through a public interface can differ from the ABI in representation (a public
+iterator is boxed, a forced-dynamic one is not), so direct LIR lowering
+specializes every member entry at the ABI and lowers every indirect call's
+arguments to it and its result from it at explicit typed boundaries. A call
+site never takes its result layout from its own view of the callee.
 
 Minted iterator backings keep finite callable slots inline. Only
 forced-dynamic backings take this explicit erased-callable boundary. The direct
@@ -8407,18 +8484,24 @@ when it is an eligible inspect override. A method named `to_inspect` is still an
 ordinary method: it may have any type, and explicit calls and `where` clauses
 dispatch to it like any other method. Inspection calls the method as a call
 site whose result is `Str` would: the instance of its type whose result is
-`Str`. The method is an inspect override exactly when that instance exists and
-is `T -> Str`, where `T` is the owning nominal applied to distinct type
-variables that carry no `where` constraints. `Wrap(a) -> Str` qualifies, and so
-does an unannotated method whose result is a string literal: its declared result
-is a variable constrained by `from_quote` or `from_interpolation`, which `Str`
-satisfies. `Wrap(I64) -> Str`, `Pair(a, a) -> Str`,
+`Str`. The method is an inspect override exactly when it is a procedure, that
+instance exists, and it is `T -> Str`, where `T` is the owning nominal applied
+to distinct type variables that carry no `where` constraints. A method of a
+type declared in a function body that checking did not promote is a local
+procedure: it runs only where its declaration context exists, and inspection
+calls an override from rendering workers, specialized generic code, and erased
+descriptor slots, none of which hold that context. Such a method is not an
+inspect override even when its type is `T -> Str`. `Wrap(a) -> Str` qualifies,
+and so does an unannotated method whose result is a string literal: its
+declared result is a variable constrained by `from_quote` or
+`from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
+`Pair(a, a) -> Str`,
 `Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
 extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
 a rigid variable), and results that are `Str` only when one of `T`'s variables
 is (interpolating a payload of type `a`) do not. Inspection ignores an
-ineligible method and renders the value's default form; this is never
-reported.
+ineligible method and renders the value's default form; per the method-naming
+principle in Core Principles, this is never reported.
 
 Checking forms that instance once per `to_inspect` declaration
 (`recordInspectOverrideInstances`): it instantiates the method's scheme as a
@@ -8440,7 +8523,8 @@ inspection reached through a record, list, tag payload, generic helper, or
 nominal backing can never select an override it cannot call. The checked method
 registry records the decision once per `to_inspect` entry:
 `MethodRegistryEntry.inspect_override` is the instance's checked callable type
-when `MethodRegistry.fromModule` finds it `T -> Str`, and `inspect_evidence` is
+when `MethodRegistry.fromModule` finds the method's target is a procedure and
+the instance is `T -> Str`, and `inspect_evidence` is
 the use's evidence node, produced by the evidence pass. Monotype and Boxy
 planning and lowering select the declaring view exactly as method dispatch does
 and consume that decision through `MethodRegistry.lookupInspectOverride`; they
@@ -12819,7 +12903,7 @@ type per slot—keyed by the use expression, next to the edge's resolved
 requirements. A monomorphic edge to an in-flight recursive value or method
 target records the exact shared scheme root and no copy pairs; its
 substitution is the identity, every slot standing for the scheme's own
-variable. Evidence publication reads constraint callables the same way: an
+variable. Evidence output reads constraint callables the same way: an
 instantiation pairs every callable it copies, so an unpaired callable is the
 use's own, and its forwarded evidence names that exact callable, including its
 side-vector contract index, never just the same-named primary callable. A specialization is the scheme instantiated under one substitution:
@@ -18094,7 +18178,10 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
-machine ABI while consuming another in ARC.
+machine ABI while consuming another in ARC. That resolution lives in
+`lir/erased_owner.zig`; a LIR transform that rewrites the definitions on such a
+chain, as join scalarization does when it turns field reads into aliases,
+re-resolves the reuse sources of the procedures it changes with it.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:

@@ -4484,4 +4484,60 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
+    .{
+        .name = "issue 11993: method call on a nominal type declared in a function body",
+        .source_kind = .module,
+        .source =
+        \\run = |_| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count
+        \\    }
+        \\
+        \\    counter = Counter.{ count: 0 }
+        \\    count = counter.value()
+        \\    expect count == 0
+        \\    count
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "issue 11993: unannotated method of a function-body nominal type dispatched at a concrete type",
+        .source_kind = .module,
+        .source =
+        \\run = |_| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + 1
+        \\    }
+        \\
+        \\    counter = Counter.{ count: 0 }
+        \\    counter.value()
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "issue 11993: method of a function-body nominal type that captures a local",
+        .source_kind = .module,
+        .source =
+        \\run = |_| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + offset
+        \\    }
+        \\
+        \\    counter = Counter.{ count: 0 }
+        \\    count = counter.value()
+        \\    expect count == 1
+        \\    count
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
 };
