@@ -289,9 +289,7 @@ const Normalizer = struct {
             const child = delivered.?;
             switch (current.stmt) {
                 .let_ => |*binding| binding.value = child,
-                .expr => |*value| value.* = child,
-                .dbg => |*value| value.* = child,
-                .expect => |*value| value.* = child,
+                .expr, .dbg, .expect => |*value| value.* = child,
                 .return_ => |*ret| ret.value = child,
                 .uninitialized, .crash, .checked_error => unreachable,
             }
@@ -312,8 +310,7 @@ const Normalizer = struct {
             const stmt = self.program.getStmt(source);
             const request: ?Request = switch (stmt) {
                 .let_ => |binding| if (binding.recursive) .{ .scope = binding.value } else .{ .expr = .{ .source = binding.value, .sink = frame.sink } },
-                .expr => |value| .{ .expr = .{ .source = value, .sink = frame.sink } },
-                .dbg => |value| .{ .expr = .{ .source = value, .sink = frame.sink } },
+                .expr, .dbg => |value| .{ .expr = .{ .source = value, .sink = frame.sink } },
                 // Expect conditions retain their run/omit execution context.
                 .expect => |value| .{ .scope = value },
                 .return_ => |ret| .{ .expr = .{ .source = ret.value, .sink = frame.sink } },
@@ -730,8 +727,7 @@ const Normalizer = struct {
             .nominal => |*child| return try self.operandChild(frame, child, cursor, delivered),
             .field_access => |*field| return try self.operandChild(frame, &field.receiver, cursor, delivered),
             .tuple_access => |*access| return try self.operandChild(frame, &access.tuple, cursor, delivered),
-            .expect_err => |*failure| return try self.operandChild(frame, &failure.msg, cursor, delivered),
-            .literal_rejected => |*failure| return try self.operandChild(frame, &failure.msg, cursor, delivered),
+            inline .expect_err, .literal_rejected => |*failure| return try self.operandChild(frame, &failure.msg, cursor, delivered),
             .break_ => |*value| {
                 if (value.*) |*child| return try self.operandChild(frame, child, cursor, delivered);
                 return try self.finishExpr(frame);

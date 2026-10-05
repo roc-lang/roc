@@ -11395,8 +11395,7 @@ const Lowerer = struct {
         const eq_op: LIR.LowLevel = switch (primitive) {
             .str => .str_is_eq,
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .num_is_eq,
-            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable,
-            .bool => unreachable,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .bool => unreachable,
         };
         const args = [_]LIR.LocalId{ lhs, rhs };
         const not_op: LIR.LowLevel = .bool_not;
@@ -13420,8 +13419,7 @@ const Lowerer = struct {
 
                 switch (lhs) {
                     .primitive => |primitive| return .{ .value = primitive == rhs.primitive },
-                    .zst => return .{ .value = true },
-                    .erased_capture_ptr => return .{ .value = true },
+                    .zst, .erased_capture_ptr => return .{ .value = true },
                     .list => |elem| try addPair(items, elem, rhs.list),
                     .box => |elem| try addPair(items, elem, rhs.box),
                     .tuple => |elems| if (!try scan.addSpanPairs(items, elems, rhs.tuple)) return .{ .value = false },
@@ -14302,8 +14300,7 @@ const Lowerer = struct {
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
             .box => unreachable,
-            .box_of_zst => .zst,
-            .zst, .scalar => .zst,
+            .box_of_zst, .zst, .scalar => .zst,
             .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
@@ -14416,8 +14413,7 @@ const TypeEquivalence = struct {
 
         switch (lhs) {
             .primitive => |primitive| return .{ .value = primitive == rhs.primitive },
-            .zst => return .{ .value = true },
-            .erased_capture_ptr => return .{ .value = true },
+            .zst, .erased_capture_ptr => return .{ .value = true },
             .list => |elem| try addPair(items, elem, rhs.list),
             .box => |elem| try addPair(items, elem, rhs.box),
             .tuple => |elems| if (!try self.addSpanPairs(items, elems, rhs.tuple)) return .{ .value = false },

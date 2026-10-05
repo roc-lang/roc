@@ -656,9 +656,7 @@ const Lowerer = struct {
     /// Free what a frame still owns.
     fn releaseFrame(self: *Lowerer, frame: *Frame) void {
         switch (frame.task) {
-            .expr => |*task| task.parts.deinit(self.allocator),
-            .stmt => |*task| task.parts.deinit(self.allocator),
-            .pat => |*task| task.parts.deinit(self.allocator),
+            inline .expr, .stmt, .pat => |*task| task.parts.deinit(self.allocator),
             .seq => |*task| task.results.deinit(self.allocator),
             .direct_call_args => |*task| {
                 self.allocator.free(task.args);
@@ -1027,8 +1025,7 @@ const Lowerer = struct {
             .def_ref,
             .fn_def,
             => Common.invariant("pre-lift function expression reached Lambda Mono"),
-            .fn_ref => parts[0].get(.data),
-            .call_value => parts[0].get(.data),
+            .fn_ref, .call_value => parts[0].get(.data),
             .call_proc => |call| .{ .direct_call = .{
                 .target = .{ .local = parts[0].get(.fn_id) },
                 .args = parts[1].get(.expr_span),

@@ -5492,8 +5492,7 @@ pub const InstGraph = struct {
     fn classProvablyUnresolved(self: *InstGraph, root: NodeId) bool {
         return switch (self.nodes.items[@intFromEnum(root)]) {
             .unresolved => true,
-            .tag_union => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
-            .record => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
+            inline .tag_union, .record => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
             .redirect, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
         };
     }
@@ -8383,7 +8382,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
             .word => |word| try self.writeU32(word),
             .type_def => |def| try self.writeTypeDef(def),
             .optional_digest => |digest| try self.writeOptionalDigest(digest),
-            .optional_owner => |owner| try self.writeOptionalBuiltinOwner(owner),
+            .optional_owner => |owner| try self.writeOptionalTagName(owner),
         };
     }
 
@@ -8568,8 +8567,8 @@ const OpenFunctionInterfaceShapeWriter = struct {
 
     fn writeVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) Allocator.Error!void {
         try self.writeBytes(@tagName(variable.origin));
-        try self.writeOptionalNumericDefaultPhase(variable.numeric_default_phase);
-        try self.writeOptionalRowDefault(variable.row_default);
+        try self.writeOptionalTagName(variable.numeric_default_phase);
+        try self.writeOptionalTagName(variable.row_default);
     }
 
     fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) Allocator.Error!void {
@@ -8605,35 +8604,12 @@ const OpenFunctionInterfaceShapeWriter = struct {
         try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.rest_field));
     }
 
-    fn writeOptionalBuiltinOwner(
+    /// Write whether `value` (an optional enum) is present, then its tag name.
+    fn writeOptionalTagName(
         self: *OpenFunctionInterfaceShapeWriter,
-        owner: ?static_dispatch.BuiltinOwner,
+        value: anytype,
     ) Allocator.Error!void {
-        if (owner) |actual| {
-            try self.writeU8(1);
-            try self.writeBytes(@tagName(actual));
-        } else {
-            try self.writeU8(0);
-        }
-    }
-
-    fn writeOptionalNumericDefaultPhase(
-        self: *OpenFunctionInterfaceShapeWriter,
-        phase: ?checked.NumericDefaultPhase,
-    ) Allocator.Error!void {
-        if (phase) |actual| {
-            try self.writeU8(1);
-            try self.writeBytes(@tagName(actual));
-        } else {
-            try self.writeU8(0);
-        }
-    }
-
-    fn writeOptionalRowDefault(
-        self: *OpenFunctionInterfaceShapeWriter,
-        row_default: ?checked.RowDefault,
-    ) Allocator.Error!void {
-        if (row_default) |actual| {
+        if (value) |actual| {
             try self.writeU8(1);
             try self.writeBytes(@tagName(actual));
         } else {

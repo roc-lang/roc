@@ -1249,8 +1249,7 @@ pub const Program = struct {
             .local_template, .imported_template, .checked_generated => |proc_template| proc_template,
             .nested => |nested| nested.owner,
             .local_hosted, .imported_hosted => |hosted_fn| hosted_fn.template,
-            .parser_runtime => |runtime| runtime.owner,
-            .encoder_for_runtime => |runtime| runtime.owner,
+            inline .parser_runtime, .encoder_for_runtime => |runtime| runtime.owner,
         };
         return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_module);
     }

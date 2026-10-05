@@ -2148,8 +2148,7 @@ const Pass = struct {
                     try tails.append(self.allocator, payload_switch.initialized);
                     try tails.append(self.allocator, payload_switch.uninitialized);
                 },
-                .try_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
-                .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
+                inline .try_sequence, .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
                 .comptime_branch_taken => |taken| try tails.append(self.allocator, taken.body),
                 .typed_boundary => |boundary| try tails.append(self.allocator, boundary.value),
                 .local,
@@ -2494,8 +2493,7 @@ const Pass = struct {
                     // selected by operational consumers, but must never cause
                     // argument specialization; the standard child list
                     // excludes them.
-                    .join_point => {},
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.allocator, self.program, id, &stack);
             },
@@ -6965,8 +6963,7 @@ const Cloner = struct {
                     .payloads = input.?.get(.expr_span),
                 } });
             },
-            .static_data_candidate => return self.finishPlainExpr(task, expr_id),
-            .comptime_value => return self.finishPlainExpr(task, expr_id),
+            .static_data_candidate, .comptime_value => return self.finishPlainExpr(task, expr_id),
             .typed_boundary => |boundary| {
                 if (cursor == 0) return .{ .call = .{ .expr = boundary.value } };
                 return self.finishPlainData(task, expr, .{ .typed_boundary = .{ .value = input.?.get(.expr) } });
@@ -11194,9 +11191,7 @@ const Cloner = struct {
     fn stepSpan(self: *Cloner, frame: *CloneFrame, task: *SpanTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
             task.count = switch (task.span) {
-                .exprs => |span| span.len,
-                .captures => |span| span.len,
-                .fields => |span| span.len,
+                .exprs, .captures, .fields => |span| span.len,
             };
             task.values = try self.arena.allocator().alloc(Ast.ExprId, task.count);
             task.unchanged = self.source_reuse == .original_body;
@@ -12279,8 +12274,7 @@ const Cloner = struct {
             .typed_boundary,
             .comptime_branch_taken,
             => Common.invariant("known-shape probe did not unwrap a transparent wrapper"),
-            .comptime_value => false,
-            .comptime_exhaustiveness_failed => false,
+            .comptime_value, .comptime_exhaustiveness_failed => false,
             .unit,
             .@"unreachable",
             .int_lit,

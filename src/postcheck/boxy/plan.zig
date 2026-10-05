@@ -4939,8 +4939,7 @@ const Builder = struct {
                 .encoder_dict_key_thunk,
                 => {},
             },
-            .generated_field_iterator => {},
-            .generated_interpolation_step => {},
+            .generated_field_iterator, .generated_interpolation_step => {},
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -6797,8 +6796,7 @@ const Builder = struct {
                 if (list.rest) |rest| if (rest.pattern) |child| try actions.append(self.allocator, patternAction(view, child));
             },
             .tuple => |items| for (items) |child| try actions.append(self.allocator, patternAction(view, child)),
-            .numeral_literal => |literal| if (literal.guard) |guard| try actions.append(self.allocator, exprAction(view, guard)),
-            .str_literal => |literal| if (literal.guard) |guard| try actions.append(self.allocator, exprAction(view, guard)),
+            inline .numeral_literal, .str_literal => |literal| if (literal.guard) |guard| try actions.append(self.allocator, exprAction(view, guard)),
             .str_interpolation => |interpolation| {
                 for (interpolation.steps) |step| {
                     if (step.capture) |capture| try actions.append(self.allocator, patternAction(view, capture));
@@ -8697,8 +8695,7 @@ const Builder = struct {
         fn deinit(frame: *RepFrame, allocator: Allocator) void {
             switch (frame.state) {
                 .row_redirect, .optional_slot => {},
-                .build => |*build| build.deinit(allocator),
-                .host_nominal => |*build| build.deinit(allocator),
+                inline .build, .host_nominal => |*build| build.deinit(allocator),
             }
         }
     };
@@ -12006,8 +12003,7 @@ const Builder = struct {
                 .checked => |template| self.templateSchemeVars(template),
                 .lifted, .synthetic => null,
             },
-            .checked_error => null,
-            .callable_eval_template => null,
+            .checked_error, .callable_eval_template => null,
         };
     }
 
@@ -12176,8 +12172,7 @@ const Builder = struct {
                 .checked => |template| self.templateEvidenceParams(template),
                 .lifted, .synthetic => null,
             },
-            .checked_error => null,
-            .callable_eval_template => null,
+            .checked_error, .callable_eval_template => null,
         };
     }
 
@@ -12669,7 +12664,7 @@ const Builder = struct {
         value_rep: TypeRepId,
         desc_rep: TypeRepId,
     ) Allocator.Error!TypeRepId {
-        if (try self.repAtTypePosition(worker.rep, desc_rep, value_rep)) |found| return found;
+        if (try self.repAtPosition(.type_position, worker.rep, desc_rep, value_rep)) |found| return found;
         const store_view = self.moduleForId(stored_fn.module);
         const store = store_view.const_store orelse
             boxyPlanInvariant("stored callable descriptor planning had no ConstStore");
@@ -12683,7 +12678,7 @@ const Builder = struct {
             } else continue;
             const persisted_rep = self.plan.repForStoredType(.{ .module = stored_fn.module, .ty = persisted.ty }) orelse
                 boxyPlanInvariant("stored callable capture type was not analyzed");
-            if (try self.repAtTypePosition(capture.rep, desc_rep, persisted_rep)) |found| return found;
+            if (try self.repAtPosition(.type_position, capture.rep, desc_rep, persisted_rep)) |found| return found;
         }
         boxyPlanInvariant("stored callable worker descriptor was absent from its stored types");
     }
@@ -14386,7 +14381,7 @@ const Builder = struct {
             arg.whole_operand = self.repQuery().descriptorArgumentIdentityRep(arg.worker_rep) ==
                 self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
             if (!arg.whole_operand) {
-                arg.source_operand_rep = try self.operandRepAtWorkerPosition(worker_arg.rep, arg.worker_rep, operand_arg_reps[index]);
+                arg.source_operand_rep = try self.repAtPosition(.runtime, worker_arg.rep, arg.worker_rep, operand_arg_reps[index]);
             }
         }
 
@@ -14522,7 +14517,7 @@ const Builder = struct {
                 for (mappings) |mapping| {
                     if (mapping.hidden_desc_index >= hidden_index) continue;
                     const root = pending.items[mapping.hidden_desc_index];
-                    const rep = try self.operandRepAtWorkerPosition(params[mapping.hidden_desc_index].rep, param.rep, root.rep) orelse continue;
+                    const rep = try self.repAtPosition(.runtime, params[mapping.hidden_desc_index].rep, param.rep, root.rep) orelse continue;
                     if (source_rep) |existing| {
                         if (existing != rep) boxyPlanInvariant("one evidence-only worker descriptor sat inside two evidence sources");
                         continue;
@@ -16210,44 +16205,18 @@ const Builder = struct {
         walk.substitutions.exitScope(frame.enclosing_scope);
     }
 
-    /// The representation inside `operand_root` at the position `target`
-    /// occupies inside `worker_root`: the worker's runtime path to `target`,
-    /// followed role by role through the operand.
-    fn operandRepAtWorkerPosition(
-        self: *Builder,
-        worker_root: TypeRepId,
-        target: TypeRepId,
-        operand_root: TypeRepId,
-    ) Allocator.Error!?TypeRepId {
-        var path = std.ArrayList(RepChild).empty;
-        defer path.deinit(self.allocator);
-        var active = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer active.deinit();
-        if (!try self.findWorkerRuntimePath(worker_root, self.repQuery().descriptorArgumentIdentityRep(target), &path, &active)) return null;
+    /// Which children a representation path may step through: `.runtime`
+    /// follows only children that carry a runtime descriptor; `.type_position`
+    /// also follows a function's arguments and result.
+    const RepPathPositions = enum { runtime, type_position };
 
-        var current = operand_root;
-        for (path.items) |step| {
-            var candidate = current;
-            const next: RepChild = while (true) {
-                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(candidate)].children);
-                if (self.namedQuery().findMatchingChildByRole(children, step)) |child| break child;
-                candidate = self.repQuery().structuralWrapperBackingRep(candidate) orelse return null;
-            };
-            current = next.rep;
-        }
-        return current;
-    }
-
-    /// Find the first runtime path, in child order, from `root` to a
-    /// representation whose descriptor identity is `target`. `path` holds
-    /// the children stepped through; `active` holds the representations on
-    /// the path, so a recursive type is not re-entered.
-    /// The representation at the position `target` occupies in `worker_root`,
-    /// read from `value_root`, a representation of the same type structure.
-    /// Unlike a runtime descriptor path, a type position may lie inside a
-    /// function's arguments or result.
-    fn repAtTypePosition(
+    /// The representation inside `value_root` at the position `target`
+    /// occupies inside `worker_root`: the path from `worker_root` to `target`,
+    /// followed role by role through `value_root`, a representation of the
+    /// same type structure.
+    fn repAtPosition(
         self: *Builder,
+        comptime positions: RepPathPositions,
         worker_root: TypeRepId,
         target: TypeRepId,
         value_root: TypeRepId,
@@ -16256,7 +16225,7 @@ const Builder = struct {
         defer path.deinit(self.allocator);
         var active = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer active.deinit();
-        if (!try self.findTypePositionPath(worker_root, self.repQuery().descriptorArgumentIdentityRep(target), &path, &active)) return null;
+        if (!try self.findRepPath(positions, worker_root, self.repQuery().descriptorArgumentIdentityRep(target), &path, &active)) return null;
 
         var current = value_root;
         for (path.items) |step| {
@@ -16271,8 +16240,13 @@ const Builder = struct {
         return current;
     }
 
-    fn findTypePositionPath(
+    /// Find the first path, in child order, from `root` to a representation
+    /// whose descriptor identity is `target`. `path` holds the children
+    /// stepped through; `active` holds the representations on the path, so a
+    /// recursive type is not re-entered.
+    fn findRepPath(
         self: *Builder,
+        comptime positions: RepPathPositions,
         root: TypeRepId,
         target: TypeRepId,
         path: *std.ArrayList(RepChild),
@@ -16302,59 +16276,14 @@ const Builder = struct {
             const current = top.rep;
             const child = self.plan.children.items[children.start + top.index];
             top.index += 1;
-            switch (child.role) {
-                .function_arg, .function_ret => {},
-                .alias_backing, .nominal_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .alias_arg, .nominal_arg, .nominal_padding_field => {
-                    if (!childCarriesRuntimeDescriptor(child.role)) continue;
+            const skipped = switch (positions) {
+                .runtime => !childCarriesRuntimeDescriptor(child.role),
+                .type_position => switch (child.role) {
+                    .function_arg, .function_ret => false,
+                    .alias_backing, .nominal_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .alias_arg, .nominal_arg, .nominal_padding_field => !childCarriesRuntimeDescriptor(child.role),
                 },
-            }
-            if (self.plan.childIsSharedBackingTemplate(current, child)) continue;
-            try path.append(self.allocator, child);
-            if (self.repQuery().descriptorArgumentIdentityRep(child.rep) == target) return true;
-            if ((try active.getOrPut(child.rep)).found_existing) {
-                path.items.len -= 1;
-                continue;
-            }
-            frames.append(self.allocator, .{ .rep = child.rep }) catch |err| {
-                _ = active.remove(child.rep);
-                return err;
             };
-        }
-        return false;
-    }
-
-    fn findWorkerRuntimePath(
-        self: *Builder,
-        root: TypeRepId,
-        target: TypeRepId,
-        path: *std.ArrayList(RepChild),
-        active: *collections.DenseMap(TypeRepId, void),
-    ) Allocator.Error!bool {
-        if (self.repQuery().descriptorArgumentIdentityRep(root) == target) return true;
-        if ((try active.getOrPut(root)).found_existing) return false;
-        const Frame = struct { rep: TypeRepId, index: usize = 0 };
-        var frames: std.ArrayList(Frame) = .empty;
-        defer {
-            for (frames.items) |frame| _ = active.remove(frame.rep);
-            frames.deinit(self.allocator);
-        }
-        frames.append(self.allocator, .{ .rep = root }) catch |err| {
-            _ = active.remove(root);
-            return err;
-        };
-        while (frames.items.len != 0) {
-            const top = &frames.items[frames.items.len - 1];
-            const children = self.plan.representations.items[@intFromEnum(top.rep)].children;
-            if (top.index == children.len) {
-                _ = active.remove(top.rep);
-                frames.items.len -= 1;
-                if (frames.items.len != 0) path.items.len -= 1;
-                continue;
-            }
-            const current = top.rep;
-            const child = self.plan.children.items[children.start + top.index];
-            top.index += 1;
-            if (!childCarriesRuntimeDescriptor(child.role)) continue;
+            if (skipped) continue;
             if (self.plan.childIsSharedBackingTemplate(current, child)) continue;
             try path.append(self.allocator, child);
             if (self.repQuery().descriptorArgumentIdentityRep(child.rep) == target) return true;
@@ -17032,9 +16961,9 @@ const Builder = struct {
         for (leaves.items) |leaf| {
             const source = found: {
                 for (requirement_args, callable_arg_reps) |requirement_arg, callable_arg_rep| {
-                    if (try self.repAtTypePosition(requirement_arg.rep, leaf, callable_arg_rep)) |rep| break :found rep;
+                    if (try self.repAtPosition(.type_position, requirement_arg.rep, leaf, callable_arg_rep)) |rep| break :found rep;
                 }
-                break :found try self.repAtTypePosition(requirement_function.ret, leaf, callable_ret_rep) orelse
+                break :found try self.repAtPosition(.type_position, requirement_function.ret, leaf, callable_ret_rep) orelse
                     boxyPlanInvariant("dictionary method evidence callable had no value at a requirement open record position");
             };
             try self.plan.requirement_leaf_reps.append(self.allocator, source);
@@ -17998,8 +17927,7 @@ const Builder = struct {
     fn procedureBindingBodyIsPendingEval(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) bool {
         const binding = view.top_level_procedure_bindings.get(binding_ref);
         return switch (binding.body) {
-            .direct_template => false,
-            .checked_error => false,
+            .direct_template, .checked_error => false,
             .callable_eval_template => |template_id| blk: {
                 const template = self.callableEvalTemplate(view, template_id);
                 const root = view.compile_time_roots.root(template.root);
@@ -18076,8 +18004,7 @@ const Builder = struct {
         body: anytype,
     ) ?CheckedExprIdentity {
         const template_id = switch (body) {
-            .direct_template => return null,
-            .checked_error => return null,
+            .direct_template, .checked_error => return null,
             .callable_eval_template => |template| template,
         };
         const template = self.callableEvalTemplate(view, template_id);
@@ -18261,7 +18188,7 @@ const Builder = struct {
         rep_id: TypeRepId,
         tag_text: []const u8,
     ) Allocator.Error!RepChild {
-        var current = try self.tagIdentityRep(rep_id);
+        var current = try self.rowIdentityRep("tag", rep_id);
         var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer seen.deinit();
         while (true) {
@@ -18284,20 +18211,22 @@ const Builder = struct {
             for (self.plan.childSlice(rep.children)) |child| {
                 if (child.role != .tag_ext) continue;
                 if (extension != null) boxyPlanInvariant("generated tag payload lookup found duplicate row extensions");
-                extension = try self.tagIdentityRep(child.rep);
+                extension = try self.rowIdentityRep("tag", child.rep);
             }
             current = extension orelse
                 boxyPlanInvariant("generated tag union was missing a required tag");
         }
     }
 
-    fn tagIdentityRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
+    /// `rep_id` with alias and transparent nominal wrappers removed; `kind`
+    /// names the row being resolved in the cyclic-chain invariant.
+    fn rowIdentityRep(self: *Builder, comptime kind: []const u8, rep_id: TypeRepId) Allocator.Error!TypeRepId {
         var current = rep_id;
         var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer seen.deinit();
         while (true) {
             const entry = try seen.getOrPut(current);
-            if (entry.found_existing) boxyPlanInvariant("tag representation wrapper chain was cyclic");
+            if (entry.found_existing) boxyPlanInvariant(kind ++ " representation wrapper chain was cyclic");
             const rep = self.plan.representations.items[@intFromEnum(current)];
             if (rep.kind == .alias) {
                 current = requiredSingleChildOf(&self.plan, current, .alias_backing).rep;
@@ -18317,7 +18246,7 @@ const Builder = struct {
         rep_id: TypeRepId,
         field_text: []const u8,
     ) Allocator.Error!RepChild {
-        var current = try self.recordIdentityRep(rep_id);
+        var current = try self.rowIdentityRep("record", rep_id);
         var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer seen.deinit();
 
@@ -18335,7 +18264,7 @@ const Builder = struct {
                             boxyPlanInvariant("generated record field lookup had no checked name store");
                         if (std.mem.eql(u8, names.recordFieldLabelText(name), field_text)) return child;
                     },
-                    .record_ext => extension = try self.recordIdentityRep(child.rep),
+                    .record_ext => extension = try self.rowIdentityRep("record", child.rep),
                     .alias_backing,
                     .alias_arg,
                     .nominal_backing,
@@ -18353,27 +18282,6 @@ const Builder = struct {
             }
             current = extension orelse
                 boxyPlanInvariant("generated record type was missing a required field");
-        }
-    }
-
-    fn recordIdentityRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
-        var current = rep_id;
-        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer seen.deinit();
-        while (true) {
-            const entry = try seen.getOrPut(current);
-            if (entry.found_existing) boxyPlanInvariant("record representation wrapper chain was cyclic");
-            const rep = self.plan.representations.items[@intFromEnum(current)];
-            if (rep.kind == .alias) {
-                current = requiredSingleChildOf(&self.plan, current, .alias_backing).rep;
-            } else if (rep.kind == .nominal) {
-                switch (rep.kind.nominal) {
-                    .transparent, .builtin_other => current = requiredSingleChildOf(&self.plan, current, .nominal_backing).rep,
-                    .opaque_nominal => return current,
-                }
-            } else {
-                return current;
-            }
         }
     }
 
@@ -18906,8 +18814,7 @@ const Builder = struct {
                 .{ .procedure_binding = binding }
             else
                 .{ .nested_expr = .{ .module = view.key, .expr = self.nestedCallableSiteExprForExpr(view, local.expr) orelse local.expr } },
-            .imported_proc => |procedure| self.workerSourceForProcedureUse(procedure),
-            .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
+            .imported_proc, .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -18974,8 +18881,7 @@ const Builder = struct {
                         .promoted_top_level_proc,
                         => |procedure| .{ .procedure_use = procedure },
                         .platform_required_proc => |required| .{ .procedure_use = required.procedure },
-                        .imported_proc => |procedure| .{ .procedure_use = procedure },
-                        .hosted_proc => |procedure| .{ .procedure_use = procedure },
+                        .imported_proc, .hosted_proc => |procedure| .{ .procedure_use = procedure },
                         .local_param,
                         .local_value,
                         .local_mutable_version,
@@ -19216,9 +19122,7 @@ const Builder = struct {
                 .hosted => requested_type,
             },
             .nested_expr => |expr_ref| self.nestedExprDefinitionType(expr_ref),
-            .generated_codec => requested_type,
-            .generated_field_iterator => requested_type,
-            .generated_interpolation_step => requested_type,
+            .generated_codec, .generated_field_iterator, .generated_interpolation_step => requested_type,
         };
     }
 

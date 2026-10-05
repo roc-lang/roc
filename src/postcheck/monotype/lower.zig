@@ -4012,8 +4012,7 @@ const DraftGeneratedHelperDefEntry = union(enum) {
 
     fn id(self: DraftGeneratedHelperDefEntry) DraftDefId {
         return switch (self) {
-            .reserved => |def_id| def_id,
-            .ready => |def_id| def_id,
+            .reserved, .ready => |def_id| def_id,
         };
     }
 };
@@ -8914,8 +8913,7 @@ const Builder = struct {
         const content: Type.Content = switch (frame.payload) {
             .pending => Common.invariant("pending checked type reached Monotype lowering"),
             .err => Common.invariant("erroneous checked type reached Monotype lowering"),
-            .flex => |variable| lowerCheckedTypeVariable(variable),
-            .rigid => |variable| lowerCheckedTypeVariable(variable),
+            .flex, .rigid => |variable| lowerCheckedTypeVariable(variable),
             .empty_record => .{ .record = .empty() },
             .empty_tag_union => .{ .tag_union = .empty() },
             .record => .{ .record = try self.activeTypeStore().addRecordFields(self.activeNameStore(), type_run.fields.items[frame.fields_start..]) },
@@ -12668,8 +12666,7 @@ const Builder = struct {
                     Common.invariant("stored default-root function's declaring module was not present in the lowering input")
             else
                 self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
-            .parser_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
-            .encoder_for_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
+            inline .parser_runtime, .encoder_for_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .local_template,
             .imported_template,
             .checked_generated,
@@ -20593,8 +20590,7 @@ const BodyContext = struct {
                     self.exprImpossibilityProof(switch_.uninitialized),
                 }),
             }),
-            .try_sequence => |try_| self.exprImpossibilityProof(try_.try_expr),
-            .try_record_sequence => |try_| self.exprImpossibilityProof(try_.try_expr),
+            inline .try_sequence, .try_record_sequence => |try_| self.exprImpossibilityProof(try_.try_expr),
             .block => |block| blk: {
                 var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
                 defer proofs.deinit(self.allocator);
@@ -21674,8 +21670,7 @@ const BodyContext = struct {
                             if (args.len != 1) Common.invariant("List type reached Monotype inspect lowering without one type argument");
                             break :blk .{ .tail = .{ .list = .{ .value = value, .elem_ty = GuardedList.at(args, 0) } } };
                         },
-                        .box => {},
-                        .dict, .set, .fields, .field, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => {},
+                        .box, .dict, .set, .fields, .field, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => {},
                     }
                 }
                 if (try self.toInspectCall(value, value_ty, str_ty)) |method_call| break :blk .{ .done = .{ .expr = method_call } };
@@ -23206,9 +23201,7 @@ const BodyContext = struct {
 
     fn destroyInstTaskBox(self: *BodyContext, task: InstTask) void {
         switch (task) {
-            .nominal => |boxed| self.allocator.destroy(boxed),
-            .declared_order => |boxed| self.allocator.destroy(boxed),
-            .decl_backing => |boxed| self.allocator.destroy(boxed),
+            inline .nominal, .declared_order, .decl_backing => |boxed| self.allocator.destroy(boxed),
             .node, .slice, .fields, .tags => {},
         }
     }
@@ -23220,8 +23213,7 @@ const BodyContext = struct {
                 const removed = self.scopedNodeMap(task.scoped_ty).remove(task.scoped_ty);
                 std.debug.assert(removed);
             },
-            .decl_backing => |task| self.leaveDeclBackingScopes(task),
-            .declared_order => |task| self.leaveDeclBackingScopes(task),
+            inline .decl_backing, .declared_order => |task| self.leaveDeclBackingScopes(task),
             .slice, .fields, .tags, .nominal => {},
         }
     }
@@ -25848,8 +25840,7 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .empty_tag_union => .mismatch,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .empty_tag_union, .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
                 },
                 .record => |request_row| switch (self.graph.content(produced_root)) {
                     .record => |produced_row| blk: {
@@ -25861,8 +25852,7 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .empty_record => .mismatch,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .empty_record, .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
                 },
                 .empty_tag_union => switch (self.graph.content(produced_root)) {
                     .empty_tag_union => .unchanged,
@@ -26546,8 +26536,7 @@ const BodyContext = struct {
 
         fn maybeNodeValue(self: EvidenceResult) ?NodeId {
             return switch (self) {
-                .maybe_node => |node| node,
-                .node => |node| node,
+                .maybe_node, .node => |node| node,
                 .none => unreachable,
             };
         }
@@ -26905,13 +26894,11 @@ const BodyContext = struct {
             .call => |call| .{ .call_result = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = null } },
             .dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
             .interpolation => |interpolation| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = null, .phase = .expression_lowering } },
-            .type_dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
-            .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .type_dispatch_call, .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
             .field_access => |field| .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } },
             .tuple_access => |access| .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = null } },
             .lookup_local => |lookup| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, lookup.resolved)),
-            .lookup_external => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
-            .lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
+            .lookup_external, .lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
             .lambda => |lambda| return try self.finishTypeNodeLeaf(task, try self.lambdaFunctionNode(expr.ty, lambda)),
             .closure => |closure| return try self.finishTypeNodeLeaf(task, try self.closureFunctionNode(closure)),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return try self.finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
@@ -26999,8 +26986,7 @@ const BodyContext = struct {
                 return evidenceCall(self, .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = expected_ty } });
             },
             .lookup_local => |lookup| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty) } },
-            .lookup_external => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
-            .lookup_required => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
+            .lookup_external, .lookup_required => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (expected_ty) |ty| {
@@ -27848,13 +27834,11 @@ const BodyContext = struct {
             frame.cursor = 1;
             switch (expr.data) {
                 .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
-                .lookup_external => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
-                .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
+                .lookup_external, .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
                 .call => |call| return try self.beginRelateCall(frame, task, expr.ty, call),
                 .dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
                 .interpolation => |interpolation| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
-                .type_dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
-                .method_eq => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .type_dispatch_call, .method_eq => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
                 .field_access => |field| return evidenceCall(self, .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } }),
                 .tag => |tag| {
                     task.name = try self.tagName(self.view, tag.name);
@@ -28061,11 +28045,9 @@ const BodyContext = struct {
             .call => |call| (try self.callResultMonoType(expr_id, expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
+            .type_dispatch_call, .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
-            .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
+            .lookup_external, .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionType(closure),
             .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field, null)),
@@ -29253,9 +29235,7 @@ const BodyContext = struct {
             .start => {},
             .pattern_value => {
                 const pattern = switch (statement.data) {
-                    .decl => |decl| decl.pattern,
-                    .var_ => |decl| decl.pattern,
-                    .reassign => |decl| decl.pattern,
+                    inline .decl, .var_, .reassign => |decl| decl.pattern,
                     .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable,
                 };
                 const lowered = try self.finishPatternStatement(pattern, statement.source_region, task.requested_cell, input.?.exprValue());
@@ -29624,9 +29604,7 @@ const BodyContext = struct {
                 task.finish = .{ .expect_err = checked_expr.source_region };
                 return requestLowerTask(self, .{ .inspected = .{ .expr = expect_err.expr, .expect_err_snippet = expect_err.snippet } });
             },
-            .str => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
-            .list => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
-            .tuple => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
+            .str, .list, .tuple => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
             .block => |block| return requestLowerTask(self, .{ .block = .{
                 .statements = block.statements,
                 .final_expr = block.final_expr,
@@ -29689,8 +29667,7 @@ const BodyContext = struct {
             },
             .dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
             .interpolation => |interpolation| return self.divergentEffectStep(self.divergentInterpolationChild(interpolation), ty),
-            .method_eq => |plan| return try self.divergentDispatchStep(plan, ty),
-            .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
+            .method_eq, .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
             .numeral => |numeral| return try self.divergentDispatchStep(numeral.plan, ty),
             .str_from_quote => |quote| return try self.divergentDispatchStep(quote.plan, ty),
             .pending,
@@ -30750,9 +30727,7 @@ const BodyContext = struct {
 
     fn releaseLowerFrame(self: *BodyContext, frame: *LowerFrame) void {
         switch (frame.task) {
-            .at_type_cell => |*task| self.restoreSourceLocation(&task.saved),
-            .expr_inner => |*task| self.restoreSourceLocation(&task.saved),
-            .with_type => |*task| self.restoreSourceLocation(&task.saved),
+            inline .at_type_cell, .expr_inner, .with_type => |*task| self.restoreSourceLocation(&task.saved),
             .record_at_type => |*task| task.deinit(self.allocator),
             .dispatch => |*task| {
                 task.pre_lowered.deinit(self.allocator);
@@ -30983,8 +30958,7 @@ const BodyContext = struct {
         frame.cursor = 5;
         switch (expr.data) {
             .lookup_local => |lookup| return try self.lookupExprAtNodeStep(checked_expr, lookup.resolved, expected_node),
-            .lookup_external => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
-            .lookup_required => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
+            .lookup_external, .lookup_required => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
             .lambda => return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = checked_expr, .request_fn_node = expected_node } }),
             .closure => |closure| return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = checked_expr, .request_fn_node = expected_node, .closure = closure } }),
             .field_access => return requestLowerTask(self, .{ .field_access = .{ .expr = checked_expr, .target = .{ .node = expected_node } } }),
@@ -31705,8 +31679,7 @@ const BodyContext = struct {
                         },
                         .intrinsic, .graph_participating => {},
                     },
-                    .local_proc => {},
-                    .structural => {},
+                    .local_proc, .structural => {},
                 }
             },
             .direct_parametric => |direct| {
@@ -31714,11 +31687,9 @@ const BodyContext = struct {
                 switch (node.target.kind) {
                     .procedure => |procedure| switch (procedure.runtime_target) {
                         .low_level => |op| task.direct_parametric_low_level = op,
-                        .procedure => {},
-                        .intrinsic, .graph_participating => {},
+                        .procedure, .intrinsic, .graph_participating => {},
                     },
-                    .local_proc => {},
-                    .structural => {},
+                    .local_proc, .structural => {},
                 }
             },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
@@ -33238,8 +33209,7 @@ const BodyContext = struct {
         const expected_arity: usize = intrinsic.callsiteArity() orelse
             Common.invariant("non-call-site intrinsic reached call-site lowering");
         const actual_arity = switch (operands) {
-            .direct_call => |args| args.len,
-            .dispatch => |args| args.len,
+            inline .direct_call, .dispatch => |args| args.len,
         };
         if (actual_arity != expected_arity) {
             Common.invariant("checked call-site intrinsic had an unexpected arity");
@@ -33478,8 +33448,7 @@ const BodyContext = struct {
         const expr = self.view.bodies.expr(checked_arg);
         const maybe_ref: ?checked.ResolvedValueId = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
-            .lookup_external => |ref_id| ref_id,
-            .lookup_required => |ref_id| ref_id,
+            .lookup_external, .lookup_required => |ref_id| ref_id,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
         if (maybe_ref) |ref_id| {
@@ -39990,8 +39959,7 @@ const BodyContext = struct {
     fn parseShapeSelection(self: *BodyContext, shape_ty: Type.TypeId) ParseShapeSelection {
         if (self.scalarCodecMethodName(shape_ty, "parse_")) |method_name| return .{ .tag_text = method_name };
         return switch (self.shapeContent(shape_ty)) {
-            .record => .{ .tag_text = "Record" },
-            .zst => .{ .tag_text = "Record" },
+            .record, .zst => .{ .tag_text = "Record" },
             .tag_union => .{ .tag_text = "TagUnion" },
             .primitive, .named, .tuple, .list, .box, .func, .erased => Common.invariant("parser shape was not supported"),
         };
@@ -40686,8 +40654,7 @@ const BodyContext = struct {
         const expr = self.view.bodies.expr(checked_func);
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
-            .lookup_external => |resolved| resolved,
-            .lookup_required => |resolved| resolved,
+            .lookup_external, .lookup_required => |resolved| resolved,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
@@ -41005,8 +40972,7 @@ const BodyContext = struct {
         // derive their generated evidence from the stored root directly,
         // mirroring `lookupExprTypeNode`'s const arms.
         const const_use: ?checked.ConstUseTemplate = switch (record.ref) {
-            .top_level_const => |const_use| const_use,
-            .imported_const => |const_use| const_use,
+            .top_level_const, .imported_const => |const_use| const_use,
             .platform_required_const => |required| required.const_use,
             .selected_hoisted_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_proc, .promoted_top_level_proc => null,
         };
@@ -41109,8 +41075,7 @@ const BodyContext = struct {
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
             .selected_hoisted_const => |selected| return try self.constUseTypeNode(checked_ty, selected.const_use),
-            .top_level_const => |const_use| return try self.constUseTypeNode(checked_ty, const_use),
-            .imported_const => |const_use| return try self.constUseTypeNode(checked_ty, const_use),
+            .top_level_const, .imported_const => |const_use| return try self.constUseTypeNode(checked_ty, const_use),
             .platform_required_const => |required| return try self.constUseTypeNode(checked_ty, required.const_use),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_proc, .promoted_top_level_proc => {},
         }
@@ -41156,8 +41121,7 @@ const BodyContext = struct {
             return local_ty;
         }
         return switch (record.ref) {
-            .top_level_const => |const_use| try self.constUseMonoType(const_use),
-            .imported_const => |const_use| try self.constUseMonoType(const_use),
+            .top_level_const, .imported_const => |const_use| try self.constUseMonoType(const_use),
             .platform_required_const => |required| try self.constUseMonoType(required.const_use),
             .local_param,
             .local_value,
@@ -41812,8 +41776,7 @@ const BodyContext = struct {
         }
         const record = self.view.resolved_refs.records[raw];
         const const_use = switch (record.ref) {
-            .top_level_const => |value| value,
-            .imported_const => |value| value,
+            .top_level_const, .imported_const => |value| value,
             .platform_required_const => |required| required.const_use,
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_proc, .promoted_top_level_proc => return null,
         };
@@ -45087,8 +45050,7 @@ const BodyContext = struct {
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         const const_use: ?checked.ConstUseTemplate = switch (record.ref) {
             .selected_hoisted_const => |selected| selected.const_use,
-            .top_level_const => |value| value,
-            .imported_const => |value| value,
+            .top_level_const, .imported_const => |value| value,
             .platform_required_const => |required| required.const_use,
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_proc, .promoted_top_level_proc => null,
         };
@@ -47366,8 +47328,7 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
     ) bool {
         const evidence = switch (plan.resolution) {
-            .direct_closed => |direct| direct.evidence,
-            .direct_parametric => |direct| direct.evidence,
+            .direct_closed, .direct_parametric => |direct| direct.evidence,
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .evidence_dependent, .structural, .@"unreachable", .checked_error => return false,
         };
@@ -47399,11 +47360,7 @@ const BodyContext = struct {
         expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
         return switch (mode) {
-            .value => expr,
-            .parser_for => expr,
-            .encoder_for => expr,
-            .map => expr,
-            .map_effectful => expr,
+            .value, .parser_for, .encoder_for, .map, .map_effectful => expr,
             .equality => |eq| if (eq.negated) blk: {
                 const result_cell = self.exprTypeCell(expr);
                 if (!self.typeCellHasBuiltinOwner(result_cell, .bool)) {
@@ -48207,8 +48164,7 @@ const BodyContext = struct {
         const plan_id = switch (expr.data) {
             .dispatch_call => |plan| plan,
             .interpolation => |interpolation| interpolation.plan,
-            .type_dispatch_call => |plan| plan,
-            .method_eq => |plan| plan,
+            .type_dispatch_call, .method_eq => |plan| plan,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
@@ -49362,8 +49318,7 @@ const BodyContext = struct {
                 }
             },
             .structural => |structural| if (structural.checked != null) return true,
-            .from_callable, .from_scheme => return true,
-            .unreachable_value, .checked_error => return true,
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => return true,
         };
         return false;
     }
@@ -55622,8 +55577,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         switch (self.graph.content(node)) {
             .tag_union, .named => {},
-            .unresolved, .empty_tag_union => return false,
-            .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => return false,
+            .unresolved, .empty_tag_union, .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -57037,11 +56991,9 @@ const BodyContext = struct {
             .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
-            .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
+            .type_dispatch_call, .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
+            .lookup_external, .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
             .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
@@ -57727,8 +57679,7 @@ const BodyContext = struct {
     fn branchOutputCell(_: *BodyContext, output: BranchOutput) DraftTypeCell {
         return switch (output) {
             .value => |cell| cell,
-            .state_result => |state| state.state_cell,
-            .state_only => |state| state.state_cell,
+            inline .state_result, .state_only => |state| state.state_cell,
         };
     }
 
@@ -59180,9 +59131,7 @@ const BodyContext = struct {
                 .record_destructure => |destructs| {
                     for (destructs) |destruct| {
                         const child = switch (destruct.kind) {
-                            .required => |child_pattern| child_pattern,
-                            .sub_pattern => |child_pattern| child_pattern,
-                            .rest => |child_pattern| child_pattern,
+                            .required, .sub_pattern, .rest => |child_pattern| child_pattern,
                         };
                         try pending.append(self.allocator, .{ .pattern = child });
                     }
@@ -59885,10 +59834,8 @@ const BodyContext = struct {
         const expr_id = switch (statement.data) {
             .decl => |decl| if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null else decl.expr,
             .promoted_proc => return null,
-            .var_ => |decl| decl.expr,
-            .reassign => |decl| decl.expr,
-            .expr => |expr| expr,
-            .dbg => |expr| expr,
+            inline .var_, .reassign => |decl| decl.expr,
+            .expr, .dbg => |expr| expr,
             .expect => |expr| if (self.builder.inline_expects == .run) expr else return null,
             .pending, .var_uninitialized, .crash, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
@@ -59922,8 +59869,7 @@ const BodyContext = struct {
                 break :blk .{ decl.pattern, decl.expr };
             },
             .promoted_proc => return null,
-            .var_ => |decl| .{ decl.pattern, decl.expr },
-            .reassign => |decl| .{ decl.pattern, decl.expr },
+            inline .var_, .reassign => |decl| .{ decl.pattern, decl.expr },
             .pending, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
         task.statement_saved = try self.enterStatementSourceLocation(statement.source_region);
@@ -60771,8 +60717,7 @@ const BodyContext = struct {
         const expr = self.view.bodies.expr(expr_id);
         switch (expr.data) {
             .str => |segments| for (segments) |segment| try pending.append(gpa, .{ .expr = segment }),
-            .list => |items| for (items) |child| try pending.append(gpa, .{ .expr = child }),
-            .tuple => |items| for (items) |child| try pending.append(gpa, .{ .expr = child }),
+            .list, .tuple => |items| for (items) |child| try pending.append(gpa, .{ .expr = child }),
             .match_ => |match| {
                 try pending.append(gpa, .{ .expr = match.cond });
                 for (match.branches) |branch| {
@@ -61595,8 +61540,7 @@ const BodyContext = struct {
                 try self.pushPatTypeFrame(pat_run, .{ .record = target });
                 for (destructs) |destruct| {
                     const child = switch (destruct.kind) {
-                        .required => |child_pattern| child_pattern,
-                        .sub_pattern => |child_pattern| child_pattern,
+                        .required, .sub_pattern => |child_pattern| child_pattern,
                         .rest => |rest_pattern| {
                             if (self.patternIsIgnored(rest_pattern)) continue;
                             Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
@@ -62417,8 +62361,7 @@ const BodyContext = struct {
         const results = pat_run.results.items[frame.results_start..];
         switch (frame.kind) {
             .nominal => |cell| return try self.addPatWithTypeCell(cell, .{ .nominal = results[0] }),
-            .as => |as| return try self.addPatWithTypeCell(as.cell, .{ .as = .{ .pattern = results[0], .local = as.local } }),
-            .optional_as => |as| return try self.addPatWithTypeCell(as.cell, .{ .as = .{ .pattern = results[0], .local = as.local } }),
+            inline .as, .optional_as => |as| return try self.addPatWithTypeCell(as.cell, .{ .as = .{ .pattern = results[0], .local = as.local } }),
             .tag => |tag| return try self.addPatWithTypeCell(tag.cell, .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.addPatSpan(results),
@@ -64533,16 +64476,8 @@ fn constRestoreData(
 
 fn restoreScalar(comptime Data: type, scalar: checked.ConstScalar) Data {
     return switch (scalar) {
-        .i8 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i16 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i32 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i64 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .i128 => |value| .{ .int_lit = signedIntLiteral(value) },
-        .u8 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u16 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u32 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u64 => |value| .{ .int_lit = unsignedIntLiteral(value) },
-        .u128 => |value| .{ .int_lit = unsignedIntLiteral(value) },
+        .i8, .i16, .i32, .i64, .i128 => |value| .{ .int_lit = signedIntLiteral(value) },
+        .u8, .u16, .u32, .u64, .u128 => |value| .{ .int_lit = unsignedIntLiteral(value) },
         .f32_bits => |bits| .{ .frac_f32_lit = @bitCast(bits) },
         .f64_bits => |bits| .{ .frac_f64_lit = @bitCast(bits) },
         .dec_bits => |bits| .{ .dec_lit = .{ .num = bits } },
@@ -64701,8 +64636,7 @@ fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) checked.Chec
 fn ownerTemplateForConstFnDef(fn_def: anytype) names.ProcTemplate {
     return switch (fn_def) {
         .nested => |nested| nested.owner,
-        .parser_runtime => |runtime| runtime.owner,
-        .encoder_for_runtime => |runtime| runtime.owner,
+        inline .parser_runtime, .encoder_for_runtime => |runtime| runtime.owner,
         .local_template,
         .imported_template,
         .local_hosted,

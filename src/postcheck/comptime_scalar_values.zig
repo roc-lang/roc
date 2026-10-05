@@ -167,8 +167,7 @@ pub const CompletedScalarValues = struct {
 /// indices shared by every store.
 fn literalFitsLayout(literal: LIR.LiteralValue, layout_idx: layout.Idx) bool {
     return switch (literal) {
-        .i64_literal => |int| int.layout_idx == layout_idx,
-        .i128_literal => |int| int.layout_idx == layout_idx,
+        inline .i64_literal, .i128_literal => |int| int.layout_idx == layout_idx,
         .f32_literal => layout_idx == .f32,
         .f64_literal => layout_idx == .f64,
         .dec_literal => layout_idx == .dec,

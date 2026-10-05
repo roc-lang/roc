@@ -1131,8 +1131,7 @@ const StaticMethodCallDescSourceMap = struct {
                             boxyLowerInvariant("static dictionary method descriptor source map assigned one worker descriptor to two slot sources");
                         }
                     },
-                    .call => entry.source = source,
-                    .argument => entry.source = source,
+                    .call, .argument => entry.source = source,
                 },
                 .call => switch (source) {
                     .slot => {},
@@ -4276,10 +4275,10 @@ const ProcedureBuilder = struct {
             const concrete_result = try proc.addFrameLocalForRep(concrete.ret);
             const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
             try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, true);
-            const to_requirement = try proc.assignStaticMethodBoundary(result, concrete_result, requirement_function.ret, concrete.ret, ret_stmt);
+            const to_requirement = try proc.assignPlannedCallBoundary(result, concrete_result, requirement_function.ret, concrete.ret, ret_stmt);
             const requirement_step = try proc.leaveDetachedDescriptorScope(detached, to_requirement);
-            break :split try proc.assignStaticMethodBoundary(concrete_result, raw_result, concrete.ret, worker_function.ret, requirement_step);
-        } else try proc.assignStaticMethodBoundary(
+            break :split try proc.assignPlannedCallBoundary(concrete_result, raw_result, concrete.ret, worker_function.ret, requirement_step);
+        } else try proc.assignPlannedCallBoundary(
             result,
             raw_result,
             requirement_function.ret,
@@ -4300,7 +4299,7 @@ const ProcedureBuilder = struct {
             if (concrete_function != null) {
                 const concrete_arg = concrete_arg_reps[arg_index];
                 const concrete_local = try proc.addFrameLocalForRep(concrete_arg);
-                continuation = try proc.assignStaticMethodBoundary(
+                continuation = try proc.assignPlannedCallBoundary(
                     worker_call_args[arg_index],
                     concrete_local,
                     worker_args[arg_index].rep,
@@ -4309,7 +4308,7 @@ const ProcedureBuilder = struct {
                 );
                 const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
                 try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, true);
-                const to_concrete = try proc.assignStaticMethodBoundary(
+                const to_concrete = try proc.assignPlannedCallBoundary(
                     concrete_local,
                     proc.arg_locals.items[arg_index],
                     concrete_arg,
@@ -4319,7 +4318,7 @@ const ProcedureBuilder = struct {
                 continuation = try proc.leaveDetachedDescriptorScope(detached, to_concrete);
                 continue;
             }
-            continuation = try proc.assignStaticMethodBoundary(
+            continuation = try proc.assignPlannedCallBoundary(
                 worker_call_args[arg_index],
                 proc.arg_locals.items[arg_index],
                 worker_args[arg_index].rep,
@@ -15216,11 +15215,8 @@ const ProcedureBuilder = struct {
                         const source = switch (assign.op) {
                             .local => |local| local,
                             .field => |field| field.source,
-                            .discriminant => |op| op.source,
-                            .tag_payload => |op| op.source,
-                            .tag_payload_struct => |op| op.source,
-                            .list_reinterpret => |op| op.backing_ref,
-                            .nominal => |op| op.backing_ref,
+                            inline .discriminant, .tag_payload, .tag_payload_struct => |op| op.source,
+                            inline .list_reinterpret, .nominal => |op| op.backing_ref,
                         };
                         if (!dynamic.contains(source)) continue;
                         const entry = try dynamic.getOrPut(assign.target);
@@ -16396,8 +16392,7 @@ const ProcBodyBuilder = struct {
                 => true,
                 .parser_constructor, .encoder_constructor => false,
             },
-            .generated_field_iterator => true,
-            .generated_interpolation_step => true,
+            .generated_field_iterator, .generated_interpolation_step => true,
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
         };
 
@@ -16917,8 +16912,7 @@ const ProcBodyBuilder = struct {
                 => true,
                 .parser_constructor, .encoder_constructor => false,
             },
-            .generated_field_iterator => true,
-            .generated_interpolation_step => true,
+            .generated_field_iterator, .generated_interpolation_step => true,
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
         };
 
@@ -17049,8 +17043,7 @@ const ProcBodyBuilder = struct {
     fn erasedCaptureSlotLayout(self: *ProcBodyBuilder, capture: Plan.ErasedCapture) layout.Idx {
         return switch (capture.kind) {
             .captured_value => self.workerRuntimeLayoutForRep(capture.rep).layoutIdx(),
-            .hidden_desc => .opaque_ptr,
-            .hidden_dict, .hidden_literal => .opaque_ptr,
+            .hidden_desc, .hidden_dict, .hidden_literal => .opaque_ptr,
         };
     }
 
@@ -17687,15 +17680,13 @@ const ProcBodyBuilder = struct {
                 try self.beginNumeralConversion(target, expr_id, expr.ty, plan, next)
             else
                 exprDone(try self.assignCheckedNumeralLiteral(target, expr.ty, numeral.literal, next)),
-            .str_segment => |literal| exprDone(try self.assignStringLiteral(target, literal, next)),
-            .bytes_literal => |literal| exprDone(try self.assignStringLiteral(target, literal, next)),
+            .str_segment, .bytes_literal => |literal| exprDone(try self.assignStringLiteral(target, literal, next)),
             .str => |segments| try self.beginStr(target, expr.ty, segments, next),
             .str_from_quote => |quote| try self.beginQuoteConversion(target, expr_id, expr.ty, quote, next),
             .empty_record => try self.beginEmptyRecord(target, expr_id, expr.ty, next),
             .empty_list => try self.beginList(target, expr.ty, &.{}, next),
             .lookup_local => |lookup| try self.beginLookupLocal(target, expr_id, expr.ty, lookup, next),
-            .lookup_external => |ref_id| try self.beginResolvedLookup(target, expr_id, expr.ty, ref_id, next),
-            .lookup_required => |ref_id| try self.beginResolvedLookup(target, expr_id, expr.ty, ref_id, next),
+            .lookup_external, .lookup_required => |ref_id| try self.beginResolvedLookup(target, expr_id, expr.ty, ref_id, next),
             .field_access => |access| try self.beginFieldAccess(target, expr.ty, access.receiver, access.segments, next),
             .tuple_access => |access| try self.beginTupleAccess(target, access.tuple, access.elem_index, next),
             .list => |items| try self.beginList(target, expr.ty, items, next),
@@ -17734,8 +17725,7 @@ const ProcBodyBuilder = struct {
             .record => |record| try self.beginRecordExpr(target, expr_id, expr.ty, record, next),
             .nominal => |nominal| try self.beginNominal(target, expr.ty, nominal.backing_expr, next),
             .call => |call| try self.beginDirectCall(target, expr_id, call, expr.ty, next),
-            .dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
-            .type_dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
+            .dispatch_call, .type_dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
             .interpolation => |interpolation| try self.beginDispatchCall(target, expr_id, interpolation.plan, expr.ty, next),
             .for_ => |for_| blk: {
                 if (self.isZstLocal(target)) {
@@ -17869,8 +17859,7 @@ const ProcBodyBuilder = struct {
             }
             switch (expr.data) {
                 .call => |call| if (target_uses_expected_layout) return try self.beginDirectCall(target, expr_id, call, expected_ty, next),
-                .dispatch_call => |maybe_plan| if (target_uses_expected_layout) return try self.beginDispatchCall(target, expr_id, maybe_plan, expected_ty, next),
-                .type_dispatch_call => |maybe_plan| if (target_uses_expected_layout) return try self.beginDispatchCall(target, expr_id, maybe_plan, expected_ty, next),
+                .dispatch_call, .type_dispatch_call => |maybe_plan| if (target_uses_expected_layout) return try self.beginDispatchCall(target, expr_id, maybe_plan, expected_ty, next),
                 .lambda,
                 .closure,
                 => return try self.beginCallableExprTypeRef(target, .{ .module = self.module.key, .ty = expected_ty }, expr_id, next),
@@ -19105,8 +19094,7 @@ const ProcBodyBuilder = struct {
         self.origin = try self.sourceOrigin(statement.source_region);
 
         const rhs: ?checked.CheckedExprId = switch (statement.data) {
-            .decl => |decl| decl.expr,
-            .var_ => |decl| decl.expr,
+            inline .decl, .var_ => |decl| decl.expr,
             .reassign => |reassign| reassign.expr,
             .expr => |expr| expr,
             .pending,
@@ -23543,8 +23531,7 @@ const ProcBodyBuilder = struct {
     ) ?checked.ResolvedValueRefId {
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
-            .lookup_external => |ref_id| ref_id,
-            .lookup_required => |ref_id| ref_id,
+            .lookup_external, .lookup_required => |ref_id| ref_id,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const ref_id = maybe_ref orelse return null;
@@ -25135,7 +25122,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy dictionary call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
         // The operands are lowered last first, under the descriptors this
         // call bound, which are restored once they are lowered. The
@@ -25558,7 +25545,7 @@ const ProcBodyBuilder = struct {
         self.call_boundary_substitution = hidden_desc_args;
         defer self.call_boundary_substitution = enclosing_call_boundary_substitution;
         continuation = try self.prependWorkerCallArgAdaptations(arg_types, source_args, adapted_args, worker_arg_children, actual_arg_reps, arg_substitutions, continuation);
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         self.restoreDescriptorBindings(call_descriptor_snapshot);
         call_descriptor_bindings_restored = true;
         return try self.prependDescriptorArgMaterializations(pre_adaptation_descriptor_initializers.items, continuation);
@@ -25793,17 +25780,6 @@ const ProcBodyBuilder = struct {
             }
         }
         return false;
-    }
-
-    fn assignStaticMethodBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
     }
 
     fn adapterDescriptorForSource(
@@ -28657,8 +28633,7 @@ const ProcBodyBuilder = struct {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
             const rhs: ?checked.CheckedExprId = switch (statement.data) {
-                .decl => |decl| decl.expr,
-                .var_ => |decl| decl.expr,
+                inline .decl, .var_ => |decl| decl.expr,
                 .reassign => |reassign| reassign.expr,
                 .pending,
                 .promoted_proc,
@@ -28688,8 +28663,7 @@ const ProcBodyBuilder = struct {
                     if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern);
                     try self.reserveClosureCaptureSnapshots(decl.expr);
                 },
-                .var_ => |decl| try self.reservePatternBindings(decl.pattern),
-                .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
+                inline .var_, .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
                 .import_,
                 .alias_decl,
@@ -30685,7 +30659,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy iterator dictionary call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
         continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
         var chain_items = std.ArrayList(ExprChainItem).empty;
@@ -33771,14 +33745,6 @@ const ProcBodyBuilder = struct {
         return try self.prependOptionalDescriptorMaterialization(result_desc.materialize, body);
     }
 
-    fn prependHiddenDescriptorArgMaterialization(
-        self: *ProcBodyBuilder,
-        hidden_args: []const DescriptorArgLocal,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.prependDescriptorArgMaterializations(hidden_args, next);
-    }
-
     fn prependDescriptorArgMaterializations(
         self: *ProcBodyBuilder,
         hidden_args: []const DescriptorArgLocal,
@@ -35397,8 +35363,7 @@ const ProcBodyBuilder = struct {
                 if (resolved != rep_id) return .{ .convert = resolved };
                 return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id));
             },
-            .list => return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id)),
-            .nominal => return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id)),
+            .list, .nominal => return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id)),
             .box => return .{ .unbox = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep },
             .tag_union => {
                 if (self.derived_context == null) return .expand;
@@ -35798,7 +35763,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("derived method dictionary call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         return try self.prependDescriptorArgMaterializations(arg_descriptor_initializers.items, continuation);
     }
 
@@ -36911,15 +36876,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         return switch (scalar) {
-            .i8 => |value| try self.assignIntLiteral(target, value, next),
-            .i16 => |value| try self.assignIntLiteral(target, value, next),
-            .i32 => |value| try self.assignIntLiteral(target, value, next),
-            .i64 => |value| try self.assignIntLiteral(target, value, next),
-            .i128 => |value| try self.assignIntLiteral(target, value, next),
-            .u8 => |value| try self.assignIntLiteral(target, value, next),
-            .u16 => |value| try self.assignIntLiteral(target, value, next),
-            .u32 => |value| try self.assignIntLiteral(target, value, next),
-            .u64 => |value| try self.assignIntLiteral(target, value, next),
+            .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64 => |value| try self.assignIntLiteral(target, value, next),
             .u128 => |value| try self.assignIntLiteral(target, @bitCast(value), next),
             .f32_bits => |bits| try self.assignF32Literal(target, @bitCast(bits), next),
             .f64_bits => |bits| try self.assignF64Literal(target, @bitCast(bits), next),
@@ -37307,7 +37264,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
-        return try self.prependHiddenDescriptorArgMaterialization(descriptor_materializations.items, continuation);
+        return try self.prependDescriptorArgMaterializations(descriptor_materializations.items, continuation);
     }
 
     fn callableBoundaryNeedsAdapter(
@@ -38337,8 +38294,7 @@ const ProcBodyBuilder = struct {
 
             switch (a_layout.tag) {
                 .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
-                .zst => {},
-                .erased_box => {},
+                .zst, .erased_box => {},
                 .box, .box_of_zst => try pending.append(allocator, .{
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
                     layouts.getBoxInfo(b_layout).elem_layout_idx,

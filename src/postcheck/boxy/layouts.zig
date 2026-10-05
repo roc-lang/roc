@@ -292,8 +292,7 @@ const Builder = struct {
         for (captures, fields, 0..) |capture, *field, index| {
             const field_layout: layout.Idx = switch (capture.kind) {
                 .captured_value => (try self.runtimeLayoutForRep(capture.rep)).layoutIdx(),
-                .hidden_desc => .opaque_ptr,
-                .hidden_dict, .hidden_literal => .opaque_ptr,
+                .hidden_desc, .hidden_dict, .hidden_literal => .opaque_ptr,
             };
             field.* = .{ .index = @intCast(index), .layout = field_layout };
         }
