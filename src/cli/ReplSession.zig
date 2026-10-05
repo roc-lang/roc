@@ -1300,46 +1300,14 @@ const DefinitionValidation = struct {
     error_message: ?[]u8,
 };
 
-fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
-    const definitions = try self.definitionsSource();
-    defer self.allocator.free(definitions);
+/// How building a REPL program failed: with type or parse diagnostics to
+/// render, or with an operational error.
+const ProgramFailureKind = enum { type_check, parse, operational };
 
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
-    defer self.allocator.free(source);
-
-    const import_sources = switch (try self.resolveImports()) {
-        .resolved => |s| s,
-        .failed => |msg| return .{ .valid = false, .error_message = msg },
-    };
-    defer self.freeModuleSources(import_sources);
-
-    if (eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
-        self.allocator,
-        .module,
-        source,
-        import_sources,
-        self.prePublishedBuiltin(),
-        self.roc_ctx,
-    )) |parsed_value| {
-        var parsed = parsed_value;
-        defer parsed.deinit(self.allocator);
-        if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
-            const msg = try self.renderModuleProblemsOrNull(source, import_sources, report_config);
-            return .{ .valid = false, .error_message = msg };
-        }
-        return .{ .valid = true, .error_message = null };
-    } else |err| switch (err) {
-        error.TypeCheckError => {
-            const msg = try self.renderModuleProblemsOrNull(source, import_sources, report_config);
-            return .{ .valid = false, .error_message = msg };
-        },
-        error.ParseError => {
-            const msg = self.renderModuleParseDiagnostics(source, report_config) catch |render_err| switch (render_err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.WriteFailed => return .{ .valid = false, .error_message = null },
-            };
-            return .{ .valid = false, .error_message = msg };
-        },
+fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
+    return switch (err) {
+        error.TypeCheckError => .type_check,
+        error.ParseError => .parse,
         error.AccessDenied,
         error.AntivirusInterference,
         error.BadPathName,
@@ -1437,7 +1405,51 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
-        => return .{ .valid = false, .error_message = null },
+        => .operational,
+    };
+}
+
+fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
+    defer self.allocator.free(source);
+
+    const import_sources = switch (try self.resolveImports()) {
+        .resolved => |s| s,
+        .failed => |msg| return .{ .valid = false, .error_message = msg },
+    };
+    defer self.freeModuleSources(import_sources);
+
+    if (eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        import_sources,
+        self.prePublishedBuiltin(),
+        self.roc_ctx,
+    )) |parsed_value| {
+        var parsed = parsed_value;
+        defer parsed.deinit(self.allocator);
+        if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
+            const msg = try self.renderModuleProblemsOrNull(source, import_sources, report_config);
+            return .{ .valid = false, .error_message = msg };
+        }
+        return .{ .valid = true, .error_message = null };
+    } else |err| switch (programFailureKind(err)) {
+        .type_check => {
+            const msg = try self.renderModuleProblemsOrNull(source, import_sources, report_config);
+            return .{ .valid = false, .error_message = msg };
+        },
+        .parse => {
+            const msg = self.renderModuleParseDiagnostics(source, report_config) catch |render_err| switch (render_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.WriteFailed => return .{ .valid = false, .error_message = null },
+            };
+            return .{ .valid = false, .error_message = msg };
+        },
+        .operational => return .{ .valid = false, .error_message = null },
     }
 }
 
@@ -1485,107 +1497,10 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
             .context = @ptrCast(&event_collector),
             .notify = ComptimeEventCollector.notify,
         },
-    ) catch |err| switch (err) {
-        error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
-        error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.OutOfMemory,
-        error.PageSizeQueryFailed,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.InvalidHostedFunctionSignature,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => return err,
+    ) catch |err| switch (programFailureKind(err)) {
+        .type_check => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
+        .parse => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
+        .operational => return err,
     };
     defer resources.deinit(self.allocator);
     self.last_events = try event_collector.events.toOwnedSlice(self.allocator);

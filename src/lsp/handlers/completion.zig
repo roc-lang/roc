@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
 
 /// CompletionItemKind values as defined by the LSP specification.
 pub const CompletionItemKind = enum(u32) {
@@ -40,73 +41,10 @@ pub const CompletionItemKind = enum(u32) {
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "completion requires params");
-                return;
-            };
-
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "completion params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            // Extract textDocument.uri
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const text_doc = text_doc_value.object;
-            const uri_value = text_doc.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
-
-            // Extract position (line, character)
-            const position_value = obj.get("position") orelse {
-                try self.sendError(id, .invalid_params, "missing position");
-                return;
-            };
-            if (std.meta.activeTag(position_value) != .object) {
-                try self.sendError(id, .invalid_params, "position must be an object");
-                return;
-            }
-            const position_obj = position_value.object;
-
-            const line_value = position_obj.get("line") orelse {
-                try self.sendError(id, .invalid_params, "missing line");
-                return;
-            };
-            if (std.meta.activeTag(line_value) != .integer) {
-                try self.sendError(id, .invalid_params, "line must be an integer");
-                return;
-            }
-            const line: u32 = std.math.cast(u32, line_value.integer) orelse {
-                try self.sendError(id, .invalid_params, "line must be a non-negative integer");
-                return;
-            };
-
-            const character_value = position_obj.get("character") orelse {
-                try self.sendError(id, .invalid_params, "missing character");
-                return;
-            };
-            if (std.meta.activeTag(character_value) != .integer) {
-                try self.sendError(id, .invalid_params, "character must be an integer");
-                return;
-            }
-            const character: u32 = std.math.cast(u32, character_value.integer) orelse {
-                try self.sendError(id, .invalid_params, "character must be a non-negative integer");
-                return;
-            };
+            const position = try position_params.parse(self, id, "completion", maybe_params) orelse return;
+            const uri = position.uri;
+            const line = position.line;
+            const character = position.character;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);

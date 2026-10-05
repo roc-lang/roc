@@ -87,6 +87,63 @@ fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
     return true;
 }
 
+/// Formats one file for `formatPath`, printing any failure to `stderr` under
+/// `display_path`.
+fn formatFilePathReportingFailure(
+    gpa: std.mem.Allocator,
+    base_dir: std.Io.Dir,
+    path: []const u8,
+    display_path: []const u8,
+    unformatted_files: ?*std.array_list.Managed([]const u8),
+    options: Options,
+    io: std.Io,
+    stderr: *std.Io.Writer,
+) std.Io.Writer.Error!enum { formatted, failed, not_roc_file } {
+    if (formatFilePath(gpa, base_dir, path, unformatted_files, options, io, stderr)) |_| {
+        return .formatted;
+    } else |err| switch (err) {
+        error.NotRocFile => return .not_roc_file,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSizeChangedDuringRead,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.ParsingFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadFailed,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.Unseekable,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
+            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = display_path }, err });
+            return .failed;
+        },
+    }
+}
+
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
@@ -116,94 +173,18 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
                 const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
                 defer gpa.free(file_path);
-                if (formatFilePath(gpa, base_dir, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
-                    success_count += 1;
-                } else |err| switch (err) {
-                    error.NotRocFile => {},
-                    error.AccessDenied,
-                    error.AntivirusInterference,
-                    error.BadPathName,
-                    error.Canceled,
-                    error.DeviceBusy,
-                    error.FileBusy,
-                    error.FileLocksUnsupported,
-                    error.FileNotFound,
-                    error.FileSizeChangedDuringRead,
-                    error.FileTooBig,
-                    error.InputOutput,
-                    error.IsDir,
-                    error.LockViolation,
-                    error.NameTooLong,
-                    error.NetworkNotFound,
-                    error.NoDevice,
-                    error.NoSpaceLeft,
-                    error.NotDir,
-                    error.NotOpenForReading,
-                    error.OutOfMemory,
-                    error.ParsingFailed,
-                    error.PathAlreadyExists,
-                    error.PermissionDenied,
-                    error.PipeBusy,
-                    error.ProcessFdQuotaExceeded,
-                    error.ReadFailed,
-                    error.ReadOnlyFileSystem,
-                    error.SymLinkLoop,
-                    error.SystemFdQuotaExceeded,
-                    error.SystemResources,
-                    error.Unexpected,
-                    error.Unseekable,
-                    error.WouldBlock,
-                    error.WriteFailed,
-                    => {
-                        try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = entry.path }, err });
-                        failed_count += 1;
-                    },
+                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, entry.path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+                    .formatted => success_count += 1,
+                    .failed => failed_count += 1,
+                    .not_roc_file => {},
                 }
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
-            success_count += 1;
-        } else |err| switch (err) {
-            error.NotRocFile => {},
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileSizeChangedDuringRead,
-            error.FileTooBig,
-            error.InputOutput,
-            error.IsDir,
-            error.LockViolation,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotOpenForReading,
-            error.OutOfMemory,
-            error.ParsingFailed,
-            error.PathAlreadyExists,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadFailed,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.Unseekable,
-            error.WouldBlock,
-            error.WriteFailed,
-            => {
-                try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = path }, err });
-                failed_count += 1;
-            },
+        switch (try formatFilePathReportingFailure(gpa, base_dir, path, path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+            .formatted => success_count += 1,
+            .failed => failed_count += 1,
+            .not_roc_file => {},
         }
     }
 
