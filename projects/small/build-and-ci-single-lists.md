@@ -119,8 +119,3 @@ work, generated).
 - The comptime field-set/enum assert in modules.zig.
 - The zon-vs-workflow/flake version-comparison CI check.
 - If the generated-workflow route is chosen: the freshness check.
-
-## Related projects
-
-- [cli-declarative-flags.md](cli-declarative-flags.md)—the same
-  declarative-table move for the CLI surface.

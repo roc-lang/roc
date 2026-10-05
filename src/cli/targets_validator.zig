@@ -207,6 +207,20 @@ fn validateTargetSpec(
     return null;
 }
 
+/// `line_format` once per target, with the target's name as its argument.
+fn perTarget(comptime targets: []const RocTarget, comptime line_format: []const u8) []const u8 {
+    var text: []const u8 = "";
+    for (targets) |target| text = text ++ std.fmt.comptimePrint(line_format, .{@tagName(target)});
+    return text;
+}
+
+/// An example `targets:` section declaring a host object for each of `targets`,
+/// for reports that show a platform author what the section looks like.
+pub fn exampleTargetsSection(comptime targets: []const RocTarget) []const u8 {
+    return "    targets: {\n        inputs_dir: \"targets/\",\n" ++
+        perTarget(targets, "        {s}: {{ inputs: [\"host.o\", app] }},\n") ++ "    }";
+}
+
 /// Create an error report for a validation failure
 pub fn createValidationReport(
     allocator: Allocator,
@@ -223,15 +237,7 @@ pub fn createValidationReport(
             try report.document.addText(", add a targets section like:");
             try report.document.addLineBreaks(2);
 
-            try report.document.addCodeBlock(
-                \\    targets: {
-                \\        inputs_dir: "targets/",
-                \\        x64linux: { inputs: ["host.o", app] },
-                \\        arm64linux: { inputs: ["host.o", app] },
-                \\        x64mac: { inputs: ["host.o", app] },
-                \\        arm64mac: { inputs: ["host.o", app] },
-                \\    }
-            );
+            try report.document.addCodeBlock(comptime exampleTargetsSection(&.{ .x64linux, .arm64linux, .x64mac, .arm64mac }));
             try report.document.addLineBreaks(2);
 
             try report.document.addText("The targets section declares:");
@@ -253,14 +259,10 @@ pub fn createValidationReport(
 
             try report.document.addText("Create the directory structure:");
             try report.document.addLineBreak();
-            try report.document.addCodeBlock(
-                \\    targets/
-                \\        x64linux/
-                \\            host.o
-                \\        arm64linux/
-                \\            host.o
-                \\        ...
-            );
+            try report.document.addCodeBlock("    targets/\n" ++ comptime perTarget(
+                &.{ .x64linux, .arm64linux },
+                "        {s}/\n            host.o\n",
+            ) ++ "        ...");
             try report.document.addLineBreak();
 
             return report;
@@ -412,9 +414,9 @@ pub fn createValidationReport(
             try report.document.addText("Use a statically-linked musl target instead:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
-            try report.document.addAnnotated("x64musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.x64musl), .emphasized);
             try report.document.addText(" or ");
-            try report.document.addAnnotated("arm64musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.arm64musl), .emphasized);
             try report.document.addLineBreak();
 
             return report;
@@ -442,25 +444,17 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Invalid Target", headline, .runtime_error);
 
             try report.document.addText("Valid targets are:");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64musl, arm64musl    - Linux (static, portable)");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64glibc, arm64glibc  - Linux (dynamic, faster)");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64mac, arm64mac      - macOS");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64win, arm64win      - Windows (MSVC)");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64mingw, arm64mingw  - Windows (MinGW)");
-            try report.document.addLineBreak();
-            try report.document.addText("  wasm32                - WebAssembly");
+            for (RocTarget.roster) |line| {
+                try report.document.addLineBreak();
+                try report.document.addText(line);
+            }
             try report.document.addLineBreaks(2);
             try report.document.addText("Adding v1 after the architecture (");
-            try report.document.addAnnotated("x64v1musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.x64v1musl), .emphasized);
             try report.document.addText(", ");
-            try report.document.addAnnotated("arm64v1musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.arm64v1musl), .emphasized);
             try report.document.addText(", ");
-            try report.document.addAnnotated("wasm32v1", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.wasm32v1), .emphasized);
             try report.document.addText(")");
             try report.document.addLineBreak();
             try report.document.addText("builds for the oldest CPUs of that architecture.");
@@ -553,6 +547,16 @@ pub fn createValidationReport(
             return report;
         },
     }
+}
+
+test "example targets section declares a host object per target" {
+    try std.testing.expectEqualStrings(
+        \\    targets: {
+        \\        inputs_dir: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64mac: { inputs: ["host.o", app] },
+        \\    }
+    , comptime exampleTargetsSection(&.{ .x64linux, .arm64mac }));
 }
 
 test "createValidationReport generates correct report for missing_targets_section" {

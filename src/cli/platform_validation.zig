@@ -187,13 +187,7 @@ fn renderMissingTargetsError(
 
     try report.document.addText("Platform headers must declare supported targets. Example:");
     try report.document.addLineBreaks(2);
-    try report.document.addCodeBlock(
-        \\    targets: {
-        \\        inputs_dir: "targets/",
-        \\        x64linux: { inputs: ["host.o", app] },
-        \\        arm64linux: { inputs: ["host.o", app] },
-        \\    }
-    );
+    try report.document.addCodeBlock(comptime targets_validator.exampleTargetsSection(&.{ .x64linux, .arm64linux }));
     try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(

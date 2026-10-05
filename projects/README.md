@@ -79,9 +79,6 @@ batches and of each other:
 - [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
   one module inventory (seven restatements plus minici's copy, with
   existing test-coverage divergence), one CI gate list, one Zig pin.
-- [small/cli-declarative-flags.md](small/cli-declarative-flags.md)—
-  each subcommand's struct/parser/help triple becomes one table;
-  target rosters and defaults render from their enums.
 
 A fourth batch (2026-07-20) targets operational robustness and
 build-throughput gaps rather than sources of truth. The projects are
