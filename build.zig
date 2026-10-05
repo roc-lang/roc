@@ -8024,6 +8024,7 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_runtime_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
+            default_platform_runtime_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
@@ -8088,6 +8089,7 @@ fn addMainExe(
             default_platform_executable_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_executable_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
+            default_platform_executable_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);

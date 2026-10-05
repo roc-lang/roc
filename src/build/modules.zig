@@ -528,6 +528,12 @@ pub const RocModules = struct {
     // only be defined once.
     raw_pages: *Module,
 
+    // Memory-fault classification (`src/base/memory_fault.zig`) as a standalone
+    // module for the default-platform Linux runtime, which is compiled without
+    // the `base` module; the compiler's own crash handler reaches the same file
+    // through `base.memory_fault`, so both report a stack overflow by one rule.
+    memory_fault: *Module,
+
     // The size-tracking host allocator (`src/host_alloc/mod.zig`) shared by
     // the test platform hosts. Part of the module dependency graph so its
     // tests run with the other module tests, but consumed only by hosts, never
@@ -595,6 +601,7 @@ pub const RocModules = struct {
             .roc_str_view = b.addModule("roc_str_view", .{ .root_source_file = b.path("src/default_platform/roc_str_view.zig") }),
             .shim_symbols = b.addModule("shim_symbols", .{ .root_source_file = b.path("src/builtins/shim_symbols.zig") }),
             .raw_pages = b.addModule("raw_pages", .{ .root_source_file = b.path("src/raw_pages.zig") }),
+            .memory_fault = b.addModule("memory_fault", .{ .root_source_file = b.path("src/base/memory_fault.zig") }),
             .host_alloc = b.addModule("host_alloc", .{ .root_source_file = b.path("src/host_alloc/mod.zig") }),
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),

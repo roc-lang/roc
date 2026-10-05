@@ -19246,6 +19246,18 @@ interpreter's `RocOps` as an explicit argument. An interpreter-mode executable
 therefore runs every program the interpreter run path runs, including in a
 process that has no thread-local storage.
 
+The Linux default-platform runtime is the only default-platform runtime that
+installs fatal-signal handlers. It decides whether a `SIGSEGV` is a stack
+overflow with `classifyFault` in `src/base/memory_fault.zig`, the same
+dependency-free function the compiler's own crash handler calls, so the two
+never disagree about what a stack overflow is. The runtime passes the fault
+address and the interrupted stack pointer from the signal context and no stack
+bounds, because a process without libc has no exact stack range to report: a
+fault within `stack_overflow_proximity` of the stack pointer is reported as
+`Roc application overflowed its stack memory`, and every other `SIGSEGV` is
+reported as a segmentation fault together with its fault address. A fault that
+is not a stack overflow is never reported as one.
+
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
 `arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows

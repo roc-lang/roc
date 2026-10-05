@@ -1,7 +1,7 @@
 //! Freestanding Linux runtime for the build-only default app platform.
 //!
 //! This provides raw syscall-based stdout/stderr, allocation, crash reporting,
-//! and stack-overflow signal handling without linking libc.
+//! and fatal-signal reporting without linking libc.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -12,6 +12,7 @@ const linux = std.os.linux;
 /// process moves the program break.
 const heap: std.mem.Allocator = .{ .ptr = undefined, .vtable = &std.heap.BrkAllocator.vtable };
 
+const memory_fault = @import("memory_fault");
 const RocStr = @import("roc_str_view").RocStr;
 const roc_args = @import("roc_args");
 const RocList = @import("roc_str_view").RocList;
@@ -342,37 +343,71 @@ fn installSignal(sig: linux.SIG) void {
     }
 }
 
-fn signalHandler(sig: linux.SIG, _: *const linux.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+fn signalHandler(sig: linux.SIG, info: *const linux.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+    const interrupted = interruptedRegisters(ctx);
+
     if (sig == .SEGV) {
-        writeLiteral(stderr_fd, "Roc application overflowed its stack memory\n\n");
+        const fault_addr = @intFromPtr(info.fields.sigfault.addr);
+        // The kernel grows this thread's stack on demand and stops at a limit
+        // that depends on the process's resource limits and neighbouring
+        // mappings. Without libc there is no exact stack range to report, so
+        // the fault is classified by its distance from the interrupted stack
+        // pointer alone.
+        const stack_pointer: ?usize = if (interrupted) |registers| registers.stack_pointer else null;
+        switch (memory_fault.classifyFault(fault_addr, stack_pointer, null)) {
+            .stack_overflow => writeLiteral(stderr_fd, "Roc application overflowed its stack memory\n\n"),
+            .access_violation => {
+                var address_buf: [2 + 2 * @sizeOf(usize)]u8 = undefined;
+                writeLiteral(stderr_fd, "Roc process terminated by a segmentation fault at address ");
+                writeAll(stderr_fd, memory_fault.formatHex(fault_addr, &address_buf));
+                writeLiteral(stderr_fd, "\n\n");
+            },
+        }
     } else {
         writeLiteral(stderr_fd, "Roc process terminated by signal ");
         writeUnsigned(stderr_fd, @intFromEnum(sig));
         writeLiteral(stderr_fd, "\n\n");
     }
 
-    if (ctx) |context_ptr| {
-        switch (linux_arch) {
-            .x86_64 => {
-                const context: *const X86_64UContext = @ptrCast(@alignCast(context_ptr));
-                const rip: usize = @bitCast(context.mcontext.gregs[REG_RIP]);
-                const rbp: usize = @bitCast(context.mcontext.gregs[REG_RBP]);
-                printBacktrace(rip, rbp);
-            },
-            .aarch64 => {
-                const context: *const Aarch64UContext = @ptrCast(@alignCast(context_ptr));
-                const pc: usize = @intCast(context.mcontext.pc);
-                const fp: usize = @intCast(context.mcontext.regs[29]);
-                printBacktrace(pc, fp);
-            },
-            .unsupported => {},
-        }
+    if (interrupted) |registers| {
+        printBacktrace(registers.instruction_pointer, registers.frame_pointer);
     }
 
     exitFailure();
 }
 
+/// The registers of the code a signal interrupted.
+const InterruptedRegisters = struct {
+    instruction_pointer: usize,
+    frame_pointer: usize,
+    stack_pointer: usize,
+};
+
+fn interruptedRegisters(ctx: ?*anyopaque) ?InterruptedRegisters {
+    const context_ptr = ctx orelse return null;
+    switch (linux_arch) {
+        .x86_64 => {
+            const context: *const X86_64UContext = @ptrCast(@alignCast(context_ptr));
+            return .{
+                .instruction_pointer = @bitCast(context.mcontext.gregs[REG_RIP]),
+                .frame_pointer = @bitCast(context.mcontext.gregs[REG_RBP]),
+                .stack_pointer = @bitCast(context.mcontext.gregs[REG_RSP]),
+            };
+        },
+        .aarch64 => {
+            const context: *const Aarch64UContext = @ptrCast(@alignCast(context_ptr));
+            return .{
+                .instruction_pointer = @intCast(context.mcontext.pc),
+                .frame_pointer = @intCast(context.mcontext.regs[29]),
+                .stack_pointer = @intCast(context.mcontext.sp),
+            };
+        },
+        .unsupported => return null,
+    }
+}
+
 const REG_RBP = 10;
+const REG_RSP = 15;
 const REG_RIP = 16;
 
 const X86_64MContext = extern struct {

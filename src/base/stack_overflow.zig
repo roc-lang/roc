@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
+const memory_fault = @import("memory_fault.zig");
 const signal_handler = @import("signal_handler.zig");
 
 /// Error message to display on stack overflow
@@ -82,7 +83,7 @@ fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolat
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
+        const addr_str = memory_fault.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nAccess violation in the Roc compiler.\nFault address: ";
         const msg2 = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
@@ -99,7 +100,7 @@ fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolat
 
         // Write the fault address as hex
         var addr_buf: [18]u8 = undefined;
-        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
+        const addr_str = memory_fault.formatHex(fault_addr, &addr_buf);
         _ = std.c.write(posix.STDERR_FILENO, addr_str.ptr, addr_str.len);
         const stack_msg = "\n\nStack trace:\n";
         _ = std.c.write(posix.STDERR_FILENO, stack_msg.ptr, stack_msg.len);
