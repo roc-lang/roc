@@ -9,7 +9,7 @@ platform ""
     provides { "roc_main": main_for_host! }
     hosted {}
     targets: {
-        inputs_dir: "../platform/targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
         arm64mac: { inputs: ["libhost.a", app] },
         x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },

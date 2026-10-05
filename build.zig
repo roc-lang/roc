@@ -2868,6 +2868,64 @@ fn createClearCacheStep(b: *std.Build) *Step {
     return &clear_cache.step;
 }
 
+/// Host outputs available before copying platform-local fixture inputs.
+const TestPlatformSteps = struct {
+    wasm: *Step,
+    hosts: *Step,
+};
+
+/// Copy shared test hosts into each fixture platform's own target directory.
+/// Platforms declare only relative inputs within their own directory.
+const CopyFixtureTargetInputsStep = struct {
+    step: Step,
+    platform_filter: ?[]const u8,
+
+    fn create(b: *std.Build, platform_filter: ?[]const u8) *CopyFixtureTargetInputsStep {
+        const self = b.allocator.create(CopyFixtureTargetInputsStep) catch @panic("OOM");
+        self.* = .{ .platform_filter = platform_filter, .step = Step.init(.{
+            .id = .custom,
+            .name = "copy-fixture-target-inputs",
+            .owner = b,
+            .makeFn = make,
+        }) };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *CopyFixtureTargetInputsStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const io = b.graph.io;
+        const root = b.build_root.handle;
+        const fixtures = [_]struct { source: []const u8, destination: []const u8 }{
+            .{ .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
+            .{ .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/hosted_nominal_return/platform/targets" },
+            .{ .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9864_static_dispatch_package_nominal/platform/targets" },
+            .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11693_nominal_boxing/targets" },
+            .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11220_required_main_host_entry/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9731_nominal_for_clause/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_10379_custom_encoder_field_state/platform/targets" },
+        };
+        for (fixtures) |fixture| {
+            if (self.platform_filter) |filter| {
+                if (!std.mem.eql(u8, fixture.source, "test/wasm/platform/targets") and
+                    !std.mem.eql(u8, fixture.source, b.fmt("test/{s}/platform/targets", .{filter}))) continue;
+            }
+            var source = try root.openDir(io, fixture.source, .{ .iterate = true });
+            defer source.close(io);
+            var walker = try source.walk(b.allocator);
+            defer walker.deinit();
+            while (try walker.next(io)) |entry| {
+                if (entry.kind != .file) continue;
+                const destination = try std.fs.path.join(b.allocator, &.{ fixture.destination, entry.path });
+                defer b.allocator.free(destination);
+                try source.copyFile(entry.path, root, destination, io, .{ .make_path = true, .replace = true });
+            }
+        }
+    }
+};
+
 fn setupTestPlatforms(
     b: *std.Build,
     target: ResolvedTarget,
@@ -2877,7 +2935,7 @@ fn setupTestPlatforms(
     strip: bool,
     omit_frame_pointer: ?bool,
     platform_filter: ?[]const u8,
-) *Step {
+) TestPlatformSteps {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
     const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
@@ -2943,6 +3001,9 @@ fn setupTestPlatforms(
     // Cross-compile for glibc targets declared by test platform manifests.
     for (glibc_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+        if (generateGlibcStub(b, cross_resolved_target, cross_target.name)) |stub| {
+            clear_cache_step.dependOn(&stub.step);
+        }
 
         for (glibc_test_platform_dirs) |platform_dir| {
             if (platform_filter) |filter| {
@@ -3033,7 +3094,7 @@ fn setupTestPlatforms(
     b.getInstallStep().dependOn(clear_cache_step);
     build_test_hosts_step.dependOn(clear_cache_step);
 
-    return wasm_host_step;
+    return .{ .wasm = wasm_host_step, .hosts = clear_cache_step };
 }
 
 const WasmStaticLibAppBuild = struct {
@@ -3720,7 +3781,12 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
 
     // Setup test platform host libraries
-    const wasm_host_step = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const test_platform_steps = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const wasm_host_step = test_platform_steps.wasm;
+    const fixture_target_inputs = CopyFixtureTargetInputsStep.create(b, platform_filter);
+    fixture_target_inputs.step.dependOn(test_platform_steps.hosts);
+    b.getInstallStep().dependOn(&fixture_target_inputs.step);
+    build_test_hosts_step.dependOn(&fixture_target_inputs.step);
     const wasm_host_fixture_files = b.addWriteFiles();
     _ = wasm_host_fixture_files.addCopyFile(
         b.path("test/wasm/platform/targets/wasm32/host.wasm"),
@@ -5113,6 +5179,12 @@ pub fn build(b: *std.Build) void {
         });
         _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32/host.wasm"), "platform/targets/wasm32/host.wasm");
         _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
+        for ([_][]const u8{ "wasm32", "wasm32v1" }) |wasm_target_name| {
+            _ = wasm_app_sources.addCopyFile(
+                b.path(b.fmt("test/wasm/platform/targets/{s}/host.wasm", .{wasm_target_name})),
+                b.fmt("static-lib-platform/targets/{s}/host.wasm", .{wasm_target_name}),
+            );
+        }
         wasm_app_sources.step.dependOn(wasm_host_step);
 
         const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm");
@@ -7786,14 +7858,6 @@ fn addMainExe(
                 omit_frame_pointer,
             );
             b.getInstallStep().dependOn(copy_step);
-        }
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
-            }
         }
     }
 
