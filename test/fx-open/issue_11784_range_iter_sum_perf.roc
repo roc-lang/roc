@@ -39,8 +39,11 @@ map_of_pipelines = |big| {
 	$total
 }
 
-main! = |_args| {
-	big = 100_000_000.U64
+main! = |args| {
+	# The bound comes from the runtime argument count (just argv0 when run
+	# with no arguments), so the pipelines run in the built program rather
+	# than being evaluated at compile time.
+	big = 99_999_999.U64 + args.len()
 
 	# The exact expected total of the ten summed ranges 0..<(big + p), p in 0..10:
 	# sum over p of (big+p)*(big+p-1)/2, computed with the same while shape.

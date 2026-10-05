@@ -8751,6 +8751,168 @@ const helper_module_source =
     \\}
 ;
 
+/// Write an app that reads `Hooks.hooks`, a record constant `Hooks` declares
+/// without importing `Lib`, either at `Lib.Options` (a nominal whose backing
+/// the record matches, so the read lifts) or at the record's own type.
+fn writeLiftedConstFixture(
+    tmp_dir: *std.testing.TmpDir,
+    sub_dir: []const u8,
+    read: enum { lifted, unlifted },
+    lib_source: []const u8,
+) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
+    var path_buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&path_buf);
+    try writer.print("{s}/app/.roc_echo_platform", .{sub_dir});
+    try tmp_dir.dir.createDirPath(std.testing.io, writer.buffered());
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "app/main.roc", .data = switch (read) {
+            .lifted =>
+            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+            \\
+            \\import pf.Echo
+            \\import Lib
+            \\import Hooks
+            \\
+            \\main! = |_args| {
+            \\    Echo.line!(Lib.buffer(Hooks.hooks).to_str())
+            \\    Ok({})
+            \\}
+            ,
+            .unlifted =>
+            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+            \\
+            \\import pf.Echo
+            \\import Lib
+            \\import Hooks
+            \\
+            \\main! = |_args| {
+            \\    Echo.line!(Lib.buffer({ size: Hooks.hooks.size }).to_str())
+            \\    Ok({})
+            \\}
+            ,
+        } },
+        .{ .rel = "app/Hooks.roc", .data =
+        \\Hooks := [].{
+        \\    hooks : { size : U64 }
+        \\    hooks = { size: 1 }
+        \\}
+        },
+        .{ .rel = "app/Lib.roc", .data = lib_source },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        var rel_buf: [256]u8 = undefined;
+        var rel_writer = std.Io.Writer.fixed(&rel_buf);
+        try rel_writer.print("{s}/{s}", .{ sub_dir, file.rel });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = rel_writer.buffered(), .data = file.data });
+    }
+}
+
+const lifted_const_lib_source =
+    \\Lib := [].{
+    \\    Options := { size : U64 ?? 1 }
+    \\
+    \\    buffer : Options -> U64
+    \\    buffer = |options| options.size
+    \\}
+;
+
+/// Read one checked-module cache entry's bytes, or null when the cache holds
+/// no entry under `key`.
+fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
+    const io = std.testing.io;
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const entries_dir = try config.getCheckedArtifactCacheDir(allocator);
+    defer allocator.free(entries_dir);
+    var dir = try std.Io.Dir.openDirAbsolute(io, entries_dir, .{});
+    defer dir.close(io);
+    const hex = std.fmt.bytesToHex(key, .lower);
+    const sub_path = try std.fs.path.join(allocator, &.{ hex[0..2], hex[2..] });
+    defer allocator.free(sub_path);
+    return dir.readFileAlloc(io, sub_path, allocator, .unlimited) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => |e| return e,
+    };
+}
+
+test "issue 12059: a checked module's cache entry does not depend on how an importer reads its constants" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "lifted_cache");
+    try tmp_dir.dir.createDirPath(std.testing.io, "unlifted_cache");
+    const lifted_cache = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "lifted_cache", allocator);
+    defer allocator.free(lifted_cache);
+    const unlifted_cache = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "unlifted_cache", allocator);
+    defer allocator.free(unlifted_cache);
+
+    try writeLiftedConstFixture(&tmp_dir, "lifted", .lifted, lifted_const_lib_source);
+    try writeLiftedConstFixture(&tmp_dir, "unlifted", .unlifted, lifted_const_lib_source);
+    const lifted_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "lifted/app/main.roc", allocator);
+    defer allocator.free(lifted_app);
+    const unlifted_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "unlifted/app/main.roc", allocator);
+    defer allocator.free(unlifted_app);
+
+    var lifted = try compileAppFacts(allocator, lifted_cache, lifted_app);
+    defer lifted.deinit(allocator);
+    try std.testing.expectEqualStrings("", lifted.reports);
+    var unlifted = try compileAppFacts(allocator, unlifted_cache, unlifted_app);
+    defer unlifted.deinit(allocator);
+    try std.testing.expectEqualStrings("", unlifted.reports);
+
+    // Every module the two apps share, `Hooks` and `Lib` among them, has one
+    // key in both builds, and its entry holds the same bytes whichever app
+    // was compiled: only the app module itself differs.
+    var shared_entries: usize = 0;
+    for (lifted.artifact_keys) |key| {
+        const in_both = for (unlifted.artifact_keys) |other| {
+            if (std.mem.eql(u8, &key, &other)) break true;
+        } else false;
+        if (!in_both) continue;
+        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
+        defer allocator.free(from_lifted);
+        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, key)) orelse return error.TestUnexpectedResult;
+        defer allocator.free(from_unlifted);
+        try std.testing.expectEqualSlices(u8, from_unlifted, from_lifted);
+        shared_entries += 1;
+    }
+    try std.testing.expect(shared_entries >= 2);
+}
+
+test "issue 12059: an app reading an imported constant at a defaulted nominal type recompiles after that nominal's module changes" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try writeLiftedConstFixture(&tmp_dir, "edit", .lifted, lifted_const_lib_source);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "edit/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var first = try compileAppFacts(allocator, cache_dir, app_path);
+    defer first.deinit(allocator);
+    try std.testing.expectEqualStrings("", first.reports);
+
+    // Only `Lib` changes, which gives its defaulted field a new default
+    // identity. `Hooks` does not import `Lib`, so its entry is reused.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "edit/app/Lib.roc",
+        .data = lifted_const_lib_source ++ "\n# an edit\n",
+    });
+
+    var second = try compileAppFacts(allocator, cache_dir, app_path);
+    defer second.deinit(allocator);
+    try std.testing.expectEqualStrings("", second.reports);
+    try std.testing.expect(second.build.cache_hits > 0);
+    try std.testing.expect(second.build.cache_misses > 0);
+}
+
 /// Count the entry files one cache directory holds.
 fn countCacheEntries(allocator: Allocator, absolute_dir: []const u8) (std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || Allocator.Error)!usize {
     const io = std.testing.io;

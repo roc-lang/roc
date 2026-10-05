@@ -294,7 +294,7 @@ fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bo
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
         .prune_join_params => shapes.join_param,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
-        .range => shapes.checked_arithmetic or shapes.switch_stmt,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.num_comparison,
         .box_reuse => shapes.box_box,
     };
 }

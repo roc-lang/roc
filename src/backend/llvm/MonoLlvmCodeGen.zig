@@ -2237,10 +2237,7 @@ pub const MonoLlvmCodeGen = struct {
                 return error.CompilationFailed;
             };
             try self.collectStmtIncomingCounts(body);
-            const compiled_direct_tce_loop = try self.compileDirectEntryTceLoop(proc, body);
-            if (!compiled_direct_tce_loop) {
-                try self.compileStmt(body);
-            }
+            try self.compileStmt(body);
             if (!self.currentBlockHasTerminator()) {
                 if (self.fast_ret_registers != null) {
                     _ = wip.@"unreachable"() catch return error.OutOfMemory;
@@ -3267,36 +3264,6 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(block) catch return error.OutOfMemory;
         wip.cursor = .{ .block = block };
         return false;
-    }
-
-    /// TCE installs the proc body as `join J { remainder: <entry>, body: old_body }`.
-    /// That shape does not need the generic join continuation block: the
-    /// remainder is the run-once entry path that branches into the loop body,
-    /// and recursive sites jump back there after their explicit
-    /// `initialize_join_param` writes. The entry path is a bare `jump J` for a
-    /// plain TCE loop; when `scalarize_joins` splits a struct-typed join
-    /// parameter (such as a closure's capture record) it seeds the per-field
-    /// parameters on the remainder before that jump, so the entry path is a
-    /// statement chain ending in `jump J` rather than a single jump.
-    fn compileDirectEntryTceLoop(self: *MonoLlvmCodeGen, proc: LirProcSpec, stmt_id: CFStmtId) Error!bool {
-        if (proc.tail_transform != .tce) return false;
-
-        const stmt = self.store.getCFStmt(stmt_id);
-        if (stmt != .join) return error.CompilationFailed;
-        const join_stmt = stmt.join;
-
-        const wip = self.wip orelse return error.CompilationFailed;
-        const key = @backingInt(join_stmt.id);
-        const loop_block = wip.block(0, "tce_loop") catch return error.OutOfMemory;
-        try self.join_points.put(key, .{ .block = loop_block, .params = join_stmt.params, .body = join_stmt.body });
-
-        // Emit the run-once entry path, then the loop body. The remainder's
-        // terminal `jump J` branches into `loop_block` through `emitJump`, after
-        // any seeded join parameters have been initialized in the entry block.
-        try self.compileStmt(join_stmt.remainder);
-        wip.cursor = .{ .block = loop_block };
-        try self.compileStmt(join_stmt.body);
-        return true;
     }
 
     /// Processes a single statement node, queueing successors and nested-body

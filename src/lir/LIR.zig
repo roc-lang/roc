@@ -1562,7 +1562,9 @@ pub const ProcShapes = packed struct(u16) {
     struct_build: bool = false,
     /// A tag construction.
     tag_build: bool = false,
-    _padding: u4 = 0,
+    /// A numeric equality or ordering comparison.
+    num_comparison: bool = false,
+    _padding: u3 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));

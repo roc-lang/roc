@@ -808,6 +808,9 @@ const Lowerer = struct {
     /// The fresh-form procedure of each static list of copies, by slot.
     uniform_constructors: collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
+    /// Whether a root-slot read at one type takes its root's slot value
+    /// as stored, per (root type, read type) pair.
+    comptime_read_shares_root: std.AutoHashMapUnmanaged(ComptimeReadTypes, bool) = .empty,
     /// The one slot holding each evaluated root's completed value.
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
@@ -1202,6 +1205,7 @@ const Lowerer = struct {
         self.static_initializer_map.deinit();
         self.uniform_constructors.deinit();
         self.comptime_value_map.deinit();
+        self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
@@ -1288,6 +1292,7 @@ const Lowerer = struct {
         self.static_initializer_map.deinit();
         self.uniform_constructors.deinit();
         self.comptime_value_map.deinit();
+        self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
@@ -1340,6 +1345,7 @@ const Lowerer = struct {
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
         self.uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
+        self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
@@ -5693,6 +5699,48 @@ const Lowerer = struct {
         ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        // The proof call's type is the root's own, and the slot is the
+        // root's. A read whose checked use lifted that type into a nominal
+        // takes the slot value through a typed boundary unless the two
+        // types store the value identically.
+        const root_ty = try self.lowerExprTy(value.initializer);
+        if (root_ty != ty and !try self.comptimeReadSharesRoot(root_ty, ty)) {
+            const root_local = try self.addTemp(root_ty);
+            const convert = try self.assignTypedBoundary(where, target, ty, root_local, root_ty, next);
+            return try self.lowerRootSlotReadInto(where, root_local, value, root_ty, convert);
+        }
+        return try self.lowerRootSlotReadInto(where, target, value, root_ty, next);
+    }
+
+    const ComptimeReadTypes = struct { root: Type.TypeId, read: Type.TypeId };
+
+    /// Whether a read at `read_ty` takes the slot value of a root typed
+    /// `root_ty` as stored: the two are one representation, or they commit
+    /// one layout and encode the value identically beneath an outer nominal.
+    fn comptimeReadSharesRoot(self: *Lowerer, root_ty: Type.TypeId, read_ty: Type.TypeId) Common.LowerError!bool {
+        const key = ComptimeReadTypes{ .root = root_ty, .read = read_ty };
+        if (self.comptime_read_shares_root.get(key)) |shares| return shares;
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        var shares = try self.representationTypesEquivalent(root_ty, read_ty, &visited);
+        if (!shares and self.layoutsMatch(try self.layoutOfType(root_ty), try self.layoutOfType(read_ty))) {
+            visited.clearRetainingCapacity();
+            shares = try self.typesEquivalentInMode(.value_encoding, self.runtimeBackingType(read_ty), self.runtimeBackingType(root_ty), &visited);
+        }
+        try self.comptime_read_shares_root.put(self.allocator, key, shares);
+        return shares;
+    }
+
+    /// Read a root's slot into `target` at the root's own type. The read's
+    /// proof call is not consulted here.
+    fn lowerRootSlotReadInto(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        value: Mono.ComptimeValue,
+        ty: Type.TypeId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
         const root = self.solved.lifted.getComptimeValueRoot(value.root);
         const layout_idx = try self.layoutOfType(ty);
         // A root's value has its type's own layout; storage that boxes it,
@@ -5701,7 +5749,7 @@ const Lowerer = struct {
             const value_local = try self.addLocalForLayout(layout_idx);
             try self.local_types.put(value_local, ty);
             const store_value = try self.assignBoxBoundary(where, target, value_local, layout_idx, next);
-            return try self.lowerComptimeValueInto(where, value_local, value, ty, store_value);
+            return try self.lowerRootSlotReadInto(where, value_local, value, ty, store_value);
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
@@ -15406,7 +15454,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         for (roots, 0..) |root, index| {
             const id: Common.ComptimeValueRootId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             // Representation witnesses are not consulted by root-slot lowering.
-            _ = try lowerer.lowerComptimeValueInto(test_site, target, .{ .root = id, .initializer = undefined }, ty, next);
+            _ = try lowerer.lowerRootSlotReadInto(test_site, target, .{ .root = id, .initializer = undefined }, ty, next);
             const slot = lowerer.result.static_data_values.items[index * 2 + 1].compile_time_root.?;
             try std.testing.expectEqualDeep(root.module, slot.module);
             try std.testing.expectEqual(root.root, slot.root);
@@ -15414,7 +15462,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         }
         // A second table entry for the same descriptor must reuse the semantic slot.
         const duplicate = try solved.lifted.addComptimeValueRoot(roots[1]);
-        _ = try lowerer.lowerComptimeValueInto(test_site, target, .{ .root = duplicate, .initializer = undefined }, ty, next);
+        _ = try lowerer.lowerRootSlotReadInto(test_site, target, .{ .root = duplicate, .initializer = undefined }, ty, next);
         try std.testing.expectEqual(@as(usize, 4), lowerer.result.static_data_values.items.len);
     }
     source_consumed = true;
