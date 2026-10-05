@@ -44,14 +44,18 @@ def main():
     retained = {}
     invocation_dirs = set()
 
-    def run(label, extra=(), failed=False):
-        result = subprocess.run(command + list(extra), cwd=source, capture_output=True, text=True)
+    def run(label, extra=(), failed=False, optimize=None):
+        invocation = command if optimize is None else [
+            value for value in command if not value.startswith("-Doptimize=")
+        ] + [f"-Doptimize={optimize}"]
+        invocation = invocation + list(extra)
+        result = subprocess.run(invocation, cwd=source, capture_output=True, text=True)
         output = result.stdout + result.stderr
         (work / f"{label}.log").write_text(output)
         if failed:
             assert result.returncode != 0 and "helpers_test_root.test.report failure control" in output, output
             assert not re.search(r"All \d+ tests passed\.", output), output
-            return {"label": label, "argv": command + list(extra), "exitCode": result.returncode,
+            return {"label": label, "argv": invocation, "exitCode": result.returncode,
                     "expectedFailure": True, "namedFailure": "helpers_test_root.test.report failure control"}
         assert result.returncode == 0, output
         reports = {}
@@ -83,7 +87,7 @@ def main():
         assert set(names[REPORT_NAMES[0]]).isdisjoint(names[REPORT_NAMES[1]])
         counts = re.findall(r"All (\d+) tests passed\.", output)
         assert counts and int(counts[-1]) == sum(map(len, names.values())), output
-        return {"label": label, "argv": command + list(extra), "reports": reports,
+        return {"label": label, "argv": invocation, "reports": reports,
                 "mutableReportDirectory": directories.pop(), "passed": int(counts[-1]),
                 "skipped": 0, "failed": 0}
 
@@ -112,7 +116,7 @@ def main():
     mode_options = [value for value in options if value.startswith("-Doptimize=")]
     mode = mode_options[-1].split("=", 1)[1] if mode_options else "Debug"
     alternate = "ReleaseSafe" if mode == "Debug" else "Debug"
-    check(run("alternate-mode", [f"-Doptimize={alternate}"]), baseline)
+    check(run("alternate-mode", optimize=alternate), baseline)
     helper = source / "src/build/helpers_test_root.zig"
     original = helper.read_bytes()
     try:
