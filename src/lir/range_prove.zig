@@ -965,6 +965,11 @@ const Pass = struct {
     /// Positions of stable facts by identity, for the stabilizations and
     /// the merge meets. Scratch, cleared by each user.
     stable_index: std.AutoHashMap(StableFactKey, u32),
+    /// A stabilization's qualifying facts before the cap applies.
+    stable_candidates: std.ArrayList(StableFact),
+    /// The identities a head persisted last round, while a stabilization
+    /// over the cap keeps them first.
+    previous_keys: std.AutoHashMap(StableFactKey, void),
     /// Stable-form scratch for a captured edge's facts, its entry facts,
     /// and a persisted meet under construction; heap-allocated once, as
     /// each is sized for its cap.
@@ -1081,6 +1086,8 @@ const Pass = struct {
             .bwd_heads = .empty,
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
             .stable_index = std.AutoHashMap(StableFactKey, u32).init(allocator),
+            .stable_candidates = .empty,
+            .previous_keys = std.AutoHashMap(StableFactKey, void).init(allocator),
             .stable_scratch = stable_scratch,
             .entry_scratch = entry_scratch,
             .persist_scratch = persist_scratch,
@@ -1153,6 +1160,8 @@ const Pass = struct {
         self.bwd_heads.deinit(self.allocator);
         self.fact_seen.deinit();
         self.stable_index.deinit();
+        self.stable_candidates.deinit(self.allocator);
+        self.previous_keys.deinit();
         self.stable_scratch.deinit(self.allocator);
         self.allocator.destroy(self.stable_scratch);
         self.entry_scratch.deinit(self.allocator);
@@ -2742,22 +2751,70 @@ const Pass = struct {
         return self.stabilizeTermFor(root, join_id);
     }
 
-    /// Stabilize the facts an entry edge carries into loop `join_id`.
+    /// Stabilize the facts an entry edge carries into loop `join_id`,
+    /// keeping the facts the loop persisted last round ahead of new ones
+    /// when the cap bites.
     fn stabilizeLoopFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact, join_id: JoinPointId) ResourceError!void {
+        try self.stabilizeInto(stable, facts, .{ .loop = join_id }, self.loop_facts.getPtrConst(join_id));
+    }
+
+    const StabilizeScope = union(enum) {
+        /// Terms stable anywhere on the path.
+        path,
+        /// Terms stable throughout this loop.
+        loop: JoinPointId,
+    };
+
+    /// Stabilize a fact list into round-stable form, keeping facts whose
+    /// endpoints all denote something stable. When more qualify than the
+    /// cap holds, the facts `previous` persisted for the same head come
+    /// first: a persisted set then changes only when a member stops
+    /// holding or room opens, rather than with the order the walk happens
+    /// to put the facts in, which a seed's position can shift from round
+    /// to round without any fact changing.
+    fn stabilizeInto(self: *Pass, stable: *LoopFacts, facts: []const Fact, scope: StabilizeScope, previous: ?*const LoopFacts) ResourceError!void {
         stable.len = 0;
         self.stable_index.clearRetainingCapacity();
+        self.stable_candidates.clearRetainingCapacity();
         for (facts) |fact| {
-            if (stable.len >= loop_fact_cap) break;
-            const a = self.stabilizeLoopTerm(fact.a, join_id) orelse continue;
-            const b = self.stabilizeLoopTerm(fact.b, join_id) orelse continue;
+            const a = (switch (scope) {
+                .path => self.stabilizeTerm(fact.a),
+                .loop => |join_id| self.stabilizeLoopTerm(fact.a, join_id),
+            }) orelse continue;
+            const b = (switch (scope) {
+                .path => self.stabilizeTerm(fact.b),
+                .loop => |join_id| self.stabilizeLoopTerm(fact.b, join_id),
+            }) orelse continue;
             if (a == .constant and b == .constant) continue;
             const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
             const gop = try self.stable_index.getOrPut(stableFactKey(candidate));
             if (gop.found_existing) {
-                stable.items[gop.value_ptr.*].assumed |= candidate.assumed;
+                self.stable_candidates.items[gop.value_ptr.*].assumed |= candidate.assumed;
                 continue;
             }
-            gop.value_ptr.* = @intCast(stable.len);
+            gop.value_ptr.* = @intCast(self.stable_candidates.items.len);
+            try self.stable_candidates.append(self.allocator, candidate);
+        }
+        const candidates = self.stable_candidates.items;
+        if (candidates.len <= loop_fact_cap or previous == null) {
+            const take = @min(candidates.len, loop_fact_cap);
+            @memcpy(stable.items[0..take], candidates[0..take]);
+            stable.len = take;
+            return;
+        }
+        // Over the cap: the previously persisted members first, in
+        // candidate order, then the rest until the cap.
+        self.previous_keys.clearRetainingCapacity();
+        for (previous.?.items[0..previous.?.len]) |fact| try self.previous_keys.put(stableFactKey(fact), {});
+        for (candidates) |candidate| {
+            if (stable.len >= loop_fact_cap) break;
+            if (!self.previous_keys.contains(stableFactKey(candidate))) continue;
+            stable.items[stable.len] = candidate;
+            stable.len += 1;
+        }
+        for (candidates) |candidate| {
+            if (stable.len >= loop_fact_cap) break;
+            if (self.previous_keys.contains(stableFactKey(candidate))) continue;
             stable.items[stable.len] = candidate;
             stable.len += 1;
         }
@@ -2820,7 +2877,7 @@ const Pass = struct {
         // meet separately so loop-invariant relations survive the back
         // edge's inability to derive them before its region is seeded.
         const mine_stable = self.stable_scratch;
-        try self.stabilizeFacts(mine_stable, self.facts.items);
+        try self.stabilizeFacts(mine_stable, self.facts.items, head);
         if (state.captures == 0) {
             try state.stable.assign(self.allocator, mine_stable);
         } else {
@@ -3362,24 +3419,8 @@ const Pass = struct {
 
     /// Stabilize a fact list into round-stable form, keeping facts whose
     /// endpoints all denote something stable.
-    fn stabilizeFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact) ResourceError!void {
-        stable.len = 0;
-        self.stable_index.clearRetainingCapacity();
-        for (facts) |fact| {
-            if (stable.len >= loop_fact_cap) break;
-            const a = self.stabilizeTerm(fact.a) orelse continue;
-            const b = self.stabilizeTerm(fact.b) orelse continue;
-            if (a == .constant and b == .constant) continue;
-            const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
-            const gop = try self.stable_index.getOrPut(stableFactKey(candidate));
-            if (gop.found_existing) {
-                stable.items[gop.value_ptr.*].assumed |= candidate.assumed;
-                continue;
-            }
-            gop.value_ptr.* = @intCast(stable.len);
-            stable.items[stable.len] = candidate;
-            stable.len += 1;
-        }
+    fn stabilizeFacts(self: *Pass, stable: *LoopFacts, facts: []const Fact, head: CFStmtId) ResourceError!void {
+        try self.stabilizeInto(stable, facts, .path, self.merge_facts.getPtrConst(head));
     }
 
     /// Persist a fully-captured merge's all-edge fact intersection for
