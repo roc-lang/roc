@@ -552,17 +552,6 @@ pub fn roc_builtins_str_from_utf8_result(out: [*]u8, list_bytes: ?[*]u8, list_le
     writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 
-/// Converts a UTF-8 byte list to a RocStr, returning the result components via separate out-pointers.
-pub fn roc_builtins_str_from_utf8_parts(out_string: *RocStr, out_index: *u64, out_problem: *u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize) callconv(.c) u8 {
-    const roc_ops = in_process_host.ops();
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const result = str.fromUtf8C(l, .Immutable, roc_ops);
-    out_string.* = result.string;
-    out_index.* = result.byte_index;
-    out_problem.* = @intFromEnum(result.problem_code);
-    return @intFromBool(result.is_ok);
-}
-
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) void {
     const roc_ops = in_process_host.ops();
@@ -809,12 +798,6 @@ fn strListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void
     str_ptr.decref(roc_ops);
 }
 
-const FlatListElementDecrefContext = struct {
-    inner_alignment: u32,
-    inner_element_width: usize,
-    roc_ops: *RocOps,
-};
-
 const CallbackElementDecrefContext = struct {
     callback: RcDropFn,
 };
@@ -822,25 +805,6 @@ const CallbackElementDecrefContext = struct {
 const CallbackElementIncrefContext = struct {
     callback: RcIncFn,
 };
-
-fn flatListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
-    if (element == null) return;
-    const ctx_ptr = context orelse unreachable;
-    const ctx: *const FlatListElementDecrefContext = utils.alignedPtrCast(
-        *const FlatListElementDecrefContext,
-        @as([*]u8, @ptrCast(ctx_ptr)),
-        @src(),
-    );
-    const inner_list: *RocList = utils.alignedPtrCast(*RocList, element.?, @src());
-    inner_list.decref(
-        ctx.inner_alignment,
-        ctx.inner_element_width,
-        false,
-        null,
-        &rcNone,
-        ctx.roc_ops,
-    );
-}
 
 fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element == null) return;
@@ -1269,26 +1233,6 @@ pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_ca
     );
 }
 
-/// Wrapper: decref a List(List a) where the inner lists do not themselves contain refcounted elements.
-pub fn roc_builtins_list_decref_flat_list(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, inner_alignment: u32, inner_element_width: usize) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    var ctx = FlatListElementDecrefContext{
-        .inner_alignment = inner_alignment,
-        .inner_element_width = inner_element_width,
-        .roc_ops = roc_ops,
-    };
-    listDecref(
-        l,
-        @alignOf(RocList),
-        @sizeOf(RocList),
-        true,
-        @ptrCast(&ctx),
-        &flatListElementDecref,
-        roc_ops,
-    );
-}
-
 /// Decref a Roc list and optionally run an element decref callback when unique.
 pub fn roc_builtins_list_decref_with(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, element_decref: ?RcDropFn) callconv(.c) void {
     const roc_ops = in_process_host.ops();
@@ -1401,27 +1345,6 @@ test "roc_builtins_list_decref_with_single_thread keeps an element alive while a
 
     shared.decrefWithAtomicity(.single_thread, ops);
     try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
-}
-
-/// Wrapper: free a List(List a) where the inner lists do not themselves contain refcounted elements.
-pub fn roc_builtins_list_free_flat_list(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, inner_alignment: u32, inner_element_width: usize) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    var ctx = FlatListElementDecrefContext{
-        .inner_alignment = inner_alignment,
-        .inner_element_width = inner_element_width,
-        .roc_ops = roc_ops,
-    };
-
-    if (l.getAllocationDataPtr(roc_ops)) |source| {
-        const count = l.getAllocationElementCount(true, roc_ops);
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            flatListElementDecref(@ptrCast(&ctx), source + i * @sizeOf(RocList));
-        }
-    }
-
-    freeDataPtrC(l.getAllocationDataPtr(roc_ops), @alignOf(RocList), true, roc_ops);
 }
 
 /// Free a Roc list and optionally run an element decref callback first.
@@ -2054,15 +1977,6 @@ pub fn roc_builtins_dec_mul(out_low: *u64, out_high: *u64, a_low: u64, a_high: u
     const result = dec.mulOrPanicC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
     out_low.* = @truncate(@as(u128, @bitCast(result)));
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
-}
-
-/// Dec multiply saturated (decomposed)
-pub fn roc_builtins_dec_mul_saturated(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
-    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
-    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-    const result = dec.mulSaturatedC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b });
-    out_low.* = @truncate(@as(u128, @bitCast(result.num)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result.num)));
 }
 
 /// Dec divide (decomposed)
