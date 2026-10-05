@@ -36477,7 +36477,7 @@ const BodyContext = struct {
                 continue;
             }
             switch (self.shapeContent(shape_ty)) {
-                .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty),
+                .record, .zst => try self.buildConstructionRecordPrecomputedPlan(.parser, plan, shape_ty, encoding_expr, encoding_ty, str_ty),
                 .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased => {},
             }
             try self.pushCodecShapeComponents(&pending, shape_ty, .ty);
@@ -36534,7 +36534,7 @@ const BodyContext = struct {
                 continue;
             }
             switch (self.shapeContent(shape_ty)) {
-                .record, .zst => try self.buildEncodeConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty),
+                .record, .zst => try self.buildConstructionRecordPrecomputedPlan(.encoder, plan, shape_ty, encoding_expr, encoding_ty, str_ty),
                 .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased => {},
             }
             try self.pushCodecShapeComponents(&pending, shape_ty, .field_payload);
@@ -36621,50 +36621,6 @@ const BodyContext = struct {
         }
     }
 
-    fn buildEncodeConstructionRecordPrecomputedPlan(
-        self: *BodyContext,
-        plan: *ParserPrecomputedPlan,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        str_ty: Type.TypeId,
-    ) Allocator.Error!void {
-        if (self.parserPlanContains(plan, shape_ty)) return;
-
-        const fields = try self.dupeRecordFieldsForShape(shape_ty);
-        defer self.allocator.free(fields);
-        const locals = try self.allocator.alloc(DraftLocalId, fields.len);
-        const values = try self.allocator.alloc(DraftExprId, fields.len);
-        var inserted = false;
-        errdefer if (!inserted) {
-            self.allocator.free(locals);
-            self.allocator.free(values);
-        };
-
-        const base_capture_id = plan.next_capture_id;
-        plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant("encoder_for generated too many captures");
-
-        for (fields, 0..) |field, index| {
-            locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
-            self.setLocalCaptureId(
-                locals[index],
-                self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
-            );
-            values[index] = try self.renamedRecordFieldNameExpr(.encoder, encoding_expr, encoding_ty, field, str_ty);
-        }
-
-        try self.parserPlanPut(plan, shape_ty, .{
-            .renamed_field_locals = locals,
-            .renamed_field_values = values,
-            .renamed_field_lengths = null,
-            .renamed_field_texts = null,
-        });
-        inserted = true;
-
-        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
-    }
-
     fn buildEncodeRestoredRecordPrecomputedPlan(
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
@@ -36710,8 +36666,9 @@ const BodyContext = struct {
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
     }
 
-    fn buildParserConstructionRecordPrecomputedPlan(
+    fn buildConstructionRecordPrecomputedPlan(
         self: *BodyContext,
+        comptime kind: CodecKind,
         plan: *ParserPrecomputedPlan,
         shape_ty: Type.TypeId,
         encoding_expr: DraftExprId,
@@ -36732,7 +36689,10 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many captures");
+        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(switch (kind) {
+            .parser => "parser generated too many captures",
+            .encoder => "encoder_for generated too many captures",
+        });
 
         for (fields, 0..) |field, index| {
             locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
@@ -36740,7 +36700,7 @@ const BodyContext = struct {
                 locals[index],
                 self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
             );
-            values[index] = try self.renamedRecordFieldNameExpr(.parser, encoding_expr, encoding_ty, field, str_ty);
+            values[index] = try self.renamedRecordFieldNameExpr(kind, encoding_expr, encoding_ty, field, str_ty);
         }
 
         try self.parserPlanPut(plan, shape_ty, .{

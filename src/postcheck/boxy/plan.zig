@@ -11327,9 +11327,9 @@ const Builder = struct {
         defer seen_descs.deinit();
         const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_function.rep)].children);
         for (children[requirement_function.args_start..][0..requirement_function.arg_count]) |arg| {
-            try self.collectRuntimeHiddenDescriptorsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorsForRep(.runtime, arg.rep, &params, &seen_reps, &seen_descs);
         }
-        try self.collectRuntimeHiddenDescriptorsForRep(requirement_function.ret, &params, &seen_reps, &seen_descs);
+        try self.collectHiddenDescriptorsForRep(.runtime, requirement_function.ret, &params, &seen_reps, &seen_descs);
         return @intCast(params.items.len);
     }
 
@@ -11769,11 +11769,11 @@ const Builder = struct {
             if (self.repQuery().functionChildren(worker.rep)) |function| {
                 const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
                 for (children[function.args_start..][0..function.arg_count]) |child| {
-                    try self.collectHiddenDescriptorsForRep(child.rep, &pending, &seen_reps, &seen_descs);
+                    try self.collectHiddenDescriptorsForRep(.all, child.rep, &pending, &seen_reps, &seen_descs);
                 }
-                try self.collectHiddenDescriptorsForRep(function.ret, &pending, &seen_reps, &seen_descs);
+                try self.collectHiddenDescriptorsForRep(.all, function.ret, &pending, &seen_reps, &seen_descs);
             } else {
-                try self.collectHiddenDescriptorsForRep(worker.rep, &pending, &seen_reps, &seen_descs);
+                try self.collectHiddenDescriptorsForRep(.all, worker.rep, &pending, &seen_reps, &seen_descs);
             }
             const body_start: u32 = @intCast(pending.items.len);
             switch (worker.source) {
@@ -11784,12 +11784,12 @@ const Builder = struct {
                             boxyPlanInvariant("generated codec runtime had no capture type");
                         const capture_rep = self.plan.repForSourceType(capture_type) orelse
                             boxyPlanInvariant("generated codec runtime capture type was not analyzed");
-                        try self.collectHiddenDescriptorsForRep(capture_rep, &pending, &seen_reps, &seen_descs);
+                        try self.collectHiddenDescriptorsForRep(.all, capture_rep, &pending, &seen_reps, &seen_descs);
                         for (self.plan.generated_parser_field_captures.items) |field_capture| {
                             if (field_capture.worker != worker.id) continue;
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated codec field capture type was not analyzed");
-                            try self.collectHiddenDescriptorsForRep(field_rep, &pending, &seen_reps, &seen_descs);
+                            try self.collectHiddenDescriptorsForRep(.all, field_rep, &pending, &seen_reps, &seen_descs);
                         }
                     },
                     .encoder_record_fields,
@@ -11803,15 +11803,15 @@ const Builder = struct {
                             boxyPlanInvariant("generated encoder callback had no encoding capture type");
                         const capture_rep = self.plan.repForSourceType(capture_type) orelse
                             boxyPlanInvariant("generated encoder callback capture type was not analyzed");
-                        try self.collectHiddenDescriptorsForRep(capture_rep, &pending, &seen_reps, &seen_descs);
+                        try self.collectHiddenDescriptorsForRep(.all, capture_rep, &pending, &seen_reps, &seen_descs);
                         const value_type = codec.value_type orelse codec.shape;
                         const shape_rep = self.plan.repForSourceType(value_type) orelse
                             boxyPlanInvariant("generated encoder callback shape type was not analyzed");
-                        try self.collectHiddenDescriptorsForRep(shape_rep, &pending, &seen_reps, &seen_descs);
+                        try self.collectHiddenDescriptorsForRep(.all, shape_rep, &pending, &seen_reps, &seen_descs);
                         if (!typeRefEql(value_type, codec.shape)) {
                             const schema_rep = self.plan.repForSourceType(codec.shape) orelse
                                 boxyPlanInvariant("generated encoder callback schema type was not analyzed");
-                            try self.collectHiddenDescriptorsForRep(schema_rep, &pending, &seen_reps, &seen_descs);
+                            try self.collectHiddenDescriptorsForRep(.all, schema_rep, &pending, &seen_reps, &seen_descs);
                         }
                         const contract_worker = codec.contract_worker orelse
                             boxyPlanInvariant("generated encoder callback had no contract worker");
@@ -11819,7 +11819,7 @@ const Builder = struct {
                             if (field_capture.worker != contract_worker) continue;
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder field capture type was not analyzed");
-                            try self.collectHiddenDescriptorsForRep(field_rep, &pending, &seen_reps, &seen_descs);
+                            try self.collectHiddenDescriptorsForRep(.all, field_rep, &pending, &seen_reps, &seen_descs);
                         }
                     },
                 },
@@ -11827,7 +11827,7 @@ const Builder = struct {
                     if (step.one_payload_type) |payload_type| {
                         const payload_rep = self.plan.repForSourceType(payload_type) orelse
                             boxyPlanInvariant("generated interpolation payload capture type was not analyzed");
-                        try self.collectHiddenDescriptorsForRep(payload_rep, &pending, &seen_reps, &seen_descs);
+                        try self.collectHiddenDescriptorsForRep(.all, payload_rep, &pending, &seen_reps, &seen_descs);
                     }
                 },
                 .procedure_template,
@@ -11857,7 +11857,7 @@ const Builder = struct {
                         try self.plan.worker_dictionary_descs.append(self.allocator, entry);
                         continue;
                     }
-                    try self.collectHiddenDescriptorsForRep(leaf, &pending, &seen_reps, &seen_descs);
+                    try self.collectHiddenDescriptorsForRep(.all, leaf, &pending, &seen_reps, &seen_descs);
                 }
             }
             self.plan.workers.items[worker_index].dictionary_descs = .{
@@ -11879,7 +11879,7 @@ const Builder = struct {
                     // descriptor. When the signature does not already describe
                     // the dispatcher, its evidence is the descriptor's source.
                     if (evidence_param.runtime_dictionary and seen_reps.contains(rep_id)) continue;
-                    try self.collectHiddenDescriptorsForRep(rep_id, &pending, &seen_reps, &seen_descs);
+                    try self.collectHiddenDescriptorsForRep(.all, rep_id, &pending, &seen_reps, &seen_descs);
 
                     var hidden_desc_index: ?u32 = null;
                     for (pending.items, 0..) |candidate, index| {
@@ -15834,8 +15834,13 @@ const Builder = struct {
         return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
     }
 
+    /// Collect, in pre-order, the hidden descriptor parameters `root`
+    /// carries. `.runtime` stops at erased callables and follows only
+    /// children that carry a hidden descriptor; `.all` follows every child
+    /// except shared backing templates.
     fn collectHiddenDescriptorsForRep(
         self: *Builder,
+        comptime scope: enum { all, runtime },
         root: TypeRepId,
         pending: *std.ArrayList(HiddenDescriptorParam),
         seen_reps: *collections.DenseMap(TypeRepId, void),
@@ -15862,52 +15867,17 @@ const Builder = struct {
                 }
             }
 
+            if (scope == .runtime and rep.kind == .erased_callable) continue;
             const children = self.plan.childSlice(rep.children);
             var index = children.len;
             while (index > 0) {
                 index -= 1;
                 const child = children[index];
-                if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
-                try reps.append(self.allocator, child.rep);
-            }
-        }
-    }
-
-    fn collectRuntimeHiddenDescriptorsForRep(
-        self: *Builder,
-        root: TypeRepId,
-        pending: *std.ArrayList(HiddenDescriptorParam),
-        seen_reps: *collections.DenseMap(TypeRepId, void),
-        seen_descs: *collections.DenseMap(DescriptorRequirementId, void),
-    ) Allocator.Error!void {
-        var reps: std.ArrayList(TypeRepId) = .empty;
-        defer reps.deinit(self.allocator);
-        try reps.append(self.allocator, root);
-        while (reps.pop()) |rep_id| {
-            const rep_entry = try seen_reps.getOrPut(rep_id);
-            if (rep_entry.found_existing) continue;
-
-            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-            if (rep.descriptor) |desc| {
-                const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-                const identity_desc = self.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
-                const desc_entry = try seen_descs.getOrPut(identity_desc);
-                if (!desc_entry.found_existing) {
-                    try pending.append(self.allocator, .{
-                        .source_type = rep.source_type,
-                        .rep = rep_id,
-                        .desc = desc,
-                    });
-                }
-            }
-
-            if (rep.kind == .erased_callable) continue;
-            const children = self.plan.childSlice(rep.children);
-            var index = children.len;
-            while (index > 0) {
-                index -= 1;
-                const child = children[index];
-                if (!self.plan.childCarriesHiddenDescriptor(rep_id, child)) continue;
+                const skip = switch (scope) {
+                    .runtime => !self.plan.childCarriesHiddenDescriptor(rep_id, child),
+                    .all => self.plan.childIsSharedBackingTemplate(rep_id, child),
+                };
+                if (skip) continue;
                 try reps.append(self.allocator, child.rep);
             }
         }
@@ -16950,9 +16920,10 @@ const Builder = struct {
             self.plan.representations.items[@intFromEnum(requirement_function.rep)].children,
         );
         for (requirement_children[requirement_function.args_start..][0..requirement_function.arg_count]) |arg| {
-            try self.collectRuntimeHiddenDescriptorsForRep(arg.rep, &params, &param_seen_reps, &param_seen_descs);
+            try self.collectHiddenDescriptorsForRep(.runtime, arg.rep, &params, &param_seen_reps, &param_seen_descs);
         }
-        try self.collectRuntimeHiddenDescriptorsForRep(
+        try self.collectHiddenDescriptorsForRep(
+            .runtime,
             requirement_function.ret,
             &params,
             &param_seen_reps,
@@ -20357,7 +20328,8 @@ fn methodOwnerForModuleType(view: ModuleView, ty: checked.CheckedTypeId) ?static
     }
 }
 
-fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static_dispatch.MethodOwner {
+/// The method owner a resolved (non-alias) checked type payload dispatches on.
+pub fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static_dispatch.MethodOwner {
     if (payload != .nominal) return null;
     const nominal = payload.nominal;
     const nominal_owner: static_dispatch.MethodOwner = .{ .nominal = .{
@@ -20370,7 +20342,9 @@ fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static_dis
     return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) };
 }
 
-fn methodOwnerInNames(
+/// `owner` re-expressed in `target_names`, or null when the target module
+/// does not name the owner's module or type.
+pub fn methodOwnerInNames(
     source_names: *const checked_names.CanonicalNameStore,
     target_names: *const checked_names.CanonicalNameStore,
     owner: static_dispatch.MethodOwner,

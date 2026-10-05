@@ -865,37 +865,9 @@ fn methodOwnerForProcedureType(module: ProcedureModuleView, ty: checked.CheckedT
         if (remaining == 0) boxyLowerInvariant("checked type alias chain was cyclic during boxy method owner lookup");
         remaining -= 1;
         const payload = module.checked_types.payload(current);
-        if (payload != .alias) return methodOwnerForProcedurePayload(payload);
+        if (payload != .alias) return Plan.methodOwnerForCheckedPayload(payload);
         current = payload.alias.backing;
     }
-}
-
-fn methodOwnerForProcedurePayload(payload: checked.CheckedTypePayload) ?static_dispatch.MethodOwner {
-    if (payload != .nominal) return null;
-    const nominal = payload.nominal;
-    const nominal_owner: static_dispatch.MethodOwner = .{ .nominal = .{
-        .module = nominal.origin_module,
-        .type_name = nominal.name,
-        .source_decl = nominal.source_decl,
-    } };
-    const builtin = nominal.builtin orelse return nominal_owner;
-    if (builtin == .try_) return nominal_owner;
-    return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) };
-}
-
-fn methodOwnerInProcedureNames(
-    source_names: *const names.CanonicalNameStore,
-    target_names: *const names.CanonicalNameStore,
-    owner: static_dispatch.MethodOwner,
-) ?static_dispatch.MethodOwner {
-    return switch (owner) {
-        .builtin => |builtin| .{ .builtin = builtin },
-        .nominal => |nominal| .{ .nominal = .{
-            .module = target_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
-            .type_name = target_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
-            .source_decl = nominal.source_decl,
-        } },
-    };
 }
 
 const HostedCatalogEntry = struct {
@@ -6015,7 +5987,7 @@ const ProcedureBuilder = struct {
         owner_module: ProcedureModuleView,
         owner: static_dispatch.MethodOwner,
     ) ?InspectOverrideDecision {
-        const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
+        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
         _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
@@ -6033,7 +6005,7 @@ const ProcedureBuilder = struct {
         owner: static_dispatch.MethodOwner,
         method_text: []const u8,
     ) ?MethodTargetLookup {
-        const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
+        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
         const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
         return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
@@ -16265,7 +16237,7 @@ const ProcBodyBuilder = struct {
         for (args, self.arg_locals.items[0..args.len]) |arg, arg_local| {
             var abi_params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer abi_params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &abi_params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &abi_params, &seen_reps, &seen_descs);
             for (abi_params.items) |param| {
                 if (next_param >= worker_params.len or
                     worker_params[next_param].desc != param.desc or
@@ -16651,7 +16623,7 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(param_starts);
         param_starts[0] = 0;
         for (args, 0..) |arg, arg_index| {
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             param_starts[arg_index + 1] = params.items.len;
         }
         if (params.items.len == 0) return .{};
@@ -16735,7 +16707,7 @@ const ProcBodyBuilder = struct {
             defer param_locals.deinit(self.parent.allocator);
             var bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
             defer bindings.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             for (params.items, 0..) |param, param_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor parameter key exceeded its index range");
@@ -24826,7 +24798,7 @@ const ProcBodyBuilder = struct {
             try self.bindLocalDescriptorEnvironment(source);
             var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             if (params.items.len == 0) {
                 const materialization = if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                     DescriptorMaterialization{ .desc = desc }
@@ -31417,59 +31389,20 @@ const ProcBodyBuilder = struct {
 
         const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(function.rep)].children);
         for (children[function.args_start..][0..function.arg_count]) |child| {
-            try self.collectRuntimeHiddenDescriptorParamsForRep(child.rep, pending, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.runtime, child.rep, pending, &seen_reps, &seen_descs);
         }
         if (include_return) {
-            try self.collectRuntimeHiddenDescriptorParamsForRep(function.ret, pending, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.runtime, function.ret, pending, &seen_reps, &seen_descs);
         }
     }
 
     /// Collect, in pre-order, the hidden descriptor parameters `root`
-    /// carries.
-    fn collectRuntimeHiddenDescriptorParamsForRep(
-        self: *ProcBodyBuilder,
-        root: Plan.TypeRepId,
-        pending: *std.ArrayList(Plan.HiddenDescriptorParam),
-        seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
-        seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, void),
-    ) Allocator.Error!void {
-        const allocator = self.parent.allocator;
-        var reps: std.ArrayList(Plan.TypeRepId) = .empty;
-        defer reps.deinit(allocator);
-        try reps.append(allocator, root);
-        while (reps.pop()) |rep_id| {
-            const rep_entry = try seen_reps.getOrPut(rep_id);
-            if (rep_entry.found_existing) continue;
-
-            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-            if (rep.descriptor) |desc| {
-                const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-                const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
-                const desc_entry = try seen_descs.getOrPut(identity_desc);
-                if (!desc_entry.found_existing) {
-                    try pending.append(allocator, .{
-                        .source_type = rep.source_type,
-                        .rep = rep_id,
-                        .desc = desc,
-                    });
-                }
-            }
-
-            if (rep.kind == .erased_callable) continue;
-            const children = self.parent.plan.childSlice(rep.children);
-            var index = children.len;
-            while (index > 0) {
-                index -= 1;
-                if (!self.parent.plan.childCarriesHiddenDescriptor(rep_id, children[index])) continue;
-                try reps.append(allocator, children[index].rep);
-            }
-        }
-    }
-
-    /// Collect, in pre-order, the hidden descriptor parameters `root`
-    /// carries.
+    /// carries. `.runtime` stops at erased callables and follows only
+    /// children that carry a hidden descriptor; `.all` follows every child
+    /// except shared backing templates.
     fn collectHiddenDescriptorParamsForRep(
         self: *ProcBodyBuilder,
+        comptime scope: enum { all, runtime },
         root: Plan.TypeRepId,
         pending: *std.ArrayList(Plan.HiddenDescriptorParam),
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
@@ -31497,11 +31430,16 @@ const ProcBodyBuilder = struct {
                 }
             }
 
+            if (scope == .runtime and rep.kind == .erased_callable) continue;
             const children = self.parent.plan.childSlice(rep.children);
             var index = children.len;
             while (index > 0) {
                 index -= 1;
-                if (self.parent.plan.childIsSharedBackingTemplate(rep_id, children[index])) continue;
+                const skip = switch (scope) {
+                    .runtime => !self.parent.plan.childCarriesHiddenDescriptor(rep_id, children[index]),
+                    .all => self.parent.plan.childIsSharedBackingTemplate(rep_id, children[index]),
+                };
+                if (skip) continue;
                 try reps.append(allocator, children[index].rep);
             }
         }
@@ -31516,7 +31454,7 @@ const ProcBodyBuilder = struct {
         defer seen_reps.deinit();
         var seen_descs = collections.DenseMap(Plan.DescriptorRequirementId, void).init(self.parent.allocator);
         defer seen_descs.deinit();
-        try self.collectHiddenDescriptorParamsForRep(rep_id, pending, &seen_reps, &seen_descs);
+        try self.collectHiddenDescriptorParamsForRep(.all, rep_id, pending, &seen_reps, &seen_descs);
     }
 
     /// Collect, in pre-order, the hidden descriptor arguments a dictionary
@@ -37830,7 +37768,7 @@ const ProcBodyBuilder = struct {
         for (self.functionArgChildren(function), 0..) |arg, arg_index| {
             var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             for (params.items, 0..) |param, descriptor_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor key exceeded its index range");
@@ -37891,9 +37829,9 @@ const ProcBodyBuilder = struct {
         defer seen_descs.deinit();
         for ([_]FunctionChildren{ target_function, source_function }) |function| {
             for (self.functionArgChildren(function)) |arg| {
-                try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+                try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             }
-            try self.collectHiddenDescriptorParamsForRep(function.ret, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, function.ret, &params, &seen_reps, &seen_descs);
         }
 
         const captures = try self.parent.allocator.alloc(CallableAdapterDescriptorCapture, params.items.len);
