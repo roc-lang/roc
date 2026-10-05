@@ -34,8 +34,9 @@ zig build roc -Droc-deps-path=/path/to/bundle
 
 This option uses the same LLVM/LLD/Binaryen configuration as a downloaded
 bundle. It cannot be combined with `-Dllvm-path` or `-Dsystem-llvm`, which select
-legacy LLVM dependency modes. Bundle headers and libraries at mutable paths participate by content
-in the cache identity; immutable Nix store paths identify their contents.
+legacy LLVM dependency modes. Bundle headers and libraries at mutable paths
+participate by content in the cache identity; immutable Nix store paths identify
+their contents.
 
 The displayed Git version is separate from application-cache compatibility.
 Compatibility tracks compiler/runtime/vendor sources, the build recipe and
@@ -44,6 +45,17 @@ options, and each compiler executable's actual mode, target, and CPU features.
 Dirty production edits invalidate cached applications without changing `HEAD`.
 Ordinary compiler builds preserve other compiler builds' application caches.
 Generated compiler embedding assets live in Zig's cache.
+
+Integration tests prepare their fixture trees and generated host libraries in
+Zig's cache, then run in private temporary copies. Concurrent build modes and
+cache directories therefore do not overwrite the checkout's hosts or each
+other's generated test executables. Test runners use absolute paths to their
+compiler and prebuilt applications. `build-test-hosts` only builds the cached
+hosts. For manual commands against checkout fixtures, publish them explicitly:
+
+```sh
+zig build update-test-fixtures
+```
 
 Dedicated audited `src/*/test/` directories are excluded from the production
 source identity. Inline tests, test helpers outside those directories, vendored
@@ -63,6 +75,7 @@ Debug test binary and checks production/test-only edits at unchanged `HEAD`:
 
 ```sh
 python3 ci/test_build_identity.py /path/to/zig
+python3 ci/test_fixture_isolation.py /path/to/zig
 ```
 
 ## CPU requirements
