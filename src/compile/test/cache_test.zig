@@ -78,6 +78,24 @@ test "getTestCacheDir returns test subdirectory" {
     try testing.expect(std.mem.startsWith(u8, test_dir, version_dir));
 }
 
+test "getScratchDir is the version cache dir's scratch subdirectory" {
+    const allocator = testing.allocator;
+    const config = CacheConfig{
+        .cache_dir = "/home/user/.cache/roc",
+        .roc_ctx = CoreCtx.testing(testing.allocator, testing.allocator),
+    };
+
+    const version_dir = try config.getVersionCacheDir(allocator);
+    defer allocator.free(version_dir);
+
+    const scratch_dir = try config.getScratchDir(allocator);
+    defer allocator.free(scratch_dir);
+
+    const expected = try std.fs.path.join(allocator, &.{ version_dir, "tmp" });
+    defer allocator.free(expected);
+    try testing.expectEqualStrings(expected, scratch_dir);
+}
+
 test "computeCacheFilePath uses subdirectory splitting" {
     const allocator = testing.allocator;
     const filesystem = CoreCtx.testing(std.testing.allocator, std.testing.allocator);

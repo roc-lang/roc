@@ -169,10 +169,9 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
         }
         if (iteration == 1) try std.testing.expect(manager.getStats().hits > 0);
         const coord = build_env.coordinator.?;
-        // A compile-time crash produces a diagnostic, so that pairing is not
-        // cached. Runtime-only rejection and valid constants are cacheable.
-        const expects_fresh_pairing = iteration == 0 or (compile_time and expected_mismatches != 0);
-        try std.testing.expectEqual(@as(u32, if (expects_fresh_pairing) 1 else 0), coord.platform_pairing_count);
+        // Reaching the rejected requirement reports nothing beyond the
+        // checker's own diagnostic, so every pairing is cacheable.
+        try std.testing.expectEqual(@as(u32, if (iteration == 0) 1 else 0), coord.platform_pairing_count);
         const platform = coord.executableRootCheckedArtifact();
         for (platform.resolved_value_refs.records) |ref| {
             if (ref.ref != .platform_required_checked_error) continue;
@@ -194,7 +193,11 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
         for (drained) |module_reports| {
             if (expected_mismatches == 0) try std.testing.expectEqual(@as(usize, 0), module_reports.reports.len);
             for (module_reports.reports) |report| {
-                if (std.mem.eql(u8, report.title, "Type Mismatch")) mismatches += 1;
+                if (std.mem.eql(u8, report.title, "Type Mismatch")) {
+                    mismatches += 1;
+                } else {
+                    try std.testing.expectEqual(.warning, report.severity);
+                }
             }
         }
         try std.testing.expectEqual(expected_mismatches, mismatches);

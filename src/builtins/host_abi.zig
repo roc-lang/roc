@@ -66,9 +66,9 @@ else
 ///
 /// These function-pointer types can be used without linking a host.
 pub const ExternHostFns = struct {
-    pub const roc_alloc = *const fn (length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+    pub const roc_alloc = *const fn (length: usize, alignment: usize) callconv(.c) *anyopaque;
     pub const roc_dealloc = *const fn (ptr: *anyopaque, alignment: usize) callconv(.c) void;
-    pub const roc_realloc = *const fn (ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+    pub const roc_realloc = *const fn (ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque;
     pub const roc_dbg = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
     pub const roc_expect_failed = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
     pub const roc_crashed = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
@@ -147,30 +147,34 @@ pub const RocOps = extern struct {
     /// through their leading `*RocOps` argument (`ops.env`) to find things like an arena
     /// allocator. May be null if the host has no context.
     env: *anyopaque,
-    /// Allocate `length` bytes aligned to `alignment`, returning the allocation (or null on
-    /// OOM—see below). Similar to `_aligned_malloc`.
+    /// Allocate `length` bytes aligned to `alignment`, returning the allocation. Similar to
+    /// `_aligned_malloc`, except that it never returns null.
     ///
-    /// A host that cannot provide a non-null pointer (e.g. due to OOM) must not return a real
-    /// pointer; a platform host aborts, while the compiler-internal host returns `null` so the
-    /// surrounding interpreter can turn it into a Roc crash. (`null` and a real pointer share
-    /// the same representation, so codegen and platform hosts that always succeed are
-    /// unaffected.)
-    roc_alloc: *const fn (*RocOps, usize, usize) callconv(.c) ?*anyopaque,
+    /// Roc writes through the returned pointer without checking it, so returning null is
+    /// undefined behavior. A host that cannot satisfy the allocation (e.g. due to OOM) must
+    /// stop execution of the Roc program and not return to it, exactly as `roc_crashed` does
+    /// (a platform host aborts; the compiler-internal hosts longjmp out). A host whose
+    /// allocator cannot fail in the first place needs no check at all.
+    roc_alloc: *const fn (*RocOps, usize, usize) callconv(.c) *anyopaque,
     /// Free the allocation at `ptr` that had alignment `alignment`. Similar to `_aligned_free`.
     /// (The length is not provided, because seamless slices make it unknown at runtime.)
     roc_dealloc: *const fn (*RocOps, *anyopaque, usize) callconv(.c) void,
     /// Reallocate `ptr` to `new_length` bytes aligned to `alignment`, returning the new
-    /// allocation (or null on OOM, as for `roc_alloc`). Similar to `_aligned_realloc`.
-    roc_realloc: *const fn (*RocOps, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
+    /// allocation. Similar to `_aligned_realloc`, except that it never returns null: a host
+    /// that cannot satisfy the reallocation must not return to Roc, as for `roc_alloc`.
+    roc_realloc: *const fn (*RocOps, *anyopaque, usize, usize) callconv(.c) *anyopaque,
     /// Called when the Roc program runs `dbg`, with the UTF-8 message bytes and length.
     /// The bytes are non-null but not guaranteed to be null-terminated.
     roc_dbg: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Called when an inline `expect` fails, with the UTF-8 message bytes and length.
     roc_expect_failed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Called when the Roc program crashes (e.g. integer overflow), with the UTF-8 message
-    /// bytes and length. The host must stop execution of the Roc program and not return to it
-    /// (a platform host aborts; the compiler-internal host longjmps out), so it never returns
-    /// to Roc—but the type stays `void` since a longjmp-based host is not statically noreturn.
+    /// bytes and length. The host must stop execution of the Roc program and never return to
+    /// it: a platform host exits the process, and a host that keeps running (like the
+    /// compiler's own hosts) longjmps to a point outside the Roc code it called. Every Roc
+    /// call site follows this call with a trap, so a host that returns anyway terminates the
+    /// process there. The type stays `void` because C cannot spell `noreturn` on a function
+    /// pointer, and a longjmp-based host is not statically noreturn either.
     roc_crashed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Hosted functions provided by the platform (sorted alphabetically by name).
     /// These are effectful operations like I/O that the platform provides to Type Modules.
@@ -182,13 +186,16 @@ pub const RocOps = extern struct {
     // load from a mutable table and an indirect call on every allocation.
     // An in-process host enters a per-thread `RocOps` and needs the dispatch.
 
-    /// Helper to crash the Roc program. The host does not return control to Roc.
-    pub fn crash(self: *RocOps, msg: []const u8) void {
-        const trace = tracy.trace(@src());
-        defer trace.end();
-
-        if (comptime host_role == .platform) return extern_host.roc_crashed(msg.ptr, msg.len);
-        self.roc_crashed(self, msg.ptr, msg.len);
+    /// Crash the Roc program. The host never returns control to Roc; if it
+    /// returns anyway, the trap after the call terminates the process instead
+    /// of letting the caller run on past a failed operation.
+    pub fn crash(self: *RocOps, msg: []const u8) noreturn {
+        if (comptime host_role == .platform) {
+            extern_host.roc_crashed(msg.ptr, msg.len);
+        } else {
+            self.roc_crashed(self, msg.ptr, msg.len);
+        }
+        @trap();
     }
 
     /// Helper to send debug output to the host.
@@ -213,23 +220,23 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const answer = self.tryAlloc(length, alignment);
+        const answer = self.allocRaw(length, alignment);
 
         if (tracy.enable_allocation) {
             tracy.alloc(@ptrCast(answer), length);
         }
 
-        return answer.?;
+        return answer;
     }
 
-    /// Allocate, returning null on OOM exactly as the host reported it.
-    pub fn tryAlloc(self: *RocOps, length: usize, alignment: usize) ?*anyopaque {
+    /// Allocate through the host without tracing. The host never returns null.
+    pub fn allocRaw(self: *RocOps, length: usize, alignment: usize) *anyopaque {
         if (comptime host_role == .platform) return extern_host.roc_alloc(length, alignment);
         return self.roc_alloc(self, length, alignment);
     }
 
-    /// Reallocate, returning null on OOM exactly as the host reported it.
-    pub fn tryRealloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
+    /// Reallocate through the host. The host never returns null.
+    pub fn realloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) *anyopaque {
         if (comptime host_role == .platform) return extern_host.roc_realloc(ptr, new_length, alignment);
         return self.roc_realloc(self, ptr, new_length, alignment);
     }
@@ -246,3 +253,84 @@ pub const RocOps = extern struct {
         self.roc_dealloc(self, ptr, alignment);
     }
 };
+
+/// A host that breaks the `roc_crashed` contract by returning.
+const ReturningCrashHost = struct {
+    // These crashes happen before any allocation, and a host that cannot
+    // allocate stops the program rather than returning.
+    fn rocAlloc(_: *RocOps, _: usize, _: usize) callconv(.c) *anyopaque {
+        @trap();
+    }
+    fn rocDealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
+    fn rocRealloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
+        @trap();
+    }
+    fn rocMessage(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+
+    fn ops() RocOps {
+        return .{
+            .env = undefined,
+            .roc_alloc = &rocAlloc,
+            .roc_dealloc = &rocDealloc,
+            .roc_realloc = &rocRealloc,
+            .roc_dbg = &rocMessage,
+            .roc_expect_failed = &rocMessage,
+            .roc_crashed = &rocMessage,
+            .hosted_fns = emptyHostedFunctions(),
+        };
+    }
+
+    fn divideDecByZero() void {
+        var roc_ops = ops();
+        const dec = @import("dec.zig");
+        _ = dec.RocDec.fromU64(1).div(dec.RocDec.fromU64(0), &roc_ops);
+    }
+
+    fn repeatPastTheAddressSpace() void {
+        var roc_ops = ops();
+        const str = @import("str.zig");
+        _ = str.repeatC(str.RocStr.fromSliceSmall("ab"), ~@as(u64, 0), &roc_ops);
+    }
+};
+
+/// Run `work` in a child process and require that it dies on a trap instead
+/// of exiting normally after its crash.
+fn expectChildTraps(comptime work: fn () void) error{ ForkFailed, WaitFailed, SkipZigTest, TestUnexpectedResult }!void {
+    const std = @import("std");
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) return error.SkipZigTest;
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.ForkFailed;
+    if (pid == 0) {
+        // The test runner's fault handler would report the trap as a failure
+        // of this test through the parent's pipe; let the kernel end the
+        // child instead.
+        const default_action: std.c.Sigaction = .{
+            .handler = .{ .handler = std.c.SIG.DFL },
+            .mask = std.mem.zeroes(std.c.sigset_t),
+            .flags = 0,
+        };
+        _ = std.c.sigaction(.ILL, &default_action, null);
+        _ = std.c.sigaction(.TRAP, &default_action, null);
+        work();
+        std.c._exit(0);
+    }
+
+    var status: c_int = 0;
+    while (std.c.waitpid(pid, &status, 0) < 0) {
+        if (@as(std.c.E, @enumFromInt(std.c._errno().*)) != .INTR) return error.WaitFailed;
+    }
+    const raw: u32 = @bitCast(status);
+    const signal = raw & 0x7f;
+    // A child that ran on past the crash exits normally, with signal 0.
+    try std.testing.expect(signal == @intFromEnum(std.c.SIG.ILL) or signal == @intFromEnum(std.c.SIG.TRAP));
+}
+
+test "a host returning from roc_crashed traps after Dec division by zero" {
+    try expectChildTraps(ReturningCrashHost.divideDecByZero);
+}
+
+test "a host returning from roc_crashed traps after Str.repeat length overflow" {
+    try expectChildTraps(ReturningCrashHost.repeatPastTheAddressSpace);
+}

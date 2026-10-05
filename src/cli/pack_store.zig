@@ -388,6 +388,10 @@ pub const LoadedPacks = struct {
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
+                    .rc_read_only_params = spec.rc_read_only_params,
+                    .rc_ret_unique = spec.rc_ret_unique,
+                    .rc_ret_unique_fields = spec.rc_ret_unique_fields,
+                    .rc_ret_conditions = spec.rc_ret_conditions,
                 };
             }
         }

@@ -1,4 +1,4 @@
-import HostValue exposing [HostValue]
+import HostValue
 
 Node := [].{
     new_token : {} -> Box(U64)

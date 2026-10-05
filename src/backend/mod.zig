@@ -315,13 +315,13 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
         fn abort(_: *builtins.host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {
             @panic("erased callable ret-size test must not reach RocOps");
         }
-        fn abortAlloc(_: *builtins.host_abi.RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        fn abortAlloc(_: *builtins.host_abi.RocOps, _: usize, _: usize) callconv(.c) *anyopaque {
             @panic("erased callable ret-size test must not allocate");
         }
         fn abortDealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize) callconv(.c) void {
             @panic("erased callable ret-size test must not deallocate");
         }
-        fn abortRealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        fn abortRealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
             @panic("erased callable ret-size test must not reallocate");
         }
     };

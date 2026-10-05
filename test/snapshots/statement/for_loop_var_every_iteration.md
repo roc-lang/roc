@@ -151,7 +151,7 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "count_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 339)
+						(e-dispatch-call (method "plus") (constraint-fn-var 340)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "count_"))))

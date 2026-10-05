@@ -46,9 +46,17 @@ pub const ExpectErrRegion = struct {
 /// Records the `?` expression's source region before the expect crashes.
 pub const ExpectErrRegionRecorder = *const fn (u32, u32) callconv(.c) void;
 
+/// The symbol through which code checking rejected records that it was
+/// reached, just before it crashes.
+pub const roc_checked_error_reached = shim_symbols.roc_checked_error_reached;
+
+/// Records that code checking rejected was reached before it crashes.
+pub const CheckedErrorRecorder = *const fn () callconv(.c) void;
+
 threadlocal var current_ops: ?*RocOps = null;
 threadlocal var current_expect_observer: ?ExpectObserver = null;
 threadlocal var last_expect_err_region: ?ExpectErrRegion = null;
+threadlocal var checked_error_reached: bool = false;
 
 /// What `enter` displaced; `leave` restores it.
 pub const Saved = struct {
@@ -104,6 +112,23 @@ pub fn expectErrRegionRecorder() ?ExpectErrRegionRecorder {
     return &rocExpectErrRegion;
 }
 
+/// Return and clear whether the most recent crash on this thread was at code
+/// checking rejected. The harness reads it back after the crash unwinds to
+/// count the evaluation as blocked by that already-reported problem.
+pub fn takeCheckedErrorReached() bool {
+    if (host_abi.host_role == .platform) return false;
+    const reached = checked_error_reached;
+    checked_error_reached = false;
+    return reached;
+}
+
+/// The in-process recorder compiled code calls before crashing at code
+/// checking rejected. A platform never reads it back, so it has no recorder.
+pub fn checkedErrorRecorder() ?CheckedErrorRecorder {
+    if (host_abi.host_role == .platform) return null;
+    return &rocCheckedErrorReached;
+}
+
 fn requireOps() *RocOps {
     return current_ops orelse hostInvariant("Roc code ran in-process on a thread that entered no host");
 }
@@ -117,7 +142,7 @@ fn hostInvariant(comptime message: []const u8) noreturn {
     std.process.abort();
 }
 
-fn symbolAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn symbolAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_abi.extern_host.roc_alloc(length, alignment);
 }
 
@@ -125,7 +150,7 @@ fn symbolDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) voi
     host_abi.extern_host.roc_dealloc(ptr, alignment);
 }
 
-fn symbolRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn symbolRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_abi.extern_host.roc_realloc(ptr, new_length, alignment);
 }
 
@@ -139,6 +164,7 @@ fn symbolExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) v
 
 fn symbolCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     host_abi.extern_host.roc_crashed(bytes, len);
+    @trap();
 }
 
 /// A `RocOps` whose every operation is the process's runtime symbol.
@@ -157,7 +183,7 @@ fn missingHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) voi
 
 var no_hosted_fns: [1]host_abi.HostedFn = .{host_abi.hostedFn(&missingHostedFn)};
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     const o = requireOps();
     return o.roc_alloc(o, length, alignment);
 }
@@ -167,7 +193,7 @@ fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     o.roc_dealloc(o, ptr, alignment);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const o = requireOps();
     return o.roc_realloc(o, ptr, new_length, alignment);
 }
@@ -182,22 +208,28 @@ fn rocExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
     o.roc_expect_failed(o, bytes, len);
 }
 
+// `RocOps.crash` in a platform build calls the `roc_crashed` symbol, which is
+// this function, so it calls the entered host's callback itself.
 fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
     const o = requireOps();
     o.roc_crashed(o, bytes, len);
+    @trap();
 }
 
 fn rocExpectObserved(site: u32, passed: u8) callconv(.c) void {
     const o = requireOps();
     const observer = current_expect_observer orelse {
         o.crash("a test expect ran under a host with no expect observer");
-        unreachable;
     };
     observer(o, site, passed);
 }
 
 fn rocExpectErrRegion(start: u32, end: u32) callconv(.c) void {
     last_expect_err_region = .{ .start = start, .end = end };
+}
+
+fn rocCheckedErrorReached() callconv(.c) void {
+    checked_error_reached = true;
 }
 
 test "in-process host scopes restore ops and expect observers" {
@@ -231,7 +263,8 @@ test "in-process host scopes restore ops and expect observers" {
 }
 
 /// The runtime symbols an in-process host defines, in `runtime_set` order,
-/// followed by the test host's expect observer and the `?` region recorder.
+/// followed by the test host's expect observer, the `?` region recorder, and
+/// the checked-error recorder.
 pub const Symbol = enum(u8) {
     roc_alloc,
     roc_dealloc,
@@ -241,6 +274,7 @@ pub const Symbol = enum(u8) {
     roc_crashed,
     roc_expect_observed,
     roc_expect_err_region,
+    roc_checked_error_reached,
 
     /// The symbol's name.
     pub fn name(self: Symbol) [:0]const u8 {
@@ -253,6 +287,7 @@ pub const Symbol = enum(u8) {
             .roc_crashed => shim_symbols.roc_crashed,
             .roc_expect_observed => roc_expect_observed,
             .roc_expect_err_region => roc_expect_err_region,
+            .roc_checked_error_reached => roc_checked_error_reached,
         };
     }
 
@@ -267,6 +302,7 @@ pub const Symbol = enum(u8) {
             .roc_crashed => @intFromPtr(&rocCrashed),
             .roc_expect_observed => @intFromPtr(&rocExpectObserved),
             .roc_expect_err_region => @intFromPtr(&rocExpectErrRegion),
+            .roc_checked_error_reached => @intFromPtr(&rocCheckedErrorReached),
         };
     }
 
@@ -296,5 +332,6 @@ comptime {
         @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed, .linkage = .weak });
         @export(&rocExpectObserved, .{ .name = roc_expect_observed, .linkage = .weak });
         @export(&rocExpectErrRegion, .{ .name = roc_expect_err_region, .linkage = .weak });
+        @export(&rocCheckedErrorReached, .{ .name = roc_checked_error_reached, .linkage = .weak });
     }
 }

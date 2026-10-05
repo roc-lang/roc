@@ -7,7 +7,7 @@ const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
 /// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 6;
+pub const selection_algorithm_version: u64 = 7;
 
 /// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {
@@ -76,6 +76,10 @@ pub const SelectedHoistedRoot = struct {
     /// expression survives post-solve pruning. Checker-only ownership metadata;
     /// checked artifact publication does not persist it.
     validation_owner_expr: ?CIR.Expr.Idx = null,
+    /// Whether the root's expression is reached only through a branch, guard,
+    /// loop body, or expect body. A guarded root whose evaluation crashes is
+    /// not a diagnostic: the original expression stays in runtime lowering.
+    guarded: bool = false,
 };
 
 /// A local function binding the checker promoted to a procedure of its own.
@@ -119,6 +123,7 @@ pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Alloca
         .body = try cloneBody(allocator, root.body),
         .value_kind = root.value_kind,
         .validation_owner_expr = root.validation_owner_expr,
+        .guarded = root.guarded,
     };
 }
 

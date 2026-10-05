@@ -29,13 +29,16 @@ pub const StrAppend = @import("str_append.zig");
 /// Shared proc-body cloning and rewrite-soundness helpers before ARC.
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
+pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 pub const SingleUseInline = @import("single_use_inline.zig");
 pub const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 pub const TagCaseFusion = @import("tag_case_fusion.zig");
+pub const KnownTagJump = @import("known_tag_jump.zig");
 pub const LoopAppendPromote = @import("loop_append_promote.zig");
 /// Always-safe check elision from proven unsigned value-range facts.
 pub const RangeProve = @import("range_prove.zig");
+pub const BranchExpectation = @import("branch_expectation.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
@@ -59,6 +62,8 @@ pub const ArcSig = @import("arc_sig.zig");
 pub const ArcSolve = @import("arc_solve.zig");
 /// Debug borrow certifier for ARC-complete LIR.
 pub const ArcCertify = @import("arc_certify.zig");
+/// The ownership unit an owned erased call transfers.
+pub const ErasedOwner = @import("erased_owner.zig");
 /// Field takes from dying aggregates, solved between ARC borrow inference
 /// and RC statement emission.
 pub const ArcDismantle = @import("arc_dismantle.zig");
@@ -171,6 +176,7 @@ test "lir tests" {
     std.testing.refAllDecls(ReturnSlot);
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
+    std.testing.refAllDecls(PruneJoinParams);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(ComptimeValueGuards);
     std.testing.refAllDecls(ComptimeRootAccessors);

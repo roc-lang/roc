@@ -10,6 +10,7 @@ const check = @import("check");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
+const AnyAll = collections.AnyAll;
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -349,6 +350,9 @@ pub const Store = struct {
     /// Query-only stores borrow their graph and completed caches. Their owner
     /// must remain alive and must not mutate any storage until all readers end.
     borrowed_read_only: bool = false,
+    /// The digest engine's lists between runs, kept for their capacity. A
+    /// borrowed store never computes a digest, so it never touches these.
+    digest_storage: DigestEngine.Storage = .{},
     read_sharing_prepared: bool = false,
     read_sharing_coverage: ReadSharingQueries = .{},
 
@@ -473,6 +477,7 @@ pub const Store = struct {
         result.allocator = allocator;
         result.digest_stats = null;
         result.borrowed_read_only = true;
+        result.digest_storage = .{};
         result.iterator_interface_pending = .empty;
         result.iterator_interface_visited = .empty;
         result.iterator_interface_visit_epochs = .empty;
@@ -484,6 +489,7 @@ pub const Store = struct {
             self.* = undefined;
             return;
         }
+        self.digest_storage.deinit(self.allocator);
         self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
@@ -606,12 +612,37 @@ pub const Store = struct {
         context: anytype,
         comptime fill: fn (@TypeOf(context), TypeId) std.mem.Allocator.Error!Content,
     ) std.mem.Allocator.Error!TypeId {
+        const slot = try self.beginRecursive();
+        errdefer self.abortRecursive(slot);
+        const content = try fill(context, slot.ty);
+        self.finishRecursive(slot, content);
+        return slot.ty;
+    }
+
+    /// A recursive type reserved by `beginRecursive` whose content is not yet
+    /// installed.
+    pub const RecursiveSlot = struct {
+        mark: Mark,
+        ty: TypeId,
+    };
+
+    /// Reserve one recursive type whose content its builder computes later,
+    /// then installs with `finishRecursive` or discards with
+    /// `abortRecursive`. `addRecursive` is this protocol for a builder that
+    /// computes the content in one call.
+    pub fn beginRecursive(self: *Store) std.mem.Allocator.Error!RecursiveSlot {
         const mark_ = self.mark();
         errdefer self.restore(mark_);
-        const reserved = try self.reserveSlot();
-        const content = try fill(context, reserved);
-        self.fillReservedSlot(reserved, content);
-        return reserved;
+        return .{ .mark = mark_, .ty = try self.reserveSlot() };
+    }
+
+    pub fn finishRecursive(self: *Store, slot: RecursiveSlot, content: Content) void {
+        self.fillReservedSlot(slot.ty, content);
+    }
+
+    /// Discard `slot` and everything added to the store after it.
+    pub fn abortRecursive(self: *Store, slot: RecursiveSlot) void {
+        self.restore(slot.mark);
     }
 
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
@@ -1370,7 +1401,19 @@ pub const Store = struct {
             suffix_by_digest.deinit();
         }
 
-        for (0..suffix_len) |offset| {
+        // Classify children before the parents that reach them, so comparing
+        // a parent meets already-classified children through `classes` and
+        // stops there instead of re-walking the whole speculative subtree.
+        const order = try self.transactionPostOrder(mark_, suffix_len);
+        defer self.allocator.free(order);
+        // The class each classified offset joined: a durable id, or the
+        // speculative id of the class's first classified member.
+        const classes = try self.allocator.alloc(?TypeId, suffix_len);
+        defer self.allocator.free(classes);
+        @memset(classes, null);
+        const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
+
+        for (order) |offset| {
             const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
             // Fallible rather than `typeDigestCached`: inside a transaction an
             // exhausted allocator has a correct answer (roll the seal back),
@@ -1380,38 +1423,54 @@ pub const Store = struct {
             const group = try suffix_by_digest.getOrPut(key);
             if (!group.found_existing) group.value_ptr.* = .empty;
 
-            var interned: ?TypeId = null;
+            var class: ?TypeId = null;
             if (self.full_digest_interned.get(key)) |bucket| {
                 for (bucket.items) |existing| {
-                    if (try self.bucketHit(name_store, key, existing, candidate)) {
-                        interned = existing;
+                    if (try self.bucketHit(name_store, key, existing, candidate, resolver)) {
+                        class = existing;
                         break;
                     }
                 }
             }
-            if (interned == null) {
+            if (class == null) {
                 // Digest-equal candidates are one type; see `bucketHit`.
                 if (group.value_ptr.items.len != 0) {
                     const earlier = group.value_ptr.items[0];
                     if (std.debug.runtime_safety) {
                         const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
-                        std.debug.assert(try self.typeEql(name_store, earlier_ty, candidate));
+                        std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver));
                     }
-                    interned = interned_original[earlier];
+                    class = classes[earlier];
                 }
             }
-            if (interned) |found| {
-                interned_original[offset] = found;
-            } else {
-                interned_original[offset] = candidate;
-                representative_of_offset[offset] = @intCast(representatives.items.len);
-                try representatives.append(self.allocator, candidate);
-            }
+            classes[offset] = class orelse candidate;
             // Re-fetched rather than reusing `group.value_ptr`: nothing above
             // inserts into this map today, but a future one would move it.
             // Every offset is grouped, not just representatives, so a later
-            // candidate compares against the same set the flat scan did.
+            // candidate compares against every digest-equal classified node.
             try suffix_by_digest.getPtr(key).?.append(self.allocator, @intCast(offset));
+        }
+
+        // Each speculative class is represented by its lowest offset, and
+        // representatives take durable ids in offset order.
+        var class_representatives = collections.DenseMap(TypeId, TypeId).init(self.allocator);
+        defer class_representatives.deinit();
+        for (0..suffix_len) |offset| {
+            const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            const class = classes[offset].?;
+            if (@intFromEnum(class) < mark_.types_len) {
+                interned_original[offset] = class;
+                continue;
+            }
+            const entry = try class_representatives.getOrPut(class);
+            if (entry.found_existing) {
+                interned_original[offset] = entry.value_ptr.*;
+                continue;
+            }
+            entry.value_ptr.* = candidate;
+            interned_original[offset] = candidate;
+            representative_of_offset[offset] = @intCast(representatives.items.len);
+            try representatives.append(self.allocator, candidate);
         }
 
         // Owned copies of just the representatives' rows. Construction reads
@@ -1461,9 +1520,13 @@ pub const Store = struct {
         // "committed" and "indexed" from ever disagreeing. Reference relocation
         // preserves content, so retain the digests computed before truncation.
         // Safety builds independently verify that contract before copying.
-        for (representatives.items, 0..) |original, representative_index| {
-            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
-            const digest = digests[@intFromEnum(original) - mark_.types_len];
+        // Children before parents, so each safety recomputation reads its
+        // children's digests from the cache instead of re-walking them.
+        for (order) |offset| {
+            const original: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            if (interned_original[offset] != original) continue;
+            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_of_offset[offset])));
+            const digest = digests[offset];
             if (std.debug.runtime_safety) {
                 const rebuilt_digest = try self.computeDigest(name_store, durable, .full, null);
                 if (!std.mem.eql(u8, &rebuilt_digest.bytes, &digest.bytes)) {
@@ -1939,6 +2002,99 @@ pub const Store = struct {
     /// A bucket created here but never filled (because a later step failed) is
     /// an empty entry, which is indistinguishable from an absent one to every
     /// reader, so this preflight needs no rollback of its own.
+    /// Offsets of a transaction's suffix, each after the suffix nodes it
+    /// reaches except where a cycle leads back to it.
+    fn transactionPostOrder(self: *const Store, mark_: Mark, suffix_len: usize) std.mem.Allocator.Error![]u32 {
+        const VisitState = enum(u8) { unvisited, open, done };
+        const Visit = struct { offset: u32, expanded: bool };
+
+        const order = try self.allocator.alloc(u32, suffix_len);
+        errdefer self.allocator.free(order);
+        const states = try self.allocator.alloc(VisitState, suffix_len);
+        defer self.allocator.free(states);
+        @memset(states, .unvisited);
+        var stack = std.ArrayList(Visit).empty;
+        defer stack.deinit(self.allocator);
+        var children = std.ArrayList(TypeId).empty;
+        defer children.deinit(self.allocator);
+
+        const start: u32 = @intCast(mark_.types_len);
+        var emitted: usize = 0;
+        for (0..suffix_len) |root| {
+            if (states[root] != .unvisited) continue;
+            try stack.append(self.allocator, .{ .offset = @intCast(root), .expanded = false });
+            while (stack.pop()) |visit| {
+                if (visit.expanded) {
+                    states[visit.offset] = .done;
+                    order[emitted] = visit.offset;
+                    emitted += 1;
+                    continue;
+                }
+                if (states[visit.offset] != .unvisited) continue;
+                states[visit.offset] = .open;
+                try stack.append(self.allocator, .{ .offset = visit.offset, .expanded = true });
+                children.clearRetainingCapacity();
+                try self.appendChildTypes(@enumFromInt(start + visit.offset), &children);
+                var index = children.items.len;
+                while (index > 0) {
+                    index -= 1;
+                    const child_index = @intFromEnum(children.items[index]);
+                    if (child_index < start or child_index - start >= suffix_len) continue;
+                    const child_offset = child_index - start;
+                    if (states[child_offset] != .unvisited) continue;
+                    try stack.append(self.allocator, .{ .offset = child_offset, .expanded = false });
+                }
+            }
+        }
+        std.debug.assert(emitted == suffix_len);
+        return order;
+    }
+
+    /// Append every type `ty`'s content refers to.
+    fn appendChildTypes(self: *const Store, ty: TypeId, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
+        switch (self.get(ty)) {
+            .primitive, .erased, .zst => {},
+            .list, .box => |child| try out.append(self.allocator, child),
+            .tuple => |span_| try self.appendSpanTypes(span_, out),
+            .func => |func| {
+                try self.appendSpanTypes(func.args, out);
+                try out.append(self.allocator, func.ret);
+            },
+            .record => |span_| {
+                const fields_ = self.fieldSpan(span_);
+                for (0..GuardedList.borrowLen(fields_)) |index| {
+                    const field = GuardedList.at(fields_, index);
+                    try out.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try out.append(self.allocator, value_ty);
+                }
+            },
+            .tag_union => |span_| {
+                const tags_ = self.tagSpan(span_);
+                for (0..GuardedList.borrowLen(tags_)) |index| {
+                    try self.appendSpanTypes(GuardedList.at(tags_, index).payloads, out);
+                }
+            },
+            .named => |named| {
+                try self.appendSpanTypes(named.args, out);
+                if (named.backing) |backing| try out.append(self.allocator, backing.ty);
+                const declared = self.declaredFieldSpan(named.declared_order);
+                for (0..GuardedList.borrowLen(declared)) |index| {
+                    switch (GuardedList.at(declared, index)) {
+                        .named => {},
+                        .padding => |padding| try out.append(self.allocator, padding),
+                    }
+                }
+            },
+        }
+    }
+
+    fn appendSpanTypes(self: *const Store, span_: Span, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
+        const types_ = self.span(span_);
+        for (0..GuardedList.borrowLen(types_)) |index| {
+            try out.append(self.allocator, GuardedList.at(types_, index));
+        }
+    }
+
     fn reserveInternedCapacity(
         self: *Store,
         mark_: Mark,
@@ -1961,28 +2117,25 @@ pub const Store = struct {
         }
     }
 
-    pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
-        return switch (self.get(ty)) {
+    pub fn ownerHead(self: *const Store, root: TypeId) OwnerHead {
+        var ty = root;
+        while (true) return switch (self.get(ty)) {
             .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => .{ .builtin = .list },
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
                 .{ .builtin = owner }
-            else if (named.kind == .alias)
+            else if (named.kind == .alias) {
                 // Aliases are transparent for static dispatch: the owner is
                 // the backing's owner. (Content digests keep aliases opaque;
                 // dispatch is a representation question, so it unwraps.) This
                 // handles alias-over-alias and alias-over-nominal uniformly
                 // (the backing of an alias-over-nominal is itself a `named`
-                // node carrying the nominal's owner). The recursion
-                // terminates because alias chains in checked output are
-                // finite.
-                (if (named.backing) |backing|
-                    self.ownerHead(backing.ty)
-                else
-                    .none)
-            else
-                .{ .named_type = named.def },
+                // node carrying the nominal's owner). Alias chains in checked
+                // output are finite, so following them terminates.
+                ty = (named.backing orelse return .none).ty;
+                continue;
+            } else .{ .named_type = named.def },
             .record, .tuple, .tag_union, .func, .erased, .zst => .none,
         };
     }
@@ -2070,7 +2223,7 @@ pub const Store = struct {
             lhs: TypeId,
             rhs: TypeId,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact);
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact, null);
         }
 
         pub fn typeMatches(
@@ -2081,7 +2234,7 @@ pub const Store = struct {
             rhs: TypeId,
             mode: TypeMatchMode,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode);
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode, null);
         }
 
         pub fn verify(self: View, name_store: *const names.NameStore) ?VerifyError {
@@ -2654,14 +2807,15 @@ pub const Store = struct {
         key: DigestBucketKey,
         existing: TypeId,
         candidate: TypeId,
+        resolver: ?SuffixClasses,
     ) std.mem.Allocator.Error!bool {
         // The full digest is a cryptographic encoding of everything `typeEql`
         // compares (design.md, "Type digests"), so a bucket entry is the type.
         if (std.debug.runtime_safety) {
             const existing_digest = try self.computeDigest(name_store, existing, .full, null);
             std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
-            std.debug.assert(try self.typeEql(name_store, existing, candidate));
-            std.debug.assert(try self.typeEql(name_store, candidate, existing));
+            std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, existing, candidate, .exact, resolver));
+            std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, candidate, existing, .exact, resolver));
         }
         return true;
     }
@@ -2674,7 +2828,7 @@ pub const Store = struct {
         const key = DigestBucketKey.from(digest);
         if (self.full_digest_interned.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
-                if (try self.bucketHit(name_store, key, existing, candidate)) {
+                if (try self.bucketHit(name_store, key, existing, candidate, null)) {
                     self.restore(mark_);
                     return existing;
                 }
@@ -3091,11 +3245,38 @@ pub const Store = struct {
         scalar_bytes: std.ArrayList(u8),
         render_buf: std.ArrayList(u8),
 
+        /// Whether this engine runs on the store's kept lists and returns
+        /// them; an engine started while another is running owns its own.
+        uses_store_storage: bool,
+
         const no_scc_position = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
 
+        const Storage = struct {
+            nodes: std.ArrayList(DigestNode) = .empty,
+            node_lookup: ?std.AutoHashMap(u64, u32) = null,
+            link_pool: std.ArrayList(ChildLink) = .empty,
+            child_offsets: std.ArrayList(usize) = .empty,
+            scalar_bytes: std.ArrayList(u8) = .empty,
+            render_buf: std.ArrayList(u8) = .empty,
+            in_use: bool = false,
+
+            const retained_lookup_capacity = 64;
+
+            fn deinit(self: *Storage, allocator: std.mem.Allocator) void {
+                self.nodes.deinit(allocator);
+                if (self.node_lookup) |*lookup| lookup.deinit();
+                self.link_pool.deinit(allocator);
+                self.child_offsets.deinit(allocator);
+                self.scalar_bytes.deinit(allocator);
+                self.render_buf.deinit(allocator);
+                self.* = .{};
+            }
+        };
+
         fn init(store: *Store, name_store: *const names.NameStore, stats: ?*DigestStats) DigestEngine {
-            return .{
+            const kept = &store.digest_storage;
+            if (kept.in_use) return .{
                 .store = store,
                 .name_store = name_store,
                 .gpa = store.allocator,
@@ -3106,16 +3287,57 @@ pub const Store = struct {
                 .child_offsets = .empty,
                 .scalar_bytes = .empty,
                 .render_buf = .empty,
+                .uses_store_storage = false,
             };
+            kept.in_use = true;
+            const engine: DigestEngine = .{
+                .store = store,
+                .name_store = name_store,
+                .gpa = store.allocator,
+                .stats = stats,
+                .nodes = kept.nodes,
+                .node_lookup = kept.node_lookup orelse std.AutoHashMap(u64, u32).init(store.allocator),
+                .link_pool = kept.link_pool,
+                .child_offsets = kept.child_offsets,
+                .scalar_bytes = kept.scalar_bytes,
+                .render_buf = kept.render_buf,
+                .uses_store_storage = true,
+            };
+            kept.* = .{ .in_use = true };
+            return engine;
         }
 
         fn deinit(self: *DigestEngine) void {
-            self.render_buf.deinit(self.gpa);
-            self.link_pool.deinit(self.gpa);
-            self.child_offsets.deinit(self.gpa);
-            self.scalar_bytes.deinit(self.gpa);
-            self.node_lookup.deinit();
-            self.nodes.deinit(self.gpa);
+            if (!self.uses_store_storage) {
+                self.render_buf.deinit(self.gpa);
+                self.link_pool.deinit(self.gpa);
+                self.child_offsets.deinit(self.gpa);
+                self.scalar_bytes.deinit(self.gpa);
+                self.node_lookup.deinit();
+                self.nodes.deinit(self.gpa);
+                return;
+            }
+            self.nodes.clearRetainingCapacity();
+            // Clearing a map touches its whole capacity, so one that a large
+            // type grew is released instead of being cleared before every
+            // later run.
+            if (self.node_lookup.capacity() > Storage.retained_lookup_capacity) {
+                self.node_lookup.clearAndFree();
+            } else {
+                self.node_lookup.clearRetainingCapacity();
+            }
+            self.link_pool.clearRetainingCapacity();
+            self.child_offsets.clearRetainingCapacity();
+            self.scalar_bytes.clearRetainingCapacity();
+            self.render_buf.clearRetainingCapacity();
+            self.store.digest_storage = .{
+                .nodes = self.nodes,
+                .node_lookup = self.node_lookup,
+                .link_pool = self.link_pool,
+                .child_offsets = self.child_offsets,
+                .scalar_bytes = self.scalar_bytes,
+                .render_buf = self.render_buf,
+            };
         }
 
         fn run(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!names.TypeDigest {
@@ -3596,136 +3818,228 @@ pub const TypeMatchMode = enum {
     declared_variable_slots_match_any,
 };
 
+/// Transaction nodes already proven equal to a class member. Resolving a
+/// classified node to its class lets an exact comparison stop at children
+/// whose equality is already decided.
+const SuffixClasses = struct {
+    start: u32,
+    classes: []const ?TypeId,
+
+    fn resolve(self: SuffixClasses, ty: TypeId) TypeId {
+        const index = @intFromEnum(ty);
+        if (index < self.start) return ty;
+        const offset = index - self.start;
+        if (offset >= self.classes.len) return ty;
+        return self.classes[offset] orelse ty;
+    }
+};
+
+/// Whether two types match in `mode`: the conjunction of every check their
+/// structures reach, in order, stopping at the first that fails. A pair
+/// already compared, or being compared, is assumed to match. Evaluated on
+/// explicit stacks, so type nesting never becomes native call depth.
 fn typeViewEql(
-    type_view: anytype,
+    type_view: Store.View,
     allocator: std.mem.Allocator,
     name_store: *const names.NameStore,
     lhs: TypeId,
     rhs: TypeId,
     mode: TypeMatchMode,
+    resolver: ?SuffixClasses,
 ) std.mem.Allocator.Error!bool {
-    var visited = std.AutoHashMap(u64, void).init(allocator);
-    defer visited.deinit();
-    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited, mode);
+    var scan = TypeViewEqlScan{
+        .type_view = type_view,
+        .name_store = name_store,
+        .mode = mode,
+        .resolver = resolver,
+        .visited = std.AutoHashMap(u64, void).init(allocator),
+    };
+    defer scan.visited.deinit();
+    return try TypeViewEqlScan.Eval.run(allocator, &scan, .{ .pair = .{ .lhs = lhs, .rhs = rhs } });
 }
 
-fn typeViewEqlInner(
-    type_view: anytype,
+const TypeViewEqlScan = struct {
+    type_view: Store.View,
     name_store: *const names.NameStore,
-    raw_lhs: TypeId,
-    raw_rhs: TypeId,
-    visited: *std.AutoHashMap(u64, void),
     mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    if (raw_lhs == raw_rhs) return true;
+    resolver: ?SuffixClasses,
+    visited: std.AutoHashMap(u64, void),
 
-    const lhs_content = type_view.get(raw_lhs);
-    if (lhs_content == .named and lhs_content.named.kind == .alias) {
-        if (lhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited, mode);
+    const Eval = AnyAll.Evaluation(Leaf, TypeViewEqlScan);
+
+    /// A pair of types to compare, or a check already decided.
+    const Leaf = union(enum) {
+        pair: struct { lhs: TypeId, rhs: TypeId },
+        decided: bool,
+    };
+
+    pub fn enter(scan: *TypeViewEqlScan, items: Eval.Items, leaf: Leaf) std.mem.Allocator.Error!Eval.Expansion {
+        const type_view = scan.type_view;
+        const name_store = scan.name_store;
+        var raw_lhs, var raw_rhs = switch (leaf) {
+            .decided => |value| return .{ .value = value },
+            .pair => |pair| .{ pair.lhs, pair.rhs },
+        };
+        if (scan.resolver) |resolver| {
+            raw_lhs = resolver.resolve(raw_lhs);
+            raw_rhs = resolver.resolve(raw_rhs);
         }
+        if (raw_lhs == raw_rhs) return .{ .value = true };
+
+        // Transparent aliases compare through their backings.
+        var lhs_content = type_view.get(raw_lhs);
+        var rhs_content = type_view.get(raw_rhs);
+        while (true) {
+            if (lhs_content == .named and lhs_content.named.kind == .alias) {
+                if (lhs_content.named.backing) |backing| {
+                    raw_lhs = backing.ty;
+                    if (raw_lhs == raw_rhs) return .{ .value = true };
+                    lhs_content = type_view.get(raw_lhs);
+                    continue;
+                }
+            }
+            if (rhs_content == .named and rhs_content.named.kind == .alias) {
+                if (rhs_content.named.backing) |backing| {
+                    raw_rhs = backing.ty;
+                    if (raw_lhs == raw_rhs) return .{ .value = true };
+                    rhs_content = type_view.get(raw_rhs);
+                    continue;
+                }
+            }
+            break;
+        }
+
+        if (scan.mode == .declared_variable_slots_match_any and
+            lhs_content == .tag_union and
+            type_view.tagSpan(lhs_content.tag_union).len == 0)
+        {
+            return .{ .value = true };
+        }
+
+        // An asymmetric mode reaches the same pair from both directions with
+        // different meanings, so it keeps the two orderings apart.
+        const pair_key = switch (scan.mode) {
+            .exact => typePairKey(raw_lhs, raw_rhs),
+            .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
+        };
+        const gop = try scan.visited.getOrPut(pair_key);
+        if (gop.found_existing) return .{ .value = true };
+
+        if (std.meta.activeTag(lhs_content) != std.meta.activeTag(rhs_content)) return .{ .value = false };
+
+        switch (lhs_content) {
+            .primitive => |lhs| return .{ .value = lhs == rhs_content.primitive },
+            .erased => |lhs| return .{ .value = std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]) },
+            .zst => return .{ .value = true },
+            .named => |lhs| if (!try scan.addNamedChecks(items, lhs, rhs_content.named)) return .{ .value = false },
+            .record => |lhs| {
+                const lhs_fields = type_view.fieldSpan(lhs);
+                const rhs_fields = type_view.fieldSpan(rhs_content.record);
+                if (lhs_fields.len != rhs_fields.len) return .{ .value = false };
+                for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
+                    if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name)) or
+                        !fieldDefaultEql(name_store, lhs_field.default, rhs_field.default) or
+                        lhs_field.kind_state != rhs_field.kind_state or
+                        (lhs_field.value_ty == null) != (rhs_field.value_ty == null))
+                    {
+                        try items.add(.{ .decided = false });
+                        break;
+                    }
+                    if (lhs_field.value_ty) |lhs_value_ty| try addPair(items, lhs_value_ty, rhs_field.value_ty.?);
+                    try addPair(items, lhs_field.ty, rhs_field.ty);
+                }
+            },
+            .tuple => |lhs| if (!try scan.addSpanPairs(items, lhs, rhs_content.tuple)) return .{ .value = false },
+            .tag_union => |lhs| {
+                const lhs_tags = type_view.tagSpan(lhs);
+                const rhs_tags = type_view.tagSpan(rhs_content.tag_union);
+                if (lhs_tags.len != rhs_tags.len) return .{ .value = false };
+                for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
+                    if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name)) or
+                        !try scan.addSpanPairs(items, lhs_tag.payloads, rhs_tag.payloads))
+                    {
+                        try items.add(.{ .decided = false });
+                        break;
+                    }
+                }
+            },
+            .list => |lhs| try addPair(items, lhs, rhs_content.list),
+            .box => |lhs| try addPair(items, lhs, rhs_content.box),
+            .func => |lhs| {
+                if (!try scan.addSpanPairs(items, lhs.args, rhs_content.func.args)) return .{ .value = false };
+                try addPair(items, lhs.ret, rhs_content.func.ret);
+            },
+        }
+        return .{ .group = .all };
     }
 
-    const rhs_content = type_view.get(raw_rhs);
-    if (rhs_content == .named and rhs_content.named.kind == .alias) {
-        if (rhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited, mode);
-        }
+    pub fn exit(_: *TypeViewEqlScan, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
+
+    fn addPair(items: Eval.Items, lhs: TypeId, rhs: TypeId) std.mem.Allocator.Error!void {
+        try items.add(.{ .pair = .{ .lhs = lhs, .rhs = rhs } });
     }
 
-    if (mode == .declared_variable_slots_match_any and
-        lhs_content == .tag_union and
-        type_view.tagSpan(lhs_content.tag_union).len == 0)
-    {
+    /// List the pairs of two type spans; false when their lengths differ.
+    fn addSpanPairs(scan: *TypeViewEqlScan, items: Eval.Items, lhs_span: Span, rhs_span: Span) std.mem.Allocator.Error!bool {
+        const lhs = scan.type_view.span(lhs_span);
+        const rhs = scan.type_view.span(rhs_span);
+        if (lhs.len != rhs.len) return false;
+        for (lhs, rhs) |lhs_ty, rhs_ty| try addPair(items, lhs_ty, rhs_ty);
         return true;
     }
 
-    // An asymmetric mode reaches the same pair from both directions with
-    // different meanings, so it keeps the two orderings apart.
-    const pair = switch (mode) {
-        .exact => typePairKey(raw_lhs, raw_rhs),
-        .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
-    };
-    const gop = try visited.getOrPut(pair);
-    if (gop.found_existing) return true;
+    /// List the checks of two named types after their own identity checks;
+    /// false when those fail.
+    fn addNamedChecks(scan: *TypeViewEqlScan, items: Eval.Items, lhs: anytype, rhs: anytype) std.mem.Allocator.Error!bool {
+        const name_store = scan.name_store;
+        if (lhs.kind != rhs.kind) return false;
+        if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
+        if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
+        if (lhs.def.source_decl != rhs.def.source_decl) return false;
+        if (lhs.def.source_decl == null and
+            !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
+        {
+            return false;
+        }
+        if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
+        if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
+        if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
+        if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+        if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
+        if (lhs.builtin_owner != rhs.builtin_owner) return false;
+        if (!try scan.addSpanPairs(items, lhs.args, rhs.args)) return false;
 
-    if (std.meta.activeTag(lhs_content) != std.meta.activeTag(rhs_content)) return false;
+        if (lhs.kind == .alias) {
+            const lhs_backing = lhs.backing orelse {
+                try items.add(.{ .decided = rhs.backing == null });
+                return true;
+            };
+            const rhs_backing = rhs.backing orelse {
+                try items.add(.{ .decided = false });
+                return true;
+            };
+            try addPair(items, lhs_backing.ty, rhs_backing.ty);
+            return true;
+        }
 
-    return switch (lhs_content) {
-        .primitive => |lhs| lhs == rhs_content.primitive,
-        .named => |lhs| try namedTypeViewEql(type_view, name_store, lhs, rhs_content.named, visited, mode),
-        .record => |lhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs_content.record, visited, mode),
-        .tuple => |lhs| try typeSpanViewEql(type_view, name_store, lhs, rhs_content.tuple, visited, mode),
-        .tag_union => |lhs| try tagSpanViewEql(type_view, name_store, lhs, rhs_content.tag_union, visited, mode),
-        .list => |lhs| try typeViewEqlInner(type_view, name_store, lhs, rhs_content.list, visited, mode),
-        .box => |lhs| try typeViewEqlInner(type_view, name_store, lhs, rhs_content.box, visited, mode),
-        .func => |lhs| blk: {
-            const rhs = rhs_content.func;
-            if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) break :blk false;
-            break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited, mode);
-        },
-        .erased => |lhs| std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]),
-        .zst => true,
-    };
-}
-
-fn namedTypeViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs: anytype,
-    rhs: anytype,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    if (lhs.kind != rhs.kind) return false;
-    if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
-    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
-    if (lhs.def.source_decl != rhs.def.source_decl) return false;
-    if (lhs.def.source_decl == null and
-        !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
-    {
-        return false;
+        if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
+            const lhs_backing = lhs.backing orelse {
+                try items.add(.{ .decided = false });
+                return true;
+            };
+            const rhs_backing = rhs.backing orelse {
+                try items.add(.{ .decided = false });
+                return true;
+            };
+            if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) {
+                try items.add(.{ .decided = false });
+                return true;
+            }
+            try addPair(items, lhs_backing.ty, rhs_backing.ty);
+        }
+        return true;
     }
-    if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
-    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
-    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
-    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
-    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
-    if (lhs.builtin_owner != rhs.builtin_owner) return false;
-    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) return false;
-
-    if (lhs.kind == .alias) {
-        const lhs_backing = lhs.backing orelse return rhs.backing == null;
-        const rhs_backing = rhs.backing orelse return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
-    }
-
-    if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
-        const lhs_backing = lhs.backing orelse return false;
-        const rhs_backing = rhs.backing orelse return false;
-        if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
-    }
-
-    return true;
-}
-
-fn typeSpanViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs_span: Span,
-    rhs_span: Span,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    const lhs = type_view.span(lhs_span);
-    const rhs = type_view.span(rhs_span);
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_ty, rhs_ty| {
-        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited, mode)) return false;
-    }
-    return true;
-}
+};
 
 fn fieldDefaultEql(name_store: *const names.NameStore, lhs: ?FieldDefault, rhs: ?FieldDefault) bool {
     const lhs_default = lhs orelse return rhs == null;
@@ -3745,48 +4059,6 @@ pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *Type
     } else {
         writeBytes(hasher, "field-no-default");
     }
-}
-
-fn fieldSpanViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs_span: Span,
-    rhs_span: Span,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    const lhs = type_view.fieldSpan(lhs_span);
-    const rhs = type_view.fieldSpan(rhs_span);
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_field, rhs_field| {
-        if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
-        if (!fieldDefaultEql(name_store, lhs_field.default, rhs_field.default)) return false;
-        if (lhs_field.kind_state != rhs_field.kind_state) return false;
-        if ((lhs_field.value_ty == null) != (rhs_field.value_ty == null)) return false;
-        if (lhs_field.value_ty) |lhs_value_ty| {
-            if (!try typeViewEqlInner(type_view, name_store, lhs_value_ty, rhs_field.value_ty.?, visited, mode)) return false;
-        }
-        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited, mode)) return false;
-    }
-    return true;
-}
-
-fn tagSpanViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs_span: Span,
-    rhs_span: Span,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    const lhs = type_view.tagSpan(lhs_span);
-    const rhs = type_view.tagSpan(rhs_span);
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_tag, rhs_tag| {
-        if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name))) return false;
-        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited, mode)) return false;
-    }
-    return true;
 }
 
 /// Order-preserving pair key, for a match mode whose two sides mean different

@@ -6,6 +6,7 @@
 mod abi;
 
 use core::ffi::c_void;
+use core::ptr::NonNull;
 use core::panic::PanicInfo;
 
 #[panic_handler]
@@ -64,7 +65,7 @@ fn finish_pass() {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> *mut c_void {
+pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> NonNull<c_void> {
     unsafe {
         if HEAP_CURSOR == 0 {
             HEAP_CURSOR = core::arch::wasm32::memory_size(0) * WASM_PAGE_SIZE;
@@ -72,17 +73,17 @@ pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> *mut c_void {
         let ptr = align_forward(HEAP_CURSOR, alignment);
         let Some(end) = ptr.checked_add(length) else {
             fail("allocation overflow");
-            return core::ptr::null_mut();
+            core::arch::wasm32::unreachable();
         };
         let required_pages = (end + WASM_PAGE_SIZE - 1) / WASM_PAGE_SIZE;
         let current_pages = core::arch::wasm32::memory_size(0);
         if required_pages > current_pages && core::arch::wasm32::memory_grow(0, required_pages - current_pages) == usize::MAX {
             fail("memory grow failed");
-            return core::ptr::null_mut();
+            core::arch::wasm32::unreachable();
         }
         HEAP_CURSOR = end;
         ALLOC_COUNT += 1;
-        ptr as *mut c_void
+        NonNull::new_unchecked(ptr as *mut c_void)
     }
 }
 
@@ -94,7 +95,7 @@ pub extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_realloc(_ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+pub extern "C" fn roc_realloc(_ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
     roc_alloc(new_length, alignment)
 }
 

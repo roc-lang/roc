@@ -1,5 +1,5 @@
-import FunctionInfo exposing [FunctionInfo]
-import HostedFunctionInfo exposing [HostedFunctionInfo]
+import FunctionInfo
+import HostedFunctionInfo
 
 ModuleTypeInfo := {
     functions : List(FunctionInfo),

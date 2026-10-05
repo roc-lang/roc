@@ -31,7 +31,7 @@ pub fn refKey(ref: Ref) u64 {
 
 /// Struct field edge in a temporary layout graph.
 pub const Field = struct {
-    index: u16,
+    index: u32,
     child: Ref,
     /// True for unnamed nominal-record padding spacers: the field's layout
     /// supplies only its size; it occupies bytes (forced to alignment 1) but is
@@ -44,7 +44,7 @@ pub const Field = struct {
 /// store uses when committing those fields.
 pub const FieldSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
     order: FieldOrder = .structural,
 
     pub const FieldOrder = enum(u8) {
@@ -60,7 +60,7 @@ pub const FieldSpan = extern struct {
 /// Span into a graph's contiguous ref storage.
 pub const RefSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() RefSpan {
         return .{ .start = 0, .len = 0 };
@@ -153,11 +153,15 @@ pub const Graph = struct {
     pub fn appendFields(self: *Graph, allocator: std.mem.Allocator, fields: []const Field) Allocator.Error!FieldSpan {
         if (fields.len == 0) return .empty();
 
-        const start: u32 = @intCast(self.fields.items.len);
+        // Spans hold 32-bit positions, so a graph past that range has
+        // exhausted the representable memory.
+        const start = std.math.cast(u32, self.fields.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, fields.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
         try self.fields.appendSlice(allocator, fields);
         return .{
             .start = start,
-            .len = @intCast(fields.len),
+            .len = len,
             .order = .structural,
         };
     }
@@ -166,11 +170,13 @@ pub const Graph = struct {
     pub fn appendRefs(self: *Graph, allocator: std.mem.Allocator, refs: []const Ref) Allocator.Error!RefSpan {
         if (refs.len == 0) return .empty();
 
-        const start: u32 = @intCast(self.refs.items.len);
+        const start = std.math.cast(u32, self.refs.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, refs.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
         try self.refs.appendSlice(allocator, refs);
         return .{
             .start = start,
-            .len = @intCast(refs.len),
+            .len = len,
         };
     }
 

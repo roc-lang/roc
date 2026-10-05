@@ -544,6 +544,39 @@ const cases = [_]Case{
         ,
     },
     .{
+        // A sublist read while its source is still live borrows from that
+        // source, so ARC selects the borrowed variant once the `List.sublist`
+        // wrapper is inlined into the reading procedure. Clearing keeps a
+        // unique list's allocation and leaves a shared one to its other
+        // holders.
+        .name = "borrowed sublist and clear, unique and shared inputs",
+        .inline_wrappers = true,
+        .source =
+        \\{
+        \\    source = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    window = List.sublist(source, { start: 1, len: 2 })
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a fourth list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_cleared = List.clear(List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a fifth list element long enough to allocate"],
+        \\    ))
+        \\    shared_cleared = List.clear(shared)
+        \\    List.len(window)
+        \\        + List.len(source)
+        \\        + List.len(unique_cleared)
+        \\        + List.len(shared_cleared)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "list sort copy-on-write, unique and shared inputs",
         .source =
         \\{
@@ -982,6 +1015,7 @@ const cases = [_]Case{
 /// that removes it from this table.
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
+    .{ .op = .list_prefetched, .reason = "never executed: LIR lowering splits it into list_prefetch and an alias of the list" },
     .{ .op = .list_first, .reason = "no producer: List.first lowers through list_get_unsafe" },
     .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
     .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },

@@ -49,7 +49,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app # Comment after keyword
+	[ # Comment after provides open
+		main!, # Comment after exposed item
+	]
+	{ # Comment after packages open
+		other: "../../other/main.roc", # Comment after last package
+		pf: platform "../main.roc", # Comment after platform
+	}
 ~~~
 # CANONICALIZE
 ~~~clojure

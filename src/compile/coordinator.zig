@@ -396,7 +396,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
 }
 
 const canonicalized_module_cache_magic = "roc-can-cache-v1";
-const canonicalized_module_entry_version: u32 = 2;
+const canonicalized_module_entry_version: u32 = 3;
 const canonicalized_module_entry_version_hash: [32]u8 = computeCanonicalizedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), canonicalized-module cache
@@ -654,6 +654,10 @@ pub const LocalImportEdge = struct {
 pub const ModuleState = struct {
     /// Module name (e.g., "Main", "Foo")
     name: []const u8,
+    /// Package-qualified module name (e.g., "pf.Foo"). Workspace information
+    /// that every environment installed for this module borrows as its
+    /// `qualified_module_name`; no cache entry carries it.
+    qualified_name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
     /// Source-relative import base override for materialized modules.
@@ -713,9 +717,10 @@ pub const ModuleState = struct {
         black,
     };
 
-    pub fn init(name: []const u8, path: []const u8) ModuleState {
+    pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
             .name = name,
+            .qualified_name = qualified_name,
             .path = path,
             .cached_ast = null,
             .phase = .Parse,
@@ -874,6 +879,7 @@ pub const ModuleState = struct {
         }
         if (self.source_dir_override) |source_dir| gpa.free(source_dir);
         gpa.free(self.path);
+        gpa.free(self.qualified_name);
         gpa.free(self.name);
     }
 };
@@ -1033,9 +1039,14 @@ pub const PackageState = struct {
 
         const id: ModuleId = @intCast(self.modules.items.len);
         const owned_name = try gpa.dupe(u8, name);
+        errdefer gpa.free(owned_name);
+        const owned_qualified_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ self.name, name });
+        errdefer gpa.free(owned_qualified_name);
         const owned_path = try gpa.dupe(u8, path);
+        errdefer gpa.free(owned_path);
 
-        try self.modules.append(gpa, ModuleState.init(owned_name, owned_path));
+        try self.modules.append(gpa, ModuleState.init(owned_name, owned_qualified_name, owned_path));
+        errdefer _ = self.modules.pop();
         try self.module_names.put(owned_name, id);
 
         return id;
@@ -1264,6 +1275,9 @@ pub const Coordinator = struct {
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
+    /// Set by checked-program finalization: whether it published a program,
+    /// which requires a checked app root.
+    checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The checked modules whose `expect`s are the developer's own tests, in
@@ -1330,6 +1344,12 @@ pub const Coordinator = struct {
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
     ctfe_timing: eval.CompileTimeFinalization.Timing,
+    /// Compile-time evaluation performed inside individual module checks.
+    module_ctfe_timing: eval.CompileTimeFinalization.Timing,
+    /// Wall time spent in `finishCheckedProgram`.
+    program_finalization_ns: u64 = 0,
+    /// Whether per-module compile-time lowering collects fine-grained timings.
+    detailed_lowering_timing: bool = false,
 
     /// Build statistics
     cache_hits: u32,
@@ -1423,6 +1443,7 @@ pub const Coordinator = struct {
             .total_typecheck_ns = 0,
             .total_typecheck_diag_ns = 0,
             .ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
+            .module_ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
             .cache_hits = 0,
             .cache_misses = 0,
             .canonicalized_cache_hits = 0,
@@ -1523,6 +1544,14 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
+    }
+
+    pub fn setDetailedLoweringTiming(self: *Coordinator, enabled: bool) void {
+        self.detailed_lowering_timing = enabled;
+        if (enabled) {
+            self.ctfe_timing.lowering.enableDetailedMonotypeBody();
+            self.module_ctfe_timing.lowering.enableDetailedMonotypeBody();
+        }
     }
 
     pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
@@ -2282,10 +2311,11 @@ pub const Coordinator = struct {
     /// Checked user errors remain explicit crash facts throughout finalization.
     pub fn finishCheckedProgram(self: *Coordinator, mode: compile_build.PostCheckPublicationMode) CoordinatorError!void {
         errdefer self.shutdown();
+        var finalization_timer = startStageTimer(self.roc_ctx.std_io);
+        defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
-        if (mode == .executable_artifacts and self.findRootModule(.platform) != null and
-            (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-        {
+        self.checked_program = mode == .executable_artifacts and self.appRootChecked();
+        if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
             if (platform.evaluation_state == .prepared) {
@@ -2307,13 +2337,23 @@ pub const Coordinator = struct {
         } else {
             // Only a compilation that publishes executable artifacts has a
             // program: `roc check`, `roc build` and `roc run` all do.
-            const program_root = if (mode == .executable_artifacts and
-                (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-                self.executableRootCheckedArtifact()
-            else
-                null;
+            const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluatePreparedModules(true, null, null, program_root);
         }
+    }
+
+    /// Whether the last checked-program finalization published a program.
+    pub fn hasCheckedProgram(self: *const Coordinator) bool {
+        return self.checked_program;
+    }
+
+    /// Whether the app root finished checking. A root that failed (for
+    /// example as a dependent of an import cycle) has no checked artifact, so
+    /// the build has no program; every checked module still finishes its
+    /// independent compile-time work and every report is still emitted.
+    fn appRootChecked(self: *Coordinator) bool {
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
+        return app_root.mod.checkedArtifact() != null;
     }
 
     fn prepareExecutableArtifacts(self: *Coordinator) compile_package.PublishError!void {
@@ -2391,13 +2431,19 @@ pub const Coordinator = struct {
 
     /// Return timing totals for frontend checking and post-check evaluation.
     pub fn getTimingInfo(self: *const Coordinator) compile_package.TimingInfo {
+        var all_compile_time = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
+        all_compile_time.addSnapshot(self.ctfe_timing.snapshot());
+        all_compile_time.addSnapshot(self.module_ctfe_timing.snapshot());
         return .{
             .tokenize_parse_ns = self.total_parse_ns,
             .canonicalize_ns = self.total_canonicalize_ns,
             .canonicalize_diagnostics_ns = self.total_canonicalize_diag_ns,
             .type_checking_ns = self.total_typecheck_ns,
             .check_diagnostics_ns = self.total_typecheck_diag_ns,
+            .module_compile_time_evaluation_ns = self.module_ctfe_timing.snapshot().total_ns,
+            .program_finalization_ns = self.program_finalization_ns,
             .compile_time_evaluation = self.ctfe_timing.snapshot(),
+            .compile_time_counters = all_compile_time.snapshot(),
         };
     }
 
@@ -3740,6 +3786,9 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         };
+        // Identical modules in different packages share this entry, so the
+        // package-qualified name comes from the module being installed.
+        cached_env.qualified_module_name = mod.qualified_name;
 
         // Relocate the artifact into its own 16-byte-aligned buffer, injecting the
         // freshly-relocated cached env (transform E). The resulting artifact is
@@ -4453,7 +4502,6 @@ pub const Coordinator = struct {
         try self.applyCanonicalizedModule(
             mod,
             result.package_name,
-            result.module_name,
             result.module_env,
             &result.reports,
         );
@@ -4482,7 +4530,6 @@ pub const Coordinator = struct {
         self: *Coordinator,
         mod: *ModuleState,
         package_name: []const u8,
-        module_name: []const u8,
         module_env: *ModuleEnv,
         reports: *std.ArrayList(Report),
     ) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
@@ -4490,18 +4537,13 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(module_env);
 
         if (mod.moduleEnv()) |env| {
-            // The package-qualified display identity is workspace information,
-            // so the coordinator records it on the canonicalized environment.
+            // The package-qualified display name is workspace information, so
+            // the coordinator records it on the canonicalized environment.
             // Two modules with the same basename in different packages share a
-            // bare display name; this identifier distinguishes them in
-            // diagnostics and in checked-artifact names. The bare
-            // `display_module_name_idx` is unchanged, and it keeps any
-            // directory segments the logical module name carries.
-            {
-                const qname = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ package_name, module_name });
-                defer self.gpa.free(qname);
-                env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
-            }
+            // bare display name; this name distinguishes them in diagnostics.
+            // The bare `display_module_name_idx` is unchanged, and it keeps
+            // any directory segments the logical module name carries.
+            env.qualified_module_name = mod.qualified_name;
 
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
@@ -4603,7 +4645,6 @@ pub const Coordinator = struct {
         try self.applyCanonicalizedModule(
             mod_after_imports,
             result.package_name,
-            result.module_name,
             result.module_env,
             &result.canonicalize_reports,
         );
@@ -6131,7 +6172,7 @@ pub const Coordinator = struct {
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
-        if (self.ctfe_timing.lowering.detailed_monotype_body) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
+        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
         const ctfe_timing = &local_ctfe_timing;
         const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         // Import resolution runs inside the type-check task and records its
@@ -6165,7 +6206,7 @@ pub const Coordinator = struct {
 
         const check_and_publish_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
         const local_ctfe = local_ctfe_timing.snapshot();
-        self.ctfe_timing.addSnapshot(local_ctfe);
+        self.module_ctfe_timing.addSnapshot(local_ctfe);
         const type_check_ns = check_and_publish_ns -| local_ctfe.total_ns;
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
@@ -8840,6 +8881,118 @@ test "canonicalized module cache shares one entry between identical modules in d
     try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_misses);
     try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, canonicalized_dir));
     try std.testing.expectEqualStrings(first.reports, second.reports);
+}
+
+/// Compile an app and require every module to carry the package-qualified
+/// name of the package it was discovered in.
+fn expectModulesQualifiedByOwningPackage(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+) CheckedModuleCacheRunError!void {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{
+        .enabled = true,
+        .cache_dir = cache_dir,
+    }, roc_ctx);
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_version,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finishCheckedProgram(.executable_artifacts);
+
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |pkg_entry| {
+        const pkg = pkg_entry.value_ptr.*;
+        for (pkg.modules.items) |*mod| {
+            const env = mod.moduleEnv() orelse continue;
+            const expected = try std.fmt.allocPrint(arena, "{s}.{s}", .{ pkg.name, mod.name });
+            const actual = env.qualifiedModuleName();
+            if (!std.mem.eql(u8, expected, actual)) {
+                std.debug.print("module qualified as '{s}', expected '{s}'\n", .{ actual, expected });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12032
+test "checked module cache hit keeps each package's qualified name for identical modules in different packages" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    // Two packages in one workspace, each holding a byte-identical `Util.roc`,
+    // so both modules share one checked-module cache key.
+    try tmp_dir.dir.createDirPath(std.testing.io, "ws/app/.roc_echo_platform");
+    try tmp_dir.dir.createDirPath(std.testing.io, "ws/pkg_a");
+    try tmp_dir.dir.createDirPath(std.testing.io, "ws/pkg_b");
+
+    const util_module =
+        \\Util := [].{
+        \\    greet : Str -> Str
+        \\    greet = |s| "hi ${s}"
+        \\}
+    ;
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "ws/app/main.roc", .data =
+        \\app [main!] {
+        \\    pf: platform "./.roc_echo_platform/main.roc",
+        \\    a: "../pkg_a/main.roc",
+        \\    b: "../pkg_b/main.roc",
+        \\}
+        \\
+        \\import pf.Echo
+        \\import a.Util
+        \\import b.Util as BUtil
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!(Util.greet(BUtil.greet("x")))
+        \\    Ok({})
+        \\}
+        },
+        .{ .rel = "ws/pkg_a/main.roc", .data = "package [Util] {}\n" },
+        .{ .rel = "ws/pkg_a/Util.roc", .data = util_module },
+        .{ .rel = "ws/pkg_b/main.roc", .data = "package [Util] {}\n" },
+        .{ .rel = "ws/pkg_b/Util.roc", .data = util_module },
+        .{ .rel = "ws/app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "ws/app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = file.rel, .data = file.data });
+    }
+
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "ws/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    // Cold: both `Util` modules are checked from source.
+    try expectModulesQualifiedByOwningPackage(allocator, cache_dir, app_path);
+    // Warm: both `Util` modules load the same checked entry, and each must
+    // still be named by the package it belongs to.
+    try expectModulesQualifiedByOwningPackage(allocator, cache_dir, app_path);
 }
 
 test "canonicalized module cache produces the same build as a disabled cache" {
