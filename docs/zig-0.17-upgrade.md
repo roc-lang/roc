@@ -73,7 +73,11 @@ arguments.
   two fixture tests, real Zig coverage, argument forwarding, and three hashed
   consumers pass. The runtime build matches the previous vendored port.
   Coverage remains lazy and separate from Roc. ARM64 helper compilation and
-  graph configuration pass locally; native ARM64 coverage CI is a separate gate.
+  graph configuration pass locally. The [Zig 0.17 workflow](https://github.com/roc-lang/zig-kcov/actions/runs/37305105565)
+  also passes native builds, fixture tests, and source coverage on x86_64 and
+  ARM64. The inherited CMake workflow has separate infrastructure failures
+  before compilation, including an unavailable Homebrew formula and ARMv7
+  container image.
 * [Bytebox fork commit](https://github.com/lukewilliamboswell/bytebox/commit/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87)
   is based on Richard's `wide-if-continuations` branch at `6565220e5d16`.
   The Zig runtime matches the previous vendored port, preserving 16-byte SIMD
@@ -85,6 +89,16 @@ arguments.
   fixtures; no performance comparison is inferred. The spec runner compiles,
   and fresh dependency-cache consumers pass. The user will submit the upstream
   Bytebox PR separately.
+
+The Roc parser's Linux x86_64 coverage restriction remains necessary. A
+private probe at `52f60bd7ca` enables that target and executes all 94 parser
+tests under pinned Kcov with Zig 0.17's default Debug backend. The tests pass,
+but coverage contains no Roc source lines. An unfiltered report contains only
+compiler-rt sources, and libdw rejects nine of ten compilation units with
+`invalid .debug_line section`. Actual source paths are present in DWARF, so
+changing the include filter does not resolve the failure. This establishes a
+remaining debug-information limitation separately from the passing small
+Kcov fixtures; the probe changes are not applied to the production build.
 
 ## Source and compiler correctness
 
