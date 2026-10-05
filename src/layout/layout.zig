@@ -720,18 +720,13 @@ pub const Layout = packed struct {
             .scalar => switch (self.getScalar().tag) {
                 .int => self.getScalar().getInt().alignment(),
                 .frac => self.getScalar().getFrac().alignment(),
-                .str => target_usize.alignment(),
-                .opaque_ptr => target_usize.alignment(),
+                .str, .opaque_ptr => target_usize.alignment(),
                 .vector => .@"16",
             },
-            .box, .box_of_zst, .erased_box => target_usize.alignment(),
-            .list, .list_of_zst => target_usize.alignment(),
-            .erased_callable => target_usize.alignment(),
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
             .struct_ => self.getStruct().sort_key.alignment(target_usize),
             .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
-            .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
-            .ptr => target_usize.alignment(),
         };
     }
 
@@ -869,9 +864,8 @@ pub const Layout = packed struct {
                 .opaque_ptr => true,
                 .vector => self.getScalar().getVector() == other.getScalar().getVector(),
             },
-            .box => self.getIdx() == other.getIdx(),
+            .box, .list, .ptr => self.getIdx() == other.getIdx(),
             .box_of_zst, .erased_box => true, // No additional data
-            .list => self.getIdx() == other.getIdx(),
             .list_of_zst => true, // No additional data
             .struct_ => self.getStruct().sort_key == other.getStruct().sort_key and
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
@@ -880,7 +874,6 @@ pub const Layout = packed struct {
             .zst => true, // No additional data
             .tag_union => self.getTagUnion().sort_key == other.getTagUnion().sort_key and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
-            .ptr => self.getIdx() == other.getIdx(),
         };
     }
 };

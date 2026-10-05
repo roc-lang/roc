@@ -1948,7 +1948,7 @@ pub const BoxyRuntime = struct {
     ) Error!bool {
         const layout_val = self.layout_store.getLayout(layout_idx);
         return switch (layout_val.tag) {
-            .zst => true,
+            .zst, .box_of_zst => true,
             .scalar => switch (layout_val.getScalar().tag) {
                 .str => builtins.str.strEqual(valueToRocStr(a), valueToRocStr(b)),
                 .frac => switch (self.helper.sizeOf(layout_idx)) {
@@ -1985,7 +1985,6 @@ pub const BoxyRuntime = struct {
                 "LIR/interpreter invariant violated: equality on erased box layout {d} survived lowering",
                 .{@intFromEnum(layout_idx)},
             ),
-            .box_of_zst => true,
             .box => blk: {
                 const a_ptr = self.readBoxedDataPointer(a);
                 const b_ptr = self.readBoxedDataPointer(b);
@@ -5798,11 +5797,7 @@ pub const BoxyRuntime = struct {
                 const rs = valueToRocStr(val);
                 rs.increfWithAtomicity(count, atomicity, self.roc_ops);
             },
-            .str_decref => {
-                const rs = valueToRocStr(val);
-                rs.decrefWithAtomicity(atomicity, self.roc_ops);
-            },
-            .str_free => {
+            .str_decref, .str_free => {
                 const rs = valueToRocStr(val);
                 rs.decrefWithAtomicity(atomicity, self.roc_ops);
             },
@@ -5811,26 +5806,7 @@ pub const BoxyRuntime = struct {
                 const has_child = list_plan.child != null;
                 rl.increfWithAtomicity(@intCast(count), has_child, atomicity, self.roc_ops);
             },
-            .list_decref => |list_plan| {
-                const rl = valueToRocList(val);
-                const has_child = list_plan.child != null;
-                const alloc_ptr = rl.getAllocationDataPtr(self.roc_ops);
-                // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
-                if (list_plan.child) |child_key| {
-                    if (rl.isUnique(self.roc_ops)) {
-                        self.decrefListElements(hooks, rl, list_plan, child_key, count, atomicity);
-                    }
-                }
-                builtins.utils.decref(
-                    alloc_ptr,
-                    rl.capacity_or_alloc_ptr,
-                    @intCast(list_plan.elem_alignment),
-                    has_child,
-                    atomicity,
-                    self.roc_ops,
-                );
-            },
-            .list_free => |list_plan| {
+            inline .list_decref, .list_free => |list_plan| {
                 const rl = valueToRocList(val);
                 const has_child = list_plan.child != null;
                 const alloc_ptr = rl.getAllocationDataPtr(self.roc_ops);

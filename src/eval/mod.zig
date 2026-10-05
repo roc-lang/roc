@@ -15,9 +15,8 @@ pub const EvalBackend = InspectedRun.Backend;
 pub fn backendAvailable(backend_kind: EvalBackend) bool {
     if (builtin.target.os.tag == .freestanding and backend_kind != .wasm) return false;
     return switch (backend_kind) {
-        .interpreter => true,
+        .interpreter, .wasm => true,
         .dev => backend.host_lir_codegen_available,
-        .wasm => true,
         .llvm => builtin.target.os.tag != .freestanding,
     };
 }

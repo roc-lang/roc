@@ -549,9 +549,7 @@ pub const LlvmTestOpt = enum {
 
 fn deinitBoolRootEvent(allocator: Allocator, event: BoolRootEvent) void {
     switch (event) {
-        .dbg => |message| allocator.free(message),
-        .expect_failed => |message| allocator.free(message),
-        .crashed => |message| allocator.free(message),
+        inline .dbg, .expect_failed, .crashed => |message| allocator.free(message),
     }
 }
 
@@ -562,10 +560,9 @@ fn deinitBoolRootEvents(allocator: Allocator, events: []BoolRootEvent) void {
 
 fn deinitBoolRootEvalOutcome(allocator: Allocator, outcome: BoolRootEvalOutcome) void {
     switch (outcome) {
-        .passed => {},
+        .passed, .checked_error => {},
         .crashed => |message| allocator.free(message),
         .expect_err => |failure| allocator.free(failure.message),
-        .checked_error => {},
     }
 }
 

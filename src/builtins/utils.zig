@@ -745,10 +745,7 @@ pub fn isUnique(
 /// Used to determine if in-place mutation is safe for reference-counted data
 pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
-        .normal => {
-            return refcount == 1;
-        },
-        .atomic => {
+        .normal, .atomic => {
             return refcount == 1;
         },
         .none => {
@@ -761,10 +758,7 @@ pub inline fn rcUnique(refcount: isize) bool {
 /// Constant references (REFCOUNT_MAX_ISIZE) are never freed when decremented
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
-        .normal => {
-            return refcount == REFCOUNT_STATIC_DATA;
-        },
-        .atomic => {
+        .normal, .atomic => {
             return refcount == REFCOUNT_STATIC_DATA;
         },
         .none => {

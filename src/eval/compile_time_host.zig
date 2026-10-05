@@ -60,9 +60,8 @@ pub const HostEvent = union(enum) {
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
+            inline .dbg, .crashed => |msg| msg,
             .expect_failed => |event| event.message,
-            .crashed => |msg| msg,
         };
     }
 };

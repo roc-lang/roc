@@ -1824,12 +1824,11 @@ pub const Store = struct {
         for (graph.nodes.items, 0..) |node, i| {
             raw_layouts[i] = try self.reserveLayout(switch (node) {
                 .pending, .committed => unreachable,
-                .nominal => Layout.zst(),
+                .nominal, .struct_, .tag_union => Layout.zst(),
                 .box => Layout.box(.zst),
                 .list => Layout.list(.zst),
                 .closure => Layout.closure(.zst),
                 .erased_callable => Layout.erasedCallable(),
-                .struct_, .tag_union => Layout.zst(),
             });
         }
 

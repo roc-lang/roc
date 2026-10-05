@@ -42,9 +42,8 @@ pub const RcOp = enum(u2) {
     pub fn performed(self: RcOp) PerformedOp {
         return switch (self) {
             .incref => .incref,
-            .decref => .decref,
+            .decref, .host_drop => .decref,
             .free => .free,
-            .host_drop => .decref,
         };
     }
 };
