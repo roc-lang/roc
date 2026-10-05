@@ -153,9 +153,9 @@ main = {
 		(e-lambda
 			(args
 				(p-assign (ident "segments")))
-			(e-dispatch-call (method "map_ok") (constraint-fn-var 319)
+			(e-dispatch-call (method "map_ok") (constraint-fn-var 323)
 				(receiver
-					(e-call (constraint-fn-var 316)
+					(e-call (constraint-fn-var 320)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -173,7 +173,7 @@ main = {
 								(e-nominal (nominal "Url")
 									(e-tag (name "Url")
 										(args
-											(e-call (constraint-fn-var 347)
+											(e-call (constraint-fn-var 351)
 												(e-lookup-local
 													(p-assign (ident "assemble")))
 												(e-lookup-local
