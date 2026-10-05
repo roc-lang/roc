@@ -298,17 +298,17 @@ fn decodeTypeDeclExtra(store: *const NodeStore, token: u32) TypeDeclExtra {
     };
 }
 
-/// Compile-time constants for union variant counts to ensure we don't miss cases
-/// when adding/removing variants from AST unions. Update these when modifying the unions.
+/// Union variant counts, which the node store tests use as coverage floors so
+/// a new AST variant cannot go untested.
 ///
 /// Count of the header nodes in the AST
-pub const AST_HEADER_NODE_COUNT = 6;
+pub const AST_HEADER_NODE_COUNT = std.meta.fields(AST.Header).len;
 /// Count of the statement nodes in the AST
-pub const AST_STATEMENT_NODE_COUNT = 13;
+pub const AST_STATEMENT_NODE_COUNT = std.meta.fields(AST.Statement).len;
 /// Count of the pattern nodes in the AST
-pub const AST_PATTERN_NODE_COUNT = 17;
+pub const AST_PATTERN_NODE_COUNT = std.meta.fields(AST.Pattern).len;
 /// Count of the type annotation nodes in the AST
-pub const AST_TYPE_ANNO_NODE_COUNT = 11;
+pub const AST_TYPE_ANNO_NODE_COUNT = std.meta.fields(AST.TypeAnno).len;
 /// Count of the expression nodes in the AST
 pub const AST_EXPR_NODE_COUNT = std.meta.fields(AST.Expr).len;
 
