@@ -130,12 +130,6 @@ pub const LookupResult = union(enum) {
     not_found: void,
 };
 
-/// Result of looking up a type variable
-pub const TypeVarLookupResult = union(enum) {
-    found: CIR.TypeAnno.Idx,
-    not_found: void,
-};
-
 /// Result of looking up a type variable alias
 pub const TypeVarAliasLookupResult = union(enum) {
     found: TypeVarAliasBinding,
@@ -209,13 +203,6 @@ pub const TypeBindingDecision = union(enum) {
     idempotent_current,
     rejected_current_conflict: TypeBinding,
     redeclared_current: TypeBinding,
-};
-
-/// Result of introducing a type variable
-pub const TypeVarIntroduceResult = union(enum) {
-    success: void,
-    shadowing_warning: CIR.TypeAnno.Idx, // The type variable that was shadowed
-    already_in_scope: CIR.TypeAnno.Idx, // The type variable already exists in this scope
 };
 
 /// Result of introducing a module alias
@@ -398,50 +385,6 @@ pub fn introduceTypeBinding(
         return TypeBindingDecision{ .inserted_shadowing_parent = binding };
     }
     return .inserted;
-}
-
-/// Introduce a type variable into the scope
-pub fn introduceTypeVar(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    name: Ident.Idx,
-    type_var_anno: CIR.TypeAnno.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
-) std.mem.Allocator.Error!TypeVarIntroduceResult {
-    // Check if already exists in current scope.
-    var iter = scope.type_vars.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            // Type variable already exists in this scope
-            return TypeVarIntroduceResult{ .already_in_scope = entry.value_ptr.* };
-        }
-    }
-
-    // Check for shadowing in parent scopes
-    var shadowed_type_var: ?CIR.TypeAnno.Idx = null;
-    if (parent_lookup_fn) |lookup_fn| {
-        shadowed_type_var = lookup_fn(name);
-    }
-
-    try scope.put(gpa, .type_var, name, type_var_anno);
-
-    if (shadowed_type_var) |anno| {
-        return TypeVarIntroduceResult{ .shadowing_warning = anno };
-    }
-
-    return TypeVarIntroduceResult{ .success = {} };
-}
-
-/// Lookup a type variable in the scope hierarchy
-pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
-    // Search by identifier equality.
-    var iter = scope.type_vars.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            return TypeVarLookupResult{ .found = entry.value_ptr.* };
-        }
-    }
-    return TypeVarLookupResult{ .not_found = {} };
 }
 
 /// Look up a type variable alias in this scope (for static dispatch on type vars)

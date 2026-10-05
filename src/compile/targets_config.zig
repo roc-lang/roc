@@ -202,36 +202,6 @@ pub const TargetsConfig = struct {
         return null;
     }
 
-    /// Get the default target based on the current system.
-    /// Returns the first target in the list that's compatible with the current host (OS and arch).
-    pub fn getDefaultTarget(self: TargetsConfig) ?RocTarget {
-        for (self.targets) |spec| {
-            if (spec.target.isCompatibleWithHost()) {
-                return spec.target;
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the default target for commands that must execute the result on this host.
-    /// This excludes build-compatible targets such as wasm32 that are not native
-    /// process executables for the default `roc` command, and targets that don't produce executables.
-    pub fn getDefaultHostExecutableTarget(self: TargetsConfig) ?RocTarget {
-        for (self.targets) |spec| {
-            if (spec.output == .exe and spec.target.isExecutableOnHost()) {
-                return spec.target;
-            }
-        }
-
-        return null;
-    }
-
-    /// Check if a specific target is supported.
-    pub fn supportsTarget(self: TargetsConfig, target: RocTarget) bool {
-        return self.getLinkSpec(target) != null;
-    }
-
     /// Get all supported targets.
     pub fn getSupportedTargets(self: TargetsConfig) []const TargetLinkSpec {
         return self.targets;
@@ -855,50 +825,6 @@ fn decScalarUnsigned(value: i128, reason: *TargetConfigResolveReason) ?u128 {
 
 // Tests
 const testing = std.testing;
-const builtin = @import("builtin");
-
-test "getDefaultTarget returns first compatible target" {
-    // Create a config with only x64glibc (not x64musl)
-    // On a Linux x64 system, both are compatible, but we only include glibc
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64glibc, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    // getDefaultTarget should return x64glibc if we're on Linux x64
-    // (since both x64musl and x64glibc are compatible with Linux x64)
-    if (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64) {
-        const result = config.getDefaultTarget();
-        try testing.expect(result != null);
-        try testing.expectEqual(RocTarget.x64glibc, result.?);
-    }
-}
-
-test "getDefaultHostExecutableTarget excludes wasm" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .wasm32, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget().?);
-    try testing.expect(config.getDefaultHostExecutableTarget() == null);
-}
-
-test "getDefaultHostExecutableTarget excludes non-exe outputs" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64mac, .output = .shared, .items = &.{.app} },
-            .{ .target = .arm64mac, .output = .shared, .items = &.{.app} },
-        },
-    };
-
-    try testing.expect(config.getDefaultHostExecutableTarget() == null);
-}
 
 test "getLinkSpec returns correct spec for supported target" {
     const config = TargetsConfig{

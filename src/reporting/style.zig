@@ -195,26 +195,6 @@ pub const Style = struct {
     pub fn init(color: []const u8) Style {
         return Style{ .color = color };
     }
-
-    pub fn withBold(self: Style) Style {
-        return Style{
-            .color = self.color,
-            .bold = true,
-            .dim = self.dim,
-            .underline = self.underline,
-            .italic = self.italic,
-        };
-    }
-
-    pub fn withUnderline(self: Style) Style {
-        return Style{
-            .color = self.color,
-            .bold = self.bold,
-            .dim = self.dim,
-            .underline = true,
-            .italic = self.italic,
-        };
-    }
 };
 
 /// Utilities for color handling.
@@ -270,18 +250,6 @@ test "ColorPalette annotation mapping" {
     try testing.expectEqualStrings(AnsiCodes.YELLOW, palette.colorForAnnotation(.warning_highlight));
     try testing.expectEqualStrings(AnsiCodes.MAGENTA, palette.colorForAnnotation(.keyword));
     try testing.expectEqualStrings(AnsiCodes.BLUE, palette.colorForAnnotation(.type_variable));
-}
-
-test "Style composition" {
-    const style = Style.init(AnsiCodes.RED)
-        .withBold()
-        .withUnderline();
-
-    try testing.expectEqualStrings(AnsiCodes.RED, style.color);
-    try testing.expect(style.bold);
-    try testing.expect(style.underline);
-    try testing.expect(!style.dim);
-    try testing.expect(!style.italic);
 }
 
 test "ColorUtils palette selection" {

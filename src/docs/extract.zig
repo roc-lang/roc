@@ -893,7 +893,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
 
     // Process each child—move it under its proper parent
     for (builtin_children) |child| {
-        try reparentDottedChild(gpa, entries_list, child);
+        try reparentDottedChildInto(gpa, entries_list, child);
     }
 
     // Free the Builtin entry's children array (entries were moved out)
@@ -957,65 +957,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     }
 }
 
-/// Recursively re-parent a child with a dotted name into the correct position in entries_list.
-fn reparentDottedChild(
-    gpa: Allocator,
-    entries_list: *std.ArrayList(DocModel.DocEntry),
-    child: DocModel.DocEntry,
-) Allocator.Error!void {
-    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
-        try entries_list.append(gpa, child);
-        return;
-    };
-
-    const parent_name = child.name[0..dot_idx];
-    const remainder = child.name[dot_idx + 1 ..];
-
-    var parent: ?*DocModel.DocEntry = null;
-    for (entries_list.items) |*entry| {
-        if (std.mem.eql(u8, entry.name, parent_name)) {
-            parent = entry;
-            break;
-        }
-    }
-
-    if (parent == null) {
-        const group_name = try gpa.dupe(u8, parent_name);
-        errdefer gpa.free(group_name);
-        const empty = try gpa.alloc(DocModel.DocEntry, 0);
-        errdefer gpa.free(empty);
-
-        try entries_list.append(gpa, DocModel.DocEntry{
-            .name = group_name,
-            .kind = .nominal,
-            .type_signature = null,
-            .doc_comment = null,
-            .children = empty,
-        });
-        parent = &entries_list.items[entries_list.items.len - 1];
-    }
-
-    const p = parent.?;
-
-    var new_child = child;
-    const short_name = try gpa.dupe(u8, remainder);
-    gpa.free(child.name);
-    new_child.name = short_name;
-
-    if (std.mem.findScalar(u8, remainder, '.')) |_| {
-        var children_list = std.ArrayList(DocModel.DocEntry).empty;
-        for (p.children) |c| {
-            try children_list.append(gpa, c);
-        }
-        gpa.free(p.children);
-        try reparentDottedChildInto(gpa, &children_list, new_child);
-        p.children = try children_list.toOwnedSlice(gpa);
-    } else {
-        try appendChildEntry(gpa, p, new_child);
-    }
-}
-
-/// Like reparentDottedChild but operates on a children ArrayList (for nested levels).
+/// Recursively re-parent a child with a dotted name into the correct position in children_list.
 fn reparentDottedChildInto(
     gpa: Allocator,
     children_list: *std.ArrayList(DocModel.DocEntry),

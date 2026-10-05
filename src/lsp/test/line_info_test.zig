@@ -103,20 +103,6 @@ test "positionFromOffset second line middle" {
     try std.testing.expectEqual(@as(u32, 1), pos.character);
 }
 
-test "offsetFromPosition round-trips" {
-    const allocator = std.testing.allocator;
-    var info = try LineInfo.init(allocator, "hello\nworld\ntest");
-    defer info.deinit();
-
-    // Test various offsets
-    const offsets = [_]u32{ 0, 3, 5, 6, 10, 12, 15 };
-    for (offsets) |offset| {
-        const pos = info.positionFromOffset(offset) orelse return error.UnexpectedNull;
-        const back = info.offsetFromPosition(pos) orelse return error.UnexpectedNull;
-        try std.testing.expectEqual(offset, back);
-    }
-}
-
 test "positionFromOffset handles empty source" {
     const allocator = std.testing.allocator;
     var info = try LineInfo.init(allocator, "");

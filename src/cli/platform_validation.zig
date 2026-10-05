@@ -204,18 +204,6 @@ fn renderMissingTargetsError(
     ) catch {};
 }
 
-/// Validate that a specific target is supported by the platform.
-/// Returns error.UnsupportedTarget if the target is not in the config.
-/// Does not log - caller should handle error reporting.
-pub fn validateTargetSupported(
-    config: TargetsConfig,
-    target: RocTarget,
-) ValidationError!void {
-    if (!config.supportsTarget(target)) {
-        return error.UnsupportedTarget;
-    }
-}
-
 /// Create a ValidationResult for an unsupported target error.
 /// This can be passed to targets_validator.createValidationReport for nice error formatting.
 pub fn createUnsupportedTargetResult(
@@ -287,34 +275,4 @@ pub fn validateAllTargetFilesExist(
     };
 
     return if (result == .valid) null else result;
-}
-
-// Tests
-const testing = std.testing;
-
-test "validateTargetSupported returns error for unsupported target" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
-            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    // x64musl is not in the config, should error
-    const result = validateTargetSupported(config, .x64musl);
-    try testing.expectError(error.UnsupportedTarget, result);
-}
-
-test "validateTargetSupported succeeds for supported target" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
-            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    // x64mac is in the config, should succeed
-    try validateTargetSupported(config, .x64mac);
 }

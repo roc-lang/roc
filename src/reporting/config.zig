@@ -224,33 +224,6 @@ pub fn formatUtf8Bounded(allocator: Allocator, max_bytes: usize, comptime fmt: [
     return truncateUtf8(allocator, result, max_bytes);
 }
 
-/// Check if a byte is a UTF-8 continuation byte
-pub fn isUtf8Continuation(byte: u8) bool {
-    return (byte & 0b11000000) == 0b10000000;
-}
-
-/// Find the start of a UTF-8 character sequence at or before the given position
-pub fn findUtf8CharStart(input: []const u8, pos: usize) usize {
-    if (pos >= input.len) return input.len;
-
-    var i = pos;
-    while (i > 0 and isUtf8Continuation(input[i])) {
-        i -= 1;
-    }
-    return i;
-}
-
-/// Find the end of a UTF-8 character sequence at or after the given position
-pub fn findUtf8CharEnd(input: []const u8, pos: usize) usize {
-    if (pos >= input.len) return input.len;
-
-    var i = pos;
-    while (i < input.len and isUtf8Continuation(input[i])) {
-        i += 1;
-    }
-    return i;
-}
-
 // Tests
 const testing = std.testing;
 
@@ -327,25 +300,6 @@ test "UTF-8 bounded formatting" {
     defer testing.allocator.free(result);
     try testing.expect(result.len <= 10);
     try validateUtf8(result);
-}
-
-test "UTF-8 character boundary detection" {
-    const input = "Hello, 世界!";
-
-    // Test continuation byte detection
-    try testing.expect(!isUtf8Continuation('H'));
-    try testing.expect(!isUtf8Continuation('e'));
-
-    // Test with actual UTF-8 bytes - '世' is encoded as [0xE4, 0xB8, 0x96]
-    try testing.expect(!isUtf8Continuation(0xE4)); // Start byte
-    try testing.expect(isUtf8Continuation(0xB8)); // Continuation byte
-    try testing.expect(isUtf8Continuation(0x96)); // Continuation byte
-
-    // Test character start finding
-    const start = findUtf8CharStart(input, 5);
-    const end = findUtf8CharEnd(input, 5);
-    try testing.expect(start <= 5);
-    try testing.expect(end >= 5);
 }
 
 test "ReportingConfig for testing" {

@@ -102,29 +102,6 @@ pub fn getRecordFieldsIterator(type_store: *const TypeStore, record: Record) Rec
     };
 }
 
-/// Extract the base type name from a formatted type string.
-/// E.g., "List a" → "List", "Dict k v" → "Dict", "Foo[Bar]" → "Foo", "Foo(a)" → "Foo"
-///
-/// This is useful for getting the primary type name from a type string
-/// that may include type parameters or other decorations.
-pub fn extractBaseTypeName(type_str: []const u8) []const u8 {
-    // Skip leading whitespace
-    var start: usize = 0;
-    while (start < type_str.len and (type_str[start] == ' ' or type_str[start] == '\t')) {
-        start += 1;
-    }
-
-    // Find end of the type name (stop at space, bracket, paren, brace, or end)
-    var end = start;
-    while (end < type_str.len) {
-        const c = type_str[end];
-        if (c == ' ' or c == '[' or c == '(' or c == '{' or c == '<') break;
-        end += 1;
-    }
-
-    return type_str[start..end];
-}
-
 /// Check if a content is an alias and get the backing var.
 /// Returns the backing var if the content is an alias, null otherwise.
 pub fn getAliasBackingVar(type_store: *const TypeStore, content: Content) ?Var {
@@ -132,35 +109,6 @@ pub fn getAliasBackingVar(type_store: *const TypeStore, content: Content) ?Var {
 }
 
 // Tests
-
-test "extractBaseTypeName basic" {
-    const testing = std.testing;
-
-    try testing.expectEqualStrings("List", extractBaseTypeName("List a"));
-    try testing.expectEqualStrings("Dict", extractBaseTypeName("Dict k v"));
-    try testing.expectEqualStrings("Str", extractBaseTypeName("Str"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo[Bar]"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo(a)"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo{bar}"));
-    try testing.expectEqualStrings("Foo", extractBaseTypeName("Foo<T>"));
-}
-
-test "extractBaseTypeName with whitespace" {
-    const testing = std.testing;
-
-    try testing.expectEqualStrings("List", extractBaseTypeName("  List a"));
-    try testing.expectEqualStrings("Dict", extractBaseTypeName("\tDict k v"));
-    try testing.expectEqualStrings("Str", extractBaseTypeName("  \t  Str"));
-}
-
-test "extractBaseTypeName empty and edge cases" {
-    const testing = std.testing;
-
-    try testing.expectEqualStrings("", extractBaseTypeName(""));
-    try testing.expectEqualStrings("", extractBaseTypeName("   "));
-    try testing.expectEqualStrings("", extractBaseTypeName("(a)"));
-    try testing.expectEqualStrings("", extractBaseTypeName("[tag]"));
-}
 
 test "RecordFieldsIterator" {
     const testing = std.testing;

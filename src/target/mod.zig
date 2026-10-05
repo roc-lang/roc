@@ -200,8 +200,8 @@ pub fn machoArchName(arch: std.Target.Cpu.Arch) MachoArchError![]const u8 {
 }
 
 /// Dynamic-linker (`ld.so`) soname filenames, one authority for the bare
-/// filenames that `glibcProgramInterpreter` and `RocTarget.getDynamicLinkerPath`
-/// prefix with the ABI-defined absolute directory.
+/// filenames that `glibcProgramInterpreter` prefixes with the ABI-defined
+/// absolute directory.
 pub const ld_so = struct {
     /// glibc ld.so soname for x86_64.
     pub const glibc_x86_64 = "ld-linux-x86-64.so.2";
@@ -939,17 +939,6 @@ pub const RocTarget = enum {
         return cpu.features;
     }
 
-    /// Check if this target can be built on the current host.
-    /// wasm32 is always compatible because wasm code generation is host-independent.
-    /// Native targets are compatible if both OS and architecture match the host.
-    pub fn isCompatibleWithHost(self: RocTarget) bool {
-        // wasm32 can be built from any host
-        if (self.toCpuArch() == .wasm32) return true;
-
-        // Otherwise, check if both OS and architecture match
-        return self.matchesHostOsAndArch();
-    }
-
     /// Check if this target produces a process executable that can run on this host.
     /// This is intentionally stricter than build compatibility: wasm32 can be
     /// built on any host, but the default `roc` command does not execute wasm artifacts directly.
@@ -957,47 +946,6 @@ pub const RocTarget = enum {
         if (self.toCpuArch() == .wasm32) return false;
 
         return self.matchesHostOsAndArch();
-    }
-
-    /// Get the dynamic linker path for this target
-    pub fn getDynamicLinkerPath(self: RocTarget) error{ StaticLinkingTarget, WindowsTarget, NoKnownLinkerPath, WebAssemblyTarget }![]const u8 {
-        return switch (self) {
-            // glibc targets
-            .x64glibc,
-            .x64linux,
-            .x64v1glibc,
-            .x64v1linux,
-            .arm64glibc,
-            .arm64linux,
-            .arm64v1glibc,
-            .arm64v1linux,
-            .arm32linux,
-            => glibcProgramInterpreter(self.toCpuArch()) orelse return error.NoKnownLinkerPath,
-
-            // Static linking targets don't need dynamic linker
-            .x64musl, .arm64musl, .arm32musl, .x64v1musl, .arm64v1musl => return error.StaticLinkingTarget,
-
-            // macOS uses dyld
-            .x64mac, .arm64mac, .x64v1mac => "/usr/lib/dyld",
-
-            // Windows doesn't use ELF-style dynamic linker
-            .x64win, .arm64win, .x64v1win, .arm64v1win, .x64mingw, .arm64mingw, .x64v1mingw, .arm64v1mingw => return error.WindowsTarget,
-
-            // BSD variants
-            .x64freebsd,
-            .x64openbsd,
-            .x64netbsd,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            => bsdProgramInterpreter(self.toOsTag()) orelse return error.NoKnownLinkerPath,
-
-            // Generic ELF doesn't have a specific linker
-            .x64elf, .x64v1elf => return error.NoKnownLinkerPath,
-
-            // WebAssembly doesn't use dynamic linker
-            .wasm32, .wasm32v1 => return error.WebAssemblyTarget,
-        };
     }
 };
 
@@ -1059,18 +1007,7 @@ test "every v1 target shares its default target's platform" {
         try std.testing.expectEqual(default.isWindows(), target.isWindows());
         try std.testing.expectEqual(default.windowsAbi(), target.windowsAbi());
         try std.testing.expectEqual(default.ptrBitWidth(), target.ptrBitWidth());
-        try std.testing.expectEqual(default.isCompatibleWithHost(), target.isCompatibleWithHost());
         try std.testing.expectEqual(default.isExecutableOnHost(), target.isExecutableOnHost());
-
-        // The switches that list `v1` targets by hand are the ones that could
-        // put a target in the wrong arm without the compiler noticing.
-        const default_linker = default.getDynamicLinkerPath();
-        const target_linker = target.getDynamicLinkerPath();
-        if (default_linker) |expected| {
-            try std.testing.expectEqualStrings(expected, try target_linker);
-        } else |expected_err| {
-            try std.testing.expectError(expected_err, target_linker);
-        }
 
         // The ABI is chosen from the default twin, so it must agree too.
         try std.testing.expectEqual(
@@ -1241,9 +1178,8 @@ test "wasm32 is not host executable" {
     try std.testing.expect(!RocTarget.wasm32.isExecutableOnHost());
 }
 
-test "wasm32 host matching is distinct from build compatibility" {
+test "wasm32 does not match a native host" {
     if (RocTarget.detectNative() != .wasm32) {
         try std.testing.expect(!RocTarget.wasm32.matchesHostOsAndArch());
     }
-    try std.testing.expect(RocTarget.wasm32.isCompatibleWithHost());
 }

@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
 const parse = @import("parse");
 const can = @import("can");
 const pos = @import("../position.zig");
@@ -16,36 +17,9 @@ const TokenizedRegion = AST.TokenizedRegion;
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "selectionRange requires params");
-                return;
-            };
-
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "selectionRange params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            // Extract textDocument.uri
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const text_doc = text_doc_value.object;
-            const uri_value = text_doc.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
+            const document = try position_params.parseDocument(self, id, "selectionRange", maybe_params) orelse return;
+            const uri = document.uri;
+            const obj = document.obj;
 
             // Extract positions array
             const positions_value = obj.get("positions") orelse {

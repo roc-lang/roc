@@ -101,8 +101,6 @@ const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 // Comptime errors
 const ComptimeOrigin = problem_mod.ComptimeOrigin;
 const ComptimeCrash = problem_mod.ComptimeCrash;
-const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
-const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
@@ -954,7 +952,7 @@ pub const ReportBuilder = struct {
                 }
                 // All error contexts are now handled via mismatch.context
                 return switch (mismatch.context) {
-                    .if_condition => self.buildIfConditionReport(mismatch.types),
+                    .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),
                     .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
                     .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
                     .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
@@ -979,7 +977,7 @@ pub const ReportBuilder = struct {
                     },
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
-                    .expect => self.buildExpect(mismatch.types),
+                    .expect => self.buildNonBoolReport(mismatch.types, "expect", "statement must evaluate to a"),
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
@@ -1146,8 +1144,8 @@ pub const ReportBuilder = struct {
                 return self.buildPlatformDefNotFound(data);
             },
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
-            .comptime_invalid_numeral => |data| return self.buildComptimeInvalidNumeralReport(data),
-            .comptime_invalid_quote => |data| return self.buildComptimeInvalidQuoteReport(data),
+            .comptime_invalid_numeral => |data| return self.buildComptimeInvalidLiteralReport(data, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it."),
+            .comptime_invalid_quote => |data| return self.buildComptimeInvalidLiteralReport(data, "Invalid String", "The from_quote implementation for this string literal's type rejected it."),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
@@ -1307,14 +1305,16 @@ pub const ReportBuilder = struct {
         return true;
     }
 
-    /// Build a report for if condition type error
-    fn buildIfConditionReport(self: *Self, types: TypePair) Allocator.Error!Report {
+    /// Build a report for an `if` condition or `expect` statement that is not a
+    /// `Bool`. `keyword` names the construct and `requirement` continues the
+    /// sentence after it.
+    fn buildNonBoolReport(self: *Self, types: TypePair, keyword: []const u8, requirement: []const u8) Allocator.Error!Report {
         return try self.makeBadTypeReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
             &.{
                 D.bytes("This"),
-                D.bytes("if").withAnnotation(.inline_code),
-                D.bytes("condition must evaluate to a"),
+                D.bytes(keyword).withAnnotation(.inline_code),
+                D.bytes(requirement),
                 D.bytes("Bool").withAnnotation(.inline_code),
                 D.bytes("– either"),
                 D.bytes("True").withAnnotation(.inline_code),
@@ -3086,38 +3086,6 @@ pub const ReportBuilder = struct {
         );
     }
 
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
-    fn buildExpect(
-        self: *Self,
-        types: TypePair,
-    ) Allocator.Error!Report {
-        // Note: The unifier's actual/expected are opposite to display order.
-        // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
-        return try self.makeBadTypeReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
-            &.{
-                D.bytes("This"),
-                D.bytes("expect").withAnnotation(.inline_code),
-                D.bytes("statement must evaluate to a"),
-                D.bytes("Bool").withAnnotation(.inline_code),
-                D.bytes("– either"),
-                D.bytes("True").withAnnotation(.inline_code),
-                D.bytes("or"),
-                D.bytes("False").withAnnotation(.inline_code),
-                D.bytes(".").withNoPrecedingSpace(),
-            },
-            &.{D.bytes("It is:")},
-            types.actual_snapshot,
-            &.{
-                &.{
-                    D.bytes("But I need this to be a"),
-                    D.bytes("Bool").withAnnotation(.inline_code),
-                    D.bytes("value."),
-                },
-            },
-        );
-    }
-
     /// Build a typo suggestions report for when a record field is not found.
     /// This is used by both buildRecordAccess and buildRecordUpdate.
     fn buildTypoSuggestionsReport(
@@ -4818,40 +4786,10 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for compile-time crash
-    fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it.", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_message = try report.addOwnedString(
-            self.problems.getExtraString(data.message),
-        );
-
-        // Add source region highlighting
-        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
-        try report.document.addLineBreak();
-
-        if (data.origin) |origin| {
-            // The rejected literal was inlined from another module (see
-            // ComptimeOrigin); name its declaring module and exact location.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
-            try D.renderSlice(&.{
-                D.bytes("The rejected literal is in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
-                D.bytes("and the implementation returned this error message:"),
-            }, self, &report);
-        } else {
-            try D.renderSlice(&.{
-                D.bytes("It returned this error message:"),
-            }, self, &report);
-        }
-        try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(owned_message);
-
-        return report;
-    }
-
-    fn buildComptimeInvalidQuoteReport(self: *Self, data: ComptimeInvalidQuote) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid String", "The from_quote implementation for this string literal's type rejected it.", .runtime_error);
+    /// Build a report for a literal that its type's compile-time conversion
+    /// (`from_numeral` or `from_quote`) rejected.
+    fn buildComptimeInvalidLiteralReport(self: *Self, data: anytype, title: []const u8, headline: []const u8) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, title, headline, .runtime_error);
         errdefer report.deinit();
 
         const owned_message = try report.addOwnedString(

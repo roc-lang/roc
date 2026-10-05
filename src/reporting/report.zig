@@ -416,15 +416,6 @@ pub const Report = struct {
     pub fn isEmpty(self: *const Report) bool {
         return self.document.isEmpty();
     }
-
-    /// Get the number of lines in the report (approximate).
-    pub fn getLineCount(self: *const Report) usize {
-        var count: usize = 2; // Title + blank line
-        for (self.document.elements.items) |element| {
-            if (element == .line_break) count += 1;
-        }
-        return count;
-    }
 };
 
 // Tests
@@ -468,7 +459,6 @@ test "Report basic functionality" {
     try report.addSuggestion("Try fixing the issue.");
 
     try testing.expect(!report.isEmpty());
-    try testing.expect(report.getLineCount() > 2);
 }
 
 test "Report diagnostic location uses the underline rather than its context" {
