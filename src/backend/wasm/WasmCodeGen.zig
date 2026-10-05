@@ -522,6 +522,15 @@ fn emitBuiltinCall(self: *Self, kind: BuiltinKind) Allocator.Error!void {
     }
 }
 
+/// Low-level lowerings that call a builtin stage its arguments first, which
+/// is only meaningful once the builtin symbol table is installed.
+fn requireBuiltinCalls(self: *const Self, comptime low_level: []const u8) void {
+    switch (self.external_calls) {
+        .builtin_relocs => {},
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before " ++ low_level, .{}),
+    }
+}
+
 fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
@@ -16393,17 +16402,13 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     }
 
     const result_offset = try self.allocStackMemory(12, 4);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            try self.emitFpOffset(result_offset);
-            try self.emitRocListFields(fields);
-            try self.emitLocalGet(elem_ptr);
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_unsafe)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_unsafe", .{}),
-    }
+    self.requireBuiltinCalls("list_append_unsafe");
+    const fields = try self.loadRocListFields(list_ptr);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitLocalGet(elem_ptr);
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_unsafe)));
     try self.emitFpOffset(result_offset);
 }
 
@@ -16429,33 +16434,29 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     const elem_layout_idx = list_abi.elem_layout_idx orelse unreachable;
     const elem_ptr = try self.materializeElementPtr(GuardedList.at(args, 1), elem_layout_idx, elem_size, elem_align);
     const result_offset = try self.allocStackMemory(12, 4);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const list_local = GuardedList.at(args, 0);
-            if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitLocalGet(elem_ptr);
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBoxyCall("roc_boxy_list_prepend");
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitLocalGet(elem_ptr);
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBuiltinCall(.list_prepend);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_prepend", .{}),
+    self.requireBuiltinCalls("list_prepend");
+    const fields = try self.loadRocListFields(list_ptr);
+    const list_local = GuardedList.at(args, 0);
+    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitLocalGet(elem_ptr);
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBoxyCall("roc_boxy_list_prepend");
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitLocalGet(elem_ptr);
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBuiltinCall(.list_prepend);
     }
     try self.emitFpOffset(result_offset);
 }
@@ -16488,21 +16489,17 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
         return;
     }
 
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const callbacks = try self.listElementCallbacks(list_abi);
-            try self.emitFpOffset(result_offset);
-            try self.emitRocListFields(fields);
-            try self.emitLocalGets(.{ start_local, count_local });
-            try self.emitI32Const(@intCast(elem_align));
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitListElementCallbackArgs(callbacks);
-            try self.emitI32Const(@intCast(unique_args & 1));
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within", .{}),
-    }
+    self.requireBuiltinCalls("list_append_range_within");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitLocalGets(.{ start_local, count_local });
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitI32Const(@intCast(unique_args & 1));
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)));
     try self.emitFpOffset(result_offset);
 }
 
@@ -16527,20 +16524,16 @@ fn generateLLListCopyRangeWithin(self: *Self, args: anytype, ret_layout: layout.
 
     const result_offset = try self.allocStackMemory(12, 4);
 
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const callbacks = try self.listElementCallbacks(list_abi);
-            try self.emitFpOffset(result_offset);
-            try self.emitRocListFields(fields);
-            try self.emitLocalGets(.{ dest_local, src_local, count_local });
-            try self.emitI32Const(@intCast(elem_align));
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitListElementCallbackArgs(callbacks);
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_copy_range_within", .{}),
-    }
+    self.requireBuiltinCalls("list_copy_range_within");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitLocalGets(.{ dest_local, src_local, count_local });
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)));
     try self.emitFpOffset(result_offset);
 }
 
@@ -16572,34 +16565,26 @@ fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout:
         return;
     }
 
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const callbacks = try self.listElementCallbacks(list_abi);
-            try self.emitFpOffset(result_offset);
-            try self.emitRocListFields(fields);
-            try self.emitLocalGets(.{ start_local, count_local });
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within_unsafe)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within_unsafe", .{}),
-    }
+    self.requireBuiltinCalls("list_append_range_within_unsafe");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitLocalGets(.{ start_local, count_local });
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+    try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within_unsafe)));
     try self.emitFpOffset(result_offset);
 }
 
 /// Generate LowLevel list_slack_unique: uniquely-owned spare capacity.
 fn generateLLListSlackUnique(self: *Self, args: anytype) Allocator.Error!void {
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-            const fields = try self.loadRocListFields(list_ptr);
-            try self.emitRocListFields(fields);
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_slack_unique)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_slack_unique", .{}),
-    }
+    self.requireBuiltinCalls("list_slack_unique");
+    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const fields = try self.loadRocListFields(list_ptr);
+    try self.emitRocListFields(fields);
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_slack_unique)));
 }
 
 /// Generate LowLevel list_owned_unique: whether in-place overwrites are safe.
@@ -16610,15 +16595,11 @@ fn generateLLListOwnedUnique(self: *Self, args: anytype, unique_args: u64) Alloc
         try self.emitI64Const(1);
         return;
     }
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-            const fields = try self.loadRocListFields(list_ptr);
-            try self.emitRocListFields(fields);
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_owned_unique)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_owned_unique", .{}),
-    }
+    self.requireBuiltinCalls("list_owned_unique");
+    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const fields = try self.loadRocListFields(list_ptr);
+    try self.emitRocListFields(fields);
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_owned_unique)));
 }
 
 /// Generate LowLevel list_append_le_bytes: append a value's low bytes.
@@ -16630,18 +16611,14 @@ fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) All
 
     const result_offset = try self.allocStackMemory(12, 4);
 
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            try self.emitFpOffset(result_offset);
-            try self.emitRocListFields(fields);
-            try self.emitLocalGets(.{ value_local, count_local });
-            try self.emitI32Const(1);
-            try self.emitI32Const(@intCast(unique_args & 1));
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_le_bytes", .{}),
-    }
+    self.requireBuiltinCalls("list_append_le_bytes");
+    const fields = try self.loadRocListFields(list_ptr);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitLocalGets(.{ value_local, count_local });
+    try self.emitI32Const(1);
+    try self.emitI32Const(@intCast(unique_args & 1));
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)));
     try self.emitFpOffset(result_offset);
 }
 
@@ -16672,23 +16649,19 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
         return;
     }
 
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const src_fields = try self.loadRocListFields(src_ptr);
-            const callbacks = try self.listElementCallbacks(list_abi);
-            try self.emitFpOffset(result_offset);
-            try self.emitRocListFields(fields);
-            try self.emitRocListFields(src_fields);
-            try self.emitLocalGets(.{ start_local, len_local });
-            try self.emitI32Const(@intCast(elem_align));
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitListElementCallbackArgs(callbacks);
-            try self.emitI32Const(@intCast(unique_args & 1));
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_sublist", .{}),
-    }
+    self.requireBuiltinCalls("list_append_sublist");
+    const fields = try self.loadRocListFields(list_ptr);
+    const src_fields = try self.loadRocListFields(src_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitRocListFields(src_fields);
+    try self.emitLocalGets(.{ start_local, len_local });
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitI32Const(@intCast(unique_args & 1));
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)));
     try self.emitFpOffset(result_offset);
 }
 
@@ -16722,35 +16695,31 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     const b_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
 
     const result_offset = try self.allocStackMemory(12, 4);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const a_fields = try self.loadRocListFields(a_ptr);
-            const b_fields = try self.loadRocListFields(b_ptr);
-            const list_a = GuardedList.at(args, 0);
-            const list_b = GuardedList.at(args, 1);
-            if (self.boxyListElementDescForLocals(list_abi, &.{ list_a, list_b }, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(a_fields);
-                try self.emitRocListFields(b_fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI64Const(@intCast(unique_args & 0b11));
-                try self.emitBoxyCall("roc_boxy_list_concat");
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(a_fields);
-                try self.emitRocListFields(b_fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI64Const(@intCast(unique_args & 0b11));
-                try self.emitBuiltinCall(.list_concat);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_concat", .{}),
+    self.requireBuiltinCalls("list_concat");
+    const a_fields = try self.loadRocListFields(a_ptr);
+    const b_fields = try self.loadRocListFields(b_ptr);
+    const list_a = GuardedList.at(args, 0);
+    const list_b = GuardedList.at(args, 1);
+    if (self.boxyListElementDescForLocals(list_abi, &.{ list_a, list_b }, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(a_fields);
+        try self.emitRocListFields(b_fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI64Const(@intCast(unique_args & 0b11));
+        try self.emitBoxyCall("roc_boxy_list_concat");
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(a_fields);
+        try self.emitRocListFields(b_fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI64Const(@intCast(unique_args & 0b11));
+        try self.emitBuiltinCall(.list_concat);
     }
     try self.emitFpOffset(result_offset);
 }
@@ -16790,33 +16759,29 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     }
 
     const result_offset = try self.allocStackMemory(12, 4);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const list_local = GuardedList.at(args, 0);
-            if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitLocalGet(index_local);
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBoxyCall("roc_boxy_list_drop_at");
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitLocalGet(index_local);
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBuiltinCall(.list_drop_at);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_drop_at", .{}),
+    self.requireBuiltinCalls("list_drop_at");
+    const fields = try self.loadRocListFields(list_ptr);
+    const list_local = GuardedList.at(args, 0);
+    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitLocalGet(index_local);
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBoxyCall("roc_boxy_list_drop_at");
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitLocalGet(index_local);
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBuiltinCall(.list_drop_at);
     }
     try self.emitFpOffset(result_offset);
 }
@@ -16835,31 +16800,27 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
     const result_offset = try self.allocStackMemory(12, 4);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const list_local = GuardedList.at(args, 0);
-            if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBoxyCall("roc_boxy_list_reverse");
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBuiltinCall(.list_reverse);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_reverse", .{}),
+    self.requireBuiltinCalls("list_reverse");
+    const fields = try self.loadRocListFields(list_ptr);
+    const list_local = GuardedList.at(args, 0);
+    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBoxyCall("roc_boxy_list_reverse");
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBuiltinCall(.list_reverse);
     }
     try self.emitFpOffset(result_offset);
 }
@@ -16874,38 +16835,34 @@ fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, ta
     const callable_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
     const result_offset = try self.allocStackMemory(12, 4);
     const fields = try self.loadRocListFields(list_ptr);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            if (self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitLocalGet(callable_ptr);
-                try self.emitI32Const(@intCast(list_abi.elem_align));
-                try self.emitI32Const(@intCast(list_abi.elem_size));
-                try self.emitI32Const(1);
-                try self.emitI32Const(0);
-                try self.emitI32Const(0);
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitI32Const(0);
-                try self.emitI32Const(0);
-                try self.emitBoxyCall("roc_boxy_list_sort_with");
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitLocalGet(callable_ptr);
-                try self.emitI32Const(@intCast(list_abi.elem_align));
-                try self.emitI32Const(@intCast(list_abi.elem_size));
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitI32Const(0);
-                try self.emitI32Const(0);
-                try self.emitBuiltinCall(.list_sort_with);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_sort_with", .{}),
+    self.requireBuiltinCalls("list_sort_with");
+    if (self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitLocalGet(callable_ptr);
+        try self.emitI32Const(@intCast(list_abi.elem_align));
+        try self.emitI32Const(@intCast(list_abi.elem_size));
+        try self.emitI32Const(1);
+        try self.emitI32Const(0);
+        try self.emitI32Const(0);
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitI32Const(0);
+        try self.emitI32Const(0);
+        try self.emitBoxyCall("roc_boxy_list_sort_with");
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitLocalGet(callable_ptr);
+        try self.emitI32Const(@intCast(list_abi.elem_align));
+        try self.emitI32Const(@intCast(list_abi.elem_size));
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitI32Const(0);
+        try self.emitI32Const(0);
+        try self.emitBuiltinCall(.list_sort_with);
     }
     try self.emitFpOffset(result_offset);
 }
@@ -17050,22 +17007,18 @@ fn emitListReplaceCall(
 ) Allocator.Error!void {
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const callbacks = try self.listElementCallbacks(list_abi);
-            try self.emitFpOffset(out_list_offset);
-            try self.emitRocListFields(fields);
-            try self.emitI32Const(@intCast(elem_align));
-            try self.emitLocalGets(.{ index_local, elem_ptr });
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitFpOffset(out_element_offset);
-            try self.emitListElementCallbackArgs(callbacks);
-            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_replace_unsafe)));
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_replace", .{}),
-    }
+    self.requireBuiltinCalls("list_replace");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    try self.emitFpOffset(out_list_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitLocalGets(.{ index_local, elem_ptr });
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitFpOffset(out_element_offset);
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_replace_unsafe)));
 }
 
 fn emitListSetCall(
@@ -17079,21 +17032,17 @@ fn emitListSetCall(
 ) Allocator.Error!void {
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const callbacks = try self.listElementCallbacks(list_abi);
-            try self.emitFpOffset(out_list_offset);
-            try self.emitRocListFields(fields);
-            try self.emitI32Const(@intCast(elem_align));
-            try self.emitLocalGets(.{ index_local, elem_ptr });
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitListElementCallbackArgs(callbacks);
-            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-            try self.emitBuiltinCall(.list_set);
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_set", .{}),
-    }
+    self.requireBuiltinCalls("list_set");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    try self.emitFpOffset(out_list_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(elem_align));
+    try self.emitLocalGets(.{ index_local, elem_ptr });
+    try self.emitI32Const(@intCast(elem_size));
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitBuiltinCall(.list_set);
 }
 
 /// Generate list_set: replace the element at `index` and release the displaced
@@ -17215,33 +17164,29 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
     const index_1_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const index_2_local = try self.materializeListIndex(GuardedList.at(args, 2));
 
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const list_local = GuardedList.at(args, 0);
-            if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitLocalGets(.{ index_1_local, index_2_local });
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBoxyCall("roc_boxy_list_swap");
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitLocalGets(.{ index_1_local, index_2_local });
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBuiltinCall(.list_swap);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_swap", .{}),
+    self.requireBuiltinCalls("list_swap");
+    const fields = try self.loadRocListFields(list_ptr);
+    const list_local = GuardedList.at(args, 0);
+    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitLocalGets(.{ index_1_local, index_2_local });
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBoxyCall("roc_boxy_list_swap");
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitLocalGets(.{ index_1_local, index_2_local });
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBuiltinCall(.list_swap);
     }
     try self.emitFpOffset(result_offset);
 }
@@ -17269,33 +17214,29 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_symbol: []const u8
     const spare_local = try self.emitSetNewLocal(.i64);
 
     const result_offset = try self.allocStackMemory(12, 4);
-    switch (self.external_calls) {
-        .builtin_relocs => {
-            const fields = try self.loadRocListFields(list_ptr);
-            const list_local = GuardedList.at(args, 0);
-            if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitLocalGet(spare_local);
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
-                try self.resolveBoxyDesc(boxy_elem.desc);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBoxyCall(boxy_symbol);
-            } else {
-                const callbacks = try self.listElementCallbacks(list_abi);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(elem_align));
-                try self.emitLocalGet(spare_local);
-                try self.emitI32Const(@intCast(elem_size));
-                try self.emitListElementCallbackArgs(callbacks);
-                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBuiltinCall(kind);
-            }
-        },
-        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_reserve", .{}),
+    self.requireBuiltinCalls("list_reserve");
+    const fields = try self.loadRocListFields(list_ptr);
+    const list_local = GuardedList.at(args, 0);
+    if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitLocalGet(spare_local);
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.resolveBoxyDesc(boxy_elem.desc);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBoxyCall(boxy_symbol);
+    } else {
+        const callbacks = try self.listElementCallbacks(list_abi);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(elem_align));
+        try self.emitLocalGet(spare_local);
+        try self.emitI32Const(@intCast(elem_size));
+        try self.emitListElementCallbackArgs(callbacks);
+        try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+        try self.emitBuiltinCall(kind);
     }
     try self.emitFpOffset(result_offset);
 }
