@@ -294,6 +294,31 @@ For separate caches, use `--cache-dir` for the local build cache and
 `ZIG_GLOBAL_CACHE_DIR` for Zig's global cache. Zig 0.17's `zig build` does
 not accept the compiler subcommand's `--global-cache-dir` flag.
 
+## Downloaded dependency bundles
+
+A fresh hashed download of the real wrapped x86_64 Linux bundle resolves
+`deps.path("include")`, `deps.path("lib")`, and its metadata at the package
+root, as Roc expects. The LLVM header, static library, and metadata checks
+pass; no extra target-directory lookup is needed. Exact direct-consumer
+commands and results are retained in
+`/tmp/roc-017-package-consumer-ji9z2rme/fresh-results.json`.
+
+Standalone Zig 0.17 `fetch` without `--save` instead recompresses the enclosing
+temporary directory for a wrapped archive. A later consumer of that global
+cache sees the wrapper again and rejects its changed package hash. Bootstrap
+archives therefore use flat `include/`, `lib/`, and `roc-deps-build.json`
+roots; the filename and metadata still identify the target. This avoids the
+stock cache defect without changing Roc's dependency paths or patching Zig.
+
+Bootstrap's persisted package-consumption check passes 18 commands for tiny
+TAR and ZIP fixtures: standalone preseed, fresh package-directory
+materialization, unchanged repeats without new HTTP requests, exact file
+bytes, and rejection of genuine wrong hashes or corrupted bytes. Evidence
+is retained at `/tmp/roc-017-package-consumption-script-final/results.json`.
+These synthetic format/cache checks are separate from the real wrapped
+direct-download proof above. The final real flat release repack and consumer
+validation are pending.
+
 ## Native CLI and cache execution
 
 The updated Debug Roc at source checkpoint `06d8403a4f` passes the following
