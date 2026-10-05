@@ -68,6 +68,7 @@ pub const Problem = union(enum) {
     comptime_crash: ComptimeCrash,
     comptime_invalid_numeral: ComptimeInvalidNumeral,
     comptime_invalid_quote: ComptimeInvalidQuote,
+    comptime_invalid_interpolation: ComptimeInvalidInterpolation,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
@@ -280,6 +281,17 @@ pub const ComptimeInvalidQuote = struct {
     message: ExtraStringIdx,
     region: base.Region,
     /// See `ComptimeOrigin` and the note on `ComptimeInvalidNumeral.origin`.
+    origin: ?ComptimeOrigin = null,
+};
+
+/// An interpolated string literal that a custom `from_interpolation`
+/// implementation rejected during compile-time evaluation
+pub const ComptimeInvalidInterpolation = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+    /// See `ComptimeOrigin`. Reachable cross-module: an interpolation inside
+    /// an imported function rejects while the consuming module's compile-time
+    /// root evaluates it.
     origin: ?ComptimeOrigin = null,
 };
 

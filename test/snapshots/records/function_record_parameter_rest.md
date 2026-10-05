@@ -62,7 +62,7 @@ NO CHANGE
 						(p-assign (ident "rest"))))
 				(segments
 					(segment (name "last_name") (mode "required")))))
-		(e-interpolation (constraint-fn-var 247) (dispatcher-var 19)
+		(e-interpolation (constraint-fn-var 243) (dispatcher-var 19)
 			(first
 				(e-literal (string "Hello ")))
 			(parts
@@ -75,5 +75,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ first_name: _field, last_name: _field2, .. } -> a where [a.from_interpolation : Str, Iter((_field, Str)) -> a]"))
+(expr (type "{ first_name: _field, last_name: _field2, .. } -> a where [a.from_interpolation : List(Str) -> Try(List(_b) -> a, [InvalidInterpolation(Str)])]"))
 ~~~

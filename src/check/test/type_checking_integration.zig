@@ -12490,30 +12490,27 @@ test "check type - derived codec - value-restricted structural receiver settles 
     try test_env.assertNoErrors();
 }
 
-// RECURSIVE DISPATCH MUST BE REPORTED AS SUCH. Satisfying the interpolation's
-// `from_interpolation` constraint on the annotation's inner
-// `Try(Url, [InvalidUrl])` would require dispatching `from_interpolation` on
-// that same type again, so the checker must reject the chain as recursive
-// dispatch. Builtin's `Try` really declares `from_interpolation`, so a
-// missing-method report on this program would be factually wrong.
-
-test "check type - dispatch - nested Try interpolation reports recursive dispatch" {
+// An interpolation's value is the `Ok` payload of its conversion, so an
+// interpolation whose target is `Try` would need `Try` itself to declare
+// `from_interpolation`. It does not: the literal is used where a non-string
+// type is needed.
+test "check type - dispatch - interpolation cannot target Try" {
     const source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
         \\main = {
         \\    domain = "example"
-        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url : Try(Url, [InvalidInterpolation(Str)])
         \\    url = "https://${domain}.com"
         \\    url
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Recursive Dispatch");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 // Bare patterns leave payload equality requirements on the method's scheme.

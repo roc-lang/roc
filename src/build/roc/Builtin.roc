@@ -2888,15 +2888,23 @@ Builtin :: [].{
 		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
 		from_quote = |str| Ok(str)
 
-		## Assembles an interpolated string literal.
+		## Converts an interpolated string literal to a [Str].
 		##
-		## The compiler calls this when a string literal contains interpolations:
-		## the first argument is the literal segment before the first
-		## interpolation, and the iterator yields each interpolated value paired
-		## with the literal segment that follows it.
-		from_interpolation : Str, Iter((Str, Str)) -> Str
-		from_interpolation = |first, rest|
-			rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+		## The compiler calls this at compile time with the literal's segments: the
+		## text before the first interpolation, then the text after each one. It
+		## returns the function the compiler calls at runtime with the interpolated
+		## values, in order, to assemble the string.
+		## ```roc
+		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"])) == Ok("abc")
+		## ```
+		from_interpolation : List(Str) -> Try((List(Str) -> Str), [InvalidInterpolation(Str)])
+		from_interpolation = |segments|
+			Ok(
+				|values| {
+					first = List.first(segments).ok_or("")
+					List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
+				},
+			)
 
 		## Split a string around a separator.
 		##
@@ -5612,18 +5620,6 @@ Builtin :: [].{
 		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
-		}
-
-		## Forwards interpolated string literal assembly through an inner type
-		## whose `from_interpolation` method returns the same [Try].
-		from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
-			where [
-				ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
-			]
-		from_interpolation = |first, rest| {
-			OkType : ok
-
-			OkType.from_interpolation(first, rest)
 		}
 
 		## If the result is `Ok`, returns the value it holds. Otherwise, returns

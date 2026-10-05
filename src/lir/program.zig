@@ -646,6 +646,11 @@ pub const Result = struct {
     const_type_names: names.NameStore,
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
+    /// Bytes every erased callable value of this program reserves at the
+    /// start of its capture: the dev shim's hot-reload header when the
+    /// program runs under hot reload, and none otherwise. Workers read their
+    /// captures after it, so a value frozen into static data reserves it too.
+    erased_capture_prefix: u32 = 0,
     boxy_type_descs: std.ArrayList(BoxyTypeDesc),
     boxy_dicts: std.ArrayList(BoxyDict),
     /// Selected implementation behind each Boxy dictionary boundary adapter.

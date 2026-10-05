@@ -18170,11 +18170,15 @@ const BodyDraftStore = struct {
         program: *Ast.Program,
         committed_types: *CommittedGraphTypes,
         static_data_ids: []const Common.StaticDataId,
-        ids: FinalIdOffsets,
+        draft_ids: FinalIdOffsets,
         emit_fns: ?[]const bool,
         emit_defs: ?[]const bool,
         emit_nested_defs: ?[]const bool,
     ) Allocator.Error!void {
+        var shared_literal_root_defs = collections.DenseMap(DraftDefId, Ast.DefId).init(program.allocator);
+        defer shared_literal_root_defs.deinit();
+        var ids = draft_ids;
+        ids.shared_literal_root_defs = &shared_literal_root_defs;
         const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
 
@@ -18334,14 +18338,17 @@ const BodyDraftStore = struct {
         // its program id. The same literal at the same type is one literal
         // root however many specializations convert it: its definition's
         // content identity names the conversion, so a later one reads the
-        // first one's root.
+        // first one's root, and its read's representation evidence calls the
+        // first one's definition, whose callables the root's value holds.
         for (self.literal_roots.items) |root| {
             if (emit_defs) |emit| if (!emit[@intFromEnum(root.def)]) continue;
             const def = self.defs.items[@intFromEnum(root.def)];
             const seed = def.identity_seed orelse Common.invariant("literal root definition had no identity seed");
             const identity = try sealedDefIdentity(program, committed_types, seed, ids.typedLocalSpan(def.args), try def.ret.sealCommitted(committed_types));
             const entry = try program.literal_root_by_identity.getOrPut(program.allocator, identity);
-            if (!entry.found_existing) {
+            if (entry.found_existing) {
+                try shared_literal_root_defs.put(root.def, program.literal_roots.get(@intFromEnum(entry.value_ptr.*)).def);
+            } else {
                 entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
             }
             var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
@@ -19053,6 +19060,9 @@ const FinalIdOffsets = struct {
     if_branch_start: u32,
     fn_slots: []const ?Ast.FnSlot = &.{},
     def_ids: []const ?Ast.DefId = &.{},
+    /// Literal root definitions this draft converts at a type an earlier
+    /// commit already owns a root for, mapped to that root's definition.
+    shared_literal_root_defs: ?*const collections.DenseMap(DraftDefId, Ast.DefId) = null,
     core_id_mode: CoreIdMode,
 
     fn core(self: FinalIdOffsets, kind: DraftCoreKind, raw: u32, identity_start: u32) u32 {
@@ -19113,6 +19123,7 @@ const FinalIdOffsets = struct {
     }
 
     fn def(self: FinalIdOffsets, id: DraftDefId) Ast.DefId {
+        if (self.shared_literal_root_defs) |shared| if (shared.get(id)) |root_def| return root_def;
         if (self.def_ids.len != 0) return self.def_ids[@intFromEnum(id)] orelse
             Common.invariant("draft definition required a local id after its function converged to an imported specialization");
         return @enumFromInt(self.def_start + @intFromEnum(id));
@@ -25585,10 +25596,13 @@ const BodyContext = struct {
                 .callable => |value| value,
                 .crash => Common.invariant("non-divergent dispatch relation resolved to a crash"),
             };
-            const expr_ty = self.view.bodies.expr(plan.expr).ty;
+            const expr = self.view.bodies.expr(plan.expr);
+            // An interpolation's conversion returns the `Try` of the
+            // assembler whose result is the interpolation's value.
+            const ret_ty = if (expr.data == .interpolation) self.literalConversionTryType(plan_id) else expr.ty;
             self.builder.count("template_dispatch_relation_replays");
             _ = try self.callableDispatchResultTypeNodeInPhase(
-                expr_ty,
+                ret_ty,
                 callable_plan,
                 null,
                 .template_relation_replay,
@@ -27206,6 +27220,9 @@ const BodyContext = struct {
         dispatch_result: DispatchResultTask,
         /// `callableDispatchResultTypeNodeInPhase`
         callable_dispatch_result: DispatchResultTask,
+        /// An interpolation's value: the result of the assembler its
+        /// conversion's dispatch returns.
+        interpolation_result: InterpolationResultTask,
         /// `callResultTypeNode`
         call_result: CallResultTask,
         /// `directCallRequestNode`
@@ -27257,6 +27274,11 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
         call_ctx: ?*BodyContext = null,
+    };
+
+    const InterpolationResultTask = struct {
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        expected_ret_node: ?NodeId,
     };
 
     const CallResultTask = struct {
@@ -27453,6 +27475,7 @@ const BodyContext = struct {
             .completed_result,
             .prepare_direct_args,
             .prepare_span,
+            .interpolation_result,
             => {},
         }
     }
@@ -27485,6 +27508,7 @@ const BodyContext = struct {
             .produced_value => |*task| self.stepProducedValue(frame, task, input),
             .dispatch_result => |*task| self.stepDispatchResult(frame, task, input, true),
             .callable_dispatch_result => |*task| self.stepDispatchResult(frame, task, input, false),
+            .interpolation_result => |*task| self.stepInterpolationResult(frame, task, input),
             .call_result => |*task| self.stepCallResult(frame, task, input),
             .direct_call_request => |*task| self.stepDirectCallRequest(frame, task, input),
             .direct_call_type => |*task| self.stepDirectCallType(frame, task, input),
@@ -27544,7 +27568,7 @@ const BodyContext = struct {
         const next: EvidenceTask = switch (expr.data) {
             .call => |call| .{ .call_result = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = null } },
             .dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
-            .interpolation => |interpolation| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .interpolation => |interpolation| .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = null } },
             .type_dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
             .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
             .field_access => |field| .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } },
@@ -27620,7 +27644,7 @@ const BodyContext = struct {
             },
             .interpolation => |interpolation| {
                 frame.cursor = if (expected_ty == null) 4 else 2;
-                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+                return evidenceCall(self, .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = expected_node } });
             },
             .type_dispatch_call => |plan| {
                 frame.cursor = if (expected_ty == null) 4 else 2;
@@ -27949,6 +27973,24 @@ const BodyContext = struct {
         } });
     }
 
+    /// An interpolation's conversion returns `Try(assembler, err)`; the
+    /// interpolation's own value is the assembler's result.
+    fn stepInterpolationResult(self: *BodyContext, frame: *EvidenceFrame, task: *InterpolationResultTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        if (frame.cursor == 1) {
+            const assembler_node = (try self.graphTryPayloads(input.?.nodeValue())).ok;
+            return .{ .ret = .{ .node = (try self.graph.functionNodes(assembler_node)).ret } };
+        }
+        const try_ty = self.literalConversionTryType(task.maybe_plan);
+        const expected_try_node: ?NodeId = if (task.expected_ret_node) |expected| blk: {
+            const try_node = try self.instNode(try_ty);
+            const assembler_node = (try self.graphTryPayloads(try_node)).ok;
+            try relateRequestComponent(self.graph, (try self.graph.functionNodes(assembler_node)).ret, expected);
+            break :blk try_node;
+        } else null;
+        frame.cursor = 1;
+        return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = try_ty, .maybe_plan = task.maybe_plan, .expected_ret_node = expected_try_node, .phase = .expression_lowering } });
+    }
+
     fn stepCallResult(self: *BodyContext, frame: *EvidenceFrame, task: *CallResultTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         const call = task.call;
         switch (frame.cursor) {
@@ -28252,7 +28294,7 @@ const BodyContext = struct {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
                 },
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {},
@@ -28492,7 +28534,7 @@ const BodyContext = struct {
                 .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
                 .call => |call| return try self.beginRelateCall(frame, task, expr.ty, call),
                 .dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
-                .interpolation => |interpolation| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .interpolation => |interpolation| return evidenceCall(self, .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = expected_node } }),
                 .type_dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
                 .method_eq => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
                 .field_access => |field| return evidenceCall(self, .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } }),
@@ -28700,7 +28742,7 @@ const BodyContext = struct {
             .runtime_error => try self.unitType(),
             .call => |call| (try self.callResultMonoType(expr_id, expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerTypeView(expr.ty),
+            .interpolation => |interpolation| try self.activeTypeFromNode(try self.interpolationResultTypeNode(interpolation.plan, null)),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -28973,31 +29015,19 @@ const BodyContext = struct {
         scheme_alias: SchemeAliasTask,
         /// A call-site intrinsic's arguments, then its generated body.
         callsite_intrinsic: CallsiteIntrinsicTask,
-        /// A generated interpolation iterator, one part at a time.
-        interpolation_iter: InterpolationIterTask,
+        /// An interpolation: its compile-time conversion, then its assembler
+        /// called with the parts' values.
+        interpolation: InterpolationLowerTask,
     };
 
-    /// A generated interpolation iterator, built from its last part to its
-    /// first; each part's value and following segment lower as children.
-    const InterpolationIterTask = struct {
-        interpolation: checked.CheckedInterpolation,
-        source_expr_id: checked.CheckedExprId,
-        iter_ty: Type.TypeId,
-        backing_ty: Type.TypeId,
-        step_fn_ty: Type.TypeId,
-        step_ret_ty: Type.TypeId,
-        stage: enum { start, value, segment } = .start,
-        /// Each remaining count's `len_if_known`. Owned.
-        len_exprs: []DraftExprId = &.{},
-        iter_expr: DraftExprId = undefined,
-        /// The part being built.
-        index: usize = 0,
-        rest_expr: DraftExprId = undefined,
-        rest_pat: DraftPatId = undefined,
-        rest_ref: DraftExprId = undefined,
-        item_ty: Type.TypeId = undefined,
-        value_expr: DraftExprId = undefined,
-        demand_scope: ?CallableBodyDemandScope = null,
+    const InterpolationLowerTask = struct {
+        expr: checked.CheckedExprId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        value_node: NodeId,
+        try_node: NodeId = undefined,
+        assembler_node: NodeId = undefined,
+        assembler: DraftExprId = undefined,
+        values_ty: Type.TypeId = undefined,
     };
 
     /// A call-site intrinsic whose arguments lower as child tasks, in
@@ -30369,10 +30399,10 @@ const BodyContext = struct {
     }
 
     fn divergentInterpolationChild(self: *BodyContext, interpolation: checked.CheckedInterpolation) checked.CheckedExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(interpolation.first)) return interpolation.first;
-        for (interpolation.parts) |part| {
-            if (self.checkedExprDivergesInLoweredRuntime(part.value)) return part.value;
-            if (self.checkedExprDivergesInLoweredRuntime(part.following_segment)) return part.following_segment;
+        if (self.checkedExprDivergesInLoweredRuntime(interpolation.segments[0])) return interpolation.segments[0];
+        for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+            if (self.checkedExprDivergesInLoweredRuntime(value)) return value;
+            if (self.checkedExprDivergesInLoweredRuntime(segment)) return segment;
         }
         Common.invariant("checked interpolation was marked divergent but no divergent child was found");
     }
@@ -30392,14 +30422,7 @@ const BodyContext = struct {
             .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
                 return self.divergentEffectStep(expr, ty);
             },
-            .generated_interpolation_iter => |expr| {
-                const interpolation = switch (self.view.bodies.expr(expr).data) {
-                    .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("divergent interpolation iterator referenced a non-interpolation expression"),
-                };
-                return self.divergentEffectStep(self.divergentInterpolationChild(interpolation), ty);
-            },
-            .generated_numeral, .generated_quote => {},
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => {},
         };
         Common.invariant("checked dispatch expression was marked divergent but no divergent operand was found");
     }
@@ -31447,12 +31470,6 @@ const BodyContext = struct {
                 self.allocator.free(task.args);
                 task.args = &.{};
             },
-            .interpolation_iter => |*task| {
-                if (task.demand_scope) |scope| scope.leave();
-                task.demand_scope = null;
-                self.allocator.free(task.len_exprs);
-                task.len_exprs = &.{};
-            },
             .prepared_operands => |*task| {
                 if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
                 task.reserving = false;
@@ -31466,6 +31483,7 @@ const BodyContext = struct {
             .operand_at_type,
             .call_expr_at_node,
             .call_expr,
+            .interpolation,
             => {},
         }
     }
@@ -31518,8 +31536,70 @@ const BodyContext = struct {
             .inspect_only => |*task| self.stepInspectOnly(task, input),
             .scheme_alias => |*task| self.stepSchemeAlias(task, input),
             .callsite_intrinsic => |*task| self.stepCallsiteIntrinsic(task, input),
-            .interpolation_iter => |*task| self.stepInterpolationIter(task, input),
+            .interpolation => |*task| self.stepInterpolationLower(frame, task, input),
         };
+    }
+
+    /// An interpolation's conversion receives its literal segments and returns
+    /// `Try(assembler, [InvalidInterpolation(Str)])`. Like any specialized
+    /// literal conversion it runs at compile time: its `Ok` payload, the
+    /// assembler, is a literal root's value, and its `Err` is the literal's
+    /// rejection. The interpolation's value is the assembler called with the
+    /// parts' values.
+    fn stepInterpolationLower(self: *BodyContext, frame: *LowerFrame, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                const try_ty = self.literalConversionTryType(task.maybe_plan);
+                task.try_node = try self.instNode(try_ty);
+                task.assembler_node = (try self.graphTryPayloads(task.try_node)).ok;
+                const assembler_fn = try self.graph.functionNodes(task.assembler_node);
+                if (assembler_fn.args.len != 1) Common.invariant("interpolation assembler did not take exactly the values list");
+                try relateRequestComponent(self.graph, assembler_fn.ret, task.value_node);
+                // Every interpolated value is an item of the assembler's
+                // values list, so the item type is the values' type. The
+                // selected `from_interpolation` determines the item only when
+                // its own signature fixes it.
+                const item_node = switch (self.graph.content(assembler_fn.args[0])) {
+                    .list => |elem| elem,
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("interpolation assembler did not take a values list"),
+                };
+                const interpolation = switch (self.view.bodies.expr(task.expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+                };
+                for (interpolation.values) |value| {
+                    try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(value));
+                }
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .dispatch = .{
+                    .checked_ret_ty = try_ty,
+                    .maybe_plan = task.maybe_plan,
+                    .expected_ret_cell = DraftTypeCell.fromGraphNode(task.try_node),
+                } });
+            },
+            1 => {
+                const site = self.literalRejectionSite(task.expr);
+                const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.assembler_node, site);
+                task.assembler = if (self.builder.literal_roots)
+                    try self.literalRootRead(task.expr, site, assembler, task.assembler_node)
+                else
+                    assembler;
+                const interpolation = switch (self.view.bodies.expr(task.expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+                };
+                task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
+                frame.cursor = 2;
+                return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.values, .list_ty = task.values_ty } });
+            },
+            else => {
+                const values = try self.addExpr(.{ .ty = task.values_ty, .data = .{ .list = input.?.spanValue() } });
+                return loweredExprStep(try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(task.value_node), .{ .call_value = .{
+                    .callee = task.assembler,
+                    .args = try self.addExprSpan(&.{values}),
+                } }));
+            },
+        }
     }
 
     fn requestLowerChild(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
@@ -31667,7 +31747,7 @@ const BodyContext = struct {
             },
             .interpolation => |interpolation| {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_cell = cell } });
+                return requestLowerTask(self, .{ .interpolation = .{ .expr = checked_expr, .maybe_plan = interpolation.plan, .value_node = expected_node } });
             },
             .type_dispatch_call => |plan| {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
@@ -31802,7 +31882,7 @@ const BodyContext = struct {
             },
             .interpolation => |interpolation| {
                 frame.cursor = 3;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_cell = .{ .sealed = ty } } });
+                return requestLowerTask(self, .{ .interpolation = .{ .expr = checked_expr, .maybe_plan = interpolation.plan, .value_node = try self.activeNodeFromType(ty) } });
             },
             .type_dispatch_call => |plan| {
                 frame.cursor = 3;
@@ -32013,7 +32093,7 @@ const BodyContext = struct {
             .interpolation => |interpolation| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
                 frame.cursor = 1;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
+                return requestLowerTask(self, .{ .interpolation = .{ .expr = expr_id, .maybe_plan = interpolation.plan, .value_node = expr_node } });
             },
             .type_dispatch_call => |plan| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
@@ -32441,7 +32521,7 @@ const BodyContext = struct {
             .checked_expr => |expr| {
                 try self.relateExprAtNode(expr, callable_graph.args[index]);
             },
-            .generated_interpolation_iter,
+            .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
             => {},
@@ -32464,7 +32544,7 @@ const BodyContext = struct {
                         .purpose = .draft,
                     } });
                 },
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {},
@@ -32490,7 +32570,7 @@ const BodyContext = struct {
                     frame.cursor = 2;
                     return requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(task.callable_args[task.index]));
                 },
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {},
@@ -32642,7 +32722,7 @@ const BodyContext = struct {
                     if (!try self.typeIsProvenUninhabited(arg_ty)) continue;
                     switch (operands[uninhabited_index]) {
                         .checked_expr => {},
-                        .generated_interpolation_iter,
+                        .generated_interpolation_segments,
                         .generated_numeral,
                         .generated_quote,
                         => Common.invariant("compiler-generated dispatch operand had an uninhabited sealed type"),
@@ -32904,13 +32984,9 @@ const BodyContext = struct {
             }
             const operand = operands[task.index];
             const node = nodes[task.index];
-            switch (operand) {
-                .generated_interpolation_iter => |expr| try self.relateInterpolationItemToParts(expr, node),
-                .checked_expr, .generated_numeral, .generated_quote => {},
-            }
             return switch (operand) {
                 .checked_expr => |expr| requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(node)),
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => requestLowerTask(self, .{ .operand_at_type = .{ .operand = operand, .ty = try self.activeTypeFromNode(node) } }),
@@ -32927,10 +33003,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 break :blk requestLowerChild(self, expr, .{ .sealed = task.ty });
             },
-            .generated_interpolation_iter => |expr| blk: {
-                frame.cursor = 1;
-                break :blk requestLowerTask(self, try self.generatedInterpolationIterTask(expr, task.ty));
-            },
+            .generated_interpolation_segments => |expr| loweredExprStep(try self.lowerInterpolationSegments(expr, task.ty)),
             .generated_numeral => |literal| loweredExprStep(try self.lowerNumeralValue(literal, task.ty)),
             .generated_quote => |literal| loweredExprStep(try self.lowerQuoteValue(literal, task.ty)),
         };
@@ -32951,7 +33024,7 @@ const BodyContext = struct {
             } else return .{ .ret = .{ .maybe_expr = null } };
             switch (operands[uninhabited_index]) {
                 .checked_expr => {},
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => Common.invariant("compiler-generated dispatch operand had an uninhabited type"),
@@ -32968,7 +33041,7 @@ const BodyContext = struct {
             const prior_node = arg_nodes[task.index];
             return switch (operands[task.index]) {
                 .checked_expr => |expr| requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(prior_node)),
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => requestLowerTask(self, .{ .operand_at_type = .{ .operand = operands[task.index], .ty = try self.activeTypeFromNode(prior_node) } }),
@@ -33890,7 +33963,7 @@ const BodyContext = struct {
                 for (args, storage.*[0..expected_arity]) |operand, *checked_arg| {
                     checked_arg.* = switch (operand) {
                         .checked_expr => |expr| expr,
-                        .generated_interpolation_iter,
+                        .generated_interpolation_segments,
                         .generated_numeral,
                         .generated_quote,
                         => Common.invariant("call-site intrinsic had a compiler-generated dispatch operand"),
@@ -36297,7 +36370,7 @@ const BodyContext = struct {
             if (index == backing_fields.len) break;
         }
         const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, backing_fields.len, mode, step_fn_ty, step_ret_ty);
-        var rest_expr = try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, lens.items[lens.items.len - 1], done_step);
+        var rest_expr = try self.lowerGeneratedIterRecord(iter_ty, iter_backing_ty, lens.items[lens.items.len - 1], done_step);
 
         index = backing_fields.len;
         while (index > start) {
@@ -36329,7 +36402,7 @@ const BodyContext = struct {
                     step_fn_ty,
                     step_ret_ty,
                 );
-            rest_expr = try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, lens.items[index - start], step_expr);
+            rest_expr = try self.lowerGeneratedIterRecord(iter_ty, iter_backing_ty, lens.items[index - start], step_expr);
         }
         return rest_expr;
     }
@@ -36357,7 +36430,7 @@ const BodyContext = struct {
             if (index == fields.len) break;
         }
         const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, fields.len, .all, step_fn_ty, step_ret_ty);
-        var rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, lens.items[lens.items.len - 1], done_step);
+        var rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, lens.items[lens.items.len - 1], done_step);
 
         index = fields.len;
         while (index > start) {
@@ -36372,7 +36445,7 @@ const BodyContext = struct {
                 step_fn_ty,
                 step_ret_ty,
             );
-            rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, lens.items[index - start], step_expr);
+            rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, lens.items[index - start], step_expr);
         }
         return rest_expr;
     }
@@ -36500,7 +36573,7 @@ const BodyContext = struct {
         };
         const done_level = levels.pop().?;
         const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, done_start, .all, step_fn_ty, step_ret_ty);
-        var rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, done_level.len, done_step);
+        var rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, done_level.len, done_step);
 
         while (levels.pop()) |level| {
             const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[level.index], level.index);
@@ -36513,7 +36586,7 @@ const BodyContext = struct {
                 step_fn_ty,
                 step_ret_ty,
             );
-            rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, level.len, step_expr);
+            rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, level.len, step_expr);
         }
         return rest_expr;
     }
@@ -36558,7 +36631,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const topology = try self.iteratorRepresentationNames(.iter);
         return switch (mode) {
-            .all => try self.lowerInterpolationLenIfKnown(remaining, ty),
+            .all => try self.lowerGeneratedIterLenIfKnown(remaining, ty),
             .for_size => blk: {
                 const unknown_tag = self.monoTagByName(ty, topology.unknown_tag);
                 break :blk try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
@@ -36607,7 +36680,7 @@ const BodyContext = struct {
         const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.typeStore().span(one_tag.payloads);
         if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
-        const one_payload = try self.lowerInterpolationOnePayload(GuardedList.at(one_payloads, 0), item_expr, rest_expr);
+        const one_payload = try self.lowerGeneratedIterOnePayload(GuardedList.at(one_payloads, 0), item_expr, rest_expr);
         const one_body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = one_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{one_payload}),
@@ -36639,7 +36712,7 @@ const BodyContext = struct {
         const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.typeStore().span(one_tag.payloads);
         if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
-        const one_payload = try self.lowerInterpolationOnePayload(GuardedList.at(one_payloads, 0), item_local_expr, rest_expr);
+        const one_payload = try self.lowerGeneratedIterOnePayload(GuardedList.at(one_payloads, 0), item_local_expr, rest_expr);
         const one_body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = one_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{one_payload}),
@@ -36648,7 +36721,7 @@ const BodyContext = struct {
         const skip_tag = self.monoTagByName(step_ret_ty, topology.skip_tag);
         const skip_payloads = self.typeStore().span(skip_tag.payloads);
         if (skip_payloads.len != 1) Common.invariant("Iter step Skip tag did not have one record payload");
-        const skip_payload = try self.lowerInterpolationSkipPayload(GuardedList.at(skip_payloads, 0), rest_expr);
+        const skip_payload = try self.lowerGeneratedIterSkipPayload(GuardedList.at(skip_payloads, 0), rest_expr);
         const skip_body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = skip_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{skip_payload}),
@@ -36669,7 +36742,88 @@ const BodyContext = struct {
         return try self.lowerFieldNamesStepLambda(checked_source_ty, source_expr_id, index, .for_size, step_fn_ty, body);
     }
 
-    fn lowerInterpolationSkipPayload(
+    fn lowerGeneratedIterRecord(
+        self: *BodyContext,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_expr: DraftExprId,
+        step_expr: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(backing_ty));
+        const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+        const topology = try self.iteratorRepresentationNames(.iter);
+
+        for (0..GuardedList.borrowLen(fields)) |i| {
+            const field = GuardedList.at(fields, i);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (field.name == topology.len_field)
+                    len_expr
+                else if (field.name == topology.step_field)
+                    step_expr
+                else
+                    Common.invariant("Iter backing record contained an unexpected field"),
+            };
+        }
+
+        const record_expr = try self.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .record = try self.addFieldExprSpan(lowered) },
+        });
+        return try self.addExpr(.{
+            .ty = iter_ty,
+            .data = .{ .nominal = record_expr },
+        });
+    }
+
+    fn lowerGeneratedIterLenIfKnown(
+        self: *BodyContext,
+        remaining: usize,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const topology = try self.iteratorRepresentationNames(.iter);
+        const known_tag = self.monoTagByName(ty, topology.known_tag);
+        const payloads = self.typeStore().span(known_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const count = try self.intLiteralExpr(@intCast(remaining), GuardedList.at(payloads, 0));
+        return try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
+            .name = known_tag.name,
+            .payloads = try self.addExprSpan(&[_]DraftExprId{count}),
+        } } });
+    }
+
+    fn lowerGeneratedIterOnePayload(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        item_expr: DraftExprId,
+        rest_expr: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(ty));
+        const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+        const topology = try self.iteratorRepresentationNames(.iter);
+
+        for (0..GuardedList.borrowLen(fields)) |i| {
+            const field = GuardedList.at(fields, i);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (field.name == topology.item_field)
+                    item_expr
+                else if (field.name == topology.rest_field)
+                    rest_expr
+                else
+                    Common.invariant("Iter step One payload contained an unexpected field"),
+            };
+        }
+
+        return try self.addExpr(.{
+            .ty = ty,
+            .data = .{ .record = try self.addFieldExprSpan(lowered) },
+        });
+    }
+
+    fn lowerGeneratedIterSkipPayload(
         self: *BodyContext,
         ty: Type.TypeId,
         rest_expr: DraftExprId,
@@ -46302,7 +46456,7 @@ const BodyContext = struct {
             }
             switch (operand) {
                 .checked_expr => |expr| try self.relateExprAtNode(expr, node),
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {},
@@ -46316,39 +46470,13 @@ const BodyContext = struct {
                 .checked_expr => |expr| if (self.isNestedCallableExpr(expr)) {
                     try drafts.append(self.allocator, .{ .ctx = self, .expr = expr, .request_fn_node = node });
                 },
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {},
             }
         }
         return try drafts.toOwnedSlice(self.allocator);
-    }
-
-    fn lowerDispatchOperandAtType(
-        self: *BodyContext,
-        operand: static_dispatch.StaticDispatchOperand,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .operand_at_type = .{ .operand = operand, .ty = ty } })).exprValue();
-    }
-
-    /// Every part of an interpolation fills the generated iterator's item
-    /// slot, so the item type is the parts' type. The selected
-    /// `from_interpolation` determines the item only when its own signature
-    /// fixes it.
-    fn relateInterpolationItemToParts(self: *BodyContext, expr_id: checked.CheckedExprId, iter_node: NodeId) Allocator.Error!void {
-        const interpolation = switch (self.view.bodies.expr(expr_id).data) {
-            .interpolation => |interpolation| interpolation,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
-        };
-        const iter_args = self.graph.namedNodes(self.graph.rootNode(iter_node)).args;
-        if (iter_args.len != 1) Common.invariant("generated interpolation iterator did not have one item argument");
-        const pair = try self.graph.tupleItemNodes(iter_args[0]);
-        if (pair.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
-        for (interpolation.parts) |part| {
-            try relateRequestComponent(self.graph, pair[0], try self.lowerExprTypeNode(part.value));
-        }
     }
 
     fn lowerDispatchOperandAtNode(
@@ -46358,236 +46486,19 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-            .generated_interpolation_iter,
+            .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
             => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
         };
     }
 
-    fn generatedInterpolationIterTask(
+    fn lowerDispatchOperandAtType(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!LowerTask {
-        const expr = self.view.bodies.expr(expr_id);
-        const interpolation = switch (expr.data) {
-            .interpolation => |interpolation| interpolation,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
-        };
-
-        const backing_ty = self.namedBackingType(ty) orelse
-            Common.invariant("generated interpolation iterator expected Iter nominal type");
-        const topology = try self.iteratorRepresentationNames(.iter);
-        const len_field = self.recordFieldByName(backing_ty, topology.len_field);
-        const step_field = self.recordFieldByName(backing_ty, topology.step_field);
-        const step_fn_ty = step_field.ty;
-        const step_shape = self.functionShape(step_fn_ty, "generated interpolation iterator step field was not a function");
-        if (self.typeStore().span(step_shape.args).len != 0) {
-            Common.invariant("generated interpolation iterator step function was not zero-argument");
-        }
-
-        const part_count = interpolation.parts.len;
-        const len_exprs = try self.allocator.alloc(DraftExprId, part_count + 1);
-        errdefer self.allocator.free(len_exprs);
-        for (len_exprs, 0..) |*len_expr, index| {
-            len_expr.* = try self.lowerInterpolationLenIfKnown(part_count - index, len_field.ty);
-        }
-        return .{ .interpolation_iter = .{
-            .interpolation = interpolation,
-            .source_expr_id = expr_id,
-            .iter_ty = ty,
-            .backing_ty = backing_ty,
-            .step_fn_ty = step_fn_ty,
-            .step_ret_ty = step_shape.ret,
-            .len_exprs = len_exprs,
-        } };
-    }
-
-    /// The iterator over `interpolation`'s parts. Each part's iterator binds
-    /// the iterator over the parts after it, so the lengths lower from the
-    /// front and the steps from the back.
-    fn stepInterpolationIter(self: *BodyContext, task: *InterpolationIterTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const interpolation = task.interpolation;
-        switch (task.stage) {
-            .start => {
-                const part_count = interpolation.parts.len;
-                const done_step = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, task.source_expr_id, part_count, task.step_fn_ty, task.step_ret_ty);
-                task.iter_expr = try self.lowerInterpolationIterRecord(task.iter_ty, task.backing_ty, task.len_exprs[part_count], done_step);
-                task.index = part_count;
-            },
-            .value => {
-                task.value_expr = input.?.exprValue();
-                task.stage = .segment;
-                const part = interpolation.parts[task.index];
-                return requestLowerChild(self, part.following_segment, .{ .sealed = GuardedList.at(self.tupleItemTypes(task.item_ty), 1) });
-            },
-            .segment => {
-                const segment_expr = input.?.exprValue();
-                const item_expr = try self.addExpr(.{ .ty = task.item_ty, .data = .{
-                    .tuple = try self.addExprSpan(&[_]DraftExprId{ task.value_expr, segment_expr }),
-                } });
-
-                const topology = try self.iteratorRepresentationNames(.iter);
-                const one_tag = self.monoTagByName(task.step_ret_ty, topology.one_tag);
-                const payloads = self.typeStore().span(one_tag.payloads);
-                if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
-                const payload_ty = GuardedList.at(payloads, 0);
-                const payload_expr = try self.lowerInterpolationOnePayload(payload_ty, item_expr, task.rest_ref);
-
-                const body = try self.addExpr(.{ .ty = task.step_ret_ty, .data = .{ .tag = .{
-                    .name = one_tag.name,
-                    .payloads = try self.addExprSpan(&[_]DraftExprId{payload_expr}),
-                } } });
-                const step_expr = try self.lowerInterpolationStepLambda(interpolation.step_fn_ty, task.source_expr_id, task.index, task.step_fn_ty, body);
-                task.demand_scope.?.leave();
-                task.demand_scope = null;
-                const record_expr = try self.lowerInterpolationIterRecord(task.iter_ty, task.backing_ty, task.len_exprs[task.index], step_expr);
-                task.iter_expr = try self.addExpr(.{ .ty = task.iter_ty, .data = .{ .let_ = .{
-                    .bind = task.rest_pat,
-                    .value = task.rest_expr,
-                    .rest = record_expr,
-                } } });
-            },
-        }
-        if (task.index == 0) {
-            self.allocator.free(task.len_exprs);
-            task.len_exprs = &.{};
-            return loweredExprStep(task.iter_expr);
-        }
-        task.index -= 1;
-        const iter_ty = task.iter_ty;
-        task.rest_expr = task.iter_expr;
-        const rest_local = try self.addLocal(self.builder.symbols.fresh(), iter_ty);
-        task.rest_pat = try self.bindPat(rest_local, iter_ty);
-        task.rest_ref = try self.localExpr(rest_local, iter_ty);
-        task.demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{iter_ty});
-        task.item_ty = self.iterItemType(iter_ty);
-        const item_fields = self.tupleItemTypes(task.item_ty);
-        if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
-        task.stage = .value;
-        return requestLowerChild(self, interpolation.parts[task.index].value, .{ .sealed = GuardedList.at(item_fields, 0) });
-    }
-
-    fn lowerInterpolationIterRecord(
-        self: *BodyContext,
-        iter_ty: Type.TypeId,
-        backing_ty: Type.TypeId,
-        len_expr: DraftExprId,
-        step_expr: DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(backing_ty));
-        const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
-        defer self.allocator.free(lowered);
-        const topology = try self.iteratorRepresentationNames(.iter);
-
-        for (0..GuardedList.borrowLen(fields)) |i| {
-            const field = GuardedList.at(fields, i);
-            lowered[i] = .{
-                .name = field.name,
-                .value = if (field.name == topology.len_field)
-                    len_expr
-                else if (field.name == topology.step_field)
-                    step_expr
-                else
-                    Common.invariant("Iter backing record contained an unexpected field"),
-            };
-        }
-
-        const record_expr = try self.addExpr(.{
-            .ty = backing_ty,
-            .data = .{ .record = try self.addFieldExprSpan(lowered) },
-        });
-        return try self.addExpr(.{
-            .ty = iter_ty,
-            .data = .{ .nominal = record_expr },
-        });
-    }
-
-    fn lowerInterpolationLenIfKnown(
-        self: *BodyContext,
-        remaining: usize,
+        operand: static_dispatch.StaticDispatchOperand,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const topology = try self.iteratorRepresentationNames(.iter);
-        const known_tag = self.monoTagByName(ty, topology.known_tag);
-        const payloads = self.typeStore().span(known_tag.payloads);
-        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
-        const count = try self.intLiteralExpr(@intCast(remaining), GuardedList.at(payloads, 0));
-        return try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-            .name = known_tag.name,
-            .payloads = try self.addExprSpan(&[_]DraftExprId{count}),
-        } } });
-    }
-
-    fn lowerInterpolationDoneStep(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
-        index: usize,
-        step_fn_ty: Type.TypeId,
-        step_ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{});
-        defer demand_scope.leave();
-        const topology = try self.iteratorRepresentationNames(.iter);
-        const done_tag = self.monoTagByName(step_ret_ty, topology.done_tag);
-        const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
-            .name = done_tag.name,
-            .payloads = .empty(),
-        } } });
-        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
-    }
-
-    fn lowerInterpolationOnePayload(
-        self: *BodyContext,
-        ty: Type.TypeId,
-        item_expr: DraftExprId,
-        rest_expr: DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(ty));
-        const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
-        defer self.allocator.free(lowered);
-        const topology = try self.iteratorRepresentationNames(.iter);
-
-        for (0..GuardedList.borrowLen(fields)) |i| {
-            const field = GuardedList.at(fields, i);
-            lowered[i] = .{
-                .name = field.name,
-                .value = if (field.name == topology.item_field)
-                    item_expr
-                else if (field.name == topology.rest_field)
-                    rest_expr
-                else
-                    Common.invariant("Iter step One payload contained an unexpected field"),
-            };
-        }
-
-        return try self.addExpr(.{
-            .ty = ty,
-            .data = .{ .record = try self.addFieldExprSpan(lowered) },
-        });
-    }
-
-    fn lowerInterpolationStepLambda(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
-        index: usize,
-        step_fn_ty: Type.TypeId,
-        body: DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        const fn_id = try self.addFn(.{
-            .fn_def = .{ .checked_generated = self.owner_template },
-            .source_fn_ty = source_fn_ty,
-            .source_fn_key = generatedInterpolationStepKey(self.current_fn_key, source_expr_id, index),
-            .mono_fn_ty = step_fn_ty,
-        });
-        return try self.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
-            .fn_id = .{ .draft = fn_id },
-            .args = try self.addTypedLocalSpan(&.{}),
-            .body = body,
-        } } });
+        return (try self.runLower(.{ .operand_at_type = .{ .operand = operand, .ty = ty } })).exprValue();
     }
 
     fn recordFieldByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Field {
@@ -48544,7 +48455,12 @@ const BodyContext = struct {
         return .{
             .owner = self.builder.loweringModuleId(self.view.key),
             .checked_expr = @intFromEnum(expr_id),
-            .kind = if (self.view.bodies.expr(expr_id).data == .numeral) .numeral else .quote,
+            .kind = switch (self.view.bodies.expr(expr_id).data) {
+                .numeral => .numeral,
+                .str_from_quote => .quote,
+                .interpolation => .interpolation,
+                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal rejection site did not point at a literal conversion expression"),
+            },
         };
     }
 
@@ -48796,6 +48712,40 @@ const BodyContext = struct {
 
     /// Materialize a string literal as the `Str` argument of a `from_quote`
     /// dispatch call.
+    /// An interpolation's literal segments, as the `List(Str)` its conversion
+    /// receives: the first segment, then each part's following segment.
+    fn lowerInterpolationSegments(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        list_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const interpolation = switch (self.view.bodies.expr(expr_id).data) {
+            .interpolation => |value| value,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation segments operand referenced a non-interpolation expression"),
+        };
+        const str_ty = switch (self.shapeContent(list_ty)) {
+            .list => |elem| elem,
+            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("interpolation segments operand had a non-list monotype"),
+        };
+        const segments = try self.allocator.alloc(DraftExprId, interpolation.segments.len);
+        defer self.allocator.free(segments);
+        for (interpolation.segments, segments) |checked_segment, *segment| {
+            segment.* = try self.lowerInterpolationSegment(checked_segment, str_ty);
+        }
+        return try self.addExpr(.{ .ty = list_ty, .data = .{ .list = try self.addExprSpan(segments) } });
+    }
+
+    fn lowerInterpolationSegment(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        return switch (self.view.bodies.expr(expr_id).data) {
+            .str_segment => |literal| try self.lowerQuoteValue(literal, str_ty),
+            .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("interpolation segment was not a checked string segment"),
+        };
+    }
+
     fn lowerQuoteValue(
         self: *BodyContext,
         literal: checked.CheckedStringLiteralId,
@@ -49258,6 +49208,14 @@ const BodyContext = struct {
         );
     }
 
+    fn interpolationResultTypeNode(
+        self: *BodyContext,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        expected_ret_node: ?NodeId,
+    ) Allocator.Error!NodeId {
+        return (try self.runEvidence(.{ .interpolation_result = .{ .maybe_plan = maybe_plan, .expected_ret_node = expected_ret_node } })).nodeValue();
+    }
+
     fn dispatchResultTypeNodeInPhase(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -49341,10 +49299,10 @@ const BodyContext = struct {
         const expr = self.view.bodies.expr(expr_id);
         const plan_id = switch (expr.data) {
             .dispatch_call => |plan| plan,
-            .interpolation => |interpolation| interpolation.plan,
             .type_dispatch_call => |plan| plan,
             .method_eq => |plan| plan,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            // An interpolation's value is its conversion result's `Ok` payload.
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         return try self.closedDirectGraphFreeResultType(expr.ty, plan);
@@ -51624,7 +51582,7 @@ const BodyContext = struct {
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
                 .checked_expr => |expr| expr,
-                .generated_interpolation_iter,
+                .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
                 => {
@@ -58439,7 +58397,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
+            .interpolation => |interpolation| try self.interpolationResultTypeNode(interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
@@ -60837,12 +60795,7 @@ const BodyContext = struct {
                 expected_node,
                 .expression_lowering,
             ),
-            .interpolation => |interpolation| try self.dispatchResultTypeNodeInPhase(
-                expr.ty,
-                interpolation.plan,
-                expected_node,
-                .expression_lowering,
-            ),
+            .interpolation => |interpolation| try self.interpolationResultTypeNode(interpolation.plan, expected_node),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
                 plan,
@@ -66097,21 +66050,6 @@ fn signedIntLiteral(value: anytype) can.CIR.IntValue {
 fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
     const widened: u128 = @intCast(value);
     return .{ .bytes = @bitCast(widened), .kind = .u128 };
-}
-
-fn generatedInterpolationStepKey(
-    current_fn_key: names.TypeDigest,
-    source_expr_id: checked.CheckedExprId,
-    index: usize,
-) names.TypeDigest {
-    var hasher = TypeDigestHasher.init();
-    hasher.update("roc.generated_interpolation_step");
-    hasher.update(&current_fn_key.bytes);
-    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
-    hasher.update(std.mem.asBytes(&source_expr_bytes));
-    var index_bytes = std.mem.nativeToLittle(u64, @intCast(index));
-    hasher.update(std.mem.asBytes(&index_bytes));
-    return .{ .bytes = hasher.finalResult() };
 }
 
 fn generatedParserRuntimeKey(

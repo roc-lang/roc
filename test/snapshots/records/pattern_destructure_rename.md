@@ -78,7 +78,7 @@ match person {
 									(e-lookup-local
 										(p-assign (ident "userAge"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 254) (dispatcher-var 20)
+						(e-interpolation (constraint-fn-var 250) (dispatcher-var 20)
 							(first
 								(e-literal (string "User ")))
 							(parts

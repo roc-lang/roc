@@ -10033,11 +10033,6 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     );
 }
 
-/// Instantiate the builtin Iter type declaration and bind its item parameter.
-fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Error!Var {
-    return self.mkForLoopSequenceVar(.iter, item_var, env, region);
-}
-
 /// Instantiate the builtin sequence type a `for` loop of this kind pulls from
 /// (`Iter` for `for`, `Stream` for `for!`) and bind its item parameter.
 fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env, region: Region) Allocator.Error!Var {
@@ -10812,7 +10807,8 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
 /// `[MissingField]`, used as the Err side of `Try(field_type, [MissingField])`.
 ///
 /// Closed (empty ext), matching the other builtin error unions minted by the
-/// checker (`[InvalidNumeral(Str)]`, `[BadQuotedBytes(Str)]`): the access
+/// checker (`[InvalidNumeral(Str)]`, `[BadQuotedBytes(Str)]`,
+/// `[InvalidInterpolation(Str)]`): the access
 /// itself can only fail one way, and a consumer's open union can still absorb
 /// it at the use site.
 fn makeFieldMissingTag(self: *Self, env: *Env, region: Region) Allocator.Error!Var {
@@ -27053,32 +27049,25 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
         return .{ .child = .{ .expr = parts[state.part_index], .expected = child_expected } };
     }
 
-    const str_var = state.str_var;
     const item_var = state.item_var;
     const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, parts) or state.did_err;
 
-    const pair_elems = try self.types.appendVars(&.{ item_var, str_var });
-    const pair_var = try self.freshFromContent(.{ .structure = .{
-        .tuple = .{ .elems = pair_elems },
-    } }, env, expr_region);
-    const rest_var = try self.mkIterVar(pair_var, env, expr_region);
-    try self.setVarRank(rest_var, env);
-
-    const step_content = try self.mkIteratorStepContent(pair_var, rest_var, env);
-    const step_ret_var = try self.freshFromContent(step_content.content, env, expr_region);
-    const empty_args = try self.types.appendVars(&.{});
-    const step_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-        .args = empty_args,
-        .ret = step_ret_var,
+    // The conversion receives the literal segments at compile time and returns
+    // the assembler the interpolation calls with its values at runtime:
+    // `List(Str) -> Try((List(item) -> a), [InvalidInterpolation(Str)])`.
+    const segments_var = try self.freshFromContent(try self.mkListContent(try self.freshStr(env, expr_region)), env, expr_region);
+    const values_var = try self.freshFromContent(try self.mkListContent(item_var), env, expr_region);
+    const assembler_var = try self.freshFromContent(.{ .structure = .{ .fn_pure = Func{
+        .args = try self.types.appendVars(&.{values_var}),
+        .ret = expr_var,
     } } }, env, expr_region);
 
     if (!did_err) {
         const dispatcher_var = (try self.explicitTypeSuffixVar(expr_idx, expr_region, env)) orelse expr_var;
-        const arg_vars = [_]Var{ first_var, rest_var };
         const constraint_fn_var = try self.mkInterpolationConstraint(
             dispatcher_var,
-            &arg_vars,
-            expr_var,
+            segments_var,
+            assembler_var,
             item_var,
             self.cir.idents.from_interpolation,
             env,
@@ -27091,7 +27080,7 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             interpolation.parts,
             interpolation.method_name_region,
             constraint_fn_var,
-            step_fn_var,
+            assembler_var,
             dispatcher_var,
         );
     }
@@ -30447,18 +30436,34 @@ fn mkInterpolationMetadata(
 fn mkInterpolationConstraint(
     self: *Self,
     dispatcher_var: Var,
-    arg_vars: []const Var,
-    ret_var: Var,
+    segments_var: Var,
+    assembler_var: Var,
     item_var: Var,
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!Var {
-    const args_range = try self.types.appendVars(arg_vars);
+    // The method returns `Try(assembler, [InvalidInterpolation(Str)])`. The
+    // Str is a fresh instance for the same reason as in
+    // `mkFlexWithFromQuoteConstraint`.
+    const message_var = try self.freshStr(env, region);
+    const invalid_interpolation_tag = try self.types.mkTag(
+        try @constCast(self.cir).insertIdent(base.Ident.for_text("InvalidInterpolation")),
+        &.{message_var},
+    );
+    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    const err_var = try self.freshFromContent(
+        try self.types.mkTagUnion(&.{invalid_interpolation_tag}, err_ext_var),
+        env,
+        region,
+    );
+    const try_var = try self.freshFromContent(try self.mkTryContent(assembler_var, err_var), env, region);
+
+    const args_range = try self.types.appendVars(&.{segments_var});
     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
         .args = args_range,
-        .ret = ret_var,
+        .ret = try_var,
     } } }, env, region);
 
     const constraint = StaticDispatchConstraint{

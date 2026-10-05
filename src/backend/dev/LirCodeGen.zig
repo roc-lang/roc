@@ -17164,28 +17164,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // materializes the worker's result into that layout. The address is
             // the same value stored at the closure's function-pointer field.
             self.codegen.freeGeneral(heap_ptr);
-            {
-                const worker_ret_layout = self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout);
-                const addr_reg = try self.allocTempGeneral();
-                if (proc.code_start == unresolved_proc_code_start)
-                    try self.emitPendingProcAddress(proc_id, addr_reg)
-                else
-                    try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, addr_reg);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                defer builder.deinit();
-                try builder.addRegArg(addr_reg);
-                try builder.addImmArg(@intFromEnum(proc_id));
-                try builder.addImmArg(@intFromEnum(worker_ret_layout));
-                try builder.addImmArg(metadata_offset);
-                const proc_spec = self.store.getProcSpec(proc_id);
-                try builder.addImmArg(proc_spec.erased_arg_layouts.start);
-                try builder.addImmArg(proc_spec.erased_arg_layouts.len);
-                try builder.addImmArg(proc_spec.erased_arg_desc_offsets.start);
-                try builder.addImmArg(proc_spec.erased_arg_desc_offsets.len);
-                try builder.addImmArg(capture_prefix_size);
-                try self.callBoxyBuiltin(&builder, .register_erased_proc);
-                self.codegen.freeGeneral(addr_reg);
-            }
+            try self.emitErasedProcRegistration(proc_id, metadata_offset, capture_prefix_size);
 
             const result_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
@@ -25077,11 +25056,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(desc_ptr_reg);
         }
 
+        /// Emit a `roc_boxy_register_erased_proc` call recording an erased
+        /// worker's return layout, argument layouts, and capture metadata
+        /// under its runtime code address, the value stored at an erased
+        /// callable's function-pointer field.
+        fn emitErasedProcRegistration(self: *Self, proc_id: lir.LIR.LirProcSpecId, metadata_offset: u32, capture_prefix_size: u32) Allocator.Error!void {
+            const proc_spec = self.store.getProcSpec(proc_id);
+            const proc = try self.compiledProcForId(proc_id);
+            const addr_reg = try self.allocTempGeneral();
+            if (proc.code_start == unresolved_proc_code_start)
+                try self.emitPendingProcAddress(proc_id, addr_reg)
+            else
+                try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, addr_reg);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addRegArg(addr_reg);
+            try builder.addImmArg(@intFromEnum(proc_id));
+            try builder.addImmArg(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout)));
+            try builder.addImmArg(metadata_offset);
+            try builder.addImmArg(proc_spec.erased_arg_layouts.start);
+            try builder.addImmArg(proc_spec.erased_arg_layouts.len);
+            try builder.addImmArg(proc_spec.erased_arg_desc_offsets.start);
+            try builder.addImmArg(proc_spec.erased_arg_desc_offsets.len);
+            try builder.addImmArg(capture_prefix_size);
+            try self.callBoxyBuiltin(&builder, .register_erased_proc);
+            self.codegen.freeGeneral(addr_reg);
+        }
+
         /// Emit `roc_boxy_register_proc` calls that bind each dictionary worker
-        /// procedure to its dispatch thunk. Emitted at entrypoint startup after
-        /// the boxy runtime is installed so the runtime's proc table is
-        /// populated before any dictionary dispatch.
+        /// procedure to its dispatch thunk, and register each erased worker
+        /// whose callable values were frozen into static data, which no packing
+        /// statement registers. Emitted at entrypoint startup after the boxy
+        /// runtime is installed so the runtime's tables are populated before
+        /// any dictionary dispatch or erased call.
         fn emitBoxyDictProcRegistrations(self: *Self) Allocator.Error!void {
+            for (self.store.getProcSpecs(), 0..) |proc_spec, index| {
+                const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
+                // A frozen value reserves the program's capture prefix, like
+                // one this code packs, before its captures and metadata.
+                const capture_prefix_size: u32 = if (self.enable_hot_reload)
+                    builtins.erased_callable.hot_reload_capture_prefix_size
+                else
+                    0;
+                const capture_size = capture_prefix_size + self.getLayoutSize(capture_layout);
+                try self.emitErasedProcRegistration(@enumFromInt(index), @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
+            }
             for (self.boxy_worker_procs) |proc_id| {
                 const proc_index = @intFromEnum(proc_id);
                 const thunk_offset = self.boxy_dict_thunks.get(proc_index) orelse {

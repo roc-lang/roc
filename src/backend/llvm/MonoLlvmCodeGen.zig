@@ -2541,6 +2541,14 @@ pub const MonoLlvmCodeGen = struct {
                 },
             );
         }
+
+        // An erased worker whose callable values were frozen into static data
+        // is registered here: no packing statement builds those values.
+        for (self.store.getProcSpecs(), 0..) |proc_spec, index| {
+            const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
+            const proc_fn = self.proc_registry.get(@intCast(index)) orelse return error.CompilationFailed;
+            try self.emitErasedProcRegistration(@enumFromInt(index), proc_fn, @intCast(builtins.erased_callable.compilerMetadataOffset(self.layoutByteSize(capture_layout))));
+        }
     }
 
     fn createBuilder(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder {
@@ -4464,6 +4472,15 @@ pub const MonoLlvmCodeGen = struct {
             );
             break :blk fresh_ptr;
         };
+        try self.emitErasedProcRegistration(proc_id, proc_fn, metadata_offset);
+        try self.storePointer(self.slot(target).ptr, data_ptr);
+    }
+
+    /// Record an erased worker's return layout, argument layouts, and capture
+    /// metadata with the Boxy runtime under its code address, the value stored
+    /// at an erased callable's function-pointer field.
+    fn emitErasedProcRegistration(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc_fn: LlvmBuilder.Function.Index, metadata_offset: u32) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         const proc_spec = self.store.getProcSpec(proc_id);
         try self.callBoxyVoid(
             "roc_boxy_register_erased_proc",
@@ -4480,7 +4497,6 @@ pub const MonoLlvmCodeGen = struct {
                 try self.boxyInt(.i32, 0),
             },
         );
-        try self.storePointer(self.slot(target).ptr, data_ptr);
     }
 
     fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {

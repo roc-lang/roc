@@ -282,7 +282,8 @@ pub const Constants = struct {
     /// 127: Type descriptors mark declared nominal backing structure.
     /// 128: Module environments carry no package-qualified module name, and
     ///      checked procedure names use the module's own name.
-    pub const CACHE_VERSION = 128;
+    /// 129: Interpolation plans validate segments before assembling values.
+    pub const CACHE_VERSION = 129;
 };
 
 /// Configuration for the Roc cache system.

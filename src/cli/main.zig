@@ -3064,7 +3064,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             lowered_result = try lowerLirWithBuildEnv(
                 ctx,
                 ctx.gpa,
-                .{ .dev_run_image = validated_link_spec.target },
+                .{ .dev_run_image = .{ .target = validated_link_spec.target, .hot_reload = args.watch } },
                 args.path,
                 null,
                 null,
@@ -3957,7 +3957,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
-        .{ .dev_run_image = selected_target },
+        .{ .dev_run_image = .{ .target = selected_target, .hot_reload = false } },
         app_path,
         original_source_dir,
         .{
@@ -6413,7 +6413,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
-        .{ .dev_run_image = selected_target },
+        .{ .dev_run_image = .{ .target = selected_target, .hot_reload = true } },
         args.path,
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
         if (source_rewrite) |rewrite| .{
@@ -6838,7 +6838,14 @@ const PlatformEntrypointArtifact = union(enum) {
     /// Pointer-width-independent LIR consumed directly by the interpreter.
     lir_image,
     /// Target-specific machine code and readonly data consumed by the dev shim.
-    dev_run_image: RocTarget,
+    dev_run_image: DevRunImage,
+};
+
+/// A dev shim image's target, and whether the shim runs it under hot reload,
+/// which reserves a header at the start of every erased callable's capture.
+const DevRunImage = struct {
+    target: RocTarget,
+    hot_reload: bool,
 };
 
 fn lowerLirWithBuildEnv(
@@ -6991,7 +6998,7 @@ fn lowerLirWithBuildEnv(
         &lowered,
         switch (artifact) {
             .lir_image => roc_target.RocTarget.detectNative(),
-            .dev_run_image => |target| target,
+            .dev_run_image => |image| image.target,
         },
         .{},
     );
@@ -12847,6 +12854,13 @@ fn checkedRuntimeLoweringConfig(
         },
         .target = .{
             .target_usize = target_usize,
+            .erased_capture_prefix = switch (roots) {
+                .platform_entrypoints => |artifact| switch (artifact) {
+                    .dev_run_image => |image| if (image.hot_reload) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0,
+                    .lir_image => 0,
+                },
+                .linked_output, .test_plan => 0,
+            },
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),

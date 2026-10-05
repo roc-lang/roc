@@ -300,7 +300,7 @@ test "NodeStore round trip - Expressions" {
             .parts = CIR.Expr.Span{ .span = rand_span() },
             .method_name_region = rand_region(),
             .constraint_fn_var = rand_idx(types.Var),
-            .step_fn_var = rand_idx(types.Var),
+            .assembler_fn_var = rand_idx(types.Var),
             .dispatcher_var = rand_idx(types.Var),
         },
     });

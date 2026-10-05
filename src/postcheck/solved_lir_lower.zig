@@ -6124,7 +6124,8 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
         callee: LIR.LocalId = undefined,
         done: LIR.JoinPointId = undefined,
-        current: LIR.CFStmtId = undefined,
+        /// Each variant's call, indexed by variant. Owned.
+        bodies: []LIR.CFStmtId = &.{},
     };
 
     const CallableVariantTask = struct {
@@ -6447,6 +6448,8 @@ const Lowerer = struct {
                 task.variants = &.{};
                 self.allocator.free(task.args);
                 task.args = &.{};
+                self.allocator.free(task.bodies);
+                task.bodies = &.{};
             },
             .match_ => |*task| {
                 if (task.arena) |arena| {
@@ -7993,14 +7996,11 @@ const Lowerer = struct {
             0 => {
                 task.callee = try self.addTemp(task.callee_ty);
                 task.done = self.freshJoinPointId();
-                task.current = try self.result.store.addCFStmt(.{ .runtime_error = {} }, task.where.glue());
+                task.bodies = try self.allocator.alloc(LIR.CFStmtId, task.variants.len);
                 frame.index = task.variants.len;
                 frame.cursor = 1;
             },
-            1 => {
-                const variant_index: u32 = @intCast(frame.index);
-                task.current = try self.discriminantSwitch(task.where, task.callee, variant_index, input.?, task.current, false);
-            },
+            1 => task.bodies[frame.index] = input.?,
             else => return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
                 .id = task.done,
                 .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
@@ -8016,7 +8016,48 @@ const Lowerer = struct {
             return .{ .call = try self.callableVariantCallTask(task.where, task.target, task.result_ty, task.callee, variant, variant_index, task.args, branch_done) };
         }
         frame.cursor = 2;
-        return .{ .call = exprTask(task.where, task.callee, task.callee_expr, task.callee_ty, task.current) };
+        return .{ .call = exprTask(task.where, task.callee, task.callee_expr, task.callee_ty, try self.callableVariantDispatch(task.where, task.callee, task.bodies)) };
+    }
+
+    /// One multiway switch selecting the call of the callee's variant: the
+    /// variant's discriminant is its index.
+    fn callableVariantDispatch(
+        self: *Lowerer,
+        where: LowerSite,
+        callee: LIR.LocalId,
+        bodies: []const LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        // A callable with no variants can never exist, so its call is never
+        // reached.
+        if (bodies.len == 0) return try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
+        // A ZST or one-variant callable holds its only variant: there is
+        // nothing to test.
+        if (self.isZstLocal(callee)) {
+            if (bodies.len != 1) Common.invariant("zero-sized callable had several variants");
+            return bodies[0];
+        }
+        const callee_layout = self.result.layouts.getLayout(self.result.store.getLocal(callee).layout_idx);
+        if (callee_layout.tag == .tag_union and self.result.layouts.getTagUnionInfo(callee_layout).variants.len == 1) {
+            if (bodies.len != 1) Common.invariant("one-variant callable layout had several variants");
+            return bodies[0];
+        }
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, bodies.len);
+        defer self.allocator.free(branches);
+        for (branches, bodies, 0..) |*branch, body, variant_index| {
+            branch.* = .{ .value = variant_index, .body = body };
+        }
+        const disc_local = try self.addLocalForLayout(.u32);
+        const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = disc_local,
+            .branches = try self.result.store.addCFSwitchBranches(branches),
+            .default_branch = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue()),
+            .continuation = null,
+        } }, where.glue());
+        return try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = disc_local,
+            .op = .{ .discriminant = .{ .source = callee } },
+            .next = switch_stmt,
+        } }, where.glue());
     }
 
     /// The call of one callable variant: a known call of its target, with

@@ -124,6 +124,9 @@ pub const WorkMetrics = struct {
 pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    /// Bytes the consumer's erased callable values reserve at the start of
+    /// their captures (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32 = 0,
     specialization_strategy: SpecializationStrategy = .lss,
     /// Reuse checking workers for generic post-check tasks when available.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -972,6 +975,9 @@ pub const Consumer = struct {
     roots: ConsumerRoots,
     /// Target pointer width this continuation commits layouts for.
     target_usize: base.target.TargetUsize,
+    /// Bytes this consumer's erased callable values reserve at the start of
+    /// their captures (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32 = 0,
     /// Whether this consumer runs or omits inline expects.
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
@@ -1480,6 +1486,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     return lowerFinalConsumerToLir(prepared, .{
         .roots = .{},
         .target_usize = prepared.target.target_usize,
+        .erased_capture_prefix = prepared.target.erased_capture_prefix,
         .inline_expects = prepared.target.inline_expects,
         .completed_scalar_values = prepared.target.completed_scalar_values,
         .observers = Observers.fromTarget(prepared.target),
@@ -1548,6 +1555,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     const allocator = prepared.allocator;
     var target = prepared.target;
     target.target_usize = consumer.target_usize;
+    target.erased_capture_prefix = consumer.erased_capture_prefix;
     target.inline_expects = consumer.inline_expects;
     target.completed_scalar_values = consumer.completed_scalar_values;
     consumer.observers.applyTo(&target);
@@ -1566,7 +1574,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     defer lir_gen_timing_scope.end();
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
-    const lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
+    var lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
         .spec_cache = target.spec_cache,
         .comptime_closure_hits = target.comptime_closure_hits,
@@ -1588,6 +1596,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
+    lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
 
     return .{ .output = lowered, .target = target };
 }
@@ -1817,6 +1826,7 @@ pub const PreparedBoxy = struct {
             },
         );
         errdefer lowered.deinit();
+        lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
         scope.end();
         var frozen: ?LirProgram.FrozenStaticData = null;
         return finishLoweredOutput(self.allocator, self.roots.requests.len, target, &lowered, &frozen);

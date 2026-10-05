@@ -11074,18 +11074,16 @@ pub const CheckedExprData = union(enum) {
     },
 };
 
-/// One `(interpolated, following_segment)` entry in a checked interpolation iterator.
-pub const CheckedInterpolationPart = struct {
-    value: CheckedExprId,
-    following_segment: CheckedExprId,
-};
-
-/// Checked custom interpolation data used to generate the `Iter` argument after checking.
+/// Checked custom interpolation data. The conversion (`plan`) receives the
+/// literal `segments`, the text before the first value and after each value,
+/// and returns the assembler, of type `assembler_ty`, which receives the
+/// interpolated `values` in order. `segments` has one more entry than
+/// `values`; every segment is a checked string segment.
 pub const CheckedInterpolation = struct {
     plan: ?StaticDispatchPlanId,
-    first: CheckedExprId,
-    parts: []const CheckedInterpolationPart,
-    step_fn_ty: CheckedTypeId,
+    segments: []const CheckedExprId,
+    values: []const CheckedExprId,
+    assembler_ty: CheckedTypeId,
 };
 
 /// Public `CheckedReturnContext` declaration.
@@ -11097,13 +11095,13 @@ pub const CheckedReturnContext = enum {
 /// `(start, len)` range into one of `CheckedBodyStore`'s flat side pools.
 pub const CheckedBodyRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
-/// POD form of `CheckedInterpolation`: `parts` is a range into
-/// `interpolation_part_pool`.
+/// POD form of `CheckedInterpolation`: `segments` and `values` are ranges into
+/// `expr_id_pool`.
 pub const StoredCheckedInterpolation = struct {
     plan: ?StaticDispatchPlanId,
-    first: CheckedExprId,
-    parts: CheckedBodyRange = .{},
-    step_fn_ty: CheckedTypeId,
+    segments: CheckedBodyRange = .{},
+    values: CheckedBodyRange = .{},
+    assembler_ty: CheckedTypeId,
 };
 
 /// Internal, relocation-invariant (POD) form of `CheckedExprData`: variant slices
@@ -11432,9 +11430,9 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .dispatch_call => |p| .{ .dispatch_call = p },
         .interpolation => |i| .{ .interpolation = .{
             .plan = i.plan,
-            .first = i.first,
-            .parts = pool_owner.interpolationPartPool()[i.parts.start .. i.parts.start + i.parts.len],
-            .step_fn_ty = i.step_fn_ty,
+            .segments = pool_owner.exprIdPool()[i.segments.start .. i.segments.start + i.segments.len],
+            .values = pool_owner.exprIdPool()[i.values.start .. i.values.start + i.values.len],
+            .assembler_ty = i.assembler_ty,
         } },
         .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
         .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
@@ -11632,7 +11630,6 @@ pub const CheckedBodyStoreView = struct {
     capture_pool: []const CheckedCapture = &.{},
     record_destruct_pool: []const CheckedRecordDestruct = &.{},
     str_pattern_step_pool: []const CheckedStrPatternStep = &.{},
-    interpolation_part_pool: []const CheckedInterpolationPart = &.{},
     string_bytes: []const u8 = &.{},
     string_ranges: []const canonical.NameInterner.Range = &.{},
     default_exprs: []const CheckedBodyStore.CheckedDefaultExpr = &.{},
@@ -11695,9 +11692,6 @@ pub const CheckedBodyStoreView = struct {
     }
     pub fn strPatternStepPool(self: CheckedBodyStoreView) []const CheckedStrPatternStep {
         return self.str_pattern_step_pool;
-    }
-    pub fn interpolationPartPool(self: CheckedBodyStoreView) []const CheckedInterpolationPart {
-        return self.interpolation_part_pool;
     }
 
     pub fn exprCount(self: CheckedBodyStoreView) usize {
@@ -12558,10 +12552,10 @@ const CheckedLoopMutationPublisher = struct {
                 try self.pushExpr(hash.hasher);
             },
             .interpolation => |interpolation| {
-                try self.pushExpr(interpolation.first);
-                for (interpolation.parts) |part| {
-                    try self.pushExpr(part.value);
-                    try self.pushExpr(part.following_segment);
+                try self.pushExpr(interpolation.segments[0]);
+                for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                    try self.pushExpr(value);
+                    try self.pushExpr(segment);
                 }
             },
             .tuple_access => |access| try self.pushExpr(access.tuple),
@@ -12651,8 +12645,6 @@ pub const CheckedBodyStore = struct {
     record_destruct_pool: std.ArrayList(CheckedRecordDestruct) = .empty,
     /// Flat pool of string-interpolation pattern steps backing str_interpolation patterns.
     str_pattern_step_pool: std.ArrayList(CheckedStrPatternStep) = .empty,
-    /// Flat pool of interpolation parts backing interpolation payloads.
-    interpolation_part_pool: std.ArrayList(CheckedInterpolationPart) = .empty,
     /// Flat bytes pool backing string literals; `string_ranges` holds bounds.
     string_bytes: std.ArrayList(u8) = .empty,
     /// `CheckedStringLiteralId`-indexed ranges into `string_bytes`.
@@ -12951,7 +12943,6 @@ pub const CheckedBodyStore = struct {
             .capture_pool = self.capture_pool.items,
             .record_destruct_pool = self.record_destruct_pool.items,
             .str_pattern_step_pool = self.str_pattern_step_pool.items,
-            .interpolation_part_pool = self.interpolation_part_pool.items,
             .string_bytes = self.string_bytes.items,
             .string_ranges = self.string_ranges.items,
             .default_exprs = self.default_exprs.items,
@@ -13153,9 +13144,6 @@ pub const CheckedBodyStore = struct {
     pub fn strPatternStepPool(self: *const CheckedBodyStore) []const CheckedStrPatternStep {
         return self.str_pattern_step_pool.items;
     }
-    pub fn interpolationPartPool(self: *const CheckedBodyStore) []const CheckedInterpolationPart {
-        return self.interpolation_part_pool.items;
-    }
 
     fn appendExprIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedExprId) Allocator.Error!CheckedBodyRange {
         return artifact_serialize.appendSpan(CheckedBodyRange, CheckedExprId, &self.expr_id_pool, allocator, ids);
@@ -13199,10 +13187,6 @@ pub const CheckedBodyStore = struct {
 
     fn appendStrPatternSteps(self: *CheckedBodyStore, allocator: Allocator, steps: []const CheckedStrPatternStep) Allocator.Error!CheckedBodyRange {
         return artifact_serialize.appendSpan(CheckedBodyRange, CheckedStrPatternStep, &self.str_pattern_step_pool, allocator, steps);
-    }
-
-    fn appendInterpolationParts(self: *CheckedBodyStore, allocator: Allocator, parts: []const CheckedInterpolationPart) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedInterpolationPart, &self.interpolation_part_pool, allocator, parts);
     }
 
     /// Append already-range-formed match branches into `match_branch_pool`. The
@@ -13282,9 +13266,9 @@ pub const CheckedBodyStore = struct {
             .dispatch_call => |p| .{ .dispatch_call = p },
             .interpolation => |i| .{ .interpolation = .{
                 .plan = i.plan,
-                .first = i.first,
-                .parts = try self.appendInterpolationParts(allocator, i.parts),
-                .step_fn_ty = i.step_fn_ty,
+                .segments = try self.appendExprIds(allocator, i.segments),
+                .values = try self.appendExprIds(allocator, i.values),
+                .assembler_ty = i.assembler_ty,
             } },
             .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
             .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
@@ -13847,7 +13831,6 @@ pub const CheckedBodyStore = struct {
             self.capture_pool.deinit(allocator);
             self.record_destruct_pool.deinit(allocator);
             self.str_pattern_step_pool.deinit(allocator);
-            self.interpolation_part_pool.deinit(allocator);
         }
         self.* = .{};
     }
@@ -13882,16 +13865,15 @@ pub const CheckedBodyStore = struct {
         capture_pool: SerializedSlice(CheckedCapture) = .{},
         record_destruct_pool: SerializedSlice(CheckedRecordDestruct) = .{},
         str_pattern_step_pool: SerializedSlice(CheckedStrPatternStep) = .{},
-        interpolation_part_pool: SerializedSlice(CheckedInterpolationPart) = .{},
         string_bytes: SerializedSlice(u8) = .{},
         string_ranges: SerializedSlice(canonical.NameInterner.Range) = .{},
         default_exprs: SerializedSlice(CheckedDefaultExpr) = .{},
         record_omitted_defaults: SerializedSlice(CheckedRecordOmittedDefault) = .{},
 
         comptime {
-            // 26 SerializedSlice fields → 26 base-pointer fixups, independent of
+            // 25 SerializedSlice fields → 25 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 26);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 25);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
@@ -14476,11 +14458,11 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                     }
                 },
                 .interpolation => |interpolation| {
-                    try self.pushItem(.{ .ty = interpolation.step_fn_ty });
-                    try self.pushExpr(interpolation.first);
-                    for (interpolation.parts) |part| {
-                        try self.pushExpr(part.value);
-                        try self.pushExpr(part.following_segment);
+                    try self.pushItem(.{ .ty = interpolation.assembler_ty });
+                    try self.pushExpr(interpolation.segments[0]);
+                    for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                        try self.pushExpr(value);
+                        try self.pushExpr(segment);
                     }
                 },
                 .structural_eq => |eq| {
@@ -14694,7 +14676,7 @@ fn checkedDispatchOperands(allocator: Allocator, expr_count: usize, plans: *cons
         var checked_operand_count: usize = 0;
         for (plan.argsSlice(plans)) |operand| switch (operand) {
             .checked_expr => checked_operand_count += 1,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => {},
         };
         if (checked_operand_count == 0) continue;
         if (dispatch_operands[expr_raw].len != 0) {
@@ -14707,7 +14689,7 @@ fn checkedDispatchOperands(allocator: Allocator, expr_count: usize, plans: *cons
                 operands[operand_index] = expr;
                 operand_index += 1;
             },
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => {},
         };
         dispatch_operands[expr_raw] = operands;
     }
@@ -14978,10 +14960,10 @@ const DivergenceScan = struct {
                 break :blk try anyOf(items, self.dispatch_facts.operands[raw]);
             },
             .interpolation => |interpolation| blk: {
-                try items.add(.{ .expr = interpolation.first });
-                for (interpolation.parts) |part| {
-                    try items.add(.{ .expr = part.value });
-                    try items.add(.{ .expr = part.following_segment });
+                try items.add(.{ .expr = interpolation.segments[0] });
+                for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                    try items.add(.{ .expr = value });
+                    try items.add(.{ .expr = segment });
                 }
                 break :blk .{ .group = .any };
             },
@@ -15511,32 +15493,26 @@ const CheckedBodyPayloadCopier = struct {
         if (self.checkedConcreteBuiltinForExpr(expr_idx) == .str) {
             return .{ .str = try self.copyStrInterpolationSegments(interpolation) };
         }
+        const parts = self.module.sliceExpr(interpolation.parts);
+        std.debug.assert(parts.len % 2 == 0);
+        const segments = try self.allocator.alloc(CheckedExprId, parts.len / 2 + 1);
+        errdefer self.allocator.free(segments);
+        const values = try self.allocator.alloc(CheckedExprId, parts.len / 2);
+        errdefer self.allocator.free(values);
+        segments[0] = self.checkedExpr(interpolation.first);
+        for (values, segments[1..], 0..) |*value, *segment, index| {
+            value.* = self.checkedExpr(parts[2 * index]);
+            segment.* = self.checkedExpr(parts[2 * index + 1]);
+        }
         return .{ .interpolation = .{
             .plan = null,
-            .first = self.checkedExpr(interpolation.first),
-            .parts = try self.copyInterpolationParts(interpolation.parts),
-            .step_fn_ty = try self.checkedTypeForRequiredVar(
-                interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
-                "checked interpolation generated step function type root was not published",
+            .segments = segments,
+            .values = values,
+            .assembler_ty = try self.checkedTypeForRequiredVar(
+                interpolation.assembler_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no assembler function type", .{}),
+                "checked interpolation assembler function type root was not published",
             ),
         } };
-    }
-
-    fn copyInterpolationParts(self: *@This(), span: CIR.Expr.Span) Allocator.Error![]const CheckedInterpolationPart {
-        const parts = self.module.sliceExpr(span);
-        std.debug.assert(parts.len % 2 == 0);
-
-        const out = try self.allocator.alloc(CheckedInterpolationPart, parts.len / 2);
-        errdefer self.allocator.free(out);
-
-        var part_i: usize = 0;
-        while (part_i < parts.len) : (part_i += 2) {
-            out[part_i / 2] = .{
-                .value = self.checkedExpr(parts[part_i]),
-                .following_segment = self.checkedExpr(parts[part_i + 1]),
-            };
-        }
-        return out;
     }
 
     fn copyStrInterpolationSegments(self: *@This(), interpolation: anytype) Allocator.Error![]const CheckedExprId {
@@ -16426,7 +16402,10 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .unary_not,
         => {},
         .field_access => |field_access| allocator.free(field_access.segments),
-        .interpolation => |interpolation| allocator.free(interpolation.parts),
+        .interpolation => |interpolation| {
+            allocator.free(interpolation.segments);
+            allocator.free(interpolation.values);
+        },
         .hosted_lambda => |hosted| allocator.free(hosted.args),
         .run_low_level => |run| allocator.free(run.args),
     }
@@ -18721,7 +18700,7 @@ fn sealCheckedProcedureTemplateRefs(
             var kind: DispatchRelationKind = .callable_result;
             for (plan.argsSlice(static_dispatch_plans)) |operand| switch (operand) {
                 .generated_numeral, .generated_quote => kind = .conversion,
-                .checked_expr, .generated_interpolation_iter => {},
+                .checked_expr, .generated_interpolation_segments => {},
             };
             try dispatch_relation_kind_pool.append(allocator, kind);
         }
@@ -18762,7 +18741,7 @@ fn sealCheckedProcedureTemplateRefs(
             var kind: DispatchRelationKind = .callable_result;
             for (plan.argsSlice(static_dispatch_plans)) |operand| switch (operand) {
                 .generated_numeral, .generated_quote => kind = .conversion,
-                .checked_expr, .generated_interpolation_iter => {},
+                .checked_expr, .generated_interpolation_segments => {},
             };
             try dispatch_relation_kind_pool.append(allocator, kind);
         }
@@ -21966,7 +21945,7 @@ const CheckedTemplateRefCollector = struct {
                 .expr => |id| try self.visitExpr(id),
                 .pattern => |id| try self.visitPattern(id),
                 .statement => |id| try self.visitStatement(id),
-                .generated_interpolation_iter => |id| try self.visitGeneratedInterpolationIter(id),
+                .generated_interpolation_segments => |id| try self.visitInterpolationChildren(id),
                 .call_relation => |id| {
                     const expr = self.checked_bodies.expr(id);
                     try self.appendCallRelation(id, expr, expr.data.call);
@@ -21980,7 +21959,7 @@ const CheckedTemplateRefCollector = struct {
         expr: CheckedExprId,
         pattern: CheckedPatternId,
         statement: CheckedStatementId,
-        generated_interpolation_iter: CheckedExprId,
+        generated_interpolation_segments: CheckedExprId,
         /// Append a call's relation once its callee and arguments are collected.
         call_relation: CheckedExprId,
         /// Leave a generalized local function's evidence scope.
@@ -22244,22 +22223,23 @@ const CheckedTemplateRefCollector = struct {
         const children = self.beginChildren();
         for (plan.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
             .checked_expr => |expr| try self.pushChild(.{ .expr = expr }),
-            .generated_interpolation_iter => |expr| try self.pushChild(.{ .generated_interpolation_iter = expr }),
+            .generated_interpolation_segments => |expr| try self.pushChild(.{ .generated_interpolation_segments = expr }),
             .generated_numeral, .generated_quote => {},
         };
         self.endChildren(children);
     }
 
-    fn visitGeneratedInterpolationIter(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
+    fn visitInterpolationChildren(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
         const expr = self.checked_bodies.expr(expr_id);
         if (expr.data != .interpolation) {
-            checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{});
+            checkedArtifactInvariant("generated interpolation segments operand pointed at non-interpolation expression", .{});
         }
         const interpolation = expr.data.interpolation;
         const children = self.beginChildren();
-        for (interpolation.parts) |part| {
-            try self.pushChild(.{ .expr = part.value });
-            try self.pushChild(.{ .expr = part.following_segment });
+        try self.pushChild(.{ .expr = interpolation.segments[0] });
+        for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+            try self.pushChild(.{ .expr = value });
+            try self.pushChild(.{ .expr = segment });
         }
         self.endChildren(children);
     }
@@ -23668,7 +23648,7 @@ const NestedProcSiteBuilder = struct {
                 .exit_expr => |exit| try self.exitExpr(exit),
                 .pattern => |item| try self.enterPattern(item.id, item.owner),
                 .statement => |item| try self.enterStatement(item.id, item.owner),
-                .generated_interpolation_iter => |item| try self.pushGeneratedInterpolationIter(item.id, item.owner),
+                .generated_interpolation_segments => |item| try self.pushInterpolationChildren(item.id, item.owner),
                 .push_branch_path => |branch| try self.path.append(self.allocator, .{ .branch = branch }),
                 .pop_path => self.path.items.len -= 1,
             }
@@ -23680,7 +23660,7 @@ const NestedProcSiteBuilder = struct {
         exit_expr: ExprExit,
         pattern: struct { id: CheckedPatternId, owner: NestedProcSiteOwner },
         statement: struct { id: CheckedStatementId, owner: NestedProcSiteOwner },
-        generated_interpolation_iter: struct { id: CheckedExprId, owner: NestedProcSiteOwner },
+        generated_interpolation_segments: struct { id: CheckedExprId, owner: NestedProcSiteOwner },
         push_branch_path: u32,
         pop_path,
     };
@@ -23901,25 +23881,26 @@ const NestedProcSiteBuilder = struct {
         try self.captureType(plan.callable_ty);
         for (plan.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
             .checked_expr => |expr| try self.pushExpr(expr, owner),
-            .generated_interpolation_iter => |expr| try self.pushWork(.{ .generated_interpolation_iter = .{ .id = expr, .owner = owner } }),
+            .generated_interpolation_segments => |expr| try self.pushWork(.{ .generated_interpolation_segments = .{ .id = expr, .owner = owner } }),
             .generated_numeral, .generated_quote => {},
         };
     }
 
-    fn pushGeneratedInterpolationIter(
+    fn pushInterpolationChildren(
         self: *NestedProcSiteBuilder,
         expr_id: CheckedExprId,
         owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const expr = self.checked_bodies.expr(expr_id);
         if (expr.data != .interpolation) {
-            checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{});
+            checkedArtifactInvariant("generated interpolation segments operand pointed at non-interpolation expression", .{});
         }
         const interpolation = expr.data.interpolation;
         const children = self.beginChildren();
-        for (interpolation.parts) |part| {
-            try self.pushExpr(part.value, owner);
-            try self.pushExpr(part.following_segment, owner);
+        try self.pushExpr(interpolation.segments[0], owner);
+        for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+            try self.pushExpr(value, owner);
+            try self.pushExpr(segment, owner);
         }
         self.endChildren(children);
     }
@@ -27255,7 +27236,7 @@ pub fn pairCheckedPlatform(
                     }
                 }
             },
-            .interpolation => |*interpolation| interpolation.step_fn_ty = try substitutions.specializeRootWithMemo(session, &result.checked_types, interpolation.step_fn_ty, &type_memo),
+            .interpolation => |*interpolation| interpolation.assembler_ty = try substitutions.specializeRootWithMemo(session, &result.checked_types, interpolation.assembler_ty, &type_memo),
             .lookup_required => |maybe_ref| {
                 const ref_id = maybe_ref orelse checkedArtifactInvariant("paired requirement lookup has no resolved reference", .{});
                 if (result.resolved_value_refs.records[@intFromEnum(ref_id)].ref == .platform_required_checked_error) {
@@ -29358,10 +29339,10 @@ fn checkedExprContains(
                 .tuple_access => |access| try pending.append(allocator, .{ .expr = access.tuple }),
                 .field_access => |field| try pending.append(allocator, .{ .expr = field.receiver }),
                 .interpolation => |interpolation| {
-                    try pending.append(allocator, .{ .expr = interpolation.first });
-                    for (interpolation.parts) |part| {
-                        try pending.append(allocator, .{ .expr = part.value });
-                        try pending.append(allocator, .{ .expr = part.following_segment });
+                    try pending.append(allocator, .{ .expr = interpolation.segments[0] });
+                    for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                        try pending.append(allocator, .{ .expr = value });
+                        try pending.append(allocator, .{ .expr = segment });
                     }
                 },
                 .structural_eq => |eq| {
@@ -33773,7 +33754,7 @@ pub const CheckedModuleArtifact = struct {
             // plans add one. Promoted local procedure templates and callable
             // contract types add one each, and the single-source-call template
             // list one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 231);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -40220,6 +40201,7 @@ test "module source input hash uses explicit file dependency state" {
 }
 
 test "checked divergence publishes both inline-expect runtime modes" {
+    const divergent_segment = [_]CheckedExprId{testIndexId(CheckedExprId, 0)};
     var exprs = [_]CheckedExpr{
         .{
             .id = testIndexId(CheckedExprId, 0),
@@ -40238,9 +40220,9 @@ test "checked divergence publishes both inline-expect runtime modes" {
         .{ .id = @enumFromInt(4), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .type_dispatch_call = null } },
         .{ .id = @enumFromInt(5), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .interpolation = .{
             .plan = null,
-            .first = testIndexId(CheckedExprId, 0),
-            .parts = &.{},
-            .step_fn_ty = testIndexId(CheckedTypeId, 0),
+            .segments = &divergent_segment,
+            .values = &.{},
+            .assembler_ty = testIndexId(CheckedTypeId, 0),
         } } },
         .{ .id = @enumFromInt(6), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .dispatch_call = null } },
     };
@@ -40358,8 +40340,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xDC, 0x02, 0x5A, 0xE0, 0x70, 0x4B, 0x6B, 0x6F, 0x61, 0xFE, 0x92, 0xED, 0xC0, 0xBE, 0x14, 0x37,
-        0x99, 0xA5, 0x3D, 0x7F, 0x80, 0xAB, 0x1D, 0x1A, 0xCB, 0xEB, 0x1F, 0xA3, 0xCA, 0x70, 0x75, 0x7E,
+        0xBC, 0x37, 0x57, 0xDF, 0x8F, 0x70, 0xBF, 0xDA, 0x19, 0xE7, 0x28, 0xBD, 0xBE, 0xC7, 0x3F, 0x45,
+        0x9A, 0xB6, 0x17, 0x90, 0x01, 0x60, 0x3F, 0xE5, 0xC2, 0x2C, 0xFE, 0x0F, 0x5C, 0x3D, 0x76, 0xAF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

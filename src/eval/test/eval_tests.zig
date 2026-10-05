@@ -2515,10 +2515,8 @@ const core_tests = [_]TestCase{
         \\Url := [Url(Str)].{
         \\    from_quote : Str -> Try(Url, [BadQuotedBytes(Str)])
         \\    from_quote = |str| Ok(Url(str))
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Url
-        \\    from_interpolation = |first, rest| {
-        \\        Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
-        \\    }
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\    inner : Url -> Str
         \\    inner = |Url.Url(str)| str
         \\}
@@ -2533,14 +2531,31 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
     },
     .{
+        .name = "inspect: from_interpolation receives the literal segments and assembles the values",
+        .source_kind = .module,
+        .source =
+        \\Shape := [Shape(U64, List(Str))].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Shape), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Ok(|values| Shape.Shape(List.len(segments), values))
+        \\}
+        \\
+        \\main = {
+        \\    a = "one"
+        \\    b = "two"
+        \\    shape : Shape
+        \\    shape = "<${a}|${b}>"
+        \\    shape
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Shape(3, [\"one\", \"two\"])" },
+    },
+    .{
         .name = "inspect: generalized interpolation supports custom and builtin specializations",
         .source_kind = .module,
         .source =
         \\Wrapped := [Wrapped(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrapped
-        \\    from_interpolation = |first, rest| {
-        \\        Wrapped.Wrapped(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
-        \\    }
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
         \\}
         \\
         \\wrapped_identity : Wrapped -> Wrapped
@@ -2559,35 +2574,111 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(Wrapped(\"hello world\"), \"hello world\")" },
     },
     .{
-        .name = "inspect: Try interpolation forwards to custom result type",
+        .name = "inspect: from_interpolation generic in its item counts the values",
         .source_kind = .module,
         .source =
-        \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\Count := [Count(U64)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(List.len(values)))
         \\}
         \\
-        \\main = {
-        \\    domain = "example"
-        \\    url : Try(Url, [InvalidUrl])
-        \\    url = "https://${domain}.com"
-        \\    url
-        \\}
+        \\around = |f, x| f("a${x}b${x}c")
+        \\
+        \\count_identity : Count -> Count
+        \\count_identity = |c| c
+        \\
+        \\main = around(count_identity, 3.I64)
         ,
-        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
+        .expected = .{ .inspect_str = "Count(2)" },
     },
     .{
-        .name = "problem: nested Try interpolation does not recursively satisfy forwarding",
+        .name = "inspect: from_interpolation generic in its item ignores the values",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"none\")" },
+    },
+    .{
+        .name = "inspect: from_interpolation generic in its item inspects the values",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"[3, 3]\")" },
+    },
+    .{
+        .name = "inspect: from_interpolation generic in its item ignores the values (specialize=no)",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"none\")" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "inspect: from_interpolation generic in its item inspects the values (specialize=no)",
+        .source_kind = .module,
+        .source =
+        \\Count := [Count(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\}
+        \\
+        \\main = {
+        \\    x = 3.I64
+        \\    c : Count
+        \\    c = "a${x}b${x}c"
+        \\    c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Count(\"[3, 3]\")" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "problem: Try has no from_interpolation for an interpolation to target",
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
         \\main = {
         \\    domain = "example"
-        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url : Try(Url, [InvalidInterpolation(Str)])
         \\    url = "https://${domain}.com"
         \\    url
         \\}
@@ -2595,12 +2686,48 @@ const core_tests = [_]TestCase{
         .expected = .{ .problem = {} },
     },
     .{
-        .name = "inspect: suffixed interpolation accepts custom return type",
+        .name = "problem: from_interpolation must return its assembler wrapped in Try",
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\    from_interpolation : List(Str) -> (List(Str) -> Url)
+        \\    from_interpolation = |_segments| |values| Url.Url(Str.join_with(values, ""))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Url
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "problem: from_interpolation must use the InvalidInterpolation error",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidUrl])
+        \\    from_interpolation = |_segments| Ok(|values| Url.Url(Str.join_with(values, "")))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Url
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "inspect: suffixed interpolation is the value its custom conversion assembles",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
         \\main = {
@@ -2608,7 +2735,7 @@ const core_tests = [_]TestCase{
         \\    "https://${domain}.com".Url
         \\}
         ,
-        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
+        .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
     },
     .{
         .name = "inspect: interpolation with adjacent and boundary interpolations",
@@ -2635,6 +2762,45 @@ const core_tests = [_]TestCase{
         \\force = |s| s
         \\
         \\main = force("nope")
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_interpolation Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Strict := [Strict].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Strict), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Err(InvalidInterpolation("Strict rejects every interpolation"))
+        \\}
+        \\
+        \\force : Strict -> Strict
+        \\force = |s| s
+        \\
+        \\name = "Roc"
+        \\
+        \\main = force("hello ${name}")
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_interpolation rejects its literal segments at compile time inside a function",
+        .source_kind = .module,
+        .source =
+        \\Html := [Html(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments|
+        \\        if segments.any(|segment| segment.contains("<script")) {
+        \\            Err(InvalidInterpolation("Html literals can't contain script tags"))
+        \\        } else {
+        \\            Str.from_interpolation(segments).map_ok(|assemble| |values| Html.Html(assemble(values)))
+        \\        }
+        \\}
+        \\
+        \\render : Str -> Html
+        \\render = |body| "<script>${body}</script>"
+        \\
+        \\main = render("alert(1)")
         ,
         .expected = .problem,
     },

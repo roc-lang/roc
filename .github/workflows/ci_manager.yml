@@ -584,6 +584,32 @@ jobs:
             Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
           }
 
+      - name: Collect macOS compiler crash reports
+        if: failure() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+
+          output = Path("zig-out/minici/crash-reports")
+          output.mkdir(parents=True, exist_ok=True)
+          programs = ("roc", "eval-test-runner", "lambda-mono-differential-runner")
+          roots = (Path.home() / "Library/Logs/DiagnosticReports",
+                   Path("/Library/Logs/DiagnosticReports"))
+          for index, root in enumerate(roots):
+              if not root.is_dir():
+                  continue
+              for report in root.rglob("*"):
+                  if report.is_file() and any(report.name.startswith(name + "-") or
+                                              report.name.startswith(name + "_")
+                                              for name in programs):
+                      shutil.copy2(report, output / (str(index) + "-" + report.name))
+                      print("Collected " + str(report))
+          PYTHON
+
       - name: Upload MiniCI report and logs
         if: failure()
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1

@@ -103,6 +103,7 @@ const ComptimeOrigin = problem_mod.ComptimeOrigin;
 const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
 const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
+const ComptimeInvalidInterpolation = problem_mod.ComptimeInvalidInterpolation;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
@@ -1159,6 +1160,7 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_invalid_numeral => |data| return self.buildComptimeInvalidNumeralReport(data),
             .comptime_invalid_quote => |data| return self.buildComptimeInvalidQuoteReport(data),
+            .comptime_invalid_interpolation => |data| return self.buildComptimeInvalidInterpolationReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
@@ -5415,6 +5417,43 @@ pub const ReportBuilder = struct {
             const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
             try D.renderSlice(&.{
                 D.bytes("The rejected literal is in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("and the implementation returned this error message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("It returned this error message:"),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_message);
+
+        return report;
+    }
+
+    fn buildComptimeInvalidInterpolationReport(self: *Self, data: ComptimeInvalidInterpolation) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Invalid String Interpolation", "The from_interpolation implementation for this string interpolation's type rejected it.", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        if (data.origin) |origin| {
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The rejected interpolation is in the module"),
                 D.bytes(owned_origin_location).withAnnotation(.emphasized),
                 D.bytes("and the implementation returned this error message:"),
             }, self, &report);

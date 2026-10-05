@@ -6,8 +6,8 @@ type=file
 # SOURCE
 ~~~roc
 Rendered := [Rendered].{
-    from_interpolation : Str, Iter((U64, Str)) -> Rendered
-    from_interpolation = |_, _| Rendered.Rendered
+    from_interpolation : List(Str) -> Try((List(U64) -> Rendered), [InvalidInterpolation(Str)])
+    from_interpolation = |_| Ok(|_| Rendered.Rendered)
 }
 
 build = |good, bad| ["${good}", "${bad}"]
@@ -40,8 +40,8 @@ TYPE MISMATCH - every_interpolation_occurrence_checks_parts.md:9:21:9:35
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
-LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,CloseRound,CloseRound,OpArrow,UpperIdent,
-LowerIdent,OpAssign,OpBar,Underscore,Comma,Underscore,OpBar,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,CloseRound,Comma,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,CloseRound,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceOpenRound,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotUpperIdent,CloseRound,
 CloseCurly,
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenSquare,StringStart,StringPart,OpenStringInterpolation,LowerIdent,CloseStringInterpolation,StringPart,StringEnd,Comma,StringStart,StringPart,OpenStringInterpolation,LowerIdent,CloseStringInterpolation,StringPart,StringEnd,CloseSquare,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
@@ -62,20 +62,32 @@ EndOfFile,
 			(associated
 				(s-type-anno (name "from_interpolation")
 					(ty-fn
-						(ty (name "Str"))
 						(ty-apply
-							(ty (name "Iter"))
-							(ty-tuple
-								(ty (name "U64"))
-								(ty (name "Str"))))
-						(ty (name "Rendered"))))
+							(ty (name "List"))
+							(ty (name "Str")))
+						(ty-apply
+							(ty (name "Try"))
+							(ty-fn
+								(ty-apply
+									(ty (name "List"))
+									(ty (name "U64")))
+								(ty (name "Rendered")))
+							(ty-tag-union
+								(tags
+									(ty-apply
+										(ty (name "InvalidInterpolation"))
+										(ty (name "Str"))))))))
 				(s-decl
 					(p-ident (raw "from_interpolation"))
 					(e-lambda
 						(args
-							(p-underscore)
 							(p-underscore))
-						(e-tag (raw "Rendered.Rendered"))))))
+						(e-apply
+							(e-tag (raw "Ok"))
+							(e-lambda
+								(args
+									(p-underscore))
+								(e-tag (raw "Rendered.Rendered"))))))))
 		(s-decl
 			(p-ident (raw "build"))
 			(e-lambda
@@ -106,8 +118,8 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Rendered := [Rendered].{
-	from_interpolation : Str, Iter((U64, Str)) -> Rendered
-	from_interpolation = |_, _| Rendered.Rendered
+	from_interpolation : List(Str) -> Try((List(U64) -> Rendered), [InvalidInterpolation(Str)])
+	from_interpolation = |_| Ok(|_| Rendered.Rendered)
 }
 
 build = |good, bad| ["${good}", "${bad}"]
@@ -122,18 +134,27 @@ main = build(1.U64, "not a number")
 		(p-assign (ident "every_interpolation_occurrence_checks_parts.Rendered.from_interpolation"))
 		(e-lambda
 			(args
-				(p-underscore)
 				(p-underscore))
-			(e-nominal (nominal "Rendered")
-				(e-tag (name "Rendered"))))
+			(e-tag (name "Ok")
+				(args
+					(e-lambda
+						(args
+							(p-underscore))
+						(e-nominal (nominal "Rendered")
+							(e-tag (name "Rendered")))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Iter") (builtin)
-					(ty-tuple
-						(ty-lookup (name "U64") (builtin))
-						(ty-lookup (name "Str") (builtin))))
-				(ty-lookup (name "Rendered") (local)))))
+				(ty-apply (name "List") (builtin)
+					(ty-lookup (name "Str") (builtin)))
+				(ty-apply (name "Try") (builtin)
+					(ty-parens
+						(ty-fn (effectful false)
+							(ty-apply (name "List") (builtin)
+								(ty-lookup (name "U64") (builtin)))
+							(ty-lookup (name "Rendered") (local))))
+					(ty-tag-union
+						(ty-tag-name (name "InvalidInterpolation")
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "build"))
 		(e-lambda
@@ -147,7 +168,7 @@ main = build(1.U64, "not a number")
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "good"))))
-						(e-interpolation (constraint-fn-var 306) (dispatcher-var 30)
+						(e-interpolation (constraint-fn-var 328) (dispatcher-var 39)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -159,7 +180,7 @@ main = build(1.U64, "not a number")
 							(p-assign (ident "#interp_1"))
 							(e-lookup-local
 								(p-assign (ident "bad"))))
-						(e-interpolation (constraint-fn-var 324) (dispatcher-var 38)
+						(e-interpolation (constraint-fn-var 342) (dispatcher-var 47)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -168,7 +189,7 @@ main = build(1.U64, "not a number")
 								(e-literal (string "")))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 353)
+		(e-call (constraint-fn-var 372)
 			(e-lookup-local
 				(p-assign (ident "build")))
 			(e-typed-int (value "1") (type "U64"))
@@ -185,14 +206,14 @@ main = build(1.U64, "not a number")
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str, Iter((U64, Str)) -> Rendered"))
-		(patt (type "_arg, _arg2 -> List(a) where [a.from_interpolation : Str, Iter((b, Str)) -> a, a.from_interpolation : Str, Iter((b, Str)) -> a]"))
+		(patt (type "List(Str) -> Try(List(U64) -> Rendered, [InvalidInterpolation(Str)])"))
+		(patt (type "_arg, _arg2 -> List(a) where [a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)]), a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)])]"))
 		(patt (type "List(Rendered)")))
 	(type_decls
 		(nominal (type "Rendered")
 			(ty-header (name "Rendered"))))
 	(expressions
-		(expr (type "Str, Iter((U64, Str)) -> Rendered"))
-		(expr (type "_arg, _arg2 -> List(a) where [a.from_interpolation : Str, Iter((b, Str)) -> a, a.from_interpolation : Str, Iter((b, Str)) -> a]"))
+		(expr (type "List(Str) -> Try(List(U64) -> Rendered, [InvalidInterpolation(Str)])"))
+		(expr (type "_arg, _arg2 -> List(a) where [a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)]), a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)])]"))
 		(expr (type "List(Rendered)"))))
 ~~~

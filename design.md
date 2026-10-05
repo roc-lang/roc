@@ -4843,7 +4843,7 @@ const DispatchDispatcher = union(enum) {
 
 const DispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
-    generated_interpolation_iter: CheckedExprId,
+    generated_interpolation_segments: CheckedExprId,
     generated_numeral: NumeralLiteral,
     generated_quote: CheckedStringLiteralId,
 };
@@ -4908,7 +4908,7 @@ Every live literal-origin record leaves checking with one explicit resolution:
   with the callable evidence supplied for that specialization. The `Err` arm
   of that conversion lowers to `literal_rejected`, a non-returning terminal
   carrying the rejection message and the literal's `LiteralRejectionSite`
-  (owner module, checked expression, numeral or quote). LIR carries the site on
+  (owner module, checked expression, numeral, quote, or interpolation). LIR carries the site on
   the `crash` statement, so a compile-time evaluation that reaches it reports
   the literal-specific diagnostic instead of a generic crash.
   A conversion at a specialization's concrete type depends on nothing at
@@ -4921,7 +4921,13 @@ Every live literal-origin record leaves checking with one explicit resolution:
   definition the draft registers; the specialization reads the root's
   `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
   beside the checked roots' plans; and finalization evaluates each literal root
-  on its first slot demand, and the rest after every checked root. Every command
+  on its first slot demand, and the rest after every checked root. The same
+  literal at the same type is one literal root however many specializations
+  convert it: its definition's content identity names the conversion. A later specialization reads the first one's root, and its
+  read's representation evidence calls the first one's definition, so a
+  callable in the root's value has one function identity in every program that
+  reads it: the compile-time program that evaluated the root and a runtime
+  program reaching only the later specialization agree on it. Every command
   that finalizes checking evaluates the literal roots of its program roots,
   with the rest of compile-time evaluation and under its fixed configuration,
   so `roc check` reports every rejected or crashing conversion a build would. Two object-cache
@@ -4936,6 +4942,24 @@ Every live literal-origin record leaves checking with one explicit resolution:
   literal node for diagnostic recovery. `CheckedModule` stores no
   callable, runtime dispatch plan, or compile-time root for it; the containing
   checked `runtime_error` expression is the failure.
+
+An interpolated string literal converts in two stages. Its
+`from_interpolation` constraint is
+`List(Str) -> Try((List(item) -> a), [InvalidInterpolation(Str)])`, where `a`
+is the interpolation's own type and `item` is every interpolated value's type.
+The conversion's only operand is the literal's segments, the `n + 1` source
+strings around its `n` interpolations, so it is a literal conversion exactly
+like a quote's: it resolves to a compile-time root, or to Boxy's literal
+planner, whose value is the assembler, and its `Err` arm is a
+literal-rejection crash with an `interpolation` `LiteralRejectionSite`, which
+compile-time evaluation reports as the interpolation's own diagnostic. The
+interpolation's value is the assembler called with the interpolated values as
+one list, which cannot reject. The checked interpolation carries its segments,
+its values, and the assembler's type; in a generalized body the checker keeps
+`item` a variable of its own, related to each value's type at every use, so
+Monotype relates `item` to each value's type before lowering the call and Boxy
+gives `item` the first value's representation. `Try` declares no
+`from_interpolation`, so an interpolation cannot target a `Try` itself.
 
 Literal-pattern deferred static-dispatch constraint groups are owned by the
 enclosing match, lambda, loop, binding statement, or top-level definition.
@@ -5346,7 +5370,7 @@ storage (`(Wrapped.(b), _)` with `Wrapped := Box(Str)`) is described before use
 (`test/cli/NominalBoxPatternBinders.roc`).
 
 Compiler-generated operands and callables use this contract at polymorphic
-boundaries too. Quote conversion, numeral conversion, interpolation iterators,
+boundaries too. Quote conversion, numeral conversion,
 and generated codec constructors carry an explicit result descriptor source
 through callable packing. When they construct an aggregate, the aggregate's
 descriptor environment is the composition of the already-recorded environments
@@ -8574,10 +8598,10 @@ commit-probe: success commits the unification and any method evidence; failure
 rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
-`Str`. Discharging an interpolation constraint also makes its generated item
-type `Str`, because `Str.from_interpolation` receives `Iter((Str, Str))`: a
-generic body that keeps the dispatch calls that method through dictionary
-evidence whose callable type names the item. A numeral literal constraint is
+`Str`. Discharging an interpolation constraint also makes its item type `Str`,
+because `Str.from_interpolation`'s assembler receives `List(Str)`: a generic
+body that keeps the dispatch calls that method through dictionary evidence
+whose callable type names the item. A numeral literal constraint is
 rejected because builtin `Str` does not
 materialize numerals, and every non-literal constraint uses the ordinary static
 dispatch method-acceptance rule. Rejecting a constrained part retires its copied
@@ -10621,6 +10645,15 @@ never required on host-created callable values. A compiler-created callable
 records the exact immutable descriptor of the value its worker returns. The
 runtime registration for that worker records its actual return layout and the
 offset of the private metadata; it does not infer either from the call site.
+A callable packed at runtime registers its worker when it is packed. A callable
+that compile-time evaluation froze into static data is never packed, so its
+worker's procedure records the frozen values' capture layout
+(`static_erased_capture_layout`) and the program registers it at startup.
+
+An erased call owns its arguments. When the caller resolved an argument to a
+concrete layout and the worker reads it in an erased form, the runtime converts
+the argument into the worker's layout, and that conversion consumes the
+caller's value.
 
 Each executing dev image selects its own sidecar runtime for the current OS
 thread so retained callables and overlapping hot-reload generations resolve
@@ -12539,8 +12572,8 @@ determine runtime representations and dispatch inside the procedure. Function
 value type digests retain their complete callable sets, including when reached
 recursively from those nested positions.
 
-A compiler-generated body retains its own source key. An interpolation or
-field-names iterator step, a structural parser or encoder runtime, and a
+A compiler-generated body retains its own source key. A field-names iterator
+step, a structural parser or encoder runtime, and a
 generated encoder callback have no checked declaration to name, so the producer
 synthesizes the body's identity—owner context, source expression, site ordinal
 and mode—into the same template slot the caller's checked type would otherwise
@@ -13654,6 +13687,12 @@ Lambda Mono function specialization to call for that variant. `capture_record`
 is the exact payload type for finite callable values and the exact capture
 argument type for erased callable entries.
 
+A call of a finite callable value reads the callee's discriminant once and
+selects the variant's direct call with one multiway switch whose case values
+are the variant indices. A callable with one variant, or a zero-sized one, holds
+that variant and is called without a test; a callable with no variants can
+never exist, so its call is a `runtime_error`.
+
 When Lambda Mono lowers a function reference, it reads the capture span from the
 Lambda Solved function value type at that expression site. It then builds a
 capture record with those exact slots and stores it in the callable value. It
@@ -14037,22 +14076,33 @@ or `from_numeral` code at runtime. Ordinary explicit calls to those methods stil
 use the checked dispatch plan. Builtin descriptor-guided numeral operations
 remain ordinary Boxy representation operations.
 
-An interpolation whose target is a type variable dispatches `from_interpolation`
-through the dictionary its worker receives: interpolation constraints, like
-quote constraints, carry runtime dictionary evidence
-(`requiresRuntimeDictionary`). Every interpolated part fills the generated
-iterator's item slot, so the item type is the parts' type. The call describes
-the item from its first part rather than from the dictionary, because a
-`from_interpolation` that is generic in its item fixes it only through the
-parts; Monotype likewise relates the iterator operand's item to each part's
-type before lowering it. The conversion's result leaves are supplied by the
-selected dictionary method's requirement descriptors, and their materialization
-precedes the operands built from them. A dictionary slot reads a requirement
-descriptor from a call argument only when the descriptor describes that whole
-argument; a descriptor nested inside an argument is the method's own storage
-there, or supplied by the invocation. The generated iterator is constructed
-inside `Iter`'s formal scope, so its shared backing's item formal names the
-interpolation's item type.
+An interpolation's conversion is a literal site like a quote's: its operand
+is the concrete `List(Str)` of segments, and its value, the assembler, is
+literal-result evidence that Boxy's planner produces at the site's checked
+type, the assembler's function type. The interpolation then calls the
+assembler with its values. An interpolation whose target is a type variable
+selects `from_interpolation` from the dictionary its worker receives:
+interpolation constraints, like quote constraints, carry runtime dictionary
+evidence (`requiresRuntimeDictionary`). Before any type is analyzed, each
+interpolation's item variable is bound to its first value's representation, so
+every representation built from a type mentioning the item, such as the
+worker's `from_interpolation` requirement, describes the values the assembler
+receives.
+
+An assembler is a frozen callable, and one that is generic in its item
+captures descriptors built by the frame that created it. Each descriptor
+capture of a frozen callable recipe records the representation the creating
+frame described, the callable's own representation of the capture, and, when
+the frame stored a static descriptor built from none of its own bindings, that
+descriptor. Matching the frozen value against its entry expects exactly what
+the frame stored: that static descriptor; else the creating representation's
+own descriptor when it is closed; else the creating representation in its own
+storage, instantiated by the closed type the active freeze context gives a
+capture the callable reads as a bare variable; else the callable's
+representation closed by the context, which binds the variables of the
+worker's whole function type, not only those its captures carry. A captured
+dictionary keeps the calling ABI of its original evidence; only its slots'
+representations are closed at the context.
 
 A literal requirement names the checked literal site, the complete conversion
 callable type, and the selected conversion evidence in the requiring worker's
@@ -14916,7 +14966,7 @@ from its instantiated lookup.
 
 A dictionary method's requirement descriptor whose source is an argument is
 that argument's own descriptor. A requirement position nested inside an
-argument (an interpolation iterator's item, say) is described by the evidence
+argument (a list argument's item, say) is described by the evidence
 callable's type at that position or supplied by the invocation, never by the
 argument's descriptor: a nominal argument's descriptor describes its backing,
 which need not expose the position at all.
@@ -20025,6 +20075,16 @@ The payload's final-drop callback first runs the original capture-drop callback
 with the adjusted capture pointer, then releases the payload's retained image
 reference. That retained reference keeps an old image alive while a host stores
 a boxed Roc closure and later calls it after one or more hot reloads.
+
+Because every generated erased-callable procedure skips the prefix, every
+erased callable value of a hot-reloading image reserves it, including the ones
+compile-time evaluation froze into static data. The runtime lowering of a
+hot-reloading dev image records the prefix size
+(`LirProgram.Result.erased_capture_prefix`), and the frozen images written for
+that program reserve it before their captures. A static value is never dropped,
+so its reserved prefix stays zeroed. The compile-time host program runs in the
+interpreter with no prefix, so its completed values are always transcoded into
+a runtime program whose prefix differs.
 
 Headerless default apps never hot reload. They compile through synthetic
 temporary source files that are discarded after each run, so there is nothing
