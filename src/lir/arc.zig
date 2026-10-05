@@ -299,9 +299,13 @@ const ProcArcDomain = struct {
     /// procedure dismantles. Owned-only containers are committed separately
     /// once the emission's owned bindings are known, since their takes exist
     /// only in emissions that bind the parameter owned.
+    /// The dismantle tables span every procedure, so each frame looks up its
+    /// own locals rather than scanning every container in the program.
     fn installResidualDomains(self: *ProcArcDomain, solution: *const arc_solve.Solution, dismantles: *const arc_dismantle.Dismantles) void {
-        var normal = dismantles.containers.iterator();
-        while (normal.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+        for (self.frame_locals) |local| {
+            const container = dismantles.containerOf(local) orelse continue;
+            self.installResidualDomain(solution, local, container.full_mask);
+        }
     }
 
     /// Commit the field domains of the owned-only containers this emission
@@ -309,20 +313,18 @@ const ProcArcDomain = struct {
     /// emission binds borrowed keeps no residual field domain: its takes are
     /// skipped, so the whole value is released together and no
     /// field-by-field release may name it. Membership in
-    /// `owned_binding_override` is defined only for this frame's locals, so
-    /// the frame check must come first.
+    /// `owned_binding_override` is defined only for this frame's locals,
+    /// which are exactly the locals visited here.
     fn installOwnedOnlyResidualDomains(
         self: *ProcArcDomain,
         solution: *const arc_solve.Solution,
         dismantles: *const arc_dismantle.Dismantles,
         owned_binding_override: *const OwnedSet,
     ) void {
-        var owned_only = dismantles.owned_only_containers.iterator();
-        while (owned_only.next()) |entry| {
-            const local = entry.key_ptr.*;
-            if (!self.frameContainsLocal(local)) continue;
+        for (self.frame_locals) |local| {
+            const container = dismantles.ownedOnlyContainerOf(local) orelse continue;
             if (!owned_binding_override.contains(local)) continue;
-            self.installResidualDomain(solution, local, entry.value_ptr.full_mask);
+            self.installResidualDomain(solution, local, container.full_mask);
         }
     }
 
@@ -1274,6 +1276,76 @@ const LoopLivenessCache = struct {
     consumed_keep_bits: bool = false,
     dirty: bool = false,
 };
+
+/// Strongly connected components of a statement graph, numbered in
+/// topological order: no edge leads into a lower-numbered component, so a
+/// statement in a lower-numbered component than another is never reachable
+/// from it. `nodes[starts[c]..starts[c + 1]]` lists component `c`'s
+/// statements. Both passes run on explicit work stacks.
+const StatementComponents = struct {
+    component_of: []u32,
+    nodes: []u32,
+    starts: []u32,
+};
+
+fn statementComponents(
+    allocator: Allocator,
+    succ_starts: []const u32,
+    succs: []const u32,
+    pred_starts: []const u32,
+    preds: []const u32,
+) Allocator.Error!StatementComponents {
+    const node_count = succ_starts.len - 1;
+    const no_component = std.math.maxInt(u32);
+    const component_of = try allocator.alloc(u32, node_count);
+    @memset(component_of, no_component);
+    var component_nodes = std.ArrayList(u32).empty;
+    var component_starts = std.ArrayList(u32).empty;
+    const Frame = struct { node: u32, next_successor: u32 };
+    var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+    var frames = std.ArrayList(Frame).empty;
+    var finish_order = std.ArrayList(u32).empty;
+    for (0..node_count) |root| {
+        if (seen.isSet(root)) continue;
+        seen.set(root);
+        try frames.append(allocator, .{ .node = @intCast(root), .next_successor = succ_starts[root] });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next_successor < succ_starts[frame.node + 1]) {
+                const successor = succs[frame.next_successor];
+                frame.next_successor += 1;
+                if (!seen.isSet(successor)) {
+                    seen.set(successor);
+                    try frames.append(allocator, .{ .node = successor, .next_successor = succ_starts[successor] });
+                }
+                continue;
+            }
+            try finish_order.append(allocator, frame.node);
+            _ = frames.pop();
+        }
+    }
+    var reverse_work = std.ArrayList(u32).empty;
+    var order_index = finish_order.items.len;
+    while (order_index > 0) {
+        order_index -= 1;
+        const root = finish_order.items[order_index];
+        if (component_of[root] != no_component) continue;
+        const component: u32 = @intCast(component_starts.items.len);
+        try component_starts.append(allocator, @intCast(component_nodes.items.len));
+        component_of[root] = component;
+        try reverse_work.append(allocator, root);
+        while (reverse_work.pop()) |member| {
+            try component_nodes.append(allocator, member);
+            for (preds[pred_starts[member]..pred_starts[member + 1]]) |predecessor| {
+                if (component_of[predecessor] != no_component) continue;
+                component_of[predecessor] = component;
+                try reverse_work.append(allocator, predecessor);
+            }
+        }
+    }
+    try component_starts.append(allocator, @intCast(component_nodes.items.len));
+    return .{ .component_of = component_of, .nodes = component_nodes.items, .starts = component_starts.items };
+}
 
 /// One exact finite-lattice bit set. Rows share persistent sparse subtrees;
 /// adding or killing one liveness fact copies one bounded-depth radix path.
@@ -5912,6 +5984,16 @@ const Inserter = struct {
         place_user_starts: []u32,
         place_users: []u32,
         reaches_every_place_use: std.bit_set.DynamicBitSetUnmanaged,
+        /// Each statement's strongly connected component, in the topological
+        /// numbering of `statementComponents`.
+        component: []u32,
+        /// By component, the place leaders used by some statement the
+        /// component reaches, itself included.
+        places_used_from: []ExactBitSet,
+        /// By root, one more than the highest-numbered component of a
+        /// statement that rebinds it, or zero when none does. No statement
+        /// rebinding the root is reachable from a component at or above it.
+        rebind_component_end: []u32,
         /// Roots whose place-use region is solved, and the nodes and loops
         /// in each region, keyed by `root << 32 | index`.
         solved_roots: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -5992,6 +6074,33 @@ const Inserter = struct {
         }
         try place_user_starts.append(allocator, @intCast(place_user_list.items.len));
 
+        // The places each component reaches. Successor components are
+        // numbered higher, so each is complete before it is read.
+        const components = try statementComponents(allocator, succ_starts, succs, pred_starts, preds);
+        const component_count = components.starts.len - 1;
+        const places_used_from = try allocator.alloc(ExactBitSet, component_count);
+        for (places_used_from) |*places| places.* = try ExactBitSet.initEmpty(allocator, local_count);
+        for (place_user_list.items) |entry| {
+            try places_used_from[components.component_of[entry.node]].set(entry.place);
+        }
+        var component_index = component_count;
+        while (component_index > 0) {
+            component_index -= 1;
+            for (components.nodes[components.starts[component_index]..components.starts[component_index + 1]]) |node_index| {
+                for (succs[succ_starts[node_index]..succ_starts[node_index + 1]]) |succ| {
+                    const succ_component = components.component_of[succ];
+                    if (succ_component != component_index) try places_used_from[component_index].setUnion(places_used_from[succ_component]);
+                }
+            }
+        }
+        const rebind_component_end = try allocator.alloc(u32, local_count);
+        @memset(rebind_component_end, 0);
+        for (rebinds, components.component_of) |root, component| {
+            if (root == no_rebind) continue;
+            const end = &rebind_component_end[@intFromEnum(root)];
+            end.* = @max(end.*, component + 1);
+        }
+
         // Statements from which some statement using every place is reachable.
         var reaches = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
         {
@@ -6050,6 +6159,9 @@ const Inserter = struct {
             .place_user_starts = place_user_starts.items,
             .place_users = place_users,
             .reaches_every_place_use = reaches,
+            .component = components.component_of,
+            .places_used_from = places_used_from,
+            .rebind_component_end = rebind_component_end,
             .node_stamp = node_stamp,
             .loop_stamp = loop_stamp,
         };
@@ -6160,6 +6272,17 @@ const Inserter = struct {
     fn placeUsedInPath(self: *Inserter, start: LIR.CFStmtId, root: LIR.LocalId) ResourceError!bool {
         const facts = try self.placeUseFacts();
         const start_node = self.source_liveness.nodeIndex(start);
+        const start_component = facts.component[start_node];
+        if (facts.rebind_component_end[@intFromEnum(root)] <= start_component) {
+            // No statement that rebinds `root` is reachable from `start`, so
+            // no path is cut short: the place is used later exactly when
+            // `start` reaches a use of it or a statement using every place.
+            // Every root of a place shares this answer, so it is never
+            // solved per root.
+            const place: usize = @intFromEnum(self.ownershipPlaceLeader(root));
+            return facts.places_used_from[start_component].isSet(place) or
+                facts.reaches_every_place_use.isSet(start_node);
+        }
         if (!facts.solved_roots.contains(@intFromEnum(root))) try self.solvePlaceUseRegion(facts, root);
         const root_key = @as(u64, @intFromEnum(root)) << 32;
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @intFromEnum(root) };
@@ -7322,57 +7445,8 @@ const Inserter = struct {
         // Components in an order that solves every successor component
         // first: a node outside every cycle is one exact step of the
         // equations from its successors' finished rows, sharing their sets.
-        const no_component = std.math.maxInt(u32);
-        const component_of = try allocator.alloc(u32, node_count);
-        @memset(component_of, no_component);
-        var component_nodes = std.ArrayList(u32).empty;
-        var component_starts = std.ArrayList(u32).empty;
-        {
-            const Frame = struct { node: u32, next_successor: u32 };
-            var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-            var frames = std.ArrayList(Frame).empty;
-            var finish_order = std.ArrayList(u32).empty;
-            for (0..node_count) |root| {
-                if (seen.isSet(root)) continue;
-                seen.set(root);
-                try frames.append(allocator, .{ .node = @intCast(root), .next_successor = 0 });
-                while (frames.items.len != 0) {
-                    const frame = &frames.items[frames.items.len - 1];
-                    const node = graph.nodes.items[frame.node];
-                    if (frame.next_successor < node.successor_len) {
-                        const successor = graph.successors.items[node.successor_start + frame.next_successor];
-                        frame.next_successor += 1;
-                        if (!seen.isSet(successor)) {
-                            seen.set(successor);
-                            try frames.append(allocator, .{ .node = successor, .next_successor = 0 });
-                        }
-                        continue;
-                    }
-                    try finish_order.append(allocator, frame.node);
-                    _ = frames.pop();
-                }
-            }
-            var reverse_work = std.ArrayList(u32).empty;
-            var order_index = finish_order.items.len;
-            while (order_index > 0) {
-                order_index -= 1;
-                const root = finish_order.items[order_index];
-                if (component_of[root] != no_component) continue;
-                const component: u32 = @intCast(component_starts.items.len);
-                try component_starts.append(allocator, @intCast(component_nodes.items.len));
-                component_of[root] = component;
-                try reverse_work.append(allocator, root);
-                while (reverse_work.pop()) |member| {
-                    try component_nodes.append(allocator, member);
-                    for (preds[pred_starts[member]..pred_starts[member + 1]]) |predecessor| {
-                        if (component_of[predecessor] != no_component) continue;
-                        component_of[predecessor] = component;
-                        try reverse_work.append(allocator, predecessor);
-                    }
-                }
-            }
-            try component_starts.append(allocator, @intCast(component_nodes.items.len));
-        }
+        const components = try statementComponents(allocator, succ_starts, succs, pred_starts, preds);
+        const component_of = components.component_of;
 
         // Inside a cyclic component, one backward search per bit. A unit is a
         // node, or the largest loop around a node that is transparent to the
@@ -7487,10 +7561,10 @@ const Inserter = struct {
         var scratch = try ExactBitSet.initEmpty(graph.allocator, bit_len);
         var edge_scratch = try ExactBitSet.initEmpty(graph.allocator, bit_len);
 
-        var component_cursor = component_starts.items.len - 1;
+        var component_cursor = components.starts.len - 1;
         while (component_cursor > 0) {
             component_cursor -= 1;
-            const members = component_nodes.items[component_starts.items[component_cursor]..component_starts.items[component_cursor + 1]];
+            const members = components.nodes[components.starts[component_cursor]..components.starts[component_cursor + 1]];
             const first = members[0];
             if (members.len == 1 and forest.innermost[first] == no_loop) {
                 _ = try self.recomputeLivenessNode(graph, first, &scratch, &edge_scratch);
@@ -8728,6 +8802,30 @@ test "exact ARC sets preserve operations across persistent forks" {
         try testing.expectEqual(bit_len - 1, iter.next().?);
         try testing.expectEqual(@as(?usize, null), iter.next());
     }
+}
+
+test "statement components never number a successor's component lower" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // 0 -> 1 -> 2 -> 1 (a loop of 1 and 2), 2 -> 3, 0 -> 4 -> 3.
+    const succ_starts = [_]u32{ 0, 2, 3, 5, 5, 6 };
+    const succs = [_]u32{ 1, 4, 2, 1, 3, 3 };
+    const pred_starts = [_]u32{ 0, 0, 2, 3, 5, 6 };
+    const preds = [_]u32{ 0, 2, 1, 2, 4, 0 };
+    const components = try statementComponents(arena.allocator(), &succ_starts, &succs, &pred_starts, &preds);
+    try testing.expectEqual(@as(usize, 5), components.starts.len);
+    try testing.expectEqual(components.component_of[1], components.component_of[2]);
+    for (0..succ_starts.len - 1) |node| {
+        for (succs[succ_starts[node]..succ_starts[node + 1]]) |succ| {
+            try testing.expect(components.component_of[succ] >= components.component_of[node]);
+        }
+        const component = components.component_of[node];
+        const members = components.nodes[components.starts[component]..components.starts[component + 1]];
+        try testing.expect(std.mem.findScalar(u32, members, @intCast(node)) != null);
+    }
+    try testing.expect(components.component_of[0] < components.component_of[1]);
+    try testing.expect(components.component_of[1] < components.component_of[3]);
+    try testing.expect(components.component_of[4] < components.component_of[3]);
 }
 
 test "arc insertion boundary exists" {

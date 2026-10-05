@@ -17182,6 +17182,19 @@ uses after an explicit rebind do not retain the argument's old stored units.
 A terminal crash or failed expectation observes only its explicit message
 operand; it does not implicitly use every live ownership place.
 
+The ownership-place query asks whether a path from a statement reaches a use
+of a root's place before a statement that rebinds the root. Its cost is linear
+in the procedure even when many roots share one place. The procedure's
+statements are grouped into strongly connected components numbered in
+topological order, and each component records, as a shared persistent set, the
+places used by everything it reaches. When no statement rebinding the root is
+in a component at or after the query's, no rebind can cut a path. The answer is
+then that shared set's answer for the place, or whether the query reaches a
+statement that uses every place. Only a query that can reach a rebind of its
+root (a loop, or a root rebound later) solves that root's own region. Residual
+field domains are likewise committed by looking up each frame local in the
+program-wide dismantle tables, never by scanning those tables per procedure.
+
 Each reachable `initialize_join_param` write defines a fresh container value.
 Dismantle analysis starts field-take flow at every such write's successor,
 with all fields available. A container's single value-producing definition
