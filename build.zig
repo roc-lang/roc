@@ -4100,216 +4100,16 @@ pub fn build(b: *std.Build) void {
         },
     });
     const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
-    const builtins64_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_bc_obj.root_module.stack_check = false;
-    builtins64_bc_obj.root_module.link_libc = false;
-    builtins64_bc_obj.use_llvm = true;
-    builtins64_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_bc_obj.getEmittedBin();
-    const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_bc_obj.root_module.stack_check = false;
-    builtins64_core_bc_obj.root_module.link_libc = false;
-    builtins64_core_bc_obj.use_llvm = true;
-    builtins64_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_bc_obj.getEmittedBin();
-    const builtins64_core_bc_file = builtins64_core_bc_obj.getEmittedLlvmBc();
+    const builtins64_bc_file = addBuiltinsBitcode(b, roc_modules, "64_bc", "src/builtins/static_lib.zig", builtins64_target, false);
+    const builtins64_core_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_bc", "src/builtins/static_lib_core.zig", builtins64_target, false);
 
     const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const builtins32_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_bc_obj.root_module.stack_check = false;
-    builtins32_bc_obj.use_llvm = true;
-    builtins32_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_bc_obj.getEmittedBin();
-    const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_bc_obj.root_module.stack_check = false;
-    builtins32_core_bc_obj.use_llvm = true;
-    builtins32_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_bc_obj.getEmittedBin();
-    const builtins32_core_bc_file = builtins32_core_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_extern_bc_obj.root_module.stack_check = false;
-    builtins64_extern_bc_obj.use_llvm = true;
-    builtins64_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_extern_bc_obj.getEmittedBin();
-    const builtins64_extern_bc_file = builtins64_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_extern_bc_obj.root_module.stack_check = false;
-    builtins64_core_extern_bc_obj.use_llvm = true;
-    builtins64_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_extern_bc_obj.getEmittedBin();
-    const builtins64_core_extern_bc_file = builtins64_core_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_extern_bc_obj.root_module.stack_check = false;
-    builtins32_extern_bc_obj.use_llvm = true;
-    builtins32_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_extern_bc_obj.getEmittedBin();
-    const builtins32_extern_bc_file = builtins32_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_extern_bc_obj.root_module.stack_check = false;
-    builtins32_core_extern_bc_obj.use_llvm = true;
-    builtins32_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_extern_bc_obj.getEmittedBin();
-    const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
+    const builtins32_bc_file = addBuiltinsBitcode(b, roc_modules, "32_bc", "src/builtins/static_lib.zig", builtins32_target, null);
+    const builtins32_core_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_bc", "src/builtins/static_lib_core.zig", builtins32_target, null);
+    const builtins64_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_extern_bc", "src/builtins/extern_static_lib.zig", builtins64_target, null);
+    const builtins64_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins64_target, null);
+    const builtins32_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_bc", "src/builtins/extern_static_lib.zig", builtins32_target, null);
+    const builtins32_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins32_target, null);
 
     // The 64-bit builtins bitcode references its SHA-256 compression by name
     // (see `Sha256` in src/builtins/crypto.zig), and the LLVM backend links the
@@ -5253,75 +5053,42 @@ pub fn build(b: *std.Build) void {
         } else {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11529_test.step);
 
-            const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_provided_callable_test.addArg("--wasm-path");
-            run_wasm_provided_callable_test.addFileArg(build_wasm_provided_callable_app.wasm);
-            run_wasm_provided_callable_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_provided_callable_app.wasm, &.{
                 "--expected",
                 "42",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
-            });
-            run_wasm_provided_callable_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_provided_callable_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_list_builtin_test.addArg("--wasm-path");
-            run_wasm_list_builtin_test.addFileArg(build_wasm_list_builtin_app.wasm);
-            run_wasm_list_builtin_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_list_builtin_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_list_builtin_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_list_builtin_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_single_variant_hosted_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_single_variant_hosted_test.addArg("--wasm-path");
-            run_wasm_single_variant_hosted_test.addFileArg(build_wasm_single_variant_hosted_app.wasm);
-            run_wasm_single_variant_hosted_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_single_variant_hosted_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_single_variant_hosted_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_hosted_try_widen_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_hosted_try_widen_test.addArg("--wasm-path");
-            run_wasm_hosted_try_widen_test.addFileArg(build_wasm_hosted_try_widen_app.wasm);
-            run_wasm_hosted_try_widen_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_hosted_try_widen_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_hosted_try_widen_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_concat_join_test.addArg("--wasm-path");
-            run_wasm_str_concat_join_test.addFileArg(build_wasm_str_concat_join_app.wasm);
-            run_wasm_str_concat_join_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_concat_join_app.wasm, &.{
                 "--expected",
                 "X:1Y:2",
                 "--max-allocs",
                 "0",
-            });
-            run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_10957_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_10957_test.addArg("--wasm-path");
-            run_wasm_issue_10957_test.addFileArg(build_wasm_issue_10957_app.wasm);
-            run_wasm_issue_10957_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_10957_app.wasm, &.{
                 "--expected",
                 "14",
-            });
-            run_wasm_issue_10957_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10957_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_interp_leading_literal_test.addArg("--wasm-path");
-            run_wasm_str_interp_leading_literal_test.addFileArg(build_wasm_str_interp_leading_literal_app.wasm);
-            run_wasm_str_interp_leading_literal_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_interp_leading_literal_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5329,14 +5096,9 @@ pub fn build(b: *std.Build) void {
                 "1",
                 "--max-allocs",
                 "2",
-            });
-            run_wasm_str_interp_leading_literal_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_concat_unique_reuse_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_concat_unique_reuse_test.addArg("--wasm-path");
-            run_wasm_str_concat_unique_reuse_test.addFileArg(build_wasm_str_concat_unique_reuse_app.wasm);
-            run_wasm_str_concat_unique_reuse_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_concat_unique_reuse_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5344,19 +5106,14 @@ pub fn build(b: *std.Build) void {
                 "1",
                 "--max-allocs",
                 "1",
-            });
-            run_wasm_str_concat_unique_reuse_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_unique_reuse_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Boot-and-play the minted-iterator `for`-loop cart; "ok" means every
             // inlined `for` over append/map/concat/chained minted chains ran to
             // completion with correct sums (i.e. the drive advanced its inner
             // iterators and terminated). `--assert-alloc-balanced` also catches a
             // per-step allocate/free leak in the drive.
-            const run_wasm_iter_for_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_for_test.addArg("--wasm-path");
-            run_wasm_iter_for_test.addFileArg(build_wasm_iter_for_app.wasm);
-            run_wasm_iter_for_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_for_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5366,14 +5123,9 @@ pub fn build(b: *std.Build) void {
                 // sizes and is the fusion pass's target, not a hard gate pre-fusion.
                 "--max-bytes",
                 "65536",
-            });
-            run_wasm_iter_for_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_iter_recursive_concat_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_recursive_concat_test.addArg("--wasm-path");
-            run_wasm_iter_recursive_concat_test.addFileArg(build_wasm_iter_recursive_concat_app.wasm);
-            run_wasm_iter_recursive_concat_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_recursive_concat_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5382,154 +5134,87 @@ pub fn build(b: *std.Build) void {
                 // callable expansion exceeded 815 KB before failing to lower.
                 "--max-bytes",
                 "750000",
-            });
-            run_wasm_iter_recursive_concat_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_recursive_concat_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Static-data hoisting: the constant list literal is materialized as
             // static data, so the whole chain allocates nothing. `--max-allocs 0`
             // is a strictly stronger assertion than `--assert-alloc-balanced`.
-            const run_wasm_iter_list_hoist_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_list_hoist_test.addArg("--wasm-path");
-            run_wasm_iter_list_hoist_test.addFileArg(build_wasm_iter_list_hoist_app.wasm);
-            run_wasm_iter_list_hoist_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_list_hoist_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--max-allocs",
                 "0",
-            });
-            run_wasm_iter_list_hoist_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_list_hoist_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_iter_for_dev_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_for_dev_test.addArg("--wasm-path");
-            run_wasm_iter_for_dev_test.addFileArg(build_wasm_iter_for_dev_app.wasm);
-            run_wasm_iter_for_dev_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_for_dev_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-            });
-            run_wasm_iter_for_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_dev_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Noiter twin—asserts correctness and prints its size so CI logs
             // carry both numbers for premium tracking.
-            const run_wasm_iter_noiter_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_noiter_test.addArg("--wasm-path");
-            run_wasm_iter_noiter_test.addFileArg(build_wasm_iter_noiter_app.wasm);
-            run_wasm_iter_noiter_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_noiter_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_iter_noiter_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_noiter_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_rc_cleanup_test.addArg("--wasm-path");
-            run_wasm_rc_cleanup_test.addFileArg(build_wasm_rc_cleanup_app.wasm);
-            run_wasm_rc_cleanup_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_rc_cleanup_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
-            });
-            run_wasm_rc_cleanup_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_rc_cleanup_model_list_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_rc_cleanup_model_list_test.addArg("--wasm-path");
-            run_wasm_rc_cleanup_model_list_test.addFileArg(build_wasm_rc_cleanup_model_list_app.wasm);
-            run_wasm_rc_cleanup_model_list_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_rc_cleanup_model_list_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "2",
-            });
-            run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_box_zst_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_box_zst_test.addArg("--wasm-path");
-            run_wasm_box_zst_test.addFileArg(build_wasm_box_zst_app.wasm);
-            run_wasm_box_zst_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_box_zst_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-            });
-            run_wasm_box_zst_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_box_zst_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_boxed_model_update_test.addArg("--wasm-path");
-            run_wasm_boxed_model_update_test.addFileArg(build_wasm_boxed_model_update_app.wasm);
-            run_wasm_boxed_model_update_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_boxed_model_update_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_10836_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_10836_test.addArg("--wasm-path");
-            run_wasm_issue_10836_test.addFileArg(build_wasm_issue_10836_app.wasm);
-            run_wasm_issue_10836_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_10836_app.wasm, &.{
                 "--expected",
                 "7,9;11,13;Inc(42)",
-            });
-            run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11419_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11419_test.addArg("--wasm-path");
-            run_wasm_issue_11419_test.addFileArg(build_wasm_issue_11419_app.wasm);
-            run_wasm_issue_11419_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11419_app.wasm, &.{
                 "--expected",
                 "id=txt",
-            });
-            run_wasm_issue_11419_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11454_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11454_test.addArg("--wasm-path");
-            run_wasm_issue_11454_test.addFileArg(build_wasm_issue_11454_app.wasm);
-            run_wasm_issue_11454_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11454_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} a, {\"favoritesCount\":14} b, {\"favoritesCount\":14} c, {\"favoritesCount\":14} d",
-            });
-            run_wasm_issue_11454_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11454_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_on_drop_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_on_drop_test.addArg("--wasm-path");
-            run_wasm_on_drop_test.addFileArg(build_wasm_on_drop_app.wasm);
-            run_wasm_on_drop_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_on_drop_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} ok",
-            });
-            run_wasm_on_drop_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_on_drop_dev_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_on_drop_dev_test.addArg("--wasm-path");
-            run_wasm_on_drop_dev_test.addFileArg(build_wasm_on_drop_dev_app.wasm);
-            run_wasm_on_drop_dev_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_on_drop_dev_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} ok",
-            });
-            run_wasm_on_drop_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_dev_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11455_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11455_test.addArg("--wasm-path");
-            run_wasm_issue_11455_test.addFileArg(build_wasm_issue_11455_app.wasm);
-            run_wasm_issue_11455_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11455_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14}",
-            });
-            run_wasm_issue_11455_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11455_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -7672,6 +7357,61 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
     return obj.getEmittedLlvmBc();
 }
 
+/// Run the wasm static-lib test runner on one built app as part of `step`.
+fn addWasmStaticLibRun(
+    b: *std.Build,
+    wasm_test_exe: *Step.Compile,
+    wasm: std.Build.LazyPath,
+    args: []const []const u8,
+    runner_step: *Step,
+    step: *Step,
+) void {
+    const run = b.addRunArtifact(wasm_test_exe);
+    run.addArg("--wasm-path");
+    run.addFileArg(wasm);
+    run.addArgs(args);
+    run.step.dependOn(runner_step);
+    step.dependOn(&run.step);
+}
+
+/// Compile one builtins bitcode payload for the LLVM backend to link.
+/// `link_libc` is left at the build system's default when null.
+fn addBuiltinsBitcode(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    comptime suffix: []const u8,
+    root_source_file: []const u8,
+    target: ResolvedTarget,
+    link_libc: ?bool,
+) std.Build.LazyPath {
+    const obj = b.addObject(.{
+        .name = "roc_builtins" ++ suffix,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(root_source_file),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    obj.root_module.addImport("tracy", b.addModule("tracy_stub" ++ suffix, .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    obj.root_module.addImport("shim_io", b.addModule("shim_io" ++ suffix, .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    obj.root_module.omit_frame_pointer = true;
+    obj.root_module.stack_check = false;
+    if (link_libc) |link| obj.root_module.link_libc = link;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
 fn addMainExe(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -9123,9 +8863,9 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
         // Fall back to minimal ELF
         const arch = target.result.cpu.arch;
         const stub_content = if (arch == .aarch64)
-            createMinimalElfArm64()
+            createMinimalElf(0xB7)
         else if (arch == .x86_64)
-            createMinimalElfX64()
+            createMinimalElf(0x3E)
         else
             return null;
 
@@ -9169,9 +8909,9 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     return copy_stubs;
 }
 
-/// Create a minimal ELF shared object for ARM64
-fn createMinimalElfArm64() []const u8 {
-    // ARM64 minimal ELF shared object
+/// Create a minimal ELF shared object for the machine with ELF id `e_machine`
+/// (`EM_AARCH64` or `EM_X86_64`).
+fn createMinimalElf(comptime e_machine: u8) []const u8 {
     return &[_]u8{
         // ELF Header (64 bytes)
         0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
@@ -9182,45 +8922,7 @@ fn createMinimalElfArm64() []const u8 {
         0, // e_ident[EI_ABIVERSION]
         0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
         0x03, 0x00, // e_type - ET_DYN (shared object)
-        0xB7, 0x00, // e_machine - EM_AARCH64
-        0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
-        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_shoff - section header offset
-        0x00, 0x00, 0x00, 0x00, // e_flags
-        0x40, 0x00, // e_ehsize - ELF header size
-        0x38, 0x00, // e_phentsize - program header entry size
-        0x01, 0x00, // e_phnum - number of program headers
-        0x40, 0x00, // e_shentsize - section header entry size
-        0x00, 0x00, // e_shnum - number of section headers
-        0x00, 0x00, // e_shstrndx - section header string table index
-
-        // Program Header (56 bytes) - PT_LOAD
-        0x01, 0x00, 0x00, 0x00, // p_type - PT_LOAD
-        0x05, 0x00, 0x00, 0x00, // p_flags - PF_R | PF_X
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_vaddr
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_paddr
-        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz
-        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz
-        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align
-    };
-}
-
-/// Create a minimal ELF shared object for x86-64
-fn createMinimalElfX64() []const u8 {
-    // x86-64 minimal ELF shared object
-    return &[_]u8{
-        // ELF Header (64 bytes)
-        0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
-        2, // e_ident[EI_CLASS] - ELFCLASS64
-        1, // e_ident[EI_DATA] - ELFDATA2LSB (little endian)
-        1, // e_ident[EI_VERSION] - EV_CURRENT
-        0, // e_ident[EI_OSABI] - ELFOSABI_NONE
-        0, // e_ident[EI_ABIVERSION]
-        0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
-        0x03, 0x00, // e_type - ET_DYN (shared object)
-        0x3E, 0x00, // e_machine - EM_X86_64
+        e_machine, 0x00, // e_machine
         0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
         0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
