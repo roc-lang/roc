@@ -14100,6 +14100,90 @@ test "uniqueness: a join result cell whose arm aliases a parameter keeps the che
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
+const JoinCellFieldTake = struct { body: LIR.CFStmtId, appended: LIR.LocalId };
+
+/// Builds `pair = {first, second}; switch flag { 1 => cell = alt; jump j;
+/// _ => cell = pair[0]; jump j }; join j(cell) { appended = checked_op(cell) }`
+/// where `alt` and `second` are fresh lists, and `first` is a fresh list when
+/// `first_fresh` is set (otherwise the caller defines it). When `reread` is
+/// set, the join body also reads `pair[0]` before the checked op.
+fn buildJoinCellFieldTake(f: *ArcTest, first: LIR.LocalId, first_fresh: bool, reread: bool) Allocator.Error!JoinCellFieldTake {
+    const flag = try f.local(.bool);
+    const second = try f.local(f.list_i64);
+    const alt = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const cell = try f.local(f.list_i64);
+    const again = try f.local(f.list_i64);
+    const len = try f.local(.i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ cell, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const body = if (reread) blk: {
+        const measure = try f.assignLowLevel(len, &.{again}, LIR.LowLevel.RcEffect.none(), append);
+        break :blk try f.assignRefField(again, pair, 0, measure);
+    } else append;
+    const jump_a = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const arm_a = try f.assignRefLocal(cell, alt, jump_a);
+    const jump_b = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const arm_b = try f.assignRefField(cell, pair, 0, jump_b);
+    const dispatch = try f.switchStmt(flag, arm_a, arm_b, null);
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, dispatch);
+    const alt_assign = try f.assignList(alt, &.{}, make_pair);
+    const second_assign = try f.assignList(second, &.{}, alt_assign);
+    const first_step = if (first_fresh) try f.assignList(first, &.{}, second_assign) else second_assign;
+    const remainder = try f.assignI64(elem, 5, first_step);
+    const flag_assign = try f.assignI64(flag, 1, remainder);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = body,
+        .remainder = flag_assign,
+    } }, .test_fixture);
+    return .{ .body = join, .appended = appended };
+}
+
+test "uniqueness: a join result cell assigned a field take of a dying fresh record is born" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const first = try f.local(f.list_i64);
+    const built = try buildJoinCellFieldTake(&f, first, true, false);
+    _ = try f.addProc(&.{}, built.body, .i64);
+
+    // One arm's take moves the dying record's fresh field unit into the
+    // cell, exactly as the other arm's alias moves its fresh list.
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(built.appended));
+}
+
+test "uniqueness: a join result cell assigned a field take of a parameter-built record keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const built = try buildJoinCellFieldTake(&f, param, false, false);
+    _ = try f.addProc(&.{param}, built.body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(built.appended));
+}
+
+test "uniqueness: a join result cell assigned a field read the record still holds keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const first = try f.local(f.list_i64);
+    const built = try buildJoinCellFieldTake(&f, first, true, true);
+    _ = try f.addProc(&.{}, built.body, .i64);
+
+    // The record's field is read again after the join, so the arm's read
+    // cannot move the field's unit into the cell.
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(built.appended));
+}
+
 test "uniqueness: a borrowed view of a list does not consume it" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
