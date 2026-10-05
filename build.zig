@@ -1744,12 +1744,22 @@ pub fn build(b: *std.Build) void {
         target.result.os.tag == builtin.target.os.tag and
         target.result.cpu.arch == builtin.target.cpu.arch;
 
-    const target_is_native =
-        // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
-        // but we still want to treat those builds as native so macOS can link against real FSEvents.
-        host_can_run_target and
-        target.result.abi == builtin.target.abi;
-    build_options.addOption(bool, "target_is_native", target_is_native);
+    // This module is also imported by native host tools, whose target differs
+    // from the outer build target. Derive the value in each importing binary so
+    // cross-target options do not rebuild the unchanged Debug builtin compiler.
+    // CPU feature overrides still count as native for real macOS FSEvents.
+    build_options.contents.appendSlice(b.allocator, b.fmt(
+        \\
+        \\pub const target_is_native =
+        \\    @import("builtin").target.os.tag == .@"{s}" and
+        \\    @import("builtin").target.cpu.arch == .@"{s}" and
+        \\    @import("builtin").target.abi == .@"{s}";
+        \\
+    , .{
+        @tagName(builtin.target.os.tag),
+        @tagName(builtin.target.cpu.arch),
+        @tagName(builtin.target.abi),
+    })) catch @panic("OOM");
 
     // Path to bundled Darwin sysroot with libSystem.tbd stub
     build_options.addOptionPathDirectory("darwin_sysroot", b.path("src/cli/darwin"));

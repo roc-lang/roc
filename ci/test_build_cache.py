@@ -33,7 +33,8 @@ def snapshot(root):
     (root / ".git/HEAD").write_text("a" * 40 + "\n")
 
 
-def graph(root, work, zig, label, options, expected_cached, baseline=None):
+def graph(root, work, zig, label, options, expected_cached, baseline=None,
+          changed_stages=frozenset(), refreshed_stages=frozenset()):
     zig_lib = [option for option in options if option.startswith("--zig-lib=")]
     remaining_options = [option for option in options if option not in zig_lib]
     # Zig 0.17 requires its special library override before steps/other options.
@@ -93,10 +94,26 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
     stage_state = {name: {"path": path, "hash": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
                    for name, path in stages.items()}
     if baseline:
-        assert stage_state == baseline["stages"], "unchanged large input stage was replaced"
+        assert stage_state.keys() == baseline["stages"].keys(), "large input stage set changed"
+        producers = {"toolchain-contents": "lib", "dependency-contents": "include"}
         for name, data in stage_state.items():
-            assert any(f"run exe compiler_identity ({Path(data['path']).name}) cached" in line
-                       for line in result.stderr.splitlines()), f"{name} digest was not reused"
+            expected_result = "success" if name in changed_stages else "cached"
+            if name in changed_stages:
+                assert data != baseline["stages"][name], f"{name} content change was ignored"
+            else:
+                assert data == baseline["stages"][name], f"unchanged {name} stage was replaced"
+            summaries = {
+                f"run exe compiler_identity ({Path(data['path']).name})": {expected_result},
+                f"WriteFile {producers[name]}": {expected_result},
+            }
+            if name in refreshed_stages:
+                # Restoring an edited file may refresh WriteFiles' manifest and
+                # copy, while its original digest/compiler/bakes remain cached.
+                summaries[f"WriteFile {producers[name]}"] = {"cached", "success"}
+            for summary, expected_results in summaries.items():
+                assert any(any(f"{summary} {expected}" in line for expected in expected_results)
+                           for line in result.stderr.splitlines()), \
+                    f"{name}: expected {summary} {expected_results}"
 
     summaries = [line for line in result.stderr.splitlines()
                  if "compile exe builtin_compiler " in line or "run exe builtin_compiler " in line]
@@ -126,6 +143,7 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
 def check(work, zig, options):
     root = work / "source"
     snapshot(root)
+    dependency_header = None
     if not any(option.startswith(("-Droc-deps-path", "-Dllvm-path", "-Dsystem-llvm")) for option in options):
         # The Debug bake graph does not link LLVM. A small controlled mutable
         # bundle exercises its real dependency identity stage without requiring
@@ -133,7 +151,8 @@ def check(work, zig, options):
         bundle = work / "dependencies"
         (bundle / "include").mkdir(parents=True)
         (bundle / "lib").mkdir()
-        (bundle / "include/cache_probe.h").write_text("// declared dependency header\n")
+        dependency_header = bundle / "include/cache_probe.h"
+        dependency_header.write_text("// declared dependency header\n")
         options = [*options, f"-Droc-deps-path={bundle}"]
     states = {}
     states["baseline"] = graph(root, work, zig, "baseline", options, False)
@@ -162,6 +181,9 @@ def check(work, zig, options):
         states["outer-target"] = graph(root, work, zig, "outer-target",
                                        [*options, "-Dtarget=x86_64-windows-gnu"], True, baseline)
         assert states["outer-target"] == baseline
+        states["outer-native-abi"] = graph(root, work, zig, "outer-native-abi",
+                                           [*options, "-Dtarget=x86_64-linux-gnu"], True, baseline)
+        assert states["outer-native-abi"] == baseline
     production = root / "src/build/builtin_compiler/main.zig"
     original = production.read_bytes()
     try:
@@ -175,6 +197,26 @@ def check(work, zig, options):
         production.write_bytes(original)
     states["production-restored"] = graph(root, work, zig, "production-restored", options, True, baseline)
     assert states["production-restored"] == baseline
+    if dependency_header is not None:
+        original_header = dependency_header.read_bytes()
+        try:
+            dependency_header.write_bytes(original_header + b"// changed declared header\n")
+            states["dependency-edit"] = graph(
+                root, work, zig, "dependency-edit", options, False, baseline,
+                changed_stages=frozenset({"dependency-contents"}))
+            edited = states["dependency-edit"]
+            assert edited["identity"] != baseline["identity"]
+            assert edited["compiler"] != baseline["compiler"]
+            assert edited["outputs"] != baseline["outputs"]
+        finally:
+            dependency_header.write_bytes(original_header)
+        states["dependency-restored"] = graph(
+            root, work, zig, "dependency-restored", options, True, baseline,
+            refreshed_stages=frozenset({"dependency-contents"}))
+        assert states["dependency-restored"] == baseline
+        states["dependency-restored-unchanged"] = graph(
+            root, work, zig, "dependency-restored-unchanged", options, True, baseline)
+        assert states["dependency-restored-unchanged"] == baseline
     (work / "results.json").write_text(json.dumps(states, indent=2) + "\n")
     print("Actual build graph cache checks passed.")
 
