@@ -28958,6 +28958,8 @@ const BodyContext = struct {
         inspected: InspectedTask,
         /// A divergent expression lowered for its effect.
         divergent: DivergentTask,
+        /// A rejected dispatch's operands, then its checked-error crash.
+        rejected_dispatch: RejectedDispatchTask,
         /// A loop statement.
         loop: LoopTask,
         /// An iterator method call. Boxed: its method lookup is far larger
@@ -30252,6 +30254,83 @@ const BodyContext = struct {
         }
     }
 
+    /// A call to a rejected method (`checked_error`) follows strict call
+    /// semantics: its receiver and arguments evaluate in order, each for its
+    /// effect, and then the call crashes with the checked-error message. An
+    /// operand that diverges ends the sequence, since its own crash happens
+    /// first.
+    const RejectedDispatchTask = struct {
+        /// The source expressions the dispatch's operands evaluate, in
+        /// evaluation order. Owned.
+        operands: []const checked.CheckedExprId,
+        ty: Type.TypeId,
+        index: usize = 0,
+        stmts: std.ArrayList(DraftStmtId) = .empty,
+    };
+
+    fn releaseRejectedDispatchTask(self: *BodyContext, task: *RejectedDispatchTask) void {
+        self.allocator.free(task.operands);
+        task.operands = &.{};
+        task.stmts.deinit(self.allocator);
+        task.stmts = .empty;
+    }
+
+    /// The source expressions a rejected dispatch evaluates before it
+    /// crashes. A generated interpolation iterator evaluates the
+    /// interpolation's segments and values; a generated numeral or quote
+    /// operand is literal source text with nothing to evaluate.
+    fn rejectedDispatchOperandExprs(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error![]const checked.CheckedExprId {
+        var exprs: std.ArrayList(checked.CheckedExprId) = .empty;
+        errdefer exprs.deinit(self.allocator);
+        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try exprs.append(self.allocator, expr),
+            .generated_interpolation_iter => |expr| {
+                const interpolation = switch (self.view.bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("rejected interpolation iterator referenced a non-interpolation expression"),
+                };
+                try exprs.append(self.allocator, interpolation.first);
+                for (interpolation.parts) |part| {
+                    try exprs.append(self.allocator, part.value);
+                    try exprs.append(self.allocator, part.following_segment);
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+        return try exprs.toOwnedSlice(self.allocator);
+    }
+
+    fn stepRejectedDispatch(self: *BodyContext, task: *RejectedDispatchTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (input) |result| {
+            const lowered = result.statementValue();
+            if (lowered.stmt) |stmt| try task.stmts.append(self.allocator, stmt);
+            switch (lowered.termination) {
+                .none => {},
+                .checked_control_transfer => return try self.finishRejectedDispatch(task, try self.unreachableAfterTerminatingStatementExpr(task.ty)),
+                .uninhabited => |scrutinee| return try self.finishRejectedDispatch(task, try self.zeroBranchMatch(scrutinee, task.ty)),
+            }
+        }
+        if (task.index < task.operands.len) {
+            const operand = task.operands[task.index];
+            task.index += 1;
+            return requestLowerTask(self, .{ .discarded = .{ .expr = operand } });
+        }
+        return try self.finishRejectedDispatch(task, try self.addExpr(.{
+            .ty = task.ty,
+            .data = try self.dispatchCrashData(.checked_error),
+        }));
+    }
+
+    fn finishRejectedDispatch(self: *BodyContext, task: *RejectedDispatchTask, final_expr: DraftExprId) Allocator.Error!LowerStep {
+        return .{ .ret = .{ .data = .{ .block = .{
+            .statements = try self.addStmtSpan(task.stmts.items),
+            .final_expr = final_expr,
+        } } } };
+    }
+
     fn divergentEffectStep(self: *BodyContext, child: checked.CheckedExprId, ty: Type.TypeId) LowerStep {
         return divergentStep(self, child, .{ .effect_data = ty });
     }
@@ -30390,7 +30469,13 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         switch (self.dispatchRuntimePlan(plan)) {
             .callable => {},
-            .crash => |reason| return .{ .ret = .{ .data = try self.dispatchCrashData(reason) } },
+            .crash => |reason| switch (reason) {
+                .checked_error => return requestLowerTask(self, .{ .rejected_dispatch = .{
+                    .operands = try self.rejectedDispatchOperandExprs(plan),
+                    .ty = ty,
+                } }),
+                .unreachable_value => return .{ .ret = .{ .data = try self.dispatchCrashData(reason) } },
+            },
         }
         for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
             .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
@@ -30437,7 +30522,7 @@ const BodyContext = struct {
             for_: CheckedForLoop,
             condition: struct { loop: checked.CheckedConditionLoop, condition: WhileCondition },
         },
-        stage: enum { start, initial_iterator, step_expr, one_body, cond, body } = .start,
+        stage: enum { start, rejected_iterable, initial_iterator, step_expr, one_body, cond, body } = .start,
         carries: []LoopCarry = &.{},
         loop_cell: DraftTypeCell = undefined,
         /// The binder mappings the loop parameters replace.
@@ -30515,9 +30600,21 @@ const BodyContext = struct {
                     .for_ => |for_| {
                         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
                         task.plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
-                        if (self.dispatchCrashReason(task.plan.iter.resolution) orelse self.dispatchCrashReason(task.plan.next.resolution)) |reason| {
-                            return self.finishLoop(task, try self.dispatchCrashData(reason));
-                        }
+                        // A rejected `iter` call evaluates the iterable it
+                        // receives and then crashes; a rejected `next` call
+                        // crashes once `iter` has produced the iterator it
+                        // receives (`initial_iterator`).
+                        if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| switch (reason) {
+                            .checked_error => {
+                                task.stage = .rejected_iterable;
+                                return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.iterable } });
+                            },
+                            .unreachable_value => return self.finishLoop(task, try self.dispatchCrashData(reason)),
+                        };
+                        if (self.dispatchCrashReason(task.plan.next.resolution)) |reason| switch (reason) {
+                            .checked_error => {},
+                            .unreachable_value => return self.finishLoop(task, try self.dispatchCrashData(reason)),
+                        };
                         task.stage = .initial_iterator;
                         return self.iteratorDispatchStep(.{
                             .plan = task.plan.iter,
@@ -30541,8 +30638,32 @@ const BodyContext = struct {
                     },
                 }
             },
+            .rejected_iterable => {
+                const lowered = input.?.statementValue();
+                var statement_buf: [1]DraftStmtId = undefined;
+                const statements: []const DraftStmtId = if (lowered.stmt) |stmt| blk: {
+                    statement_buf[0] = stmt;
+                    break :blk statement_buf[0..1];
+                } else &.{};
+                const final_expr = switch (lowered.termination) {
+                    .none => try self.addExprWithTypeCell(task.loop_cell, try self.dispatchCrashData(.checked_error)),
+                    .checked_control_transfer => try self.addExprWithTypeCell(task.loop_cell, .@"unreachable"),
+                    .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, task.loop_cell),
+                };
+                return self.finishLoop(task, .{ .block = .{
+                    .statements = try self.addStmtSpan(statements),
+                    .final_expr = final_expr,
+                } });
+            },
             .initial_iterator => {
                 const plan = task.plan;
+                if (self.dispatchCrashReason(plan.next.resolution)) |reason| {
+                    const iterator_stmt = try self.addStmt(.{ .expr = input.?.exprValue() });
+                    return self.finishLoop(task, .{ .block = .{
+                        .statements = try self.addStmtSpan(&.{iterator_stmt}),
+                        .final_expr = try self.addExprWithTypeCell(task.loop_cell, try self.dispatchCrashData(reason)),
+                    } });
+                }
                 task.initial_iterator = input.?.exprValue();
                 task.iterator_cell = self.exprTypeCell(task.initial_iterator);
                 try self.constrainCheckedInterfaceToCell(plan.iterator_ty, task.iterator_cell);
@@ -31438,6 +31559,7 @@ const BodyContext = struct {
             },
             .value_then_state => |*task| self.releaseValueThenStateTask(task),
             .discarded => |*task| self.releaseDiscardedTask(task),
+            .rejected_dispatch => |*task| self.releaseRejectedDispatchTask(task),
             .statement => |*task| self.releaseStatementTask(task),
             .loop => |*task| self.releaseLoopTask(task),
             .iterator_dispatch => |task| {
@@ -31513,6 +31635,7 @@ const BodyContext = struct {
             .return_value => |*task| self.stepReturn(frame, task, input),
             .inspected => |*task| self.stepInspected(frame, task, input),
             .divergent => |*task| self.stepDivergent(frame, task, input),
+            .rejected_dispatch => |*task| self.stepRejectedDispatch(task, input),
             .loop => |*task| self.stepLoop(task, input),
             .iterator_dispatch => |task| self.stepIteratorDispatch(frame, task, input),
             .materialize => |*task| self.stepMaterialize(task, input),
@@ -58762,7 +58885,38 @@ const BodyContext = struct {
         };
     }
 
+    /// A derivation reads each operand once per component, so the operands
+    /// are bound to locals first: each evaluates exactly once, in order, and
+    /// before any component comparison or hash runs (including a component
+    /// whose rejected method crashes).
     fn lowerDerivation(
+        self: *BodyContext,
+        comptime D: type,
+        ty: Type.TypeId,
+        operand: D.Operand,
+        ctx: DerivationCtx,
+    ) Allocator.Error!DraftExprId {
+        const values = D.callArgs(operand);
+        const second_ty = D.helperSecondArgType(ty, ctx.result_ty);
+        const first_local = try self.addLocal(self.builder.symbols.fresh(), ty);
+        const second_local = try self.addLocal(self.builder.symbols.fresh(), second_ty);
+        const derived = try self.lowerDerivationOfBound(D, ty, D.helperOperand(
+            try self.localExpr(first_local, ty),
+            try self.localExpr(second_local, second_ty),
+        ), ctx);
+        const bind_second = try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
+            .bind = try self.bindPat(second_local, second_ty),
+            .value = values[1],
+            .rest = derived,
+        } } });
+        return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
+            .bind = try self.bindPat(first_local, ty),
+            .value = values[0],
+            .rest = bind_second,
+        } } });
+    }
+
+    fn lowerDerivationOfBound(
         self: *BodyContext,
         comptime D: type,
         ty: Type.TypeId,

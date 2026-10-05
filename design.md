@@ -12885,7 +12885,8 @@ its plan:
   ownerless shape. Mapping derivations include the checker-selected tag and
   direct payload index.
 - `checked_error`—checking rejected the site; executing it anyway (running a
-  program with reported errors) lowers to an explicit crash.
+  program with reported errors) evaluates the call's receiver and arguments
+  and then crashes explicitly (rejected calls evaluate their operands, below).
 - `unreachable`—the dispatcher is a constrained variable no
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
@@ -12953,8 +12954,9 @@ structural equality or hash component whose own `is_eq` or `to_hash` is a
 rejected declaration compares or hashes as `checked_error`, and synthesized
 evidence that lands on one is `checked_error` evidence, so a derived comparison
 reaching that component (inside a tuple, record, tag payload, or generic
-helper) crashes exactly where a direct dispatch to the method would. Monotype
-emits the crash in derivation lowering; Boxy planning records the component's
+helper) crashes exactly where a direct dispatch to the method would, after the
+comparison's operands are evaluated. Monotype emits the crash in derivation
+lowering; Boxy planning records the component's
 `DerivedComponentDecision.checked_error` and lowering emits the crash from it.
 
 Inspection is the one deliberate exception. When a type's custom `to_inspect`
@@ -13011,6 +13013,29 @@ call, so neither can return a dispatch result value. For `checked_error`, this i
 the crash observed if `roc run` continues after reporting the missing method and
 execution reaches the rejected dispatch. For `unreachable`, the crash
 represents the path that checking proved cannot receive a dispatcher value.
+
+Rejected calls evaluate their operands. A call that dispatches to a rejected
+method (`checked_error`, by any of its routes) follows strict call semantics in
+every lowering mode: its receiver and arguments evaluate first, in their normal
+order and with every `dbg`, effect, and crash inside them, and then the call
+crashes with the checked-error crash (`method dispatch failed to check`). An
+operand that crashes ends the sequence, so its crash is the one observed. The
+dispatch stays explicit through lowering: Monotype lowers its operands as
+discarded statements before the `checked_error` crash (`RejectedDispatchTask`),
+and Boxy lowers them into discarded locals before the same crash
+(`beginRejectedDispatch`), exactly as a call through a dictionary slot filled
+with a crashing method evaluates its arguments before the slot crashes. A
+generated interpolation iterator operand evaluates the interpolation's segments
+and values; a generated numeral or quote operand is literal source text with
+nothing to evaluate. A `for` loop's implicit calls follow the same rule: a
+rejected `iter` evaluates the iterable first, and a rejected `next` crashes
+once `iter` has produced the iterator it receives. A derived equality or hash
+whose component reaches a rejected method has already evaluated its operands,
+because every derivation binds its operands to locals, each evaluated once and
+in order, before any component comparison or hash runs. This is distinct from
+call-operand retirement, where an operand is itself erroneous: evaluating that
+operand already crashes.
+
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
 an `evidence_dependent(depth, k)` call becomes `checked_error` or

@@ -19636,7 +19636,7 @@ const ProcBodyBuilder = struct {
                 .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
-            .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
+            .checked_error => return try self.beginRejectedDispatch(dispatch),
             .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         }
 
@@ -19966,7 +19966,7 @@ const ProcBodyBuilder = struct {
             .structural,
             => try self.beginDispatchCall(target, plan.expr, maybe_plan, self.module.checked_bodies.expr(plan.expr).ty, next),
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
+            .checked_error => try self.beginRejectedDispatch(plan),
             .@"unreachable" => exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         };
     }
@@ -20070,14 +20070,46 @@ const ProcBodyBuilder = struct {
                 const plan_id = task.for_.plan orelse
                     boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
                 const plan = self.iteratorForPlan(plan_id);
-                inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
-                    switch (resolution) {
-                        .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
-                        .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
-                        .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
-                        .direct_closed, .direct_parametric, .evidence_dependent => {},
-                        .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
-                    }
+                // A rejected `iter` call evaluates the iterable it receives
+                // and then crashes; a rejected `next` call crashes once
+                // `iter` has produced the iterator it receives.
+                switch (plan.iter.resolution) {
+                    .checked_error => {
+                        const iterable = self.module.checked_bodies.expr(plan.iterable);
+                        const discarded = if (iterable.data == .runtime_error)
+                            try self.addFrameLocal(.zst)
+                        else
+                            try self.addFrameLocalForType(iterable.ty);
+                        const chain_items = try self.parent.allocator.alloc(ExprChainItem, 1);
+                        chain_items[0] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = plan.iterable, .next = undefined } } };
+                        return exprChain(chain_items, try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"));
+                    },
+                    .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+                    .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                    .direct_closed, .direct_parametric, .evidence_dependent => {},
+                    .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
+                }
+                switch (plan.next.resolution) {
+                    .checked_error => {
+                        const iterator_type = if (self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker)) |call_plan|
+                            call_plan.ret_type
+                        else
+                            Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = plan.iterator_ty };
+                        const discarded = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(iterator_type));
+                        return .{ .tail = .{ .iter_dispatch = .{
+                            .target = discarded,
+                            .plan_id = plan_id,
+                            .kind = .iter,
+                            .plan = plan,
+                            .call = plan.iter,
+                            .loop_iterator = null,
+                            .next = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+                        } } };
+                    },
+                    .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+                    .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                    .direct_closed, .direct_parametric, .evidence_dependent => {},
+                    .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
                 }
                 if (!self.isZstLocal(task.target)) {
                     boxyLowerInvariant("checked iterator for reached boxy lowering with non-Unit result layout");
@@ -25234,6 +25266,50 @@ const ProcBodyBuilder = struct {
     /// reported; reaching it crashes with the checked-error message.
     fn lowerCheckedRuntimeError(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
         return try self.lowerCheckedErrorDispatchInto("runtime error");
+    }
+
+    /// A call to a rejected method (`checked_error`) follows strict call
+    /// semantics: its receiver and arguments evaluate in order, each into a
+    /// discarded local, and then the call crashes with the checked-error
+    /// message. A generated interpolation iterator evaluates the
+    /// interpolation's segments and values; a generated numeral or quote
+    /// operand is literal source text with nothing to evaluate. A checked
+    /// runtime error produces no value, so its discarded local is
+    /// zero-sized.
+    fn beginRejectedDispatch(
+        self: *ProcBodyBuilder,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!ExprStep {
+        var exprs: std.ArrayList(checked.CheckedExprId) = .empty;
+        defer exprs.deinit(self.parent.allocator);
+        for (dispatch.argsSlice(self.module.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try exprs.append(self.parent.allocator, expr),
+            .generated_interpolation_iter => |expr| {
+                const interpolation = switch (self.module.checked_bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("rejected interpolation iterator referenced a non-interpolation expression"),
+                };
+                try exprs.append(self.parent.allocator, interpolation.first);
+                for (interpolation.parts) |part| {
+                    try exprs.append(self.parent.allocator, part.value);
+                    try exprs.append(self.parent.allocator, part.following_segment);
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+        const crash = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check");
+        if (exprs.items.len == 0) return exprDone(crash);
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, exprs.items.len);
+        for (exprs.items, 0..) |expr_id, index| {
+            const expr = self.module.checked_bodies.expr(expr_id);
+            const discarded = if (expr.data == .runtime_error)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[exprs.items.len - 1 - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = expr_id, .next = undefined } } };
+        }
+        return exprChain(chain_items, crash);
     }
 
     fn lowerCheckedErrorDispatchInto(
