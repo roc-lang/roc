@@ -714,7 +714,6 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
         "src/mir/",
         "src/lir/",
         "src/layout/",
-        "src/values/",
         "src/backend/",
         "src/target/",
         "src/eval/",

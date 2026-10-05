@@ -198,7 +198,6 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-module-ctx" },
     .{ .name = "run-test-zig-module-eval" },
     .{ .name = "run-test-zig-module-layout" },
-    .{ .name = "run-test-zig-module-values" },
     .{ .name = "run-test-zig-module-ipc" },
     .{ .name = "run-test-zig-module-fmt" },
     .{ .name = "run-test-zig-module-watch" },
