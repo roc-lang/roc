@@ -1334,27 +1334,28 @@ pub const ReportBuilder = struct {
         );
     }
 
-    /// Build a report for if branch type mismatch
-    fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
-        const branch_index = ctx.branch_index + 1;
+    /// Build a report for a branch of an `if` or `match` (named by `keyword`)
+    /// whose type does not match. `branch_index_0` is the 0-based branch index.
+    fn buildBranchReport(self: *Self, types: TypePair, branch_index_0: u32, keyword: []const u8, hints: []const []const Doc) Allocator.Error!Report {
+        const branch_index = branch_index_0 + 1;
         // The first branch has no previous branches, so a mismatch there is
-        // against the type the whole `if` is expected to have.
-        const is_first = ctx.branch_index == 0;
+        // against the type the whole expression is expected to have.
+        const is_first = branch_index_0 == 0;
         return try self.makeMismatchReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
             if (is_first) &.{
                 D.bytes("The first branch of this"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("does not have the type this"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("is expected to have."),
             } else &.{
                 D.bytes("The"),
                 D.num_ord(branch_index),
                 D.bytes("branch of this"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("does not match the previous"),
-                if (ctx.branch_index > 1)
+                if (branch_index_0 > 1)
                     D.bytes("branches")
                 else
                     D.bytes("branch"),
@@ -1368,19 +1369,24 @@ pub const ReportBuilder = struct {
             types.actual_snapshot,
             if (is_first) &.{
                 D.bytes("But the"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("is expected to have the type:"),
             } else &.{
                 D.bytes("But the previous"),
-                if (ctx.branch_index > 1)
+                if (branch_index_0 > 1)
                     D.bytes("branches result")
                 else
                     D.bytes("branch results"),
                 D.bytes("in:"),
             },
             types.expected_snapshot,
-            &.{},
+            hints,
         );
+    }
+
+    /// Build a report for if branch type mismatch
+    fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
+        return self.buildBranchReport(types, ctx.branch_index, "if", &.{});
     }
 
     /// Build a report for match pattern type mismatch
@@ -1479,65 +1485,21 @@ pub const ReportBuilder = struct {
 
     /// Build a report for match branch type mismatch
     fn buildMatchBranchReport(self: *Self, types: TypePair, ctx: Context.MatchBranchContext) Allocator.Error!Report {
-        const branch_index = ctx.branch_index + 1;
-        // The first branch has no previous branches, so a mismatch there is
-        // against the type the whole `match` is expected to have.
-        const is_first = ctx.branch_index == 0;
-        return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
-            if (is_first) &.{
-                D.bytes("The first branch of this"),
+        return self.buildBranchReport(types, ctx.branch_index, "match", &.{
+            &.{
+                D.bytes("All branches in a"),
                 D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("does not have the type this"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("is expected to have."),
-            } else &.{
-                D.bytes("The"),
-                D.num_ord(branch_index),
-                D.bytes("branch of this"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("does not match the previous"),
-                if (ctx.branch_index > 1)
-                    D.bytes("branches")
-                else
-                    D.bytes("branch"),
-                D.bytes(".").withNoPrecedingSpace(),
+                D.bytes("must have compatible types."),
             },
             &.{
-                D.bytes("The"),
-                D.num_ord(branch_index),
-                D.bytes("branch is:"),
+                D.bytes("Note:").withAnnotation(.underline),
+                D.bytes("You can wrap branch values in a tag to make them compatible."),
             },
-            types.actual_snapshot,
-            if (is_first) &.{
-                D.bytes("But the"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("is expected to have the type:"),
-            } else &.{
-                D.bytes("But the previous"),
-                if (ctx.branch_index > 1)
-                    D.bytes("branches result")
-                else
-                    D.bytes("branch results"),
-                D.bytes("in:"),
-            },
-            types.expected_snapshot,
             &.{
-                &.{
-                    D.bytes("All branches in a"),
-                    D.bytes("match").withAnnotation(.inline_code),
-                    D.bytes("must have compatible types."),
-                },
-                &.{
-                    D.bytes("Note:").withAnnotation(.underline),
-                    D.bytes("You can wrap branch values in a tag to make them compatible."),
-                },
-                &.{
-                    D.bytes("To learn about tags, see"),
-                    D.link("https://www.roc-lang.org/tutorial#tags"),
-                },
+                D.bytes("To learn about tags, see"),
+                D.link("https://www.roc-lang.org/tutorial#tags"),
             },
-        );
+        });
     }
 
     fn buildMatchAltBinderReport(self: *Self, types: TypePair, ctx: Context.MatchAltBinderContext) Allocator.Error!Report {

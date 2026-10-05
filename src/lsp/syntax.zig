@@ -152,6 +152,15 @@ fn typeDeclAnno(stmt: CIR.Statement) ?CIR.TypeAnno.Idx {
     };
 }
 
+/// Unwraps `result`; on allocation failure records it in `oom` and yields
+/// null, for queries that report "nothing found" as null.
+fn noteOom(oom: *?Allocator.Error, result: anytype) ?@typeInfo(@TypeOf(result)).error_union.payload {
+    return result catch |err| {
+        oom.* = err;
+        return null;
+    };
+}
+
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
@@ -1579,10 +1588,7 @@ pub const SyntaxChecker = struct {
     fn findDefinitionAtOffset(self: *SyntaxChecker, build_env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, target_offset: u32, current_uri: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
         if (cir_queries.findWriteAtOffset(module_env, target_offset)) |write| {
             const range = cir_queries.declarationNameRegion(module_env, write.pattern_idx) orelse return null;
-            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
             return DefinitionResult{ .uri = uri_copy, .range = range };
         }
 
@@ -1599,10 +1605,7 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, annotation.anno, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
-                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                            oom.* = err;
-                            return null;
-                        };
+                        const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                         return DefinitionResult{
                             .uri = uri_copy,
                             .range = result.range,
@@ -1633,16 +1636,10 @@ pub const SyntaxChecker = struct {
             if (cir_queries.regionContainsOffset(dep.region(), target_offset)) {
                 const path_text = module_env.getString(dep.relative_path);
                 const doc_dir = std.fs.path.dirname(doc_path) orelse "";
-                const target_path = std.fs.path.resolve(self.allocator, &.{ doc_dir, path_text }) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                const target_path = noteOom(oom, std.fs.path.resolve(self.allocator, &.{ doc_dir, path_text })) orelse return null;
                 defer self.allocator.free(target_path);
 
-                const target_uri = uri_util.pathToUri(self.allocator, target_path) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                const target_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_path)) orelse return null;
 
                 const origin_range = cir_queries.regionToRange(module_env, dep.region());
 
@@ -1709,10 +1706,7 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, type_anno_idx, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
-                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                            oom.* = err;
-                            return null;
-                        };
+                        const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                         return DefinitionResult{
                             .uri = uri_copy,
                             .range = result.range,
@@ -1761,10 +1755,7 @@ pub const SyntaxChecker = struct {
                 const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
                 const def_region = module_env.store.getRegionAt(pattern_node_idx);
                 const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
-                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                 return DefinitionResult{
                     .uri = uri_copy,
                     .range = range,
@@ -1872,10 +1863,7 @@ pub const SyntaxChecker = struct {
 
         if (method_owner.origin_module == module_env.selfModuleIdentity()) {
             const range = methodDefinitionRange(module_env, module_env, method_owner.owner, method_name) orelse return null;
-            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
             return DefinitionResult{ .uri = uri_copy, .range = range };
         }
 
@@ -1883,10 +1871,7 @@ pub const SyntaxChecker = struct {
         const target_mod_state = findModuleByContentIdentity(build_env, origin_hash) orelse return null;
         const target_mod_env = target_mod_state.moduleEnv() orelse return null;
         const range = methodDefinitionRange(target_mod_env, module_env, method_owner.owner, method_name) orelse return null;
-        const module_uri = uri_util.pathToUri(self.allocator, target_mod_state.path) catch |err| {
-            oom.* = err;
-            return null;
-        };
+        const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
         return DefinitionResult{ .uri = module_uri, .range = range };
     }
 
@@ -2050,10 +2035,7 @@ pub const SyntaxChecker = struct {
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                                        oom.* = err;
-                                        return null;
-                                    };
+                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -2063,10 +2045,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                                oom.* = err;
-                                return null;
-                            };
+                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2086,10 +2065,7 @@ pub const SyntaxChecker = struct {
             if (maybe_anno) |anno_idx| {
                 if (findTagInTypeAnno(&module_env.store, &module_env.common, anno_idx, tag_name)) |tag_region| {
                     const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-                    const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
+                    const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                     return DefinitionResult{
                         .uri = uri_copy,
                         .range = range,
@@ -2110,10 +2086,7 @@ pub const SyntaxChecker = struct {
                     if (maybe_anno) |anno_idx| {
                         if (findTagInTypeAnno(&module_env.store, &module_env.common, anno_idx, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-                            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                                oom.* = err;
-                                return null;
-                            };
+                            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                             return DefinitionResult{
                                 .uri = uri_copy,
                                 .range = range,
@@ -2123,10 +2096,7 @@ pub const SyntaxChecker = struct {
                 }
                 if (findTagInModuleEnv(module_env, tag_name)) |tag_region| {
                     const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-                    const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
+                    const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                     return DefinitionResult{
                         .uri = uri_copy,
                         .range = range,
@@ -2143,10 +2113,7 @@ pub const SyntaxChecker = struct {
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = uri_util.pathToUri(self.allocator, target_mod_state.path) catch |err| {
-                                        oom.* = err;
-                                        return null;
-                                    };
+                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -2156,10 +2123,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = uri_util.pathToUri(self.allocator, target_mod_state.path) catch |err| {
-                                oom.* = err;
-                                return null;
-                            };
+                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2174,10 +2138,7 @@ pub const SyntaxChecker = struct {
         // 4. If tag has no nominal/alias type origin (e.g. pure open tag), check current module
         if (findTagInModuleEnv(module_env, tag_name)) |tag_region| {
             const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
-            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
             return DefinitionResult{
                 .uri = uri_copy,
                 .range = range,
@@ -2423,10 +2384,7 @@ pub const SyntaxChecker = struct {
         else
             env.findModuleByNameInPackage(importing_pkg, base_name);
         if (module_state) |mod_state| {
-            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
 
             var range = LspRange{
                 .start_line = 0,
@@ -2670,10 +2628,7 @@ pub const SyntaxChecker = struct {
                     if (maybe_type_anno) |type_anno_idx| {
                         if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, type_anno_idx, target_offset, oom)) |result| {
                             if (result.uri.len == 0) {
-                                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
-                                    oom.* = err;
-                                    return null;
-                                };
+                                const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
                                 return DefinitionResult{
                                     .uri = uri_copy,
                                     .range = result.range,
@@ -3664,10 +3619,7 @@ pub const SyntaxChecker = struct {
     fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
-        scope.build(module_env) catch |err| {
-            oom.* = err;
-            return null;
-        };
+        noteOom(oom, scope.build(module_env)) orelse return null;
 
         for (scope.bindings.items) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
@@ -3733,18 +3685,9 @@ pub const SyntaxChecker = struct {
             var type_var = ModuleEnv.varFrom(def_info.pattern_idx);
             var namespace_prefix = std.ArrayList(u8).empty;
             defer namespace_prefix.deinit(self.allocator);
-            namespace_prefix.appendSlice(self.allocator, first.segment) catch |err| {
-                oom.* = err;
-                return null;
-            };
-            namespace_prefix.append(self.allocator, '.') catch |err| {
-                oom.* = err;
-                return null;
-            };
-            namespace_prefix.appendSlice(self.allocator, member.segment) catch |err| {
-                oom.* = err;
-                return null;
-            };
+            noteOom(oom, namespace_prefix.appendSlice(self.allocator, first.segment)) orelse return null;
+            noteOom(oom, namespace_prefix.append(self.allocator, '.')) orelse return null;
+            noteOom(oom, namespace_prefix.appendSlice(self.allocator, member.segment)) orelse return null;
 
             while (nextChainSegment(access_chain, idx)) |segment| {
                 idx = segment.next;
@@ -3753,14 +3696,8 @@ pub const SyntaxChecker = struct {
                 // falling back to structural field traversal.
                 if (findDefinitionByQualifiedPrefix(self.allocator, resolved_env, namespace_prefix.items, segment.segment, oom)) |next_def| {
                     type_var = ModuleEnv.varFrom(next_def.pattern_idx);
-                    namespace_prefix.append(self.allocator, '.') catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
-                    namespace_prefix.appendSlice(self.allocator, segment.segment) catch |err| {
-                        oom.* = err;
-                        return null;
-                    };
+                    noteOom(oom, namespace_prefix.append(self.allocator, '.')) orelse return null;
+                    noteOom(oom, namespace_prefix.appendSlice(self.allocator, segment.segment)) orelse return null;
                     continue;
                 }
                 if (oom.* != null) return null;
@@ -3768,14 +3705,8 @@ pub const SyntaxChecker = struct {
                 const next_var = builder.getFieldTypeVarFromTypeVar(resolved_env, type_var, segment.segment) orelse return null;
                 type_var = next_var;
 
-                namespace_prefix.append(self.allocator, '.') catch |err| {
-                    oom.* = err;
-                    return null;
-                };
-                namespace_prefix.appendSlice(self.allocator, segment.segment) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
+                noteOom(oom, namespace_prefix.append(self.allocator, '.')) orelse return null;
+                noteOom(oom, namespace_prefix.appendSlice(self.allocator, segment.segment)) orelse return null;
             }
 
             return .{ .module_env = resolved_env, .type_var = type_var };
@@ -3823,10 +3754,7 @@ pub const SyntaxChecker = struct {
         member_name: []const u8,
         oom: *?Allocator.Error,
     ) ?module_lookup.DefinitionInfo {
-        const qualified = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name }) catch |err| {
-            oom.* = err;
-            return null;
-        };
+        const qualified = noteOom(oom, std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name })) orelse return null;
         defer allocator.free(qualified);
         return module_lookup.findDefinitionByName(module_env, qualified);
     }
