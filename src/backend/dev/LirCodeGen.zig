@@ -429,7 +429,7 @@ pub const BoxyBuiltinFn = enum {
     defer_erased,
     drive_pending,
     caller_drives,
-    call_pending,
+    return_pending,
     list_concat,
     list_prepend,
     list_sublist,
@@ -487,7 +487,7 @@ pub const BoxyBuiltinFn = enum {
             .defer_erased => "roc_boxy_defer_erased",
             .drive_pending => "roc_boxy_drive_pending",
             .caller_drives => "roc_boxy_caller_drives",
-            .call_pending => "roc_boxy_call_pending",
+            .return_pending => "roc_boxy_return_pending",
             .list_concat => "roc_boxy_list_concat",
             .list_prepend => "roc_boxy_list_prepend",
             .list_sublist => "roc_boxy_list_sublist",
@@ -517,7 +517,7 @@ pub const BoxyBuiltinFn = enum {
         return switch (self) {
             .register_erased_proc => &.{ p, 4, 4, 4, 4, 4, 4, 4, 4 },
             .call_erased => &.{ p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
-            .defer_erased => &.{ p, p, p, p, p, p, 4, 4, 4, 4 },
+            .defer_erased => &.{ p, p, p, p, p, p, 4, 4, 4, 4, p },
             .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
             .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
@@ -557,7 +557,7 @@ pub const BoxyBuiltinFn = enum {
             .register_proc,
             .drive_pending,
             .caller_drives,
-            .call_pending,
+            .return_pending,
             => null,
         };
     }
@@ -9790,12 +9790,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn bindAssignedLocal(self: *Self, local: LocalId, value_loc: ValueLocation) Allocator.Error!void {
+            try self.bindLocal(local, value_loc, true);
+        }
+
+        /// Bind a call's target. While the call can leave another pending,
+        /// the target may hold no value, so nothing is asserted about it.
+        fn bindCallResult(self: *Self, local: LocalId, value_loc: ValueLocation, drive: lir.LIR.PendingDrive) Allocator.Error!void {
+            try self.bindLocal(local, value_loc, !drive.canLeavePending());
+        }
+
+        fn bindLocal(self: *Self, local: LocalId, value_loc: ValueLocation, holds_value: bool) Allocator.Error!void {
             const key = localKey(local);
             const local_layout = self.localLayout(local);
             if (self.local_locations.get(key)) |stable_loc| {
                 try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
-                try self.emitDebugAssertValidBoxLocal(local, stable_loc);
-                try self.emitDebugAssertValidStrLocal(local, stable_loc);
+                if (holds_value) {
+                    try self.emitDebugAssertValidBoxLocal(local, stable_loc);
+                    try self.emitDebugAssertValidStrLocal(local, stable_loc);
+                }
                 return;
             }
 
@@ -9817,8 +9829,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
             try self.setLocalLocation(key, stable_loc);
-            try self.emitDebugAssertValidBoxLocal(local, stable_loc);
-            try self.emitDebugAssertValidStrLocal(local, stable_loc);
+            if (holds_value) {
+                try self.emitDebugAssertValidBoxLocal(local, stable_loc);
+                try self.emitDebugAssertValidStrLocal(local, stable_loc);
+            }
         }
 
         /// Canonicalize a NaN observed through `to_bits`: Roc code never sees
@@ -17071,6 +17085,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try defer_builder.addImmArg(arg_desc_keys.len);
                 try defer_builder.addImmArg(arg_layouts_span.start);
                 try defer_builder.addImmArg(arg_layouts_span.len);
+                if (result_desc_slot) |s| try defer_builder.addMemArg(frame_ptr, s) else try defer_builder.addImmArg(0);
                 try self.callBoxyBuiltin(&defer_builder, .defer_erased);
                 if (out_desc) |local| try self.bindAssignedLocal(local, .{ .immediate_i64 = 0 });
                 return if (ret_size == 0)
@@ -17149,7 +17164,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_desc: ?lir.LIR.BoxyDescRef,
             out_desc: ?LocalId,
         ) Allocator.Error!ValueLocation {
-            if (drive == .none) return value_loc;
+            if (!drive.canDriveHere()) return value_loc;
             try self.spillAllVectorLocals();
             const result_desc_slot: ?i32 = if (result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
             const runtime_layout = self.runtimeRepresentationLayoutIdx(value_layout);
@@ -17199,12 +17214,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Return from the procedure without a value while an erased call is
         /// pending, as the tail-drive pass marked the statement just emitted.
         /// The caller makes the pending call and never reads this return.
-        fn emitReturnIfCallPending(self: *Self) Allocator.Error!void {
+        fn emitReturnIfCallPending(self: *Self, pending: lir.LIR.PendingReturn) Allocator.Error!void {
             try self.spillAllVectorLocals();
+            const result_desc_slot: ?i32 = if (pending.result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
             const slot = self.codegen.allocStackSlot(8);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try self.callBoxyBuiltin(&builder, .call_pending);
+            if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            try self.callBoxyBuiltin(&builder, .return_pending);
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
             const flag_reg = try self.allocTempGeneral();
             // The runtime returns one byte; the rest of the slot is unspecified.
@@ -21460,9 +21477,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (proc.reads_caller_drives) {
                     // Read before anything else can make an erased call: the
                     // runtime's answer describes only this invocation.
+                    // The runtime names the callable it invokes by the
+                    // function pointer callable values hold, which is this
+                    // procedure's address.
                     const slot = self.codegen.allocStackSlot(8);
+                    const own_addr = try self.allocTempGeneral();
+                    const own = try self.compiledProcForId(proc_id);
+                    if (own.code_start == unresolved_proc_code_start)
+                        try self.emitPendingProcAddress(proc_id, own_addr)
+                    else
+                        try self.emitInternalCodeAddress(.{ .proc = own.id }, own.code_start, own_addr);
+                    try self.emitStore(.w64, frame_ptr, slot, own_addr);
+                    self.codegen.freeGeneral(own_addr);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
+                    try builder.addMemArg(frame_ptr, slot);
                     try self.callBoxyBuiltin(&builder, .caller_drives);
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
                     self.caller_drives_slot = slot;
@@ -23436,8 +23465,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .out_desc = assign.out_desc,
                             });
                             const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
-                            try self.bindAssignedLocal(assign.target, driven_loc);
-                            if (assign.returns_pending) try self.emitReturnIfCallPending();
+                            try self.bindCallResult(assign.target, driven_loc, assign.drive);
+                            if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
@@ -23456,7 +23485,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.deferred,
                             );
                             const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
-                            try self.bindAssignedLocal(assign.target, driven_loc);
+                            try self.bindCallResult(assign.target, driven_loc, assign.drive);
                             try work.append(wa, .{ .node = assign.next });
                         },
 

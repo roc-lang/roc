@@ -36,7 +36,7 @@ const DirectCall = struct {
     returns: Returns,
 };
 
-const Returns = enum {
+const Returns = union(enum) {
     /// Something other than returning it reads the value.
     no,
     /// Nothing but reference-count statements and jumps into a join body
@@ -45,7 +45,8 @@ const Returns = enum {
     /// The value is returned after representation conversions only. The
     /// only reference counts adjusted in between are the value's own, so
     /// returning right after the call leaves nothing the frame owns behind.
-    converted,
+    /// The payload is the descriptor the last conversion stores the value as.
+    converted: ?LIR.BoxyDescRef,
 };
 
 const DeferredCall = struct {
@@ -80,6 +81,8 @@ pub fn run(
     // join encloses every jump to it, so it is recorded before they are read.
     var join_bodies = std.ArrayList(?LIR.CFStmtId).empty;
     defer join_bodies.deinit(allocator);
+    var late_desc_locals = std.ArrayList(LIR.LocalId).empty;
+    defer late_desc_locals.deinit(allocator);
     for (0..proc_count) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
@@ -100,7 +103,7 @@ pub fn run(
                     .caller = @intCast(proc_index),
                     .callee = @intFromEnum(stmt.assign_call.proc),
                     .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.assign_call.target, stmt.assign_call.next),
+                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call),
                 });
             } else if (stmt == .assign_call_erased) {
                 if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
@@ -147,9 +150,11 @@ pub fn run(
         // Whatever is still pending once this statement has run its drive is
         // the caller's to make, before the conversions that follow read a
         // value that is not there yet.
-        updated.returns_pending = call.returns == .converted and drive != .always;
+        if (call.returns == .converted and drive.canLeavePending()) {
+            updated.returns_pending = .{ .result_desc = call.returns.converted };
+        }
         // A call that runs pending calls afterwards keeps its frame to do so.
-        if (drive != .none) updated.replaces_frame = false;
+        if (drive.canDriveHere()) updated.replaces_frame = false;
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@enumFromInt(call.caller)).reads_caller_drives = true;
     }
 }
@@ -174,7 +179,7 @@ fn driveAfter(
     if (!returns_unchanged) return .always;
     return switch (handsUp(store, outside, proc_index)) {
         .never => .always,
-        .always => .none,
+        .always => .handed_up,
         .when_runtime_called => .unless_caller_drives,
     };
 }
@@ -183,14 +188,27 @@ fn driveAfter(
 /// value it converts, and a descriptor reference reads no value, so a path
 /// made of those, and of reference counts on the value being converted, owns
 /// nothing but the value on the way to the return.
-fn returnOf(store: *const LirStore, join_bodies: []const ?LIR.CFStmtId, value: LIR.LocalId, start: LIR.CFStmtId) Returns {
-    var current = start;
+fn returnOf(
+    allocator: Allocator,
+    store: *const LirStore,
+    join_bodies: []const ?LIR.CFStmtId,
+    late_desc_locals: *std.ArrayList(LIR.LocalId),
+    call: anytype,
+) Allocator.Error!Returns {
+    const value: LIR.LocalId = call.target;
+    var current: LIR.CFStmtId = call.next;
     var returned = value;
     // The value the latest conversion consumed; its counts bracket that
     // conversion.
     var converted_from = value;
+    var converted_to: ?LIR.BoxyDescRef = null;
     var converts = false;
     var counts_other = false;
+    // Descriptor locals written by the call or after it. A procedure that
+    // returns right after a call that left another pending has none of them,
+    // so the last conversion's descriptor must not be one.
+    late_desc_locals.clearRetainingCapacity();
+    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, out_desc);
     // Each jump enters a join body, and a body that jumps back to its own
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
@@ -199,7 +217,13 @@ fn returnOf(store: *const LirStore, join_bodies: []const ?LIR.CFStmtId, value: L
         if (stmt == .ret) {
             if (stmt.ret.value != returned) return .no;
             if (!converts) return .unchanged;
-            return if (counts_other) .no else .converted;
+            if (counts_other) return .no;
+            if (converted_to) |desc| {
+                if (desc.localOrNull()) |local| {
+                    if (std.mem.findScalar(LIR.LocalId, late_desc_locals.items, local) != null) return .no;
+                }
+            }
+            return .{ .converted = converted_to };
         }
         if (stmt == .jump) {
             const join_index = @intFromEnum(stmt.jump.target);
@@ -213,11 +237,13 @@ fn returnOf(store: *const LirStore, join_bodies: []const ?LIR.CFStmtId, value: L
             if (adapt.source != returned or adapt.source_mode != .move) return .no;
             converted_from = returned;
             returned = adapt.target;
+            converted_to = adapt.target_desc;
             converts = true;
             current = adapt.next;
             continue;
         }
         if (stmt == .assign_boxy_desc_ref) {
+            try late_desc_locals.append(allocator, stmt.assign_boxy_desc_ref.target);
             current = stmt.assign_boxy_desc_ref.next;
             continue;
         }

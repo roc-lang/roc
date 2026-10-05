@@ -2784,12 +2784,18 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
+                    var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
                     if (self.pending_erased != null) {
                         if (!drivesHere(frame, assign.drive)) {
                             // The conversions that follow would read a value
                             // that is not there yet, so the procedure returns
                             // now to whoever makes the pending call.
-                            if (assign.returns_pending) return .returned_pending;
+                            if (assign.returns_pending) |pending_return| {
+                                if (try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc)) |desc| {
+                                    self.pending_erased.?.result_desc = desc;
+                                }
+                                return .returned_pending;
+                            }
                             // The pending call produces this statement's
                             // value; this procedure returns to whoever makes
                             // it without reading the value.
@@ -2800,13 +2806,15 @@ pub const Interpreter = struct {
                         }
                         const driven = (try self.drivePendingErasedCalls(frame, self.store.getLocal(assign.target).layout_idx)).?;
                         result = .{ .value = driven.value, .layout = driven.layout, .desc = driven.desc };
+                        stored_as = driven.stored_as;
                     }
-                    const materialized_result = self.materializeCallResultToLayout(
+                    const materialized_result = self.materializeDrivenCallResult(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
+                        stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     ) catch |err| {
                         if (comptime builtin.target.os.tag != .freestanding) {
@@ -2902,6 +2910,7 @@ pub const Interpreter = struct {
                             .arg_descs = arg_descs,
                             .arg_desc_keys = arg_desc_keys,
                             .arg_plan = assign.arg_plan,
+                            .result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc),
                         };
                         if (!drivesHere(frame, assign.drive)) {
                             frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
@@ -2927,12 +2936,13 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    const materialized_result = try self.materializeCallResultToLayout(
+                    const materialized_result = try self.materializeDrivenCallResult(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
+                        result.stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     );
                     try self.setLocalChecked(
@@ -4100,6 +4110,10 @@ pub const Interpreter = struct {
         value: Value,
         layout: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc = null,
+        /// When the value came from a pending call: the descriptor named by
+        /// the outermost statement that left a call pending, which the value
+        /// is stored as when the statement making the call names none.
+        stored_as: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
     const PendingErasedCall = struct {
@@ -4109,12 +4123,13 @@ pub const Interpreter = struct {
         arg_descs: []const *const LirProgram.BoxyTypeDesc,
         arg_desc_keys: []const LIR.ErasedArgDescKey,
         arg_plan: LIR.ErasedCallArgsPlanId,
+        result_desc: ?*const LirProgram.BoxyTypeDesc,
     };
 
     /// Whether calls pending after a statement are made in this frame.
     fn drivesHere(frame: *const Frame, drive: LIR.PendingDrive) bool {
         return switch (drive) {
-            .none => false,
+            .none, .handed_up => false,
             .always => true,
             .unless_caller_drives => !frame.caller_drives,
         };
@@ -4124,9 +4139,12 @@ pub const Interpreter = struct {
     /// call that left it pending would have.
     fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame, ret_layout: layout_mod.Idx) Error!?ErasedCallResult {
         var result: ?ErasedCallResult = null;
+        var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
         while (self.pending_erased) |call| {
             self.pending_erased = null;
+            if (stored_as == null) stored_as = call.result_desc;
             result = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, ret_layout, false);
+            result.?.stored_as = stored_as;
             const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
                 "LIR/interpreter invariant violated: pending erased call had a null closure",
                 .{},
@@ -10086,6 +10104,30 @@ pub const Interpreter = struct {
         expected_layout: layout_mod.Idx,
     ) Error!boxy_runtime.BoxyAssignedValue {
         const result_desc = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
+        return try self.boxy_runtime.materializeCallResult(
+            self.boxyFrameHooks(frame),
+            value,
+            actual_layout,
+            actual_desc,
+            result_desc,
+            expected_layout,
+        );
+    }
+
+    /// Store a call's result as the statement's own descriptor describes,
+    /// or, when it names none and the value came from a pending call, as
+    /// the outermost statement that left a call pending named.
+    fn materializeDrivenCallResult(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        actual_desc: ?*const LirProgram.BoxyTypeDesc,
+        result_desc_ref: ?LIR.BoxyDescRef,
+        stored_as: ?*const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!boxy_runtime.BoxyAssignedValue {
+        const result_desc = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref) orelse stored_as;
         return try self.boxy_runtime.materializeCallResult(
             self.boxyFrameHooks(frame),
             value,

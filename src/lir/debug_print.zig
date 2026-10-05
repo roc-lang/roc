@@ -134,7 +134,13 @@ const Printer = struct {
                     if (s.is_cold) try writer.writeAll(" cold");
                     if (s.replaces_frame) try writer.writeAll(" replaces_frame");
                     if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
-                    if (s.returns_pending) try writer.writeAll(" returns_pending");
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                    }
                     try writer.writeByte('\n');
                     current = s.next;
                 },

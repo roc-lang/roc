@@ -16562,10 +16562,10 @@ LIR construction proves the tail position of an erased call exactly as it
 does for a direct call, and ARC marks such a call `deferred` when its value is
 the procedure's whole result at the same layout, any descriptor that comes
 back with it is the one the procedure returns, and the callee does not repack
-the closure. A deferred call is not
-made. Everything else the frame owns is released first, the call is recorded
-as pending together with its packed arguments and one owned reference to its
-closure, and the procedure returns. Its target holds no value.
+the closure. A deferred call is not made. Everything else the frame owns is
+released first, the call is recorded as pending together with its packed
+arguments, one owned reference to its closure and the result descriptor the
+statement names, and the procedure returns. Its target holds no value.
 
 Whoever awaits that procedure's result makes the pending call, releases the
 closure reference afterwards, and repeats while the call it made leaves
@@ -16575,10 +16575,12 @@ other waiter is stated in LIR by the tail-drive pass (`src/lir/tail_drive.zig`),
 which runs after ARC and stamps a `PendingDrive` on each direct call whose
 callee can return with a call pending, and on each deferred call:
 
-- `none`: this procedure returns the value unchanged to a caller that makes
-  the pending call. Only reference-count statements and jumps into a join
-  body may separate the call from the return; a pending call owns its closure
-  and every argument, so running those statements first releases nothing it
+- `none`: nothing can be pending after the statement.
+- `handed_up`: this procedure returns the value unchanged to a caller that
+  makes the pending call, and until then the statement's target holds no
+  value. Only reference-count statements and jumps into a join body may
+  separate the call from the return; a pending call owns its closure and
+  every argument, so running those statements first releases nothing it
   reads.
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
@@ -16587,7 +16589,9 @@ callee can return with a call pending, and on each deferred call:
 - `unless_caller_drives`: in an erased-callable procedure, which reads at
   entry whether the erased-call runtime invoked it. A host that calls an
   erased callable directly does not make pending calls, so then the
-  procedure makes them itself.
+  procedure makes them itself. The runtime names the callable it is invoking
+  by its function pointer and the procedure asks with its own, so a value no
+  callee read cannot answer for a different procedure entered later.
 
 A direct call cannot hand its conversion to the callee, so a generic callee's
 result may still be converted before it is returned. The pass marks such a
@@ -16597,13 +16601,22 @@ If a call is still pending once the statement has run its drive, the
 procedure returns at once without a value, and nothing it owns is left
 behind. Skipping the conversions is sound because each one only changes how
 the same value is represented: whoever makes the pending call stores the
-final result in the representation its own statement reads.
+final result in the representation its own statement reads. The mark carries
+the descriptor the last skipped conversion stores the value as, which must be
+one the procedure already holds when the call returns.
+
+One rule decides the descriptor a pending call's result is stored as: the
+outermost statement the result passes through that names one. The statement
+making the call uses its own when it has one. Otherwise it uses the pending
+record's, which starts as the deferred statement's and is replaced by each
+`returns_pending` procedure on the way out, and it keeps that choice for
+every further call the one it made leaves pending.
 
 Backends follow these marks and nothing else: a deferred call becomes a call
 to the runtime's record function, a drive becomes a call to its drive
 function, and `returns_pending` becomes a query of the pending record
-followed by a return. The pending call is per-thread runtime state, held the same way the
-runtime holds its active-runtime selection.
+followed by a return. The pending call is per-thread runtime state, held the
+same way the runtime holds its active-runtime selection.
 
 ### RC Planning and Materialization
 

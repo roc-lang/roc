@@ -8766,6 +8766,13 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         // Read before anything else can make an erased call: the runtime's
         // answer describes only this invocation.
         const flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        // The runtime names the callable it invokes by the function pointer
+        // callable values hold, which is this procedure's table index. A
+        // procedure without one is never the callee of an erased call.
+        if (self.proc_table_indices.get(key)) |table_idx|
+            try self.emitFunctionTableIndexConst(table_idx)
+        else
+            try self.emitNullPtr();
         try self.emitBoxyCall("roc_boxy_caller_drives");
         try self.emitLocalSet(flag);
         self.caller_drives_local = flag;
@@ -9032,10 +9039,10 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_register_proc", &.{ .i32, .i32, .i32, .i64, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_call_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_drive_pending", &.{ .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_caller_drives", &.{}, &.{.i32});
-    try self.registerBoxySymbol("roc_boxy_call_pending", &.{}, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_caller_drives", &.{.i32}, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_return_pending", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_list_concat", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_prepend", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_sublist", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32 }, &.{});
@@ -10102,10 +10109,11 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             });
             try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
             try self.bindAssignedLocal(assign.target);
-            if (assign.returns_pending) {
+            if (assign.returns_pending) |pending| {
                 // The caller makes the pending call and never reads this
                 // procedure's return value.
-                try self.emitBoxyCall("roc_boxy_call_pending");
+                if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+                try self.emitBoxyCall("roc_boxy_return_pending");
                 self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
                 self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
                 self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
@@ -11246,6 +11254,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         try self.emitI32Const(@intCast(c.arg_desc_keys.len));
         try self.emitI32Const(@intCast(c.arg_layouts.start));
         try self.emitI32Const(@intCast(c.arg_layouts.len));
+        if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
         try self.emitBoxyCall("roc_boxy_defer_erased");
         if (c.out_desc) |desc_local| {
             try self.emitNullPtr();
@@ -11296,7 +11305,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 /// leaves the last pending call's result there, or the same value when none
 /// was pending.
 fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx, result_desc: ?LIR.BoxyDescRef, out_desc: ?ProcLocalId) Allocator.Error!void {
-    if (drive == .none) return;
+    if (!drive.canDriveHere()) return;
     const runtime_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
     const ret_size = try self.layoutStorageByteSize(runtime_layout);
     const val_type = try self.resolveValType(ret_layout);

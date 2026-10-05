@@ -233,6 +233,10 @@ const PendingErasedCall = struct {
     arg_desc_keys_len: u32,
     arg_layouts_start: u32,
     arg_layouts_len: u32,
+    /// The descriptor the call's result is stored as when whoever makes the
+    /// call names none itself: the one named by the outermost statement the
+    /// result passes through on its way to that caller.
+    result_desc: ?*const BoxyTypeDesc,
 };
 
 /// Per-thread state of the deferred-call protocol.
@@ -243,10 +247,12 @@ const TailState = struct {
     /// another call before it has finished reading them.
     args: std.ArrayList(u8) = .empty,
     arg_descs: std.ArrayList(?*const BoxyTypeDesc) = .empty,
-    /// True from the moment the erased-call runtime invokes a callable until
-    /// that callable reads it, so a Roc callee can tell this caller, which
-    /// makes pending calls, from any other.
-    caller_drives: bool = false,
+    /// The callable the erased-call runtime is invoking, from that moment
+    /// until the callable reads it, so a Roc callee can tell this caller,
+    /// which makes pending calls, from any other. Naming the callee keeps a
+    /// value nobody read from answering for a different procedure entered
+    /// later some other way.
+    driven: ?*const anyopaque = null,
 };
 
 /// Buffers outlive the calls that fill them and are reused by later ones.
@@ -291,7 +297,8 @@ fn tailOps() *RocOps {
 /// returns immediately afterwards, and whoever awaits its result makes the
 /// call: the erased-call runtime when it invoked that procedure, otherwise
 /// the statement the tail-drive pass marked. `closure` carries one owned
-/// reference, released after the call is made.
+/// reference, released after the call is made. `result_desc` is the
+/// descriptor the deferred call statement stores its result as.
 pub fn roc_boxy_defer_erased(
     fn_ptr: ?*const anyopaque,
     closure: ?[*]u8,
@@ -303,6 +310,7 @@ pub fn roc_boxy_defer_erased(
     arg_desc_keys_len: u32,
     arg_layouts_start: u32,
     arg_layouts_len: u32,
+    result_desc: ?*const BoxyTypeDesc,
 ) callconv(.c) void {
     const tail = TailStateSelection.get();
     if (tail.pending != null) @panic("boxy deferred an erased call while another was pending");
@@ -319,11 +327,16 @@ pub fn roc_boxy_defer_erased(
         .arg_desc_keys_len = arg_desc_keys_len,
         .arg_layouts_start = arg_layouts_start,
         .arg_layouts_len = arg_layouts_len,
+        .result_desc = result_desc,
     };
 }
 
 /// Make every pending erased call in turn, each delivering its result where
 /// the call that left it pending would have. Returns once none is pending.
+/// Each result is stored as `result_desc` describes, or, when the caller
+/// names no descriptor, as the outermost statement that left a call pending
+/// named one: every statement between only changes how the same value is
+/// represented, so the outermost request decides the stored form.
 pub fn roc_boxy_drive_pending(
     ret: ?[*]u8,
     out_desc: *?*const BoxyTypeDesc,
@@ -331,8 +344,10 @@ pub fn roc_boxy_drive_pending(
     expected_layout: u32,
 ) callconv(.c) void {
     const tail = TailStateSelection.get();
+    var stored_as = result_desc;
     while (tail.pending) |call| {
         tail.pending = null;
+        if (stored_as == null) stored_as = call.result_desc;
         var args = tail.args;
         var arg_descs = tail.arg_descs;
         tail.args = .empty;
@@ -344,7 +359,7 @@ pub fn roc_boxy_drive_pending(
             call.capture,
             null,
             out_desc,
-            result_desc,
+            stored_as,
             expected_layout,
             if (arg_descs.items.len == 0) null else arg_descs.items.ptr,
             call.arg_desc_keys_start,
@@ -359,17 +374,24 @@ pub fn roc_boxy_drive_pending(
 }
 
 /// Whether the erased-call runtime invoked the erased-callable procedure
-/// that is starting. Reading it clears it.
-pub fn roc_boxy_caller_drives() callconv(.c) u8 {
+/// that is starting, which passes the function pointer its callable values
+/// hold. A match is read once.
+pub fn roc_boxy_caller_drives(callee: ?*const anyopaque) callconv(.c) u8 {
     const tail = TailStateSelection.get();
-    const drives = tail.caller_drives;
-    tail.caller_drives = false;
-    return @intFromBool(drives);
+    if (callee == null or tail.driven != callee) return 0;
+    tail.driven = null;
+    return 1;
 }
 
-/// Whether an erased call is pending on this thread.
-pub fn roc_boxy_call_pending() callconv(.c) u8 {
-    return @intFromBool(TailStateSelection.get().pending != null);
+/// Whether an erased call is pending on this thread, asked by a procedure
+/// that returns at once when one is. `result_desc` is the descriptor that
+/// procedure would have converted the call's result to before returning it;
+/// being further out than whatever the pending call already names, it
+/// replaces that.
+pub fn roc_boxy_return_pending(result_desc: ?*const BoxyTypeDesc) callconv(.c) u8 {
+    const pending = &(TailStateSelection.get().pending orelse return 0);
+    if (result_desc) |desc| pending.result_desc = desc;
+    return 1;
 }
 
 fn requireGlobal() *GlobalBoxyRuntime {
@@ -1373,9 +1395,9 @@ fn invokeErasedCallableDriving(
     out_desc: *?*const anyopaque,
 ) void {
     const tail = TailStateSelection.get();
-    tail.caller_drives = true;
+    tail.driven = raw;
     invokeErasedCallable(raw, ops, ret, args, capture, reuse, out_desc);
-    tail.caller_drives = false;
+    tail.driven = null;
 }
 
 /// Box a payload into dynamic storage. Writes the boxed value through `out`

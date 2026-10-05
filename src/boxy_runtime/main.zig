@@ -230,7 +230,7 @@ comptime {
         "roc_boxy_defer_erased",
         "roc_boxy_drive_pending",
         "roc_boxy_caller_drives",
-        "roc_boxy_call_pending",
+        "roc_boxy_return_pending",
         "roc_boxy_list_concat",
         "roc_boxy_list_prepend",
         "roc_boxy_list_sublist",

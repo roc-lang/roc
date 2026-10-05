@@ -2184,10 +2184,11 @@ pub const MonoLlvmCodeGen = struct {
     /// Return from the procedure without a value while an erased call is
     /// pending, as the tail-drive pass marked the statement just emitted. The
     /// caller makes the pending call and never reads this return.
-    fn emitReturnIfCallPending(self: *MonoLlvmCodeGen) Error!void {
+    fn emitReturnIfCallPending(self: *MonoLlvmCodeGen, pending_return: lir.LIR.PendingReturn) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        const flag = try self.callBoxy("roc_boxy_call_pending", .i8, &.{}, &.{});
+        const result_desc_ptr = if (pending_return.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
+        const flag = try self.callBoxy("roc_boxy_return_pending", .i8, &.{try self.ptrType()}, &.{result_desc_ptr});
         const pending = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
         const return_block = wip.block(0, "return_pending") catch return error.OutOfMemory;
         const continue_block = wip.block(0, "none_pending") catch return error.OutOfMemory;
@@ -2568,7 +2569,10 @@ pub const MonoLlvmCodeGen = struct {
             // Read before anything else can make an erased call: the
             // runtime's answer describes only this invocation.
             const flag_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
-            const flag = try self.callBoxy("roc_boxy_caller_drives", .i8, &.{}, &.{});
+            // The runtime names the callable it invokes by the function
+            // pointer callable values hold, which is this procedure's.
+            const own_fn = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
+            const flag = try self.callBoxy("roc_boxy_caller_drives", .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)});
             _ = wip.store(.normal, flag, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
             self.caller_drives_flag = flag_ptr;
         }
@@ -3842,7 +3846,7 @@ pub const MonoLlvmCodeGen = struct {
             } else {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
                 try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
-                if (assign.returns_pending) try self.emitReturnIfCallPending();
+                if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
@@ -4869,7 +4873,7 @@ pub const MonoLlvmCodeGen = struct {
             const args_len: u32 = if (arg_locals.len == 0) 0 else self.store.getErasedCallArgsPlan(arg_plan).size;
             try self.callBoxyVoid(
                 "roc_boxy_defer_erased",
-                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, ptr_ty, .i32, .i32, .i32, .i32 },
+                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, ptr_ty, .i32, .i32, .i32, .i32, ptr_ty },
                 &.{
                     fn_ptr,
                     closure_ptr,
@@ -4881,6 +4885,7 @@ pub const MonoLlvmCodeGen = struct {
                     try self.boxyInt(.i32, arg_desc_keys.len),
                     try self.boxyInt(.i32, arg_layouts.start),
                     try self.boxyInt(.i32, arg_layouts.len),
+                    if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
                 },
             );
             if (out_desc) |desc_local| {
@@ -4930,7 +4935,7 @@ pub const MonoLlvmCodeGen = struct {
         result_desc: ?lir.LIR.BoxyDescRef,
         out_desc: ?LocalId,
     ) Error!void {
-        if (drive == .none) return;
+        if (!drive.canDriveHere()) return;
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();

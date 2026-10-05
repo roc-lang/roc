@@ -1034,16 +1034,43 @@ pub const ProcAbi = enum {
 /// returns; whoever is waiting on that procedure's result then makes the
 /// pending call, and repeats while that call leaves another pending.
 pub const PendingDrive = enum(u8) {
-    /// Nothing is run here: either nothing can be pending, or this
-    /// procedure returns the result to a caller that runs it.
+    /// Nothing can be pending after this statement.
     none,
+    /// A call can be pending, and this procedure returns to a caller that
+    /// makes it. While one is, the statement's target holds no value.
+    handed_up,
     /// Every pending call is run here, and the last one's result replaces
     /// this statement's.
     always,
     /// In an erased-callable procedure: as `always` when the procedure was
     /// entered by anything but the erased-call runtime, which runs pending
-    /// calls itself.
+    /// calls itself, and as `handed_up` otherwise.
     unless_caller_drives,
+
+    /// Whether a call can still be pending once the statement has finished,
+    /// leaving its target without a value.
+    pub fn canLeavePending(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .always => false,
+            .handed_up, .unless_caller_drives => true,
+        };
+    }
+
+    /// Whether the statement makes pending calls itself in some invocation of
+    /// its procedure, which needs the procedure's frame afterwards.
+    pub fn canDriveHere(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .handed_up => false,
+            .always, .unless_caller_drives => true,
+        };
+    }
+};
+
+/// What a procedure does when it returns early because a call is pending.
+pub const PendingReturn = struct {
+    /// The descriptor the skipped conversions would have stored the result
+    /// as, which whoever makes the pending call stores it as instead.
+    result_desc: ?BoxyDescRef,
 };
 
 /// Identity shared by procedures that reach one another through
@@ -1154,7 +1181,7 @@ pub const CFStmt = union(enum) {
         /// a call is still pending after this statement, the procedure
         /// returns at once without a value: the caller that makes the pending
         /// call stores its result in the representation that caller reads.
-        returns_pending: bool = false,
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_call_erased: struct {

@@ -48,9 +48,23 @@ call_with = |g, x| g(|j| through_generic_value(j), x)
 through_generic_value : U64 -> U64
 through_generic_value = |n| if n == 0 0 else call_with(apply, n - 1)
 
+# The converted result is not always a number: whoever makes the last call
+# of the cycle stores its result as the concrete type each function returns.
+label_through_apply : U64, Str -> Str
+label_through_apply = |n, label| if n == 0 Str.concat(label, "!") else apply(|m| label_through_apply(m - 1, label), n)
+
+pair_through_apply : U64, Str -> { count : U64, label : Str }
+pair_through_apply = |n, label| if n == 0 { count: 7, label } else apply(|m| pair_through_apply(m - 1, label), n)
+
+list_through_apply : U64, List(Str) -> List(Str)
+list_through_apply = |n, items| if n == 0 items else apply(|m| list_through_apply(m - 1, items), n)
+
 expect ping(20_000, wider(1), "done") == "done"
 expect countdown(20_000, wider(1), "done") == "done"
 expect through_apply(30_000, "done") == "done"
 expect through_lambda_calling_generic(30_000) == 0
 expect concrete_through_apply(30_000) == 0
 expect through_generic_value(30_000) == 0
+expect label_through_apply(30_000, "a label long enough to live on the heap") == "a label long enough to live on the heap!"
+expect pair_through_apply(30_000, "a label long enough to live on the heap") == { count: 7, label: "a label long enough to live on the heap" }
+expect list_through_apply(30_000, ["one", "two"]) == ["one", "two"]
