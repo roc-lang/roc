@@ -4462,42 +4462,6 @@ fn settleUniqueOrigins(
     }
 }
 
-/// Marks every local whose value's outermost allocation provably has count 1
-/// at the local's definition with nothing later adding a holder: born unique
-/// by a fresh allocation or a direct call to a unique-returning callee,
-/// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
-/// allocation—an incref, an aggregate or capture operand, a `set_local`
-/// value or target, or a second consuming use. Consuming uses (a consumed
-/// low-level argument, an owned-position direct-call argument, a return)
-/// take the value's single unit with them, so the first one preserves
-/// uniqueness and any further one destroys it; borrowed-position call
-/// arguments and erased-call arguments conservatively destroy. A pure
-/// same-value alias (`.local`, `.list_reinterpret`, `.nominal`—not
-/// payload reads, which name interior allocations of a possibly-shared
-/// outer value) inherits uniqueness: its definition is the chain's
-/// consuming use of the source, so the source's single unit moves through
-/// to the target, and any other occurrence of the source—consuming,
-/// holder-adding, or a mere read, before or after, since the analysis is
-/// flow-insensitive—destroys the target's uniqueness (a read elsewhere
-/// forces emission to give the alias its own unit, holding the count above
-/// 1). A multi-bound alias target never inherits. Parameters are born on
-/// the condition that their position is seeded, and the condition travels
-/// with every transfer, so one analysis answers for every emission of a
-/// proc: emission and the certifier test a local's condition against the
-/// `RcSig.unique_params` of the variant at hand. Only reachable statements contribute;
-/// the solver consumes its shared per-proc lift, while final-LIR
-/// certification analyzes one emitted proc at a time because base and
-/// specialized bodies deliberately share every source LocalId.
-pub fn computeUniqueness(
-    allocator: Allocator,
-    store: *const LirStore,
-    rc_local: []const bool,
-    sigs: arc_sig.SigTable,
-    layouts: *const layout_mod.Store,
-) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, true, layouts, .none, null, null, null, null);
-}
-
 const ProcUniquenessDomain = struct {
     local_to_dense: []const u32,
     count: usize,
@@ -5438,6 +5402,32 @@ fn settleUniquenessOracle(
     }
 }
 
+/// Marks every local whose value's outermost allocation provably has count 1
+/// at the local's definition with nothing later adding a holder: born unique
+/// by a fresh allocation or a direct call to a unique-returning callee,
+/// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
+/// allocation—an incref, an aggregate or capture operand, a `set_local`
+/// value or target, or a second consuming use. Consuming uses (a consumed
+/// low-level argument, an owned-position direct-call argument, a return)
+/// take the value's single unit with them, so the first one preserves
+/// uniqueness and any further one destroys it; borrowed-position call
+/// arguments and erased-call arguments conservatively destroy. A pure
+/// same-value alias (`.local`, `.list_reinterpret`, `.nominal`—not
+/// payload reads, which name interior allocations of a possibly-shared
+/// outer value) inherits uniqueness: its definition is the chain's
+/// consuming use of the source, so the source's single unit moves through
+/// to the target, and any other occurrence of the source—consuming,
+/// holder-adding, or a mere read, before or after, since the analysis is
+/// flow-insensitive—destroys the target's uniqueness (a read elsewhere
+/// forces emission to give the alias its own unit, holding the count above
+/// 1). A multi-bound alias target never inherits. Parameters are born on
+/// the condition that their position is seeded, and the condition travels
+/// with every transfer, so one analysis answers for every emission of a
+/// proc: emission and the certifier test a local's condition against the
+/// `RcSig.unique_params` of the variant at hand. Only reachable statements contribute;
+/// the solver consumes its shared per-proc lift, while final-LIR
+/// certification analyzes one emitted proc at a time because base and
+/// specialized bodies deliberately share every source LocalId.
 fn computeUniquenessDetailed(
     allocator: Allocator,
     store: *const LirStore,

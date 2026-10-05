@@ -24,11 +24,6 @@ pub const Value = struct {
     /// Sentinel value for zero-sized types.
     pub const zst: Value = .{ .ptr = @ptrFromInt(0xDEAD_BEEF) };
 
-    /// Create a Value from a typed pointer.
-    pub fn fromPtr(ptr: *anyopaque) Value {
-        return .{ .ptr = @ptrCast(ptr) };
-    }
-
     /// Create a Value from a byte slice.
     pub fn fromSlice(slice: []u8) Value {
         return .{ .ptr = slice.ptr };
