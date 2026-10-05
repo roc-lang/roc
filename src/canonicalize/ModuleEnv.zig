@@ -854,6 +854,27 @@ pub const RejectedStaticDispatch = extern struct {
     }
 };
 
+/// The use inspection makes of a `to_inspect` method: an instance of its type
+/// whose result is `Str`, recorded by checking for each such method its module
+/// declares (design.md "Inspect Overrides"). A method with no such instance
+/// has no entry.
+pub const InspectOverrideInstance = extern struct {
+    def_idx: u32,
+    /// Unified with the instance's callable type, and the raw identity of the
+    /// use's dispatch-target scheme-use record.
+    callable_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub fn def(self: InspectOverrideInstance) CIR.Def.Idx {
+        return @enumFromInt(self.def_idx);
+    }
+
+    pub fn callableVar(self: InspectOverrideInstance) TypeVar {
+        return @enumFromInt(self.callable_var);
+    }
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -1033,12 +1054,15 @@ module_name: []const u8,
 /// The module's bare name as an interned identifier (e.g., "Color").
 /// Used for display, type module validation, and method name construction.
 display_module_name_idx: Ident.Idx,
-/// Package-qualified module display name (e.g., "pf.Color"). Display-only; identity
-/// comparisons use content-based module identities (see `module_identities`).
-/// Which package a module belongs to is workspace information, so the
-/// coordinator records this once the module is canonicalized; a cache hit
-/// restores what was recorded then. Canonicalization never reads it.
-qualified_module_ident: Ident.Idx,
+/// Package-qualified module display name (e.g., "pf.Color"), borrowed from
+/// the coordinator's module state. Display-only; identity comparisons use
+/// content-based module identities (see `module_identities`). Which package a
+/// module belongs to is workspace information, so it is runtime-only like
+/// `module_name`: it is never serialized, and the coordinator records it on
+/// every environment it installs for the module, whether canonicalized or
+/// checked, fresh or loaded from a cache. Empty for environments built outside
+/// the coordinator; `qualifiedModuleName` then reports the bare name.
+qualified_module_name: []const u8,
 /// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
 /// deep content hash (see `base.module_identity`). Entry ids are the
 /// `origin_module` values stored on nominal/alias types in this env's type
@@ -1125,6 +1149,8 @@ generated_codec_calls: GeneratedCodecCall.SafeList,
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 /// Exact default identities selected at record-literal omission sites.
 record_omitted_defaults: RecordOmittedDefault.SafeList,
+/// Checked `to_inspect` instances at result `Str`, one per method that has one.
+inspect_override_instances: InspectOverrideInstance.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1314,9 +1340,11 @@ pub const DeferredImportRef = extern struct {
     module_name_bits: u32,
     /// The leaf name this reference selects, for diagnostics.
     item_name_bits: u32,
-    /// The parent name nested-path diagnostics report.
+    /// The parent name nested-path diagnostics report. For exposed-item checks,
+    /// the source import alias, or NONE for an unaliased import.
     parent_name_bits: u32,
-    /// The whole qualified spelling, for diagnostics that name it.
+    /// The whole qualified spelling, for diagnostics that name it. For
+    /// exposed-item checks, the local name bound by the item.
     qualified_name_bits: u32,
     /// For `receiver_method_owner`, the method registration this entry
     /// completes; unused otherwise.
@@ -1326,9 +1354,16 @@ pub const DeferredImportRef = extern struct {
     missing_module_failure: DeferredRefFailure,
     /// Diagnostic for an import that resolved to a module lacking this path.
     not_found_failure: DeferredRefFailure,
+    /// Keeps `flags` aligned without implicit padding.
+    _reserved: u8 = 0,
     /// See `Flags`.
-    flags: u8,
-    _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    flags: u16,
+    /// Keeps the following `u32` fields aligned without implicit padding.
+    _reserved_after_flags: u16 = 0,
+    /// For an entry with `Flags.allows_tag_member`, the node that accesses the
+    /// member: the call written `Q.U.v(...)`, or this entry's own node when the
+    /// member is not called.
+    tag_member_access_node: u32 = 0,
     /// For `receiver_method_owner`, the node whose type variable holds the
     /// method's checked type.
     method_binding_type_node: u32,
@@ -1344,37 +1379,48 @@ pub const DeferredImportRef = extern struct {
     /// whether these two hold one; otherwise the node's own region is used.
     diagnostic_region_start: u32,
     diagnostic_region_end: u32,
+    /// For an entry with `Flags.allows_tag_member`, where the qualified tag
+    /// `Alias.Path.U` ends in the source. It starts where the node does.
+    tag_receiver_end: u32 = 0,
 
     /// Bit flags recording source-local facts the drain needs.
     pub const Flags = struct {
         /// A resolved target that is a nominal declaration may also be reached
         /// through the imported module's main type as a tag constructor.
-        pub const allows_nominal_tag: u8 = 1 << 0;
+        pub const allows_nominal_tag: u16 = 1 << 0;
         /// The import was written package-qualified (`pf.Stdout`), which only
         /// the workspace resolver can judge, so a missing module is its
         /// diagnostic to report rather than this module's.
-        pub const is_package_qualified: u8 = 1 << 1;
+        pub const is_package_qualified: u16 = 1 << 1;
         /// The reference names the import's own selected declaration -- a type
         /// module's main type, or the declaration a package header makes
         /// public -- rather than a path inside it.
-        pub const names_import_main_type: u8 = 1 << 2;
+        pub const names_import_main_type: u16 = 1 << 2;
         /// An exposed-item check expects a type declaration rather than a
         /// value definition.
-        pub const selects_type: u8 = 1 << 3;
+        pub const selects_type: u16 = 1 << 3;
         /// A file import binds the file's raw bytes rather than its text.
-        pub const file_import_is_bytes: u8 = 1 << 4;
+        pub const file_import_is_bytes: u16 = 1 << 4;
         /// The entry carries its own diagnostic region.
-        pub const has_diagnostic_region: u8 = 1 << 5;
+        pub const has_diagnostic_region: u16 = 1 << 5;
         /// The reference is written `Alias.Name(...)` in tag position with an
         /// import's alias as the qualifier. Which declaration the qualifier
         /// denotes depends on the import: when the import selects a public
         /// declaration, that declaration owns the tag `Name`; when it selects
         /// none, the qualifier names the module and `Name` names one of its
         /// exposed types.
-        pub const tag_after_import_alias: u8 = 1 << 6;
+        pub const tag_after_import_alias: u16 = 1 << 6;
+        /// An exposed-item check spells `Type.*`, which retains the import
+        /// constructor lookup rules rather than binding a same-name member.
+        pub const exposes_constructors: u16 = 1 << 7;
+        /// The reference is written `Alias.Path.U.v` with `U` spelled as a tag
+        /// and `v` as a value. When the import has no value at that path but
+        /// `Alias.Path` names a nominal type, `Alias.Path.U` is a qualified tag
+        /// and `v` is a member accessed on it.
+        pub const allows_tag_member: u16 = 1 << 8;
     };
 
-    pub fn has(self: @This(), flag: u8) bool {
+    pub fn has(self: @This(), flag: u16) bool {
         return (self.flags & flag) != 0;
     }
 
@@ -1463,6 +1509,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
+    self.inspect_override_instances.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1490,7 +1537,6 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
     self.display_module_name_idx = try self.insertIdent(Ident.for_text(module_name));
-    self.qualified_module_ident = self.display_module_name_idx; // Default to bare name; coordinator later records the package-qualified name
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
@@ -1542,7 +1588,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .import_identities = .{},
         .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
-        .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
+        .qualified_module_name = "", // Recorded by the coordinator
         .module_identities = .{},
         .module_identity_displays = .{},
         .self_module_identity = base.ModuleIdentity.Idx.NONE,
@@ -1569,6 +1615,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
+        .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
     };
 }
 
@@ -1603,6 +1650,7 @@ pub fn deinit(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.inspect_override_instances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1707,6 +1755,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.inspect_override_instances.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -2592,6 +2641,45 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+
+            break :blk report;
+        },
+        .duplicate_pattern_binder => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+
+            var report = try Report.init(allocator, "Duplicate Name In Pattern", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The name ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is bound more than once in this pattern.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                duplicate_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("It was first bound here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Each name in a pattern must be different. To check whether two values are equal, give them different names and compare them in a guard:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock("(a, b) if a == b => ...");
 
             break :blk report;
         },
@@ -3868,7 +3956,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name_bytes = self.getIdent(data.type_name);
             const module_name_bytes = self.getIdent(data.module_name);
 
-            var report = try Report.init(allocator, "Redundant Expose", "", .warning);
+            var report = try Report.init(allocator, "Redundant Expose", "", .runtime_error);
             const type_name = try report.addOwnedString(type_name_bytes);
             const module_name = try report.addOwnedString(module_name_bytes);
             try report.headline.addReflowingText("Redundantly exposing ");
@@ -3891,7 +3979,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
-                .warning_highlight,
+                .error_highlight,
                 owned_filename,
                 self.getSourceAll(),
                 self.getLineStartsAll(),
@@ -4127,6 +4215,108 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .control_flow_in_expect => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = switch (data.kind) {
+                .try_suffix => r: {
+                    var r = try Report.init(allocator, "Try Operator In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("?", .inline_code);
+                    try r.headline.addReflowingText(" operator cannot be used directly inside an inline ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+                .return_keyword => r: {
+                    var r = try Report.init(allocator, "Return In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("return", .inline_code);
+                    try r.headline.addReflowingText(" keyword cannot be used directly inside an ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+                .break_keyword => r: {
+                    var r = try Report.init(allocator, "Break In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("break", .inline_code);
+                    try r.headline.addReflowingText(" statement cannot exit a loop from inside an ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+            };
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Optimized builds remove inline ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText("s, so an ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" must not move control flow outside of itself, or the program would behave differently in optimized builds.");
+            if (data.kind == .try_suffix) {
+                try report.document.addReflowingText(" Handle the ");
+                try report.document.addAnnotated("Err", .inline_code);
+                try report.document.addReflowingText(" case explicitly instead, for example with a ");
+                try report.document.addAnnotated("match", .inline_code);
+                try report.document.addReflowingText(".");
+            }
+
+            break :blk report;
+        },
+        .var_reassigned_in_expect => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const declaration_region_info = self.calcRegionInfo(data.declaration_region);
+
+            var report = try Report.init(allocator, "Var Reassigned In Expect", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            const owned_filename = try report.addOwnedString(filename);
+            try report.headline.addReflowingText("This ");
+            try report.headline.addAnnotated("expect", .inline_code);
+            try report.headline.addReflowingText(" reassigns ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(", which was declared outside of it:");
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                declaration_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Optimized builds remove inline ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText("s, so an ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" must not change variables declared outside of it, or the program would behave differently in optimized builds. Variables declared inside the ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" can be reassigned freely.");
+
+            break :blk report;
+        },
         .mutually_recursive_type_aliases => |data| blk: {
             const type_name = self.getIdent(data.name);
             const other_type_name = self.getIdent(data.other_name);
@@ -4328,7 +4518,7 @@ pub const Serialized = extern struct {
     import_identities: collections.SafeList(base.ModuleIdentity.Idx).Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
-    qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
+    display_module_name_idx_padding: u32 = 0,
     module_identities: base.SerialStringInterner.Serialized,
     module_identity_displays: collections.SafeList(Ident.Idx).Serialized,
     self_module_identity_reserved: u32,
@@ -4358,6 +4548,7 @@ pub const Serialized = extern struct {
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
+    inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4365,21 +4556,24 @@ pub const Serialized = extern struct {
     comptime {
         const renamed_fields = [_]collections.serde_validation.FieldRename{
             .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
-            .{ .owner = "qualified_module_ident", .serialized = "qualified_module_ident_reserved" },
             .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
             .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
             .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
         };
         const serialized_only_fields = [_][]const u8{
+            "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
             "self_module_identity_padding", // Fixed-width padding for the reserved identity slot.
             "runtime_prepared_padding", // Fixed-width padding for the serialized bool.
             "_reserved_flags", // Format-reserved bytes for fields removed from ModuleEnv.
             "_padding", // Tail padding kept explicit and zeroed for deterministic bytes.
         };
+        const owner_only_fields = [_][]const u8{
+            "qualified_module_name", // Workspace information, recorded by the coordinator.
+        };
         collections.serde_validation.assertBidirectionalFieldSet(
             Self,
             Serialized,
-            &.{},
+            &owner_only_fields,
             &serialized_only_fields,
             &renamed_fields,
         );
@@ -4442,7 +4636,7 @@ pub const Serialized = extern struct {
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
-        self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
+        self.display_module_name_idx_padding = 0;
         try self.module_identities.serialize(&env.module_identities, allocator, writer);
         try self.module_identity_displays.serialize(&env.module_identity_displays, allocator, writer);
         self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
@@ -4476,6 +4670,7 @@ pub const Serialized = extern struct {
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
+        try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4522,7 +4717,7 @@ pub const Serialized = extern struct {
             .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
             .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
@@ -4549,6 +4744,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4597,7 +4793,7 @@ pub const Serialized = extern struct {
             .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
             .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
@@ -4624,6 +4820,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4673,7 +4870,7 @@ pub const Serialized = extern struct {
             .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             // Copy so the display list can grow if runtime type copies add identities.
             .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
@@ -4702,6 +4899,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4765,7 +4963,7 @@ pub const Serialized = extern struct {
             .import_identities = try self.import_identities.deserializeWithCopy(base_addr, gpa),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .qualified_module_name = "",
             .module_identities = module_identities,
             .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
             .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
@@ -4792,6 +4990,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -5243,6 +5442,23 @@ pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatc
     return self.rejected_static_dispatches.items.items;
 }
 
+/// Persist the use inspection makes of one `to_inspect` method.
+pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable_var: TypeVar) std.mem.Allocator.Error!void {
+    _ = try self.inspect_override_instances.append(self.gpa, .{
+        .def_idx = @intFromEnum(def_idx),
+        .callable_var = @intFromEnum(callable_var),
+    });
+}
+
+/// The use inspection makes of the `to_inspect` method `def_idx`, or null
+/// when its type has no instance whose result is `Str`.
+pub fn inspectOverrideInstance(self: *const Self, def_idx: CIR.Def.Idx) ?TypeVar {
+    for (self.inspect_override_instances.items.items) |instance| {
+        if (instance.def() == def_idx) return instance.callableVar();
+    }
+    return null;
+}
+
 /// Return the checked `from_quote` function for a string literal node.
 pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
     const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
@@ -5600,15 +5816,15 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
-/// The coordinator-assigned package-qualified module identifier (e.g.
+/// The coordinator-assigned package-qualified module name (e.g.
 /// `pf.Utils`), unique across the build's packages. Module identity
 /// comparisons in diagnostics must use this rather than the bare module
 /// name, which can collide between packages. Environments constructed
-/// outside the coordinator (unit tests) have no qualified ident; they are
+/// outside the coordinator (unit tests) have no qualified name; they are
 /// single-module worlds, so the bare name is their qualified name.
 pub fn qualifiedModuleName(self: *const Self) []const u8 {
-    if (self.qualified_module_ident.isNone()) return self.module_name;
-    return self.getIdent(self.qualified_module_ident);
+    if (self.qualified_module_name.len == 0) return self.module_name;
+    return self.qualified_module_name;
 }
 
 /// Builds a mapping from platform for-clause alias ident indices to the

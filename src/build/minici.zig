@@ -105,12 +105,14 @@ const Shard = struct {
 const shards = [_]Shard{
     .{ .name = "source", .host = .linux, .lane = .source },
     .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
-    .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval-host-effects" } },
+    .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "linux-simd", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
     .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .to = "run-test-eval" } },
     .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
     .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = "run-test-zig-module-roc_target" } },
-    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-zig-module-roc_target", .to = "run-test-eval" } },
+    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-zig-module-roc_target", .before = "run-test-eval" } },
+    .{ .name = "windows-eval", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
 };
 

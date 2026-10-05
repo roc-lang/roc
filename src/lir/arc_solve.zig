@@ -620,12 +620,17 @@ const UniqueCallFact = struct {
     stmt: LIR.CFStmtId,
 };
 
+const OwnershipFlow = struct { target: LIR.LocalId, source: LIR.LocalId };
+
 const BindingFact = union(enum) {
     fresh: LIR.LocalId,
     multi: LIR.LocalId,
     borrow: struct { target: LIR.LocalId, source: LIR.LocalId },
-    alias: struct { target: LIR.LocalId, source: LIR.LocalId },
+    alias: OwnershipFlow,
     demand: LIR.LocalId,
+    /// An owned result selects the consuming primitive, so its input must
+    /// supply a unit. This is ownership flow, not same-value aliasing.
+    consuming_result: OwnershipFlow,
 };
 
 const VisibilityFact = union(enum) {
@@ -687,14 +692,17 @@ const Solver = struct {
     rc_local: []const bool,
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     consume_dead_boxes: bool,
+    /// Run the host-visibility analysis. Off, every local is visible.
+    thread_confined_rc: bool,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     pinned: std.bit_set.DynamicBitSetUnmanaged,
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
     defs: []DefKind,
-    /// Ownership demands per local. Returns never demand: a returned borrow
-    /// pays one retain at the return when the signature's return is owned.
+    /// Ownership demands per local. Ordinary returned borrows pay a retain
+    /// when the return signature is owned; allocation-transferring primitive
+    /// results instead demand their input units so unique capacity survives.
     demand: []bool,
     /// Source local of each pure same-value alias (`.local`,
     /// `.list_reinterpret`, `.nominal`), or `no_local`. A demand on an alias
@@ -756,7 +764,7 @@ pub fn solve(
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
 ) SolveError!Solution {
-    return solveWithOptions(allocator, store, layouts, rc_local, boxy_rc_descs, roots, consume_dead_boxes, .{});
+    return solveWithOptions(allocator, store, layouts, rc_local, boxy_rc_descs, roots, consume_dead_boxes, true, .{});
 }
 
 /// Solves ARC with optional component-parallel uniqueness execution.
@@ -768,6 +776,7 @@ pub fn solveWithOptions(
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
+    thread_confined_rc: bool,
     options: UniquenessOptions,
 ) SolveError!Solution {
     const local_count = store.localCount();
@@ -785,6 +794,7 @@ pub fn solveWithOptions(
         .rc_local = rc_local,
         .boxy_rc_descs = boxy_rc_descs,
         .consume_dead_boxes = consume_dead_boxes,
+        .thread_confined_rc = thread_confined_rc,
         .domain = &domain,
         .sigs = &.{},
         .pinned = .{},
@@ -896,16 +906,28 @@ pub fn solveWithOptions(
     // Start non-pinned refcounted parameter positions borrowed; demands can
     // only flip positions to owned, so the borrowed set shrinks with each
     // queued change.
+    var external_rows = std.ArrayList(arc_sig.RetCondition).empty;
+    defer external_rows.deinit(allocator);
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         var sig = arc_sig.RcSig.all_owned;
         if (proc.external) {
-            // The cache entry was compiled with this signature; the program
-            // that links it calls it exactly so.
+            // The cache entry was compiled with this signature, and its
+            // uniqueness facts are those its producer solved for this body;
+            // the program that links it calls it exactly so.
+            const words = store.getU32Span(proc.rc_ret_conditions);
+            const rows_start = external_rows.items.len;
+            for (0..GuardedList.borrowLen(words)) |index| {
+                try external_rows.append(allocator, @bitCast(GuardedList.at(words, index)));
+            }
             sig = .{
                 .borrowed_params = @intCast(proc.rc_borrowed_params),
                 .ret_mode = if (proc.rc_ret_borrowed) .borrowed else .owned,
                 .ret_lenders = @intCast(proc.rc_ret_lenders),
+                .ret_unique = proc.rc_ret_unique,
+                .ret_unique_fields = proc.rc_ret_unique_fields,
+                .ret_conditions = .{ .start = @intCast(rows_start), .len = @intCast(external_rows.items.len - rows_start) },
+                .read_only_params = @intCast(proc.rc_read_only_params),
             };
         } else if (!solver.pinned.isSet(proc_index)) {
             const params = store.getLocalSpan(proc.args);
@@ -968,9 +990,17 @@ pub fn solveWithOptions(
         var tail_call_table = try buildTailCallTable(&solver, &binding);
         errdefer tail_call_table.deinit(allocator);
 
-        var visible = try computeVisibilityFromFacts(allocator, &solver);
+        // Without thread-confined counts every local may be host-visible, so
+        // every RC statement is atomic and no visibility fact is consulted.
+        const initial_ret_conditions = try external_rows.toOwnedSlice(allocator);
+        errdefer allocator.free(initial_ret_conditions);
+
+        var visible = if (thread_confined_rc)
+            try computeVisibilityFromFacts(allocator, &solver)
+        else
+            try std.bit_set.DynamicBitSetUnmanaged.initFull(allocator, local_count);
         errdefer visible.deinit(allocator);
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .Debug and thread_confined_rc) {
             var independently_visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns);
             defer independently_visible.deinit(allocator);
             if (!visible.eql(independently_visible)) solveInvariant("typed visibility facts disagreed with independent LIR analysis");
@@ -1108,7 +1138,7 @@ pub fn solveWithOptions(
             .unique_conds = unique_conds,
             .unique_origins_ok = unique_origins_ok,
             .fresh_reads = fresh_reads,
-            .ret_conditions = &.{},
+            .ret_conditions = initial_ret_conditions,
             .pinned = solver.pinned,
         };
     };
@@ -1156,6 +1186,7 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -1357,7 +1388,7 @@ fn computeOutcomeRestitution(
             entry.value_ptr.* = join_point.body;
         }
 
-        var accum = std.AutoHashMap(u16, OutcomeAccum).init(allocator);
+        var accum = std.AutoHashMap(u32, OutcomeAccum).init(allocator);
         defer accum.deinit();
         var valid = true;
         var solved_param_count: usize = 0;
@@ -1368,7 +1399,7 @@ fn computeOutcomeRestitution(
             @memset(bit_escape_discriminants, no_local);
             @memset(bit_escape_present, false);
             if (@import("builtin").mode == .Debug) outcome_scratch_entries += bit_escape_discriminants.len + bit_escape_present.len;
-            var bit_accum = std.AutoHashMap(u16, OutcomeBitAccum).init(allocator);
+            var bit_accum = std.AutoHashMap(u32, OutcomeBitAccum).init(allocator);
             defer bit_accum.deinit();
             var stack = std.ArrayList(OutcomeWalkState).empty;
             defer stack.deinit(allocator);
@@ -1450,6 +1481,15 @@ fn computeOutcomeRestitution(
                     .assign_boxy_dict_ref => |assign| try pushNext(&stack, allocator, next_state, assign.next),
                     .assign_boxy_box => |assign| {
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.payload, assign.payload_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_record_update => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.base, .borrow) or
+                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.fields, .move))
+                        {
                             valid = false;
                             break;
                         }
@@ -1666,7 +1706,7 @@ fn computeOutcomeRestitution(
                             valid = false;
                             break;
                         }
-                        const discriminant: u16 = @intCast(next_state.discriminant);
+                        const discriminant: u32 = @intCast(next_state.discriminant);
                         const entry = try bit_accum.getOrPut(discriminant);
                         if (entry.found_existing) {
                             entry.value_ptr.present_on_all_paths = entry.value_ptr.present_on_all_paths and next_state.present;
@@ -2168,6 +2208,7 @@ fn liftProcStmtFacts(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -2298,10 +2339,11 @@ fn collectAll(solver: *Solver) SolveError!void {
         .borrow => |borrow| noteBorrowDef(solver, borrow.target, borrow.source),
         .alias => |alias| noteAlias(solver, alias.target, alias.source),
         .demand => |local| noteDemand(solver, local),
+        .consuming_result => {},
     };
 
-    // Direct-call demands are the only binding facts that depend on the
-    // current optimistic parameter signatures. Tailness never changes the
+    // Direct-call demands depend on the current optimistic parameter
+    // signatures and compose with primitive ownership-flow demands. Tailness never changes the
     // ownership relation: same-SCC tail arguments get a separate exact
     // lifetime fact after borrowed-return lenders settle.
     for (solver.direct_calls.items) |call| {
@@ -2321,14 +2363,23 @@ fn collectAll(solver: *Solver) SolveError!void {
             noteDemand(solver, arg);
         }
     }
+}
 
-    propagateAliasDemands(solver);
+fn bindingOwnershipFlow(solver: *const Solver, fact: BindingFact) ?OwnershipFlow {
+    return switch (fact) {
+        .alias => |edge| if (solver.domain.indexOf(edge.target)) |target|
+            if (solver.defs[target] != .multi) edge else null
+        else
+            null,
+        .consuming_result => |edge| edge,
+        .fresh, .multi, .borrow, .demand => null,
+    };
 }
 
 /// Settles the borrowed-parameter lattice from the facts collected above.
-/// A work item is one exact `(callee, parameter position)` bit that just
-/// became owned. Its adjacency list contains only the caller argument locals
-/// whose demand depends on that bit.
+/// A work item is one newly demanded local. Ownership-flow adjacency supplies
+/// its source demands; a parameter that flips owned supplies the exact caller
+/// arguments that depend on that signature bit.
 fn solveParameterModes(solver: *Solver) SolveError!void {
     // Compact the collected edge facts into dense offsets. This preserves
     // exact dependency lookup without one allocation-capable list object for
@@ -2349,18 +2400,76 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
         fill[use.key] += 1;
     }
 
-    var work = std.ArrayList(u32).empty;
-    defer work.deinit(solver.allocator);
-
-    // Static demands, alias-propagated demands, and multi-definition params
-    // seed the worklist.
-    for (0..solver.demand.len) |local_index| {
-        try flipParamIfRequired(solver, @intCast(local_index), &work);
+    // Ownership-flow edges are separate from value aliases: a slice can
+    // transfer its input's unit while changing the list descriptor.
+    const local_count = solver.demand.len;
+    const flow_offsets = try solver.allocator.alloc(u32, local_count + 1);
+    defer solver.allocator.free(flow_offsets);
+    @memset(flow_offsets, 0);
+    var consuming_results = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, local_count);
+    defer consuming_results.deinit(solver.allocator);
+    for (solver.binding_facts.items) |fact| {
+        const flow = bindingOwnershipFlow(solver, fact) orelse continue;
+        const target = solver.domain.indexOf(flow.target) orelse continue;
+        if (solver.domain.indexOf(flow.source) == null) continue;
+        flow_offsets[target + 1] += 1;
+        if (fact == .consuming_result) consuming_results.set(target);
+    }
+    for (1..flow_offsets.len) |index| flow_offsets[index] += flow_offsets[index - 1];
+    const flow_sources = try solver.allocator.alloc(u32, flow_offsets[local_count]);
+    defer solver.allocator.free(flow_sources);
+    const flow_fill = try solver.allocator.dupe(u32, flow_offsets[0..local_count]);
+    defer solver.allocator.free(flow_fill);
+    for (solver.binding_facts.items) |fact| {
+        const flow = bindingOwnershipFlow(solver, fact) orelse continue;
+        const target = solver.domain.indexOf(flow.target) orelse continue;
+        const source = solver.domain.indexOf(flow.source) orelse continue;
+        flow_sources[flow_fill[target]] = source;
+        flow_fill[target] += 1;
     }
 
-    while (work.pop()) |key| {
-        for (edges[offsets[key]..offsets[key + 1]]) |arg| {
-            try demandAliasChain(solver, arg, &work);
+    // A returned truncation must transfer ownership too: lending its input
+    // and retaining at the return would discard a unique buffer's capacity.
+    // Ordinary payload reads and same-value returns retain their borrow rules.
+    var returned_aliases = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, local_count);
+    defer returned_aliases.deinit(solver.allocator);
+    for (solver.proc_returns) |returns| for (returns.items) |local| {
+        var cursor = solver.domain.indexOf(@enumFromInt(local)) orelse continue;
+        while (!returned_aliases.isSet(cursor)) {
+            returned_aliases.set(cursor);
+            if (consuming_results.isSet(cursor)) {
+                solver.demand[cursor] = true;
+                break;
+            }
+            if (solver.defs[cursor] == .multi or solver.alias_source[cursor] == no_local) break;
+            cursor = solver.alias_source[cursor];
+        }
+    };
+
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(solver.allocator);
+    for (0..local_count) |local_index| {
+        if (solver.demand[local_index] or solver.defs[local_index] == .multi) {
+            solver.demand[local_index] = true;
+            try work.append(solver.allocator, @intCast(local_index));
+        }
+    }
+    var changed_params = std.ArrayList(u32).empty;
+    defer changed_params.deinit(solver.allocator);
+    while (work.pop()) |local| {
+        changed_params.clearRetainingCapacity();
+        try flipParamIfRequired(solver, local, &changed_params);
+        for (changed_params.items) |key| {
+            for (edges[offsets[key]..offsets[key + 1]]) |arg| {
+                if (solver.demand[arg]) continue;
+                solver.demand[arg] = true;
+                try work.append(solver.allocator, arg);
+            }
+        }
+        for (flow_sources[flow_offsets[local]..flow_offsets[local + 1]]) |source| {
+            if (solver.demand[source]) continue;
+            solver.demand[source] = true;
+            try work.append(solver.allocator, source);
         }
     }
 }
@@ -2376,21 +2485,6 @@ fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u
     if (!required) return;
     sig.borrowed_params &= ~arc_sig.paramBit(position).?;
     try work.append(solver.allocator, proc_index * arc_sig.tracked_param_count + position);
-}
-
-/// Adds one ownership demand and propagates it through the exact pure-alias
-/// chain. Every newly demanded parameter bit is queued immediately.
-fn demandAliasChain(solver: *Solver, start: u32, work: *std.ArrayList(u32)) SolveError!void {
-    var cursor = start;
-    while (true) {
-        if (solver.demand[cursor]) return;
-        solver.demand[cursor] = true;
-        try flipParamIfRequired(solver, cursor, work);
-        if (solver.defs[cursor] == .multi) return;
-        const source = solver.alias_source[cursor];
-        if (source == no_local) return;
-        cursor = source;
-    }
 }
 
 /// Changes only the definition facts whose kind depends on solved return
@@ -2540,26 +2634,6 @@ fn noteAlias(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
         no_local;
 }
 
-/// Demands on aliases are demands on their sources, transitively: the chain
-/// shares one value whose single unit should move through the chain to the
-/// consuming occurrence rather than the alias paying a retain while the
-/// source's unit is separately released.
-fn propagateAliasDemands(solver: *Solver) void {
-    for (0..solver.demand.len) |start| {
-        if (!solver.demand[start]) continue;
-        var cursor: u32 = @intCast(start);
-        while (true) {
-            // A multi-bound alias names different values over time; its
-            // recorded edge is not a same-value link.
-            if (solver.defs[cursor] == .multi) break;
-            const source = solver.alias_source[cursor];
-            if (source == no_local or solver.demand[source]) break;
-            solver.demand[source] = true;
-            cursor = source;
-        }
-    }
-}
-
 fn noteDef(solver: *Solver, local: LIR.LocalId, kind: DefKind) void {
     const index = solver.domain.indexOf(local) orelse return;
     solver.defs[index] = switch (solver.defs[index]) {
@@ -2595,12 +2669,13 @@ fn noteDemand(solver: *Solver, local: LIR.LocalId) void {
 }
 
 fn liftVisibilityLink(solver: *Solver, a: LIR.LocalId, b: LIR.LocalId) SolveError!void {
-    if (a == b) return;
+    if (!solver.thread_confined_rc or a == b) return;
     if (solver.domain.indexOf(a) == null or solver.domain.indexOf(b) == null) return;
     try solver.visibility_facts.append(solver.allocator, .{ .link = .{ .a = a, .b = b } });
 }
 
 fn liftVisibilitySeed(solver: *Solver, local: LIR.LocalId) SolveError!void {
+    if (!solver.thread_confined_rc) return;
     if (solver.domain.indexOf(local) == null) return;
     try solver.visibility_facts.append(solver.allocator, .{ .seed = local });
 }
@@ -2835,6 +2910,16 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.payload_desc) |desc| try liftBoxyDescRead(solver, desc);
             try liftVisibilityLink(solver, assign.target, assign.payload);
         },
+        .assign_boxy_record_update => |assign| {
+            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+            try liftBoxyTransfer(solver, assign.base, .borrow, current);
+            try liftBoxyTransfer(solver, assign.fields, .move, current);
+            try liftBoxyDescRead(solver, assign.base_desc);
+            try liftBoxyDescRead(solver, assign.fields_desc);
+            try liftVisibilityLink(solver, assign.target, assign.base);
+            try liftVisibilityLink(solver, assign.target, assign.fields);
+        },
         .assign_boxy_reuse_box => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.binding_facts.append(allocator, .{ .demand = assign.source });
@@ -2937,6 +3022,16 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_low_level => |assign| {
             const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
             const args = store.getLocalSpan(assign.args);
+            if (assign.op.arcBorrowedResultVariant() != null and assign.op != .box_unbox) {
+                const consumed = assign.rc_effect.consume_args;
+                for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
+                    if ((consumed & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                    try solver.binding_facts.append(allocator, .{ .consuming_result = .{
+                        .target = assign.target,
+                        .source = GuardedList.at(args, position),
+                    } });
+                }
+            }
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
             if (rc_effect.retain_result and borrow_source != no_local) {
                 const source: LIR.LocalId = @enumFromInt(solver.domain.localAt(borrow_source));
@@ -3489,7 +3584,7 @@ fn computeVisibilityFromLift(
                         try stack.append(allocator, stmt.body);
                         try stack.append(allocator, stmt.remainder);
                     },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                         try stack.append(allocator, stmt.next);
                     },
                     .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -3592,6 +3687,10 @@ fn computeVisibilityFromLift(
             },
             .assign_boxy_box => |assign| {
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.payload));
+            },
+            .assign_boxy_record_update => |assign| {
+                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.base));
+                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.fields));
             },
             .assign_boxy_reuse_box => |assign| {
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
@@ -4944,6 +5043,9 @@ const UniquenessComponentTask = struct {
         var sig = self.solution.sigs[proc_index];
         var rows = std.ArrayList(arc_sig.RetCondition).empty;
         const pinned = self.solution.pinned.isSet(proc_index);
+        // A pinned signature's rows are fixed input: none for an ABI
+        // contract, and an object-cache entry's own for an external proc.
+        if (pinned) try rows.appendSlice(allocator, self.solution.sigTable().retConditionsOf(sig));
         if (!pinned) {
             const proc = self.store.getProcSpec(@enumFromInt(proc_index));
             const params = self.store.getLocalSpan(proc.args);
@@ -5306,6 +5408,7 @@ fn settleUniquenessOracle(
             const sig = &solution.sigs[proc_index];
             const old_rows = solution.sigTable().retConditionsOf(sig.*);
             const row_start = rows.items.len;
+            if (solution.pinned.isSet(proc_index)) try rows.appendSlice(allocator, old_rows);
             // Borrowed positions the body only reads add no holder to the
             // caller's argument.
             if (!solution.pinned.isSet(proc_index)) {
@@ -5889,6 +5992,12 @@ fn computeUniquenessDetailed(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.payload, assign.payload_mode, @intCast(stmt_index));
+            },
+            .assign_boxy_record_update => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.noteBirth(&born, assign.target);
+                try marks.transfer(allocator, &consumes, &destroyed, assign.base, .borrow, @intCast(stmt_index));
+                try marks.transfer(allocator, &consumes, &destroyed, assign.fields, .move, @intCast(stmt_index));
             },
             .assign_boxy_reuse_box => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
@@ -6553,6 +6662,7 @@ fn computeUniquenessDetailed(
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -7245,8 +7355,9 @@ test "component uniqueness preserves shared RC definitions shared statements and
     try std.testing.expect(solution.unique_born.isSet(@intFromEnum(bodyless)));
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(bodyless)]);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(shared)]);
-    // Pinned capabilities are contracts, but their conditional rows follow
-    // the legacy rule and are cleared rather than inferred.
+    // A pinned signature's capabilities and conditional rows are contracts
+    // (an external proc's come from its cache entry): settlement keeps them
+    // rather than inferring them.
     allocator.free(solution.ret_conditions);
     solution.ret_conditions = try allocator.dupe(arc_sig.RetCondition, &.{.{ .field = 0, .params = 1 }});
     solution.sigs[3].ret_conditions = .{ .start = 0, .len = 1 };
@@ -7255,7 +7366,10 @@ test "component uniqueness preserves shared RC definitions shared statements and
     solution.sigs[3].ret_unique_fields = 1;
     metrics = .{};
     try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
-    try std.testing.expectEqual(@as(u32, 0), solution.sigs[3].ret_conditions.len);
+    const kept_rows = solution.sigTable().retConditionsOf(solution.sigs[3]);
+    try std.testing.expectEqual(@as(usize, 1), kept_rows.len);
+    try std.testing.expectEqual(@as(u8, 0), kept_rows[0].field);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), kept_rows[0].params);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.sigs[3].read_only_params);
     try std.testing.expect(solution.sigs[3].ret_unique);
     try std.testing.expectEqual(@as(u64, 1), solution.sigs[3].ret_unique_fields);

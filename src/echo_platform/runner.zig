@@ -333,10 +333,7 @@ fn runEchoView(
             diag.step("interpreter.runEntrypoint", err);
             return error.EvaluationFailed;
         },
-        error.Crash => {
-            diag.step("interpreter.runEntrypoint", err);
-            return error.EvaluationFailed;
-        },
+        error.Crash => roc_ops.crash(interpreter.getCrashMessage()),
         error.ComptimeExhaustiveness => {
             diag.step("interpreter.runEntrypoint", err);
             return error.EvaluationFailed;

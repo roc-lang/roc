@@ -25,12 +25,18 @@ fn finishPass() void {
     report_len = message.len;
 }
 
-fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
+/// `roc_alloc` and `roc_realloc` must not return to Roc without an
+/// allocation, so an allocation failure traps.
+fn allocationFailed() noreturn {
+    @trap();
+}
+
+fn allocRaw(length: usize, alignment: usize) *anyopaque {
     if (alignment == 0 or (alignment & (alignment - 1)) != 0) {
         fail("invalid allocation alignment");
-        return null;
+        allocationFailed();
     }
-    const ptr = host_alloc.alloc(backing, length, alignment) orelse return null;
+    const ptr = host_alloc.alloc(backing, length, alignment) orelse allocationFailed();
     alloc_count += 1;
     return ptr;
 }
@@ -41,15 +47,15 @@ fn deallocRaw(ptr: ?*anyopaque, alignment: usize) void {
     dealloc_count += 1;
 }
 
-fn reallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) ?*anyopaque {
+fn reallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) *anyopaque {
     const old = ptr orelse return allocRaw(length, alignment);
-    const answer = host_alloc.realloc(backing, old, length, alignment) orelse return null;
+    const answer = host_alloc.realloc(backing, old, length, alignment) orelse allocationFailed();
     alloc_count += 1;
     dealloc_count += 1;
     return answer;
 }
 
-fn hostAlloc(_: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(_: *abi.RocHost, length: usize, alignment: usize) callconv(.c) *anyopaque {
     return allocRaw(length, alignment);
 }
 
@@ -57,7 +63,7 @@ fn hostDealloc(_: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) 
     deallocRaw(ptr, alignment);
 }
 
-fn hostRealloc(_: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(_: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return reallocRaw(ptr, new_length, alignment);
 }
 
@@ -79,13 +85,13 @@ var roc_host = abi.RocHost{
     .roc_crashed = &hostCrashed,
 };
 
-fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     return allocRaw(length, alignment);
 }
 fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
     deallocRaw(ptr, alignment);
 }
-fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return reallocRaw(ptr, new_length, alignment);
 }
 fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}

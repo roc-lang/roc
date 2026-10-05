@@ -87,7 +87,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     module_env.common.source = source;
     module_env.module_name = module_name;
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     // Put the other module in the env map using module_env's ident store
@@ -261,7 +260,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     module_env.common.source = source;
     module_env.module_name = module_name;
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     // Parse the AST
@@ -368,7 +366,6 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     module_env.common.source = source;
     module_env.module_name = module_name;
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     const parse_ast = try parse.file(gpa, &module_env.common);

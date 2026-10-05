@@ -35,7 +35,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { other: "../../other/main.roc", pf: platform "../main.roc" }
 ~~~
 # CANONICALIZE
 ~~~clojure

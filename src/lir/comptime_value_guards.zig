@@ -8,7 +8,7 @@ const Body = @import("body_clone.zig");
 const GuardedList = core.LirStore.GuardedList;
 
 const Use = struct { proc: LIR.LirProcSpecId, stmt: LIR.CFStmtId, slot: LIR.StaticDataId };
-const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR.CFStmtId };
+const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR.CFStmtId, checked_crash: LIR.CFStmtId };
 
 /// Insert explicit failure checks before each compile-time value slot read.
 /// A program lowered after its compile-time roots completed passes their
@@ -49,7 +49,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             try Body.appendSuccessors(store, &work, stmt_id);
             const assign = switch (store.getCFStmt(stmt_id)) {
                 .assign_literal => |a| a,
-                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => continue,
+                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
                 .static_data => |id| id,
@@ -85,14 +85,23 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         guard_origin.kind = .comptime_value_guard;
         const success = try store.addCFStmt(store.getCFStmt(use.stmt), use_origin);
         const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message } } }, guard_origin);
+        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
             .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
             .next = crash,
         } }, guard_origin);
+        const load_checked_message = try store.addCFStmt(.{ .assign_ref = .{
+            .target = message,
+            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
+            .next = checked_crash,
+        } }, guard_origin);
         const branch = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = failed,
-            .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = success }}),
+            .branches = try store.addCFSwitchBranches(&.{
+                .{ .value = @intFromEnum(Program.ComptimeFailureKind.none), .body = success },
+                .{ .value = @intFromEnum(Program.ComptimeFailureKind.checked_error), .body = load_checked_message },
+            }),
             .default_branch = load_message,
             .default_is_cold = true,
         } }, guard_origin);
@@ -106,7 +115,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             .value = .{ .static_data = failure_slot },
             .next = load_failed,
         } }, guard_origin);
-        try guards.put(use.stmt, .{ .locals = .{ record, failed, message }, .success = success, .crash = crash });
+        try guards.put(use.stmt, .{ .locals = .{ record, failed, message }, .success = success, .crash = crash, .checked_crash = checked_crash });
     }
     // Preserve each owner discovered before rewriting shared statements.
     for (uses.items) |use| {
@@ -121,6 +130,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             .success = guard.success,
             .value_slot = use.slot,
             .crash = guard.crash,
+            .checked_crash = guard.checked_crash,
         });
     }
     var locals: std.ArrayList(LIR.LocalId) = .empty;

@@ -180,6 +180,14 @@ pub const Store = struct {
         unreachable;
     }
 
+    /// Record that the compile-time root selected to execute this site failed
+    /// and left its code to runtime, so the diagnostic is decided statically.
+    pub fn markPendingStaticExhaustivenessStatic(self: *Self, site: CheckedExhaustivenessSiteId) void {
+        for (self.pending_static_exhaustiveness.items) |*pending| {
+            if (pending.site != null and pending.site.? == site) pending.mode = .static;
+        }
+    }
+
     pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
@@ -251,6 +259,7 @@ pub const Store = struct {
                     .annotation_only_value,
                     .annotation_only_value_use,
                     .derived_method_value_use,
+                    .capturing_local_type_escape,
                     .unsupported_generated_method,
                     .hosted_unboxed_function,
                     .hosted_function_not_effectful,

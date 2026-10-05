@@ -235,7 +235,7 @@ pub const LayoutData = std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layo
 /// Equal-alignment fields preserve that earlier semantic order.
 pub const StructField = struct {
     /// The canonical semantic index of this field before layout sorting.
-    index: u16,
+    index: u32,
     /// The layout of the field's value
     layout: Idx,
     /// True for unnamed nominal-record padding spacers. Such a field reserves
@@ -356,7 +356,7 @@ pub const TagUnionData = struct {
     size: WidthValues(u32),
     /// Offset of the discriminant within the union (after the payload),
     /// precomputed for both pointer widths.
-    discriminant_offset: WidthValues(u16),
+    discriminant_offset: WidthValues(u32),
     /// Size of the discriminant in bytes (0, 1, 2, 4, or 8).
     /// A size of 0 means the tag union has exactly one variant, so the
     /// discriminant is implicit and always 0.
@@ -668,7 +668,7 @@ pub const TagUnionInfo = struct {
     /// Size in bytes, resolved for the store's target.
     byte_size: u32,
     /// Discriminant offset, resolved for the store's target.
-    discriminant_offset: u16,
+    discriminant_offset: u32,
     variants: TagUnionVariant.SafeMultiList.Slice,
     contains_refcounted: bool,
 

@@ -239,10 +239,13 @@ pub const Store = struct {
     /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
         const idx = try self.interner.insert(gpa, ident.raw_text);
+        // The 29-bit id space is the store's capacity; `maxInt(u29)` is the
+        // `NONE` sentinel.
+        if (@intFromEnum(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
 
         const result = Idx{
             .attributes = ident.attributes,
-            .idx = @as(u29, @intCast(@intFromEnum(idx))),
+            .idx = @intCast(@intFromEnum(idx)),
         };
 
         return result;
@@ -313,6 +316,7 @@ pub const Store = struct {
         const name = str_buffer[digit_index + 1 ..];
 
         const idx = try self.interner.insert(gpa, name);
+        if (@intFromEnum(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
 
         const attributes = Attributes{
             .effectful = false,
@@ -330,7 +334,7 @@ pub const Store = struct {
 
         const result = Idx{
             .attributes = attributes,
-            .idx = @truncate(@intFromEnum(idx)),
+            .idx = @intCast(@intFromEnum(idx)),
         };
 
         return result;

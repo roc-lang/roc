@@ -1,6 +1,6 @@
 app [main] { pf: platform "./issue9717-platform/main.roc" }
 
-import pf.Elem exposing [Elem]
+import pf.Elem
 import pf.Html
 import pf.Signal
 import pf.Ui

@@ -3,6 +3,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const CacheConfig = @import("compile").CacheConfig;
+const CoreCtx = @import("ctx").CoreCtx;
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
 const DocumentStore = @import("document_store.zig").DocumentStore;
@@ -38,7 +40,7 @@ const code_action_handler_mod = @import("handlers/code_action.zig");
 const log = std.log.scoped(.roc_lsp_server);
 
 /// Errors that can occur while opening the optional LSP debug log.
-pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError;
+pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError || std.Io.Dir.CreateDirPathError || error{NoHomeDirectory};
 /// Errors that can occur while running the LSP server over standard IO.
 pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || error{
     EndOfStream,
@@ -413,7 +415,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
 }
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
-pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) RunWithStdIoError!void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, roc_ctx: CoreCtx, debug: DebugOptions) RunWithStdIoError!void {
     var stdin_file = std.Io.File.stdin();
     var stdout_file = std.Io.File.stdout();
 
@@ -425,7 +427,7 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOp
     var log_file: ?std.Io.File = null;
     const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
     if (enable_logging) {
-        const log_info = try createLogFile(allocator, std_io);
+        const log_info = try createLogFile(allocator, std_io, roc_ctx);
         log_file = log_info.file;
         const stderr_file = std.Io.File.stderr();
         stderr_file.writeStreamingAll(std_io, "roc-lsp logging to ") catch {};
@@ -455,12 +457,15 @@ const LogFileInfo = struct {
     path: []u8,
 };
 
-fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) CreateLogFileError!LogFileInfo {
-    const dir_path = try resolveTempDir(allocator);
+/// Open the debug log in the user's Roc cache directory, which only that user
+/// can write to, creating the directory if needed.
+fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io, roc_ctx: CoreCtx) CreateLogFileError!LogFileInfo {
+    const cache_config = CacheConfig{ .roc_ctx = roc_ctx };
+    const dir_path = try cache_config.getEffectiveCacheDir(allocator);
     defer allocator.free(dir_path);
-    const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
-    defer allocator.free(filename);
-    const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
+    try std.Io.Dir.cwd().createDirPath(std_io, dir_path);
+    const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, "lsp-debug.log" });
+    errdefer allocator.free(absolute_path);
     const file = std.Io.Dir.createFileAbsolute(std_io, absolute_path, .{
         .truncate = false,
         .read = true,
@@ -496,28 +501,4 @@ fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) CreateLogFileErro
     };
     // File is opened in append mode (non-truncate)
     return .{ .file = file, .path = absolute_path };
-}
-
-fn resolveTempDir(allocator: std.mem.Allocator) Allocator.Error![]u8 {
-    const env_names = if (builtin.os.tag == .windows)
-        [_][]const u8{ "TMP", "TEMP", "LOCALAPPDATA" }
-    else
-        [_][]const u8{ "TMPDIR", "TMP", "TEMP" };
-
-    for (env_names) |name| {
-        const value = blk: {
-            const key_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
-            defer allocator.free(key_z);
-            const cval = std.c.getenv(key_z) orelse continue;
-            const len = std.mem.len(cval);
-            break :blk allocator.dupe(u8, cval[0..len]) catch return error.OutOfMemory;
-        };
-        return value;
-    }
-
-    if (builtin.os.tag == .windows) {
-        return try allocator.dupe(u8, ".");
-    } else {
-        return try allocator.dupe(u8, "/tmp");
-    }
 }

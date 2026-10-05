@@ -10,18 +10,18 @@ same = |a, b| if a == Nope { False } else { a == b }
 x = same(Fn(|z| z), Fn(|z| z))
 ~~~
 # EXPECTED
-TYPE DOES NOT SUPPORT EQUALITY - derived_eq_open_row_rejects_function_tail.md:1:18:1:27
+TYPE DOES NOT SUPPORT EQUALITY - derived_eq_open_row_rejects_function_tail.md:3:5:3:9
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Type Does Not Support Equality")
-		(region (start 1 18) (end 1 27))
+		(region (start 3 5) (end 3 9))
 		(headline
 			(reflow "This expression is doing an equality check on a type that doesn't support equality."))
 		(document
-			(source-region (file "derived_eq_open_row_rejects_function_tail.md") (start 1 18) (end 1 27) (annotation error) (line-text "same = |a, b| if a == Nope { False } else { a == b }"))
+			(source-region (file "derived_eq_open_row_rejects_function_tail.md") (start 3 5) (end 3 9) (annotation error) (line-text "x = same(Fn(|z| z), Fn(|z| z))"))
 			(line-break)
 			(reflow "The type is:")
 			(line-break)
@@ -132,10 +132,16 @@ x = same(Fn(|z| z), Fn(|z| z))
 							(e-tag (name "False")))))
 				(if-else
 					(e-block
-						(e-runtime-error (tag "erroneous_value_expr")))))))
+						(e-structural-eq (negated "false")
+							(lhs
+								(e-lookup-local
+									(p-assign (ident "a"))))
+							(rhs
+								(e-lookup-local
+									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 278)
+		(e-call (constraint-fn-var 279)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-tag (name "Fn")
 				(args

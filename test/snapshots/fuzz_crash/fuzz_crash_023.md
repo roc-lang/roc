@@ -2149,13 +2149,14 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 import pf.Stdout exposing [line!, write!]
 
 import # Comment after import keyword
-	pf.StdoutMultiline # Comment after ident
+	pf # Comment after qualifier
+	.StdoutMultiline # Comment after ident
 		exposing [ # Comment after exposing open
 			line!, # Comment after exposed item
 			write!, # Another after exposed item
 		] # Comment after exposing close
 
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+import pkg.Something exposing [Custom.*, Type as ValueCategory, func as function]
 
 import BadName as GoodName
 import
@@ -2293,7 +2294,7 @@ main! = |_| { # Yeah I can leave a comment here
 	tag = Blue
 	return # Comment after return statement
 
-	# Just a random comment!
+		# Just a random comment!
 
 		
 	match_time(
