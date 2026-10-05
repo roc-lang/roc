@@ -12377,6 +12377,14 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const value_ty = value.typeOfWip(wip);
         if (value_ty == target_ty) return value;
+        const builder = wip.builder;
+        if (value_ty.scalarTag(builder) == .integer and target_ty.scalarTag(builder) == .integer and
+            value_ty.scalarBits(builder) > target_ty.scalarBits(builder))
+        {
+            // Narrowing also extracts raw limbs and implements wrapping casts.
+            // Builder.conv now adds nuw/nsw, but discarded bits may be nonzero.
+            return wip.cast(.trunc, value, target_ty, "") catch return error.OutOfMemory;
+        }
         return wip.conv(if (signed) .signed else .unsigned, value, target_ty, "") catch return error.OutOfMemory;
     }
 
