@@ -329,10 +329,7 @@ const StaticInitializerMachine = struct {
                 .assign_struct => |assign| assign.next,
                 .assign_tag => |assign| assign.next,
                 .set_local => |assign| assign.next,
-                .incref => |arc| arc.next,
-                .decref => |arc| arc.next,
-                .decref_if_initialized => |arc| arc.next,
-                .free => |arc| arc.next,
+                inline .incref, .decref, .decref_if_initialized, .free => |arc| arc.next,
                 .ret,
                 .init_uninitialized,
                 .assign_call,
@@ -466,10 +463,7 @@ const StaticInitializerMachine = struct {
                     setLocal(locals, assign.target, try self.cloneValueAs(source, target_layout));
                     current = assign.next;
                 },
-                .incref => |arc| current = arc.next,
-                .decref => |arc| current = arc.next,
-                .decref_if_initialized => |arc| current = arc.next,
-                .free => |arc| current = arc.next,
+                inline .incref, .decref, .decref_if_initialized, .free => |arc| current = arc.next,
                 .ret => |ret| {
                     const value = local(locals, ret.value);
                     if (value.layout_idx != proc.ret_layout) {
@@ -525,8 +519,7 @@ const StaticInitializerMachine = struct {
     ) MaterializationError!*SymbolicValue {
         return switch (op) {
             .local => |source| try self.cloneValueAs(local(locals, source), target_layout),
-            .list_reinterpret => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
-            .nominal => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
+            inline .list_reinterpret, .nominal => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
             .discriminant,
             .field,
             .tag_payload,
