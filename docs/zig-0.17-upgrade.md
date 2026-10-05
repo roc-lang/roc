@@ -3,8 +3,11 @@
 This records the source migration and validation on the Zig 0.17 upgrade
 branch. Roc requires Zig 0.17.0 and a compatible roc-bootstrap dependency
 bundle containing LLVM/Clang/LLD 22.1.8. A compatible LLVM 22 musl/libc++
-bundle has been built locally and passed its static C++ LLVM/LLD, Binaryen, zlib, and zstd probe. A published release
-and complete native Roc validation are still pending.
+bundle has been built locally and passed its static C++ LLVM/LLD, Binaryen,
+zlib, and zstd probe. The full native Debug Roc build passes all 152 build
+steps, and the native, generated Zig glue, and small WASM gates below pass.
+A published roc-bootstrap release and ReleaseFast performance measurements
+are still pending.
 
 ## Source and compiler correctness
 
@@ -87,21 +90,29 @@ cache levels.
 
 Other validated source checks include canonical C/Rust glue output byte
 equality against the pre-migration compiler, seven target ABI compile
-checks for the static Zig glue declarations, and Bytebox continuation-count
+checks for generated Zig glue, and Bytebox continuation-count
 regression coverage beyond 65,535. Bytebox's public `Val` retains 16-byte
 size and alignment. The echo-WASM runner compiles in Debug and its argument contract
 was checked outside the checkout; executing the complete echo artifact is
 still pending.
 
-The seven Zig ABI checks compile `test/glue/zig_abi_lock.zig` against an
-extracted template containing six byte-exact current `ZigGlue.roc` static
-blocks, plus the RocStr release-policy registry needed by that template.
-They passed for x86_64/aarch64 Linux musl, x86_64/aarch64 macOS,
-x86_64/aarch64 Windows MSVC, and wasm32-freestanding-none. A renamed RocStr
-field is rejected by the same lock. These checks cover layout and runtime
-signatures; actual `roc glue` generation and the complete generated-glue
-ABI gate remain pending. Exact rerun commands and results were retained at
-`/tmp/roc-017-abi-review-results.json`; the complete generation gate is:
+The seven Zig ABI checks now compile `test/glue/zig_abi_lock.zig` against
+the actual `roc_platform_abi.zig` emitted by the newly linked Debug Roc:
+
+```sh
+roc glue src/glue/src/ZigGlue.roc /private/output test/fx/platform/main.roc
+```
+
+Generation ran in a private fixture copy. Its output passes the ReleaseSafe
+compile-only lock for x86_64/aarch64 Linux musl, x86_64/aarch64 macOS,
+x86_64/aarch64 Windows MSVC, and wasm32-freestanding-none. Exact generation
+and seven `zig build-obj` commands, logs, and results are retained at
+`/tmp/roc-017-generated-glue-gates-fikkc8xk/results.json`. These checks cover
+generated Zig layout and runtime signatures; they do not claim native
+execution on those other targets or the complete generated C/Rust gate.
+An earlier extracted-template control rejects a renamed RocStr field
+(`/tmp/roc-017-abi-review-results.json`). The complete multi-language gate
+can be rerun with:
 
 ```sh
 zig build run-check-glue-abi -Doptimize=ReleaseSafe \
@@ -111,8 +122,8 @@ zig build run-check-glue-abi -Doptimize=ReleaseSafe \
 The final CLI classification audit adds the six new Zig OS tags to the
 existing filename, platform-support, linker, and fixture-policy branches.
 A compile-only probe using the current source declarations validates the
-install/fixture classifiers and native host selection; full CLI execution
-is pending the newly linked Roc binary.
+install/fixture classifiers and native host selection. The native CLI
+execution checks below use the newly linked Roc binary.
 
 After the full suites, the official Zig 0.17 formatter updated 144 tracked
 source/test/vendor files. A token-preserving comparison verified only enum
@@ -162,6 +173,24 @@ an identical stdlib copy preserves identity, while adding a stdlib file
 changes identity and only its toolchain digest. These are build graph
 correctness checks, not full native cross-target runtime measurements.
 
+Mutable dependency bundles and relocated stdlib copies are identified by
+their bytes. Verified immutable Nix dependency bundles use their complete
+store path to avoid copying and hashing multi-GiB libraries. A stable store
+path reuses identity; assembling identical headers and libraries under a
+different store output conservatively changes the compiler identity and
+cache namespace, including a metadata-only recipe change.
+
+Deleting an installed host-tool executable restores identical bytes with
+its compilation cached. Deleting an individual internal identity Run or
+Options output instead fails with `FileNotFound` while its producer remains
+cached. Minimal stock Zig 0.17 Run and WriteFiles/InstallFile graphs
+reproduce this behavior; discarding their private local cache and rebuilding
+regenerates the files. The same minimal declared Run deletion also fails
+under Zig 0.16, confirming a preexisting upstream limitation. This is
+partial-cache corruption recovery outside the 14-case matrix, rather than
+a Roc repair. Exact probes and logs
+are retained at `/tmp/roc-017-small-cache-gates-tplz59o0`.
+
 The fixture check passes concurrent separate-cache/mode and shared-cache
 graphs, selected host overlays, preserved tracked CRT inputs, immutable
 cached roots, private runner writes, and reuse after `.pyc`/`.pyo` edits.
@@ -189,6 +218,86 @@ For separate caches, use `--cache-dir` for the local build cache and
 `ZIG_GLOBAL_CACHE_DIR` for Zig's global cache. Zig 0.17's `zig build` does
 not accept the compiler subcommand's `--global-cache-dir` flag.
 
+## Native CLI and cache execution
+
+The updated Debug Roc at source checkpoint `06d8403a4f` passes the following
+private-fixture checks. The host and Bytebox runner used for WASM were
+built with ReleaseSafe. These are correctness checks; recorded command
+durations are diagnostic logs, not performance measurements.
+
+| Gate | Result | Exact command and log records |
+| --- | --- | --- |
+| Five fresh cache roots: interpreter, dev run, dev build, execute | 20 commands passed | `/tmp/roc-017-debug-native-fixed-rhw433t4/results.json` |
+| Native dev/size/speed build and execute, package check/test, two cached dev build/execute cycles | 12 commands passed; one Roc expect passed | same native results file |
+| Existing Zig 0.16 Roc against the same cache root | Cleanup ran; both canaries and all nine current cache artifacts survived | `/tmp/roc-017-debug-native-fixed-rhw433t4/shared-016-cache-results.json` |
+| Actual Zig glue generation and seven target ABI locks | 8 commands passed | `/tmp/roc-017-generated-glue-gates-fikkc8xk/results.json` |
+| Small WASM dev/size/speed build and explicit-artifact Bytebox execution | 6 commands passed | `/tmp/roc-017-small-wasm-gates-fb5qfsdp/runtime-results.json` |
+| Imported Roc module baseline/create/edit/delete/restore/revert with warm caches | 11 commands passed, including two expected missing-module failures | `/tmp/roc-017-imported-module-gates-3crglyjc/results.json` |
+
+Each record includes the exact argv, working directory, cache environment,
+exit status, and output log paths. Fixtures and generated artifacts were
+copied into private `/tmp` projects, with separate Roc, Zig, XDG, install,
+and temporary directories. The imported-module matrix also verifies the
+original checkout fixture hashes remain unchanged. Native smoke commands,
+run from a private copy of `test/echo`, include:
+
+```sh
+roc --opt=interpreter --no-cache platformless_app.roc
+roc --opt=dev --no-cache platformless_app.roc
+roc build --opt=dev --no-cache --output=/private/native-dev platformless_app.roc
+/private/native-dev
+roc build --opt=size --no-cache --output=/private/native-size platformless_app.roc
+roc build --opt=speed --no-cache --output=/private/native-speed platformless_app.roc
+roc check --no-cache platformless_app_with_package.roc
+roc test --no-cache platformless_app_with_package.roc
+roc build --opt=dev --output=/private/native-cached platformless_app.roc
+```
+
+Native run and emitted-binary checks require the exact `Hello, World!`
+output. The imported-module matrix creates an imported `Suffix.roc`, edits
+its exported suffix from `!` to `?`, and observes `Hello, World?` using the
+same warm cache. Deleting the file makes both `roc check` and `roc
+--opt=dev` fail instead of replaying cached success. Restoring it restores
+the changed output; reverting the importer and deleting the added module
+returns `Hello, World!`, including another unchanged warm run.
+
+The first native builds exposed a migration regression in legacy cache
+cleanup: the new 64-hex-character compatibility namespace was classified
+as a legacy hash directory and deleted while its platform inputs were in
+use. Five fresh Zig 0.17 Debug controls failed the first dev build; all
+five equivalent retained Zig 0.16 ReleaseFast controls passed
+(`/tmp/roc-017-debug-native-gates-mlvnv_am/fresh-baseline-matrix.json`). The
+fix removes ambiguous directory-name deletion and retains explicit flat
+legacy `.rcache` cleanup. Its actual background-thread filesystem
+regression fails before the fix and passes afterward; all seven cleanup
+tests pass in ReleaseSafe. Exact standalone module arguments and logs are
+retained at `/tmp/roc-017-cache-cleanup-test-args.json` and
+`/tmp/roc-017-cache-cleanup-after.log`.
+
+Cache directories now use `compat-<ID>` while semantic compatibility IDs
+and artifact key inputs stay unchanged. This prefix also protects current
+namespaces from the unchanged Zig 0.16 compiler's legacy cleanup. In the
+shared-root execution test, a bare 64-hex-directory negative control is
+deleted, proving that old cleanup ran. The actual prefixed namespace's
+scratch and artifact canaries retain their contents, and all nine current
+cache artifacts retain their hashes. The two cache-directory tests also
+pass in ReleaseSafe.
+
+The small WASM checks use the emitted `host.wasm` in an isolated platform
+fixture and explicitly pass each final app artifact to the runner:
+
+```sh
+roc build --target=wasm32 --opt=dev --no-cache \
+    --output=/private/app-dev.wasm test/wasm/app.roc
+/private/wasm_runner --wasm-path /private/app-dev.wasm \
+    --expected 'Hello from Roc WASM!'
+```
+
+The same commands pass with `--opt=size` and `--opt=speed`. Host and runner
+compilation commands are retained at
+`/tmp/roc-017-small-wasm-gates-fb5qfsdp/helper-results.json`. This executes
+the small static-library fixture, not the full echo or REPL WASM suites.
+
 ## Workarounds and native validation
 
 - The four LLVM scaling fixes remain ported to LLVM 22.1.8. The assertions
@@ -212,11 +321,11 @@ not accept the compiler subcommand's `--global-cache-dir` flag.
   Zig 0.17 getauxval probe still returns zero. Historical Zig 0.16 source
   and ABI provenance comments retain their original version references.
 
-Pending validation uses the locally built complete roc-bootstrap LLVM 22
-musl/libc++ bundle: native Roc linking, native app and test fixture
-execution, and cold/warm compiler and application cache measurements.
-Performance runs must use an unstripped ReleaseFast Roc compiler; no
-native Roc timing improvement is claimed by the graph cache checks.
+Remaining validation includes broader platform, full echo/REPL WASM, and
+multi-language glue runtime suites, plus cold/warm compiler and application
+cache measurements with the complete LLVM 22 musl/libc++ bundle.
+Performance runs must use an unstripped ReleaseFast Roc compiler; no native
+Roc timing improvement is claimed by the graph or Debug execution checks.
 
 ```sh
 zig build roc -Doptimize=ReleaseFast -Dstrip=false \
