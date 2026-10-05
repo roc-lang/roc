@@ -1116,13 +1116,7 @@ const Transform = struct {
         const final = try self.addLocal(ret_layout);
         const st = try self.addLocal(.zst);
         const ret_final = try self.store.addCFStmt(.{ .ret = .{ .value = final } }, origin);
-        const load = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = final,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{self.head}),
-            .next = ret_final,
-        } }, origin);
+        const load = try self.store.addLowLevelStmt(final, .ptr_load, &.{self.head}, ret_final, origin);
         const store_args = try self.store.addLocalSpan(&.{ self.hole, value });
         try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
@@ -1349,13 +1343,7 @@ const Transform = struct {
             } }, origin);
         }
         if (is_trmc) {
-            current = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = initial,
-                .op = .ptr_alloca,
-                .rc_effect = LowLevelOp.ptr_alloca.rcEffect(),
-                .args = try self.store.addLocalSpan(&.{}),
-                .next = current,
-            } }, origin);
+            current = try self.store.addLowLevelStmt(initial, .ptr_alloca, &.{}, current, origin);
         }
 
         const param_count = self.old_args.len + if (is_trmc) @as(usize, 2) else 0;

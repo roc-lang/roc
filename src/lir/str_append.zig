@@ -207,13 +207,7 @@ const AppendRewriter = struct {
     }
 
     fn concatInto(_: *AppendRewriter, cloner: anytype, target: LocalId, left: LocalId, right: LocalId, origin: LIR.StmtOrigin, next: CFStmtId) ResourceError!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .str_concat,
-            .rc_effect = LowLevelOp.str_concat.rcEffect(),
-            .args = try cloner.store.addLocalSpan(&.{ left, right }),
-            .next = next,
-        } }, origin);
+        return try cloner.store.addLowLevelStmt(target, .str_concat, &.{ left, right }, next, origin);
     }
 };
 

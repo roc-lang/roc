@@ -1338,27 +1338,9 @@ const Pass = struct {
     ) ResourceError!CFStmtId {
         const spare = try self.freshLocal(.u64, new_locals);
         const len = try self.freshLocal(.u64, new_locals);
-        const add = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = limit_target,
-            .op = .num_int_add_wrap,
-            .rc_effect = LowLevelOp.num_int_add_wrap.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ len, spare }),
-            .next = next,
-        } }, origin);
-        const measure_len = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = len,
-            .op = .list_len,
-            .rc_effect = LowLevelOp.list_len.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{list}),
-            .next = add,
-        } }, origin);
-        return try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = spare,
-            .op = .list_slack_unique,
-            .rc_effect = LowLevelOp.list_slack_unique.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{list}),
-            .next = measure_len,
-        } }, origin);
+        const add = try self.store.addLowLevelStmt(limit_target, .num_int_add_wrap, &.{ len, spare }, next, origin);
+        const measure_len = try self.store.addLowLevelStmt(len, .list_len, &.{list}, add, origin);
+        return try self.store.addLowLevelStmt(spare, .list_slack_unique, &.{list}, measure_len, origin);
     }
 
     fn freshLocal(self: *Pass, layout_idx: layout_mod.Idx, new_locals: *std.ArrayList(LocalId)) ResourceError!LocalId {
@@ -1373,13 +1355,7 @@ const Pass = struct {
         var continuation = next;
         if (owned) |flag| {
             try self.noteOwnedDef(flag, .measured);
-            continuation = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = flag,
-                .op = .list_owned_unique,
-                .rc_effect = LowLevelOp.list_owned_unique.rcEffect(),
-                .args = try self.store.addLocalSpan(&.{list}),
-                .next = continuation,
-            } }, origin);
+            continuation = try self.store.addLowLevelStmt(flag, .list_owned_unique, &.{list}, continuation, origin);
         }
         return self.seedLimit(list, limit, continuation, new_locals, origin);
     }
@@ -1811,13 +1787,7 @@ const Pass = struct {
             .op = .{ .local = merged_slack },
             .next = call.next,
         } }, origin);
-        const unsafe_append = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = call.target,
-            .op = .list_append_unsafe,
-            .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ merged_list, elem_arg }),
-            .next = forward_limit,
-        } }, origin);
+        const unsafe_append = try self.store.addLowLevelStmt(call.target, .list_append_unsafe, &.{ merged_list, elem_arg }, forward_limit, origin);
 
         // Fast path: hand the list and its remaining slack to the join.
         const fast_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
@@ -1850,13 +1820,7 @@ const Pass = struct {
             .next = grow_set_slack,
         } }, origin);
         const grow_measure = try self.seedLimit(grown, grown_slack, grow_set_list, new_locals, origin);
-        const grow_reserve = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = grown,
-            .op = .list_reserve_for_append,
-            .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ list_arg, grow_spare }),
-            .next = grow_measure,
-        } }, origin);
+        const grow_reserve = try self.store.addLowLevelStmt(grown, .list_reserve_for_append, &.{ list_arg, grow_spare }, grow_measure, origin);
         const grow_spare_lit = try self.store.addCFStmt(.{ .assign_literal = .{
             .target = grow_spare,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
@@ -1872,20 +1836,8 @@ const Pass = struct {
             .default_is_cold = true,
             .continuation = null,
         } }, origin);
-        const compare = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = is_full,
-            .op = .num_is_eq,
-            .rc_effect = LowLevelOp.num_is_eq.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ cur_len, slack_in }),
-            .next = dispatch,
-        } }, origin);
-        const measure_len = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = cur_len,
-            .op = .list_len,
-            .rc_effect = LowLevelOp.list_len.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{list_arg}),
-            .next = compare,
-        } }, origin);
+        const compare = try self.store.addLowLevelStmt(is_full, .num_is_eq, &.{ cur_len, slack_in }, dispatch, origin);
+        const measure_len = try self.store.addLowLevelStmt(cur_len, .list_len, &.{list_arg}, compare, origin);
 
         // The call statement becomes the whole construct in place.
         var body = unsafe_append;
@@ -1990,50 +1942,14 @@ const Pass = struct {
             .default_is_cold = true,
             .continuation = null,
         } }, origin);
-        const combine = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = fits,
-            .op = .num_bitwise_and,
-            .rc_effect = LowLevelOp.num_bitwise_and.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ enough_for_slop, enough_for_count }),
-            .next = dispatch,
-        } }, origin);
-        const compare_count = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = enough_for_count,
-            .op = .num_is_gte,
-            .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ adjusted, count_arg }),
-            .next = combine,
-        } }, origin);
-        const subtract_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = adjusted,
-            .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ spare, slop }),
-            .next = compare_count,
-        } }, origin);
-        const compare_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = enough_for_slop,
-            .op = .num_is_gte,
-            .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ spare, slop }),
-            .next = subtract_slop,
-        } }, origin);
+        const combine = try self.store.addLowLevelStmt(fits, .num_bitwise_and, &.{ enough_for_slop, enough_for_count }, dispatch, origin);
+        const compare_count = try self.store.addLowLevelStmt(enough_for_count, .num_is_gte, &.{ adjusted, count_arg }, combine, origin);
+        const subtract_slop = try self.store.addLowLevelStmt(adjusted, .num_int_sub_wrap, &.{ spare, slop }, compare_count, origin);
+        const compare_slop = try self.store.addLowLevelStmt(enough_for_slop, .num_is_gte, &.{ spare, slop }, subtract_slop, origin);
         // The chain invariant keeps the length at most the limit, so this
         // difference cannot wrap.
-        const measure_spare = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = spare,
-            .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ slack_in, cur_len }),
-            .next = compare_slop,
-        } }, origin);
-        const measure_len = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = cur_len,
-            .op = .list_len,
-            .rc_effect = LowLevelOp.list_len.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{list_arg}),
-            .next = measure_spare,
-        } }, origin);
+        const measure_spare = try self.store.addLowLevelStmt(spare, .num_int_sub_wrap, &.{ slack_in, cur_len }, compare_slop, origin);
+        const measure_len = try self.store.addLowLevelStmt(cur_len, .list_len, &.{list_arg}, measure_spare, origin);
         const slop_lit = try self.store.addCFStmt(.{ .assign_literal = .{
             .target = slop,
             .value = .{ .i64_literal = .{ .value = @intCast(slop_elements), .layout_idx = .u64 } },
@@ -2710,48 +2626,18 @@ const Pass = struct {
         if (chain.appends_per_iteration > 1) {
             covered = try self.freshLocal(.u64, new_locals);
             const divisor = try self.freshLocal(.u64, new_locals);
-            head = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = fits,
-                .op = .num_is_gte,
-                .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
-                .args = try self.store.addLocalSpan(&.{ covered, remaining }),
-                .next = head,
-            } }, origin);
-            head = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = covered,
-                .op = .num_div_trunc_by,
-                .rc_effect = LowLevelOp.num_div_trunc_by.rcEffect(),
-                .args = try self.store.addLocalSpan(&.{ spare, divisor }),
-                .next = head,
-            } }, origin);
+            head = try self.store.addLowLevelStmt(fits, .num_is_gte, &.{ covered, remaining }, head, origin);
+            head = try self.store.addLowLevelStmt(covered, .num_div_trunc_by, &.{ spare, divisor }, head, origin);
             head = try self.store.addCFStmt(.{ .assign_literal = .{
                 .target = divisor,
                 .value = .{ .i128_literal = .{ .value = chain.appends_per_iteration, .layout_idx = .u64 } },
                 .next = head,
             } }, origin);
         } else {
-            head = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = fits,
-                .op = .num_is_gte,
-                .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
-                .args = try self.store.addLocalSpan(&.{ covered, remaining }),
-                .next = head,
-            } }, origin);
+            head = try self.store.addLowLevelStmt(fits, .num_is_gte, &.{ covered, remaining }, head, origin);
         }
-        head = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = spare,
-            .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{ chain.limit_param, len }),
-            .next = head,
-        } }, origin);
-        return try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = len,
-            .op = .list_len,
-            .rc_effect = LowLevelOp.list_len.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{chain.list_param}),
-            .next = head,
-        } }, origin);
+        head = try self.store.addLowLevelStmt(spare, .num_int_sub_wrap, &.{ chain.limit_param, len }, head, origin);
+        return try self.store.addLowLevelStmt(len, .list_len, &.{chain.list_param}, head, origin);
     }
 
     fn containsLocal(locals: []const LocalId, local: LocalId) bool {

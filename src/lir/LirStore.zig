@@ -1656,6 +1656,24 @@ fn verifyCFStmtId(self: *const Self, id: CFStmtId) void {
     }
 }
 
+/// Appends `target = op(args)` followed by `next`, with the op's own RC effect.
+pub fn addLowLevelStmt(
+    self: *Self,
+    target: LocalId,
+    op: lir_defs.LowLevel,
+    args: []const LocalId,
+    next: CFStmtId,
+    origin: StmtOrigin,
+) Allocator.Error!CFStmtId {
+    return self.addCFStmt(.{ .assign_low_level = .{
+        .target = target,
+        .op = op,
+        .rc_effect = op.rcEffect(),
+        .args = try self.addLocalSpan(args),
+        .next = next,
+    } }, origin);
+}
+
 /// Appends switch branches and returns the corresponding flat-storage span.
 pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Allocator.Error!CFSwitchBranchSpan {
     if (branches.len == 0) return CFSwitchBranchSpan.empty();

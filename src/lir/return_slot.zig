@@ -207,13 +207,7 @@ const ReturnSlotRewriter = struct {
     pub fn cloneRet(self: *ReturnSlotRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const slot = slotOrigin(origin);
         const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } }, slot);
-        return try cloner.store.addCFStmt(.{ .assign_low_level = .{
-            .target = self.store_unit,
-            .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
-            .args = try cloner.store.addLocalSpan(&.{ self.out_ptr, try cloner.mapLocal(value) }),
-            .next = ret_stmt,
-        } }, slot);
+        return try cloner.store.addLowLevelStmt(self.store_unit, .ptr_store, &.{ self.out_ptr, try cloner.mapLocal(value) }, ret_stmt, slot);
     }
 
     pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
