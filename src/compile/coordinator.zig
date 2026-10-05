@@ -1601,10 +1601,6 @@ pub const Coordinator = struct {
         self.roc_ctx = roc_ctx;
     }
 
-    /// Back-compat alias for the documented embedding contract
-    /// (`coord.setIo(my_io)` in `src/compile/README.md`).
-    pub const setIo = setCoreCtx;
-
     /// Get the allocator to use for module data.
     /// - In multi-threaded mode: smp_allocator (per-thread freelists)
     /// - In single-threaded mode: gpa (better performance)
@@ -2286,26 +2282,6 @@ pub const Coordinator = struct {
             if (std.mem.eql(u8, &view.key.bytes, &key.bytes)) return true;
         }
         return false;
-    }
-
-    fn appendAvailableArtifactViewByKey(
-        self: *Coordinator,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) Allocator.Error!void {
-        if (importedArtifactViewExists(views.items, key)) return;
-        const artifact = if (checkedArtifactKeyEql(key, self.builtin_modules.checked_artifact.key))
-            &self.builtin_modules.checked_artifact
-        else
-            self.checkedArtifactByKey(key) orelse {
-                coordinatorInvariant("compile.coordinator missing lowering visibility checked artifact", .{});
-            };
-
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-        for (artifact.lowering_visibility.module_ids) |dependency_key| {
-            try self.appendAvailableArtifactViewByKey(views, allocator, dependency_key);
-        }
     }
 
     /// Finish the immutable platform's independent compile-time work, then

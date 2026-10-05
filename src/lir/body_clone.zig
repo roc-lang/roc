@@ -610,13 +610,6 @@ pub fn forEachStmtRead(
     }
 }
 
-/// Count definitions of every local reachable from `body`, walking all
-/// successor edges: statement targets, join parameters, descriptor outputs,
-/// and pattern-match captures. Operand reads are not definitions.
-pub fn countReachableDefs(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    return countReachableDefsWithAllocator(store, body, store.allocator);
-}
-
 /// Like `countReachableDefs`, using the procedure task's scratch allocator.
 pub fn countReachableDefsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
     return countReachable(store, body, allocator, null, .defs);
@@ -848,13 +841,6 @@ pub const ReachableStmts = struct {
     }
 };
 
-/// Return only binders reachable from `body`. Clone passes give these fresh
-/// identities while retaining read-only external inputs. Unlike write counts,
-/// this excludes `set_local` and includes maybe-uninitialized join binders.
-pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    return collectReachableDefinitionsWithAllocator(store, body, store.allocator);
-}
-
 /// Like `collectReachableDefinitions`, with independently owned scratch.
 pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
     return countReachable(store, body, allocator, null, .binders);
@@ -863,11 +849,6 @@ pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId
 /// Collect lexical binders using an independent lease from the worker's storage.
 pub fn collectReachableDefinitionsWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReadCounts {
     return countReachable(store, body, scratch.counts.allocator, scratch, .binders);
-}
-
-/// Add every local defined by `stmt_id` to an existing definition set.
-pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFStmtId) void {
-    visitStmtDefinitions(store, defined, stmt_id);
 }
 
 /// Add exact lexical binders without allocating for unrelated local identities.

@@ -675,21 +675,6 @@ pub const TokenizedBuffer = struct {
             return null;
         }
     }
-
-    /// Gets underscore flags for identifier tokens.
-    /// Returns null if token is not an identifier with underscore flags.
-    pub fn resolveUnderscoreFlags(self: *TokenizedBuffer, token: Token.Idx) ?struct { starts_with_underscore: bool, ends_with_underscore: bool } {
-        const tag = self.tokens.items(.tag)[@intCast(token)];
-        if (tag.hasUnderscoreFlags()) {
-            const extra = self.tokens.items(.extra)[@intCast(token)];
-            return .{
-                .starts_with_underscore = extra.ident_with_flags.starts_with_underscore,
-                .ends_with_underscore = extra.ident_with_flags.ends_with_underscore,
-            };
-        } else {
-            return null;
-        }
-    }
 };
 
 /// Represents a diagnostic message including its position in the source.

@@ -177,11 +177,6 @@ pub const Resolver = struct {
         return self.store.layoutContainsRefcounted(l);
     }
 
-    /// Build a helper key from an operation and layout id.
-    pub fn makeKey(_: *const Resolver, op: RcOp, layout_idx: Idx) HelperKey {
-        return .{ .op = op, .layout_idx = layout_idx };
-    }
-
     /// Plan the RC behavior for a canonical helper key.
     ///
     /// A `host_drop` adapter performs its layout's `decref`, so it plans as

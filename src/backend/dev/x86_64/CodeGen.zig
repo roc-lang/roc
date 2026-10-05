@@ -235,40 +235,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try builder.emitEpilogue(&self.emit);
         }
 
-        /// Emit stack frame setup with given local size
-        pub fn emitStackAlloc(self: *Self, size: u32) Allocator.Error!void {
-            if (size > 0) {
-                // sub rsp, size
-                try self.emit.subRegImm32(.w64, .RSP, @intCast(size));
-            }
-        }
-
-        /// On Windows, save R12 to stack before a C function call.
-        /// R12 holds roc_ops in generated code, and while R12 is callee-saved
-        /// in the Windows x64 ABI, something in the Zig-compiled C function
-        /// call chain appears to corrupt it. This saves R12 and returns the
-        /// offset where it was saved, for use with restoreR12AfterCall.
-        pub fn saveR12BeforeCall(self: *Self) Allocator.Error!i32 {
-            if (comptime target.isWindows()) {
-                // Allocate 8 bytes on stack for R12
-                try self.emit.subRegImm32(.w64, .RSP, 8);
-                // Save R12 at [RSP]
-                try self.emit.movMemReg(.w64, .RSP, 0, .R12);
-                return 0; // R12 is at [RSP+0]
-            }
-            return 0;
-        }
-
-        /// On Windows, restore R12 from stack after a C function call.
-        pub fn restoreR12AfterCall(self: *Self) Allocator.Error!void {
-            if (comptime target.isWindows()) {
-                // Restore R12 from [RSP]
-                try self.emit.movRegMem(.w64, .R12, .RSP, 0);
-                // Deallocate the 8 bytes
-                try self.emit.addRegImm32(.w64, .RSP, 8);
-            }
-        }
-
         // Integer operations
 
         /// Emit integer addition: dst = a + b
@@ -431,14 +397,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 try self.emit.movRegReg(width, dst, src);
             }
             try self.emit.notReg(width, dst);
-        }
-
-        /// Emit bitwise XOR with immediate: dst = src ^ imm
-        pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) Allocator.Error!void {
-            if (dst != src) {
-                try self.emit.movRegReg(width, dst, src);
-            }
-            try self.emit.xorRegImm8(width, dst, imm);
         }
 
         // Comparison operations

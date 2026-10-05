@@ -978,22 +978,6 @@ fn writeFooter(w: Writer) error{WriteFailed}!void {
     try w.writeAll("        <footer><p>Made by people who like to make nice things.</p></footer>\n");
 }
 
-fn sortSidebarNodeChildren(node: *SidebarNode) void {
-    std.mem.sortUnstable(*SidebarNode, node.children.items, {}, lessThanSidebarNode);
-
-    for (node.children.items) |child| {
-        sortSidebarNodeChildren(child);
-    }
-}
-
-fn lessThanSidebarNode(_: void, a: *SidebarNode, b: *SidebarNode) bool {
-    // Types come first
-    if (a.is_type and !b.is_type) return true;
-    if (!a.is_type and b.is_type) return false;
-    // Then sort alphabetically
-    return std.mem.order(u8, a.name, b.name) == .lt;
-}
-
 const EntryTree = struct {
     root: *SidebarNode,
     /// When the tree had a single top-level child whose name matched the

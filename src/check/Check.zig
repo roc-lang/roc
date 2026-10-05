@@ -15476,20 +15476,6 @@ pub fn platformRequirementSolutions(self: *const Self) []const requirement_solut
     return self.platform_requirement_solutions.items;
 }
 
-/// Whether any of this module's requires-clause type annotations still carry
-/// erroneous type content after checking. A platform root in that state keeps
-/// its check-time publication: the env-derived requirement context a deferred
-/// publication needs is a canonical key digest, and erroneous content has no
-/// canonical key.
-pub fn requiresTypesContainError(self: *Self) std.mem.Allocator.Error!bool {
-    for (self.cir.requires_types.items.items) |required_type| {
-        if (try self.canonical_key_writer.containsError(ModuleEnv.varFrom(required_type.type_anno))) {
-            return true;
-        }
-    }
-    return false;
-}
-
 fn instantiatePlatformRequiredType(
     self: *Self,
     input: PlatformRequirementInput,
@@ -18298,18 +18284,6 @@ fn generateHeaderVars(
 }
 
 // type gen config //
-
-const OutVar = enum {
-    in_place,
-    fresh,
-
-    pub fn voidOrVar(comptime out_var: OutVar) type {
-        return switch (out_var) {
-            .in_place => void,
-            .fresh => Var,
-        };
-    }
-};
 
 // annotations //
 

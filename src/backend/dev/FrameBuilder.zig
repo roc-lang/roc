@@ -199,30 +199,6 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
         }
 
-        /// Emit only callee-saved register saves (for pre-allocated frame pattern).
-        /// Use this when the frame has already been set up and you just need to
-        /// save the callee-saved registers at fixed offsets.
-        pub fn emitSaveCalleeSaved(self: *const Self, emit: *EmitType) Allocator.Error!void {
-            if (is_x86_64) {
-                return self.emitSaveCalleeSavedX86_64(emit);
-            } else if (is_aarch64) {
-                return self.emitSaveCalleeSavedAarch64(emit);
-            } else {
-                unreachable;
-            }
-        }
-
-        /// Emit only callee-saved register restores (for pre-allocated frame pattern).
-        pub fn emitRestoreCalleeSaved(self: *const Self, emit: *EmitType) Allocator.Error!void {
-            if (is_x86_64) {
-                return self.emitRestoreCalleeSavedX86_64(emit);
-            } else if (is_aarch64) {
-                return self.emitRestoreCalleeSavedAarch64(emit);
-            } else {
-                unreachable;
-            }
-        }
-
         // ==================== x86_64 Implementation ====================
 
         fn calculatePrologueSizeX86_64(self: *const Self) u32 {

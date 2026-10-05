@@ -421,12 +421,6 @@ pub const CliCtx = struct {
         }
     }
 
-    /// Render all problems and return whether there were any errors
-    pub fn renderAndCheck(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!bool {
-        try self.renderProblemsTo(writer);
-        return self.hasErrors();
-    }
-
     /// Clear all problems
     pub fn clear(self: *Self) void {
         self.problems.clearRetainingCapacity();
@@ -440,25 +434,6 @@ pub const CliCtx = struct {
 };
 
 // Helper Functions
-
-/// Create a context, add a single problem, render it, and return the exit code.
-/// Convenience function for simple error cases.
-pub fn reportSingleProblem(
-    allocator: Allocator,
-    io: *Io,
-    command: Command,
-    problem: CliProblem,
-) u8 {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var ctx = CliCtx.init(allocator, arena.allocator(), io, command);
-    defer ctx.deinit();
-
-    ctx.addProblemIgnoreError(problem);
-    ctx.renderProblemsTo(io.stderr()) catch {};
-
-    return ctx.exitCode();
-}
 
 /// Render a single problem without adding it to the context's accumulated
 /// problem list.

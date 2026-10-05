@@ -102,44 +102,6 @@ pub const GeneralReg = enum(u5) {
             .ZRSP => "sp",
         };
     }
-
-    /// Get the 32-bit register name (e.g., "w0", "wsp")
-    pub fn name32(self: GeneralReg) []const u8 {
-        return switch (self) {
-            .X0 => "w0",
-            .X1 => "w1",
-            .X2 => "w2",
-            .X3 => "w3",
-            .X4 => "w4",
-            .X5 => "w5",
-            .X6 => "w6",
-            .X7 => "w7",
-            .XR => "w8",
-            .X9 => "w9",
-            .X10 => "w10",
-            .X11 => "w11",
-            .X12 => "w12",
-            .X13 => "w13",
-            .X14 => "w14",
-            .X15 => "w15",
-            .IP0 => "w16",
-            .IP1 => "w17",
-            .PR => "w18",
-            .X19 => "w19",
-            .X20 => "w20",
-            .X21 => "w21",
-            .X22 => "w22",
-            .X23 => "w23",
-            .X24 => "w24",
-            .X25 => "w25",
-            .X26 => "w26",
-            .X27 => "w27",
-            .X28 => "w28",
-            .FP => "w29",
-            .LR => "w30",
-            .ZRSP => "wsp",
-        };
-    }
 };
 
 /// aarch64 SIMD/floating-point registers.
@@ -183,39 +145,6 @@ pub const FloatReg = enum(u5) {
     /// Get the 5-bit register encoding
     pub fn enc(self: FloatReg) u5 {
         return @intFromEnum(self);
-    }
-
-    /// Get the single-precision (32-bit float) register name
-    pub fn nameS(self: FloatReg) []const u8 {
-        const names = [_][]const u8{
-            "s0",  "s1",  "s2",  "s3",  "s4",  "s5",  "s6",  "s7",
-            "s8",  "s9",  "s10", "s11", "s12", "s13", "s14", "s15",
-            "s16", "s17", "s18", "s19", "s20", "s21", "s22", "s23",
-            "s24", "s25", "s26", "s27", "s28", "s29", "s30", "s31",
-        };
-        return names[@intFromEnum(self)];
-    }
-
-    /// Get the double-precision (64-bit float) register name
-    pub fn nameD(self: FloatReg) []const u8 {
-        const names = [_][]const u8{
-            "d0",  "d1",  "d2",  "d3",  "d4",  "d5",  "d6",  "d7",
-            "d8",  "d9",  "d10", "d11", "d12", "d13", "d14", "d15",
-            "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23",
-            "d24", "d25", "d26", "d27", "d28", "d29", "d30", "d31",
-        };
-        return names[@intFromEnum(self)];
-    }
-
-    /// Get the quad-precision (128-bit) register name
-    pub fn nameQ(self: FloatReg) []const u8 {
-        const names = [_][]const u8{
-            "q0",  "q1",  "q2",  "q3",  "q4",  "q5",  "q6",  "q7",
-            "q8",  "q9",  "q10", "q11", "q12", "q13", "q14", "q15",
-            "q16", "q17", "q18", "q19", "q20", "q21", "q22", "q23",
-            "q24", "q25", "q26", "q27", "q28", "q29", "q30", "q31",
-        };
-        return names[@intFromEnum(self)];
     }
 };
 

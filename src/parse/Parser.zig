@@ -2366,14 +2366,6 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
-/// Run the token parser kernel with a pattern goal and return the completed pattern.
-pub fn runPattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.runPatternRoot(alternatives);
-}
-
 fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -3343,14 +3335,6 @@ fn runExprRoot(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Expr.Idx {
 
 fn runStatementRoot(self: *Parser, statement_type: StatementType) std.mem.Allocator.Error!AST.Statement.Idx {
     return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
-}
-
-fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
-    return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
-}
-
-fn runPatternRoot(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
-    return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
 }
 
 fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.Error!AST.TypeAnno.Idx {
@@ -7357,17 +7341,6 @@ fn recordTypeDependencyFromQualifiedTokens(
     try self.scratch_idents.append(final_ident);
 
     try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
-}
-
-/// Parse a block that contains only statements, no ending expression.
-/// This is used for nominal type associated items like `Foo := [A, B].{ x = 5 }`
-/// {
-///     <stmt1>
-///     ...
-///     <stmtN>
-/// }
-pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
-    return try self.runAssociatedBlockRoot(start, owner_type_path);
 }
 
 fn finishRecordExpr(

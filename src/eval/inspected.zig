@@ -612,9 +612,6 @@ pub const CompileTargetOutcome = union(enum) {
     diagnostics: ParsedResources,
 };
 
-/// Type alias for CompiledProgram used for inspect-wrapped expressions.
-pub const CompiledInspectedExpr = CompiledProgram;
-
 /// Parse, canonicalize, and type-check a program without inspect wrapping.
 pub fn parseAndCanonicalizeProgram(
     allocator: Allocator,
@@ -670,11 +667,6 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         pre_published_builtin,
         roc_ctx,
     );
-}
-
-/// Parse and canonicalize a single expression (no imports).
-pub fn parseAndCanonicalizeExpr(allocator: Allocator, source: []const u8) Error!ParsedResources {
-    return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
 
 /// Parse and type-check a program, returning resources for problem reporting.
@@ -871,30 +863,6 @@ fn compileProgramWithOptions(
         .resources = resources,
         .lowered = lowered,
         .wasm_lowered = wasm_lowered,
-    };
-}
-
-/// Parse, canonicalize, type-check, and lower to LIR for a specific target.
-pub fn compileProgramForTarget(
-    allocator: Allocator,
-    io: std.Io,
-    source_kind: SourceKind,
-    source: []const u8,
-    imports: []const ModuleSource,
-    target_usize: base.target.TargetUsize,
-) Error!CompiledTargetProgram {
-    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
-    errdefer cleanupParseAndCanonical(allocator, resources);
-
-    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
-    errdefer {
-        var owned = lowered;
-        owned.deinit(allocator);
-    }
-
-    return .{
-        .resources = resources,
-        .lowered = lowered,
     };
 }
 
@@ -1221,11 +1189,6 @@ fn compileInspectedProgramForTargetImpl(
     };
 }
 
-/// Compile a single expression with inspect wrapping, returning a Str result.
-pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8) Error!CompiledInspectedExpr {
-    return compileInspectedProgram(allocator, io, .expr, source, &.{});
-}
-
 /// Debug-only: compile an inspect-wrapped program for the native target while
 /// capturing the Debug verifier's materialized Lambda Mono program in
 /// `materialized_out`. Compiles with the in-place list-transform paths off (so the
@@ -1355,30 +1318,6 @@ fn publishProgramForComptimeProblemsImpl(
         }
     }
     return .no_problems;
-}
-
-/// Publish a program with compile-time evaluation problems routed into each
-/// module's checker problem store and return the full resources for tests that
-/// need to inspect which module received which diagnostic. Crashing roots and
-/// failed expects publish explicit crash constants and return their resources.
-pub fn publishProgramKeepingReportedComptimeProblems(
-    allocator: Allocator,
-    source_kind: SourceKind,
-    source: []const u8,
-    imports: []const ModuleSource,
-) Error!ParsedResources {
-    return parseAndCanonicalizeProgramWithRootModeReporting(
-        allocator,
-        source_kind,
-        source,
-        imports,
-        false,
-        .published_roots_only,
-        null,
-        .report_comptime_problems,
-        null,
-        null,
-    );
 }
 
 /// Publish a program for an interactive compile-time evaluation while retaining
@@ -1901,15 +1840,6 @@ pub fn parseCheckModule(
         .canonicalize_ns = can_elapsed,
         .typecheck_ns = check_elapsed,
     };
-}
-
-fn lowerParsedProgramToLir(
-    allocator: Allocator,
-    io: std.Io,
-    resources: *ParsedResources,
-    target_usize: base.target.TargetUsize,
-) Error!LoweredProgram {
-    return lowerParsedProgramToLirWithOptions(allocator, io, resources, target_usize, .{});
 }
 
 const LowerToLirOptions = struct {
@@ -2794,71 +2724,6 @@ fn boxyNativeFnTable() BoxyNativeFnTable {
     return boxy_abi.nativeFnTable();
 }
 
-/// JIT-compile and run bool-returning test roots via the dev backend.
-pub fn devEvalBoolRoots(
-    allocator: Allocator,
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
-    roots: []const BoolRoot,
-) Error![]BoolRootEvalResult {
-    return devEvalBoolRootsWithTimingAndMaxWorkers(allocator, store, layouts, tables, roots, null, null);
-}
-
-/// JIT-compile and run boolean roots while accumulating detailed dev-backend timings.
-pub fn devEvalBoolRootsWithTiming(
-    allocator: Allocator,
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
-    roots: []const BoolRoot,
-    timing: ?*DevBoolRootTiming,
-) Error![]BoolRootEvalResult {
-    return devEvalBoolRootsWithTimingAndMaxWorkers(allocator, store, layouts, tables, roots, timing, null);
-}
-
-/// JIT-compile bool-returning test roots via the dev backend into one
-/// executable mapping, then run them on parallel worker threads, exactly like
-/// the LLVM test path: every root gets its own entrypoint wrapper and its own
-/// per-call host environment, and workers claim roots through a shared atomic
-/// cursor.
-pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
-    allocator: Allocator,
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
-    roots: []const BoolRoot,
-    timing: ?*DevBoolRootTiming,
-    max_workers: ?usize,
-) Error![]BoolRootEvalResult {
-    const batch = try devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
-        allocator,
-        store,
-        layouts,
-        tables,
-        roots,
-        timing,
-        max_workers,
-        0,
-    );
-    allocator.free(batch.expect_counts);
-    return batch.results;
-}
-
-/// JIT-compile test roots and aggregate observations for every LIR expect site.
-pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
-    allocator: Allocator,
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
-    roots: []const BoolRoot,
-    timing: ?*DevBoolRootTiming,
-    max_workers: ?usize,
-    expect_site_count: usize,
-) Error!BoolRootEvalBatch {
-    return devEvalBoolRootModule(allocator, .{ .store = store, .layouts = layouts, .tables = tables, .roots = roots, .expect_site_count = expect_site_count }, timing, max_workers);
-}
-
 /// Execute an explicit root module and its completed immutable value graph.
 pub fn devEvalBoolRootModule(allocator: Allocator, module: BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
     return devEvalSharedBoolRootModules(allocator, &.{module}, timing, max_workers);
@@ -3362,24 +3227,6 @@ fn runBoolRootCalls(
     }
 
     return .{ .results = results, .expect_counts = expect_counts };
-}
-
-/// Compile and run bool-returning test roots via the LLVM backend.
-pub fn llvmEvalBoolRoots(
-    allocator: Allocator,
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
-    roots: []const BoolRoot,
-    opt: LlvmTestOpt,
-) Error![]BoolRootEvalResult {
-    const modules = [_]BoolRootModule{.{
-        .store = store,
-        .layouts = layouts,
-        .tables = tables,
-        .roots = roots,
-    }};
-    return llvmEvalBoolRootModules(allocator, modules[0..], opt);
 }
 
 /// Compile and run one LIR module while aggregating its inline expects.

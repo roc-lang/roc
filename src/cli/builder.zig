@@ -74,11 +74,6 @@ pub const CompileConfig = struct {
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
     lower_memory_intrinsics_to_loops: bool = false,
-
-    /// Check if compiling for the current machine
-    pub fn isNative(self: CompileConfig) bool {
-        return self.target == target.RocTarget.detectNative();
-    }
 };
 
 fn sanitizerCoverageOptions(enabled: bool) ZigLLVMCoverageOptions {

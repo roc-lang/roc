@@ -258,10 +258,6 @@ pub const BuiltinIdents = struct {
 pub const HumanIndex = struct {
     value: u32, // 0-based internally
 
-    pub fn fromZeroBased(index: u32) HumanIndex {
-        return .{ .value = index };
-    }
-
     /// Returns the 1-based index number
     pub fn toHuman(self: HumanIndex) u32 {
         return self.value + 1;
@@ -312,13 +308,6 @@ pub const Pattern = union(enum) {
         /// Patterns for list elements
         elements: []const Pattern,
     };
-
-    /// Check if this pattern can ever match a value (is inhabited).
-    /// A pattern is uninhabited if it matches a type with no possible values,
-    /// such as an empty tag union or a constructor with uninhabited arguments.
-    pub fn isInhabited(self: Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
-        return self.isInhabitedWithKnownEmpty(type_store, builtin_idents, &.{});
-    }
 
     /// Every node of the pattern must be inhabited; nodes are checked in
     /// source order from an explicit work list.
@@ -441,11 +430,6 @@ pub const ListArity = union(enum) {
             .exact => |n| n,
             .slice => |s| s.prefix + s.suffix,
         };
-    }
-
-    /// Does this arity cover all lengths that `other` covers?
-    pub fn coversAritiesOf(self: ListArity, other: ListArity) bool {
-        return self.coversLength(other.minLen());
     }
 
     pub fn coversLength(self: ListArity, length: usize) bool {
@@ -1623,18 +1607,6 @@ fn isCtorPayloadTagUnionInhabited(
             .field_presence, .err => return false,
         }
     }
-}
-
-/// Collects unresolved unbound type variables that make a constructor payload uninhabited.
-pub fn collectCtorPayloadBlockers(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    out: *std.ArrayList(Var),
-) error{OutOfMemory}!void {
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
-    try collectCtorPayloadBlockersHelp(type_store, builtin_idents, type_var, out, &seen);
 }
 
 fn collectCtorPayloadBlockersHelp(

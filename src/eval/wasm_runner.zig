@@ -16,13 +16,6 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 /// Dec's scaling factor (10^18) as an i128, sourced from the canonical Dec type.
 const dec_one_i128: i128 = builtins.dec.RocDec.one_point_zero_i128;
 
-/// Errors that can occur during WebAssembly evaluation.
-pub const WasmEvalError = error{
-    Crash,
-    WasmExecFailed,
-    OutOfMemory,
-};
-
 /// Infrastructure failures that can prevent a WebAssembly evaluation from
 /// producing a semantic outcome.
 pub const WasmOutcomeError = error{
@@ -241,38 +234,6 @@ fn crashedWasmResult(run_state: *WasmRunState) WasmOutcomeError!RunWasmOutcomeRe
         .outcome = .{ .crashed = message },
         .events = try run_state.takeEvents(),
         .allocation_count = run_state.allocation_count,
-    };
-}
-
-/// Executes a wasm module and returns the Str.inspect result as a string.
-pub fn runWasmStr(
-    allocator: std.mem.Allocator,
-    wasm_bytes: []const u8,
-    heap_base: u32,
-    has_imports: bool,
-) WasmEvalError![]u8 {
-    const result = try runWasmStrWithStats(allocator, wasm_bytes, heap_base, has_imports);
-    return result.output;
-}
-
-/// Executes a wasm module and returns the raw Str result plus host-observed allocation stats.
-pub fn runWasmStrWithStats(
-    allocator: std.mem.Allocator,
-    wasm_bytes: []const u8,
-    heap_base: u32,
-    has_imports: bool,
-) WasmEvalError!RunWasmStrResult {
-    const result = try runWasmOutcomeWithStats(allocator, wasm_bytes, heap_base, has_imports);
-    defer result.deinitEvents(allocator);
-    return switch (result.outcome) {
-        .returned => |output| .{
-            .output = output,
-            .allocation_count = result.allocation_count,
-        },
-        .crashed => |message| {
-            allocator.free(message);
-            return error.Crash;
-        },
     };
 }
 

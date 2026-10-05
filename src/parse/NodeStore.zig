@@ -3017,13 +3017,6 @@ pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// Clears any StatementIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchStatementsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_statements.clearFrom(start);
-}
-
 /// Returns a new Statement slice so that the caller can iterate through
 /// all items in the span.
 pub fn statementSlice(store: *const NodeStore, span: AST.Statement.Span) []AST.Statement.Idx {
@@ -3216,13 +3209,6 @@ pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Erro
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// Clears any MatchBranchIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchMatchBranchesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_match_branches.clearFrom(start);
-}
-
 /// Returns a new WhenBranch slice so that the caller can iterate through
 /// all items in the span.
 pub fn matchBranchSlice(store: *const NodeStore, span: AST.MatchBranch.Span) []AST.MatchBranch.Idx {
@@ -3325,13 +3311,6 @@ pub fn tokenSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!Toke
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
-}
-
-/// Clears any TokenIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchTokensFrom(store: *NodeStore, start: u32) void {
-    store.scratch_tokens.clearFrom(start);
 }
 
 const LiteralTypeSuffixKind = enum(u32) { path, deprecated_builtin };

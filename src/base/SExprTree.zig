@@ -243,23 +243,6 @@ pub fn pushReservedStringPair(self: *SExprTree, key: []const u8, begin: u32, val
     try self.endNode(node_begin, attrs);
 }
 
-/// Push a dynamic atom (copied into data buffer) onto the stack
-pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
-    const begin: u32 = @intCast(self.data.items.len);
-    try self.data.appendSlice(value);
-    const end: u32 = @intCast(self.data.items.len);
-    try self.stack.append(Node{ .DynamicAtom = .{ .begin = begin, .end = end } });
-}
-
-/// Push a dynamic atom key-value pair onto the stack
-pub fn pushDynamicAtomPair(self: *SExprTree, key: []const u8, value: []const u8) std.mem.Allocator.Error!void {
-    const begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushDynamicAtom(value);
-    const attrs = self.beginNode();
-    try self.endNode(begin, attrs);
-}
-
 /// Push a boolean node onto the stack
 pub fn pushBool(self: *SExprTree, value: bool) std.mem.Allocator.Error!void {
     try self.stack.append(Node{ .Boolean = value });
@@ -286,11 +269,6 @@ pub fn pushU64Pair(self: *SExprTree, key: []const u8, value: u64) std.mem.Alloca
     try self.pushU64(value);
     const attrs = self.beginNode();
     try self.endNode(begin, attrs);
-}
-
-/// Push a NodeIdx node onto the stack
-pub fn pushNodeIdx(self: *SExprTree, idx: u32) std.mem.Allocator.Error!void {
-    try self.stack.append(Node{ .NodeIdx = idx });
 }
 
 /// Push a BytesRange node onto the stack
@@ -419,13 +397,6 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
             try writer_impl.setColor(.default);
         },
     }
-}
-
-/// Pretty-print the root node (top of stack) to the writer
-pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
-    if (self.stack.items.len == 0) return;
-    var plain_writer = PlainTextSExprWriter(@TypeOf(writer.any())){ .writer = writer.any() };
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.

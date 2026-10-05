@@ -169,11 +169,6 @@ pub const ReportingConfig = struct {
         return self.show_line_numbers;
     }
 
-    /// Check if UTF-8 validation should be performed
-    pub fn shouldValidateUtf8(self: ReportingConfig) bool {
-        return self.validate_utf8;
-    }
-
     /// Get the maximum message size in bytes
     pub fn getMaxMessageBytes(self: ReportingConfig) usize {
         return self.max_message_bytes;

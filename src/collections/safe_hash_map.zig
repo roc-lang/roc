@@ -67,22 +67,6 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return self.map.containsContext(key, std.hash_map.StringContext{});
         }
 
-        /// Calculate the size needed to serialize this hash map
-        pub fn serializedSize(self: *const Self) usize {
-            var size: usize = @sizeOf(u32); // count
-
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                size += @sizeOf(u32); // key length
-                size += entry.key_ptr.len; // key bytes
-                if (V != void) {
-                    size += @sizeOf(V); // value bytes
-                }
-            }
-
-            return size;
-        }
-
         /// Get an iterator over the hash map
         pub fn iterator(self: *const Self) std.StringHashMapUnmanaged(V).Iterator {
             return self.map.iterator();

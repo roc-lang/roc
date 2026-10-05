@@ -10,19 +10,15 @@
 //! - Extracting statement parts
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const can = @import("can");
 const compile = @import("compile");
 const base = @import("base");
-const types = @import("types");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const NodeStore = can.NodeStore;
 const BuildEnv = compile.BuildEnv;
 const Ident = base.Ident;
-const Region = base.Region;
-const TypeVar = types.Var;
 
 /// Information about a found definition.
 pub const DefinitionInfo = struct {
@@ -53,34 +49,12 @@ pub const StatementParts = struct {
     expr2: ?CIR.Expr.Idx,
 };
 
-/// Information about a binding found at a specific scope position.
-pub const BindingInfo = struct {
-    /// The pattern index where the binding is defined
-    pattern_idx: CIR.Pattern.Idx,
-    /// The identifier for the binding
-    ident_idx: Ident.Idx,
-    /// The expression index (if available)
-    expr_idx: ?CIR.Expr.Idx,
-    /// The region where the binding is defined
-    region: Region,
-};
-
 // Pattern Extraction Functions
 
 /// Extract the identifier from a binding pattern.
 /// Returns null for patterns that don't directly bind an identifier
 /// (e.g., record destructures, literals, underscore).
 pub fn extractIdentFromPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
-    const pattern = store.getSourcePattern(pattern_idx);
-    if (std.meta.activeTag(pattern) == .assign) return pattern.assign.ident;
-    if (std.meta.activeTag(pattern) == .var_assign) return pattern.var_assign.ident;
-    if (std.meta.activeTag(pattern) == .as) return pattern.as.ident;
-    return null;
-}
-
-/// Extract the identifier from a pattern, recursively following .as patterns
-/// to find the innermost identifier.
-pub fn extractIdentFromPatternRecursive(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = store.getSourcePattern(pattern_idx);
     if (std.meta.activeTag(pattern) == .assign) return pattern.assign.ident;
     if (std.meta.activeTag(pattern) == .var_assign) return pattern.var_assign.ident;
@@ -272,54 +246,6 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
     return null;
 }
 
-/// Find all definitions in a module that match a given prefix.
-/// Useful for completion suggestions.
-pub fn findDefinitionsWithPrefix(
-    module_env: *ModuleEnv,
-    prefix: []const u8,
-    allocator: std.mem.Allocator,
-) Allocator.Error!std.ArrayList(DefinitionInfo) {
-    var results = std.ArrayList(DefinitionInfo).empty;
-
-    // Search through all_defs
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (extractIdentFromPattern(&module_env.store, def.pattern)) |ident_idx| {
-            const ident_name = module_env.getIdentText(ident_idx);
-            if (prefix.len == 0 or std.mem.startsWith(u8, ident_name, prefix)) {
-                try results.append(allocator, DefinitionInfo{
-                    .pattern_idx = def.pattern,
-                    .expr_idx = def.expr,
-                    .ident_idx = ident_idx,
-                });
-            }
-        }
-    }
-
-    // Search through all_statements
-    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-    for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getSourceStatement(stmt_idx);
-        const parts = getStatementParts(stmt);
-
-        if (parts.pattern) |pattern_idx| {
-            if (extractIdentFromPattern(&module_env.store, pattern_idx)) |ident_idx| {
-                const ident_name = module_env.getIdentText(ident_idx);
-                if (prefix.len == 0 or std.mem.startsWith(u8, ident_name, prefix)) {
-                    try results.append(allocator, DefinitionInfo{
-                        .pattern_idx = pattern_idx,
-                        .expr_idx = parts.expr,
-                        .ident_idx = ident_idx,
-                    });
-                }
-            }
-        }
-    }
-
-    return results;
-}
-
 // Module Lookup Functions
 
 /// Find a module by name in the build environment's Coordinator state within an importing package context.
@@ -346,38 +272,7 @@ pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleIn
     return findModuleByNameInPackage(build_env, null, module_name);
 }
 
-/// Find a module by name, optionally checking if it's a builtin type first.
-/// This is a convenience wrapper that combines builtin checking with module lookup.
-pub fn findModuleByNameWithBuiltinCheck(
-    build_env: *BuildEnv,
-    module_name: []const u8,
-    builtin_types: []const []const u8,
-) ?ModuleInfo {
-    // Only check builtin types if module_name is unqualified
-    if (std.mem.find(u8, module_name, ".") == null) {
-        for (builtin_types) |builtin| {
-            if (std.mem.eql(u8, module_name, builtin)) {
-                // Builtin types don't have a separate module env in the normal sense
-                return null;
-            }
-        }
-    }
-
-    return findModuleByName(build_env, module_name);
-}
-
 // Type Variable Functions
-
-/// Get the type variable for a pattern from the type store.
-/// This converts the pattern index to a type variable using ModuleEnv.varFrom.
-pub fn getTypeVarForPattern(pattern_idx: CIR.Pattern.Idx) TypeVar {
-    return ModuleEnv.varFrom(pattern_idx);
-}
-
-/// Get the type variable for an expression from the type store.
-pub fn getTypeVarForExpr(expr_idx: CIR.Expr.Idx) TypeVar {
-    return ModuleEnv.varFrom(expr_idx);
-}
 
 // Statement Parts Extraction
 
@@ -496,58 +391,6 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
 }
 
 // Binding Search Functions
-
-/// Find a binding by name that is in scope at the given offset.
-/// This searches through statements to find bindings that are defined before the offset.
-pub fn findBindingByName(module_env: *ModuleEnv, name: []const u8, offset: u32) ?BindingInfo {
-    // First check all_defs (top-level definitions are always in scope)
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (extractIdentFromPattern(&module_env.store, def.pattern)) |ident_idx| {
-            const ident_name = module_env.getIdentText(ident_idx);
-            if (std.mem.eql(u8, ident_name, name)) {
-                const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
-                const region = module_env.store.getRegionAt(pattern_node_idx);
-                return BindingInfo{
-                    .pattern_idx = def.pattern,
-                    .ident_idx = ident_idx,
-                    .expr_idx = def.expr,
-                    .region = region,
-                };
-            }
-        }
-    }
-
-    // Then check statements, but only those defined before the offset
-    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-    for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getSourceStatement(stmt_idx);
-        const parts = getStatementParts(stmt);
-
-        if (parts.pattern) |pattern_idx| {
-            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-            const region = module_env.store.getRegionAt(pattern_node_idx);
-
-            // Only consider bindings that are defined before the offset
-            if (region.start.offset > offset) continue;
-
-            if (extractIdentFromPattern(&module_env.store, pattern_idx)) |ident_idx| {
-                const ident_name = module_env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_name, name)) {
-                    return BindingInfo{
-                        .pattern_idx = pattern_idx,
-                        .ident_idx = ident_idx,
-                        .expr_idx = parts.expr,
-                        .region = region,
-                    };
-                }
-            }
-        }
-    }
-
-    return null;
-}
 
 // Iterator Helpers
 

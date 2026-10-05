@@ -2390,19 +2390,6 @@ pub const DefinitionStore = struct {
         return false;
     }
 
-    pub fn removeByNameAndKind(self: *DefinitionStore, allocator: Allocator, name: []const u8, kind: DefinitionKind) void {
-        var i: usize = 0;
-        while (i < self.items.items.len) {
-            const definition = &self.items.items[i];
-            if (definition.kind == kind and definition.bindsName(name)) {
-                var removed = self.items.orderedRemove(i);
-                removed.deinit(allocator);
-                return;
-            }
-            i += 1;
-        }
-    }
-
     fn addOrReplace(
         self: *DefinitionStore,
         allocator: Allocator,

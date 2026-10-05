@@ -108,11 +108,6 @@ pub fn Emit(comptime target: RocTarget) type {
             self.relocs.deinit(self.allocator);
         }
 
-        /// Get the current code offset
-        pub fn codeOffset(self: *const Self) u64 {
-            return @intCast(self.buf.items.len);
-        }
-
         /// Emit a 32-bit instruction (little-endian)
         fn emit32(self: *Self, inst: u32) Allocator.Error!void {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(inst)));
@@ -180,22 +175,6 @@ pub fn Emit(comptime target: RocTarget) type {
             const hw: u2 = @truncate(shift >> 4);
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b11100101 << 23) |
-                (@as(u32, hw) << 21) |
-                (@as(u32, imm) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// MOVN - Move with NOT (load inverted immediate)
-        /// Sets dst = ~(imm16 << shift), useful for loading negative values
-        pub fn movn(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) Allocator.Error!void {
-            // MOVN <Xd>, #<imm16>, LSL #<shift>
-            // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
-            // sf  0  0  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
-            const sf = width.sf();
-            const hw: u2 = @truncate(shift >> 4);
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b00100101 << 23) |
                 (@as(u32, hw) << 21) |
                 (@as(u32, imm) << 5) |
                 dst.enc();
@@ -316,19 +295,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b0101011 << 24) | // ADD with S bit (bit 29)
                 (0b00 << 22) |
                 (0 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// ADC reg, reg, reg (add with carry)
-        pub fn adcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
-            // ADC <Xd>, <Xn>, <Xm>
-            const sf = width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0011010000 << 21) |
                 (@as(u32, src2.enc()) << 16) |
                 (0b000000 << 10) |
                 (@as(u32, src1.enc()) << 5) |
@@ -775,14 +741,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// UDF (permanently undefined instruction - generates exception)
-        pub fn udf(self: *Self, imm16: u16) Allocator.Error!void {
-            // UDF #imm16
-            // 0000 0000 0000 0000 imm16
-            const inst: u32 = @as(u32, imm16);
-            try self.emit32(inst);
-        }
-
         /// ADR Xd, #imm—compute PC-relative address
         /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
         pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) Allocator.Error!void {
@@ -955,20 +913,6 @@ pub fn Emit(comptime target: RocTarget) type {
             const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0110100 << 24) |
-                (@as(u32, imm19) << 5) |
-                reg.enc();
-            try self.emit32(inst);
-        }
-
-        /// CBNZ (compare and branch if non-zero)
-        pub fn cbnz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) Allocator.Error!void {
-            // CBNZ <Xt>, <label>
-            // sf 011010 1 imm19 Rt
-            const sf = width.sf();
-            const offset_words = @divExact(offset_bytes, 4);
-            const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0110101 << 24) |
                 (@as(u32, imm19) << 5) |
                 reg.enc();
             try self.emit32(inst);
@@ -1847,22 +1791,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// FCMP with zero
-        pub fn fcmpRegZero(self: *Self, ftype: FloatType, reg: FloatReg) Allocator.Error!void {
-            // FCMP <Sn>, #0.0 or FCMP <Dn>, #0.0
-            // 0 0 0 11110 ftype 1 00000 00 1000 Rn 0 1 000
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b00000 << 16) |
-                (0b00 << 14) |
-                (0b1000 << 10) |
-                (@as(u32, reg.enc()) << 5) |
-                (0b01000 << 0);
-            try self.emit32(inst);
-        }
-
         /// SCVTF (signed integer to float)
         pub fn scvtfFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg, src_width: RegisterWidth) Allocator.Error!void {
             // SCVTF <Sd>, <Wn> or SCVTF <Dd>, <Xn> etc.
@@ -1892,41 +1820,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b1 << 21) |
                 (0b00 << 19) |
                 (0b011 << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// FCVTZS (float to signed integer with truncation toward zero)
-        pub fn fcvtzsGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) Allocator.Error!void {
-            // FCVTZS <Wd>, <Sn> or FCVTZS <Xd>, <Dn> etc.
-            const sf = dst_width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b00 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b11 << 19) |
-                (0b000 << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// FCVTZU (float to unsigned integer with truncation toward zero)
-        pub fn fcvtzuGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) Allocator.Error!void {
-            // FCVTZU <Wd>, <Sn> or FCVTZU <Xd>, <Dn> etc.
-            // Same as FCVTZS but opcode = 001 instead of 000
-            const sf = dst_width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b00 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b11 << 19) |
-                (0b001 << 16) |
                 (0b000000 << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();

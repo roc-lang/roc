@@ -22,13 +22,4 @@ pub const Severity = enum {
             .fatal => "FATAL",
         };
     }
-
-    /// Returns a short code suitable for prefixing error messages.
-    pub fn toCode(self: Severity) []const u8 {
-        return switch (self) {
-            .warning => "W",
-            .runtime_error => "E",
-            .fatal => "F",
-        };
-    }
 };

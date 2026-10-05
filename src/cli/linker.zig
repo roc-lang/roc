@@ -1164,34 +1164,6 @@ fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) boo
     return false;
 }
 
-/// Convenience function to link two object files into an executable
-pub fn linkTwoObjects(ctx: *CliCtx, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
-
-    const config = LinkConfig{
-        .output_path = output,
-        .object_files = &.{ obj1, obj2 },
-    };
-
-    return link(ctx, config);
-}
-
-/// Convenience function to link multiple object files into an executable
-pub fn linkObjects(ctx: *CliCtx, object_files: []const []const u8, output: []const u8) LinkError!void {
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
-
-    const config = LinkConfig{
-        .output_path = output,
-        .object_files = object_files,
-    };
-
-    return link(ctx, config);
-}
-
 test "size wasm strips final target feature metadata" {
     const size = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .size });
     try std.testing.expectEqual(@as(u8, 1), size.strip_target_features);

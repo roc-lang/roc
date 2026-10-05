@@ -855,21 +855,6 @@ pub const CompletionBuilder = struct {
         }
     }
 
-    /// Add record field completions for a named definition in a specific module.
-    ///
-    /// This is used for module member accesses (e.g., Module.value.) where the
-    /// member is a record. We resolve the member's type from the module's
-    /// definition table, then extract its record fields.
-    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) Allocator.Error!bool {
-        if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
-            const type_var = ModuleEnv.varFrom(def_info.pattern_idx);
-            try self.addFieldsFromTypeVar(module_env, type_var);
-            return true;
-        }
-
-        return false;
-    }
-
     /// Resolve a record field's type variable from a receiver type.
     ///
     /// This unwraps aliases to find records and returns the field's type var

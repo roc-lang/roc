@@ -7,9 +7,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Error returned when a circular dependency is detected.
-pub const CyclicDependencyError = error{CyclicDependency};
-
 /// Context for import extraction callback.
 pub const ImportContext = struct {
     /// User-provided context pointer
@@ -19,123 +16,6 @@ pub const ImportContext = struct {
     /// Available module names (for filtering)
     available_modules: []const []const u8,
 };
-
-/// Callback type for extracting imports from a module.
-/// Returns a slice of imported module names (caller owns memory).
-pub fn ImportExtractor(comptime ExtractorError: type) type {
-    return *const fn (context: ImportContext, module_name: []const u8) ExtractorError![][]const u8;
-}
-
-/// Sort modules by their import dependencies using Kahn's algorithm.
-/// Returns modules in compilation order (dependencies first, dependents last).
-///
-/// Parameters:
-///   gpa: Allocator for result and temporary allocations
-///   module_names: List of module names to sort
-///   extractor: Function to extract imports from a module
-///   extractor_ctx: Context pointer passed to extractor
-///
-/// Returns: Sorted list of module names (caller owns memory)
-/// Returns error.CyclicDependency if modules have circular imports.
-pub fn sortByDependency(
-    comptime ExtractorError: type,
-    gpa: Allocator,
-    module_names: []const []const u8,
-    extractor: ImportExtractor(ExtractorError),
-    extractor_ctx: *anyopaque,
-) (Allocator.Error || CyclicDependencyError || ExtractorError)![][]const u8 {
-    const n = module_names.len;
-
-    // Early return for trivial cases
-    if (n <= 1) {
-        var result = try gpa.alloc([]const u8, n);
-        for (module_names, 0..) |name, i| {
-            result[i] = name;
-        }
-        return result;
-    }
-
-    // Build a name -> index map for O(1) lookups
-    var name_to_idx = std.StringHashMap(usize).init(gpa);
-    defer name_to_idx.deinit();
-    for (module_names, 0..) |name, i| {
-        try name_to_idx.put(name, i);
-    }
-
-    // Build adjacency list: adj[i] = list of modules that depend on module i
-    // And compute in-degree: how many modules each module depends on
-    var adjacency = try gpa.alloc(std.ArrayList(usize), n);
-    defer {
-        for (adjacency) |*list| list.deinit(gpa);
-        gpa.free(adjacency);
-    }
-    for (adjacency) |*list| {
-        list.* = std.ArrayList(usize).empty;
-    }
-
-    var in_degree = try gpa.alloc(usize, n);
-    defer gpa.free(in_degree);
-    @memset(in_degree, 0);
-
-    // For each module, extract its imports and build the graph
-    const context = ImportContext{
-        .ctx = extractor_ctx,
-        .gpa = gpa,
-        .available_modules = module_names,
-    };
-    for (module_names, 0..) |name, i| {
-        const imports = try extractor(context, name);
-        defer {
-            for (imports) |imp| gpa.free(imp);
-            gpa.free(imports);
-        }
-
-        // For each import, add an edge: this module depends on the imported module
-        for (imports) |imp| {
-            if (name_to_idx.get(imp)) |dep_idx| {
-                // Module i imports module dep_idx, so dep_idx must come before i
-                // Edge: dep_idx -> i (dep_idx is depended upon by i)
-                try adjacency[dep_idx].append(gpa, i);
-                in_degree[i] += 1;
-            }
-        }
-    }
-
-    // Kahn's algorithm: start with modules that have no dependencies (in_degree == 0)
-    var queue = std.ArrayList(usize).empty;
-    defer queue.deinit(gpa);
-
-    for (0..n) |i| {
-        if (in_degree[i] == 0) {
-            try queue.append(gpa, i);
-        }
-    }
-
-    const result = try gpa.alloc([]const u8, n);
-    var result_count: usize = 0;
-
-    while (queue.items.len > 0) {
-        const current = queue.orderedRemove(0);
-        result[result_count] = module_names[current];
-        result_count += 1;
-
-        // For each module that depends on current, decrement its in-degree
-        for (adjacency[current].items) |dependent| {
-            in_degree[dependent] -= 1;
-            if (in_degree[dependent] == 0) {
-                try queue.append(gpa, dependent);
-            }
-        }
-    }
-
-    // If we didn't process all modules, there's a cycle
-    if (result_count != n) {
-        gpa.free(result);
-        return error.CyclicDependency;
-    }
-
-    return result;
-}
 
 /// Simpler version that takes pre-computed imports for each module.
 /// Useful when imports have already been extracted (e.g., during parsing phase).

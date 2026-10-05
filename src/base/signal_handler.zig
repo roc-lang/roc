@@ -304,10 +304,6 @@ pub const StackBounds = struct {
         };
     }
 
-    pub fn containsStackPointer(self: StackBounds, sp: usize) bool {
-        return sp >= self.low and sp < self.high;
-    }
-
     pub fn containsGuardAddress(self: StackBounds, addr: usize) bool {
         const guard_low = self.guard_low orelse return false;
         const guard_high = self.guard_high orelse return false;

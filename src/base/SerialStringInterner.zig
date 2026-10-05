@@ -241,9 +241,6 @@ const Policy = struct {
     pub fn count(self: *const SerialStringInterner) u32 {
         return @intCast(self.ranges.items.items.len);
     }
-    pub fn entryCount(self: *const SerialStringInterner, _: *const Index) u32 {
-        return @intCast(self.ranges.items.items.len);
-    }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
     }

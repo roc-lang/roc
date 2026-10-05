@@ -142,7 +142,6 @@ pub const RocDec = extern struct {
     num: i128,
 
     pub const decimal_places: u5 = 18;
-    pub const whole_number_places: u5 = 21;
     pub const max_digits: u6 = 39;
     pub const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
 

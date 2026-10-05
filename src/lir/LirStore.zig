@@ -368,10 +368,6 @@ pub const BodyRelocation = struct {
         return relocateBodyValue(CFStmtId, id, prefix, self);
     }
 
-    pub fn localSpan(self: BodyRelocation, prefix: BodyPrefix, span: LocalSpan) LocalSpan {
-        return relocateBodyValue(LocalSpan, span, prefix, self);
-    }
-
     pub fn joinPointSpan(self: BodyRelocation, prefix: BodyPrefix, span: JoinPointSpan) JoinPointSpan {
         return relocateBodyValue(JoinPointSpan, span, prefix, self);
     }
@@ -1614,11 +1610,6 @@ pub fn getCFStmtLocs(self: *const Self) []const base.SourceLoc {
     return self.cf_stmt_locs.unsafeRawItemsForView();
 }
 
-/// Number of stored statement source-region entries.
-pub fn cfStmtRegionCount(self: *const Self) usize {
-    return self.cf_stmt_regions.len();
-}
-
 /// Returns all stored statement source-region entries.
 pub fn getCFStmtRegions(self: *const Self) []const base.Region {
     return self.cf_stmt_regions.unsafeRawItemsForView();
@@ -1883,11 +1874,6 @@ pub fn procSpecCount(self: *const Self) usize {
     return self.proc_specs.len() + if (self.body_coordinator != null) self.body_prefix.proc_specs else 0;
 }
 
-/// Number of stored proc source-location entries.
-pub fn procLocCount(self: *const Self) usize {
-    return self.proc_locs.len();
-}
-
 /// Returns all stored proc source-location entries.
 pub fn getProcLocs(self: *const Self) []const base.SourceLoc {
     return self.proc_locs.unsafeRawItemsForView();
@@ -1901,11 +1887,6 @@ pub fn procDebugNameCount(self: *const Self) usize {
 /// Returns all stored proc debug-name entries.
 pub fn getProcDebugNames(self: *const Self) []const ProcDebugName {
     return self.proc_debug_names.unsafeRawItemsForView();
-}
-
-/// Number of stored local-name entries.
-pub fn localNameCount(self: *const Self) usize {
-    return self.local_names.len();
 }
 
 /// Returns all raw local-name table entries.
@@ -1928,11 +1909,6 @@ pub fn setProcSpecBody(self: *Self, idx: LirProcSpecId, body: ?CFStmtId) void {
     const proc = self.getProcSpecPtr(idx);
     proc.body = body;
     proc.shapes = proc.shapes.merged(self.shapes);
-}
-
-/// Updates the final join-point span for a stored proc specification.
-pub fn setProcSpecJoinPoints(self: *Self, idx: LirProcSpecId, join_points: JoinPointSpan) void {
-    self.getProcSpecPtr(idx).join_points = join_points;
 }
 
 /// Updates body and final join points after all fallible/appending work has completed.

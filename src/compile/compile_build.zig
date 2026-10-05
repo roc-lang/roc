@@ -47,8 +47,6 @@ pub const InitError = Allocator.Error || BuiltinModules.InitError;
 pub const CompileDiscoveredError = coordinator_mod.CoordinatorError || BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
-/// Errors that can occur while building an app module.
-pub const BuildAppError = BuildRootError || error{NotAnApp};
 /// Errors that can occur while building with an explicit main module.
 pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
@@ -524,13 +522,6 @@ pub const BuildEnv = struct {
         self.root_source_dir_override = source_dir;
     }
 
-    pub fn setCompilerOwnedSourceDir(self: *BuildEnv, source_dir: []const u8) Allocator.Error!void {
-        if (self.compiler_owned_source_dir) |old| {
-            self.gpa.free(@constCast(old));
-        }
-        self.compiler_owned_source_dir = try self.gpa.dupe(u8, source_dir);
-    }
-
     pub fn setSyntheticRootSourceMapping(
         self: *BuildEnv,
         original_path: []const u8,
@@ -592,22 +583,6 @@ pub const BuildEnv = struct {
     pub fn setWatchInputTracking(self: *BuildEnv, enabled: bool) void {
         self.track_watch_inputs = enabled;
         if (self.coordinator) |coord| coord.setWatchInputTracking(enabled);
-    }
-
-    /// Build an app file specifically (validates it's an app)
-    pub fn buildApp(self: *BuildEnv, app_file: []const u8) BuildAppError!void {
-        // Build and let the main function handle everything
-        // The build function accepts both apps and modules
-        try self.build(app_file);
-
-        // After building, verify it was actually an app
-        // Check the package we just created
-        const pkg_name = self.discovered_pkg_name orelse return error.NotAnApp;
-        const pkg = self.packages.get(pkg_name);
-        if (pkg == null or pkg.?.kind != .app) {
-            // If it wasn't an app, return an error
-            return error.NotAnApp;
-        }
     }
 
     // Build the workspace starting from an app root file path.
@@ -2372,36 +2347,10 @@ pub const BuildEnv = struct {
         module_time_max_ns: u64 = 0,
         module_time_sum_ns: u64 = 0,
 
-        /// Record a module's compilation time
-        pub fn recordModuleTime(self: *BuildStats, time_ns: u64) void {
-            self.modules_compiled += 1;
-            self.module_time_sum_ns += time_ns;
-            if (time_ns < self.module_time_min_ns) self.module_time_min_ns = time_ns;
-            if (time_ns > self.module_time_max_ns) self.module_time_max_ns = time_ns;
-        }
-
         /// Get average module compile time in nanoseconds
         pub fn moduleTimeAvgNs(self: BuildStats) u64 {
             if (self.modules_compiled == 0) return 0;
             return self.module_time_sum_ns / self.modules_compiled;
-        }
-
-        /// Get module time min in milliseconds (rounded)
-        pub fn moduleTimeMinMs(self: BuildStats) u32 {
-            if (self.modules_compiled == 0) return 0;
-            return @intCast((self.module_time_min_ns + 500_000) / 1_000_000);
-        }
-
-        /// Get module time max in milliseconds (rounded)
-        pub fn moduleTimeMaxMs(self: BuildStats) u32 {
-            if (self.modules_compiled == 0) return 0;
-            return @intCast((self.module_time_max_ns + 500_000) / 1_000_000);
-        }
-
-        /// Get module time average in milliseconds (rounded)
-        pub fn moduleTimeAvgMs(self: BuildStats) u32 {
-            if (self.modules_compiled == 0) return 0;
-            return @intCast((self.moduleTimeAvgNs() + 500_000) / 1_000_000);
         }
 
         /// Get cache hit rate as percentage (0-100)
@@ -2663,10 +2612,6 @@ pub const BuildEnv = struct {
         }
 
         return self.findModuleByNameInPackage(importing_pkg_opt, qualified_name);
-    }
-
-    pub fn findModuleByQualifiedName(self: *BuildEnv, qualified_name: []const u8) ?*coordinator_mod.ModuleState {
-        return self.findModuleByQualifiedNameInPackage(null, qualified_name);
     }
 
     pub fn findModuleByNameInPackage(
@@ -3210,27 +3155,6 @@ pub const BuildEnv = struct {
 
         allocator.free(all_modules);
         return result.toOwnedSlice(allocator);
-    }
-
-    /// Find the index of the primary module (platform main if present, otherwise app) in a module list.
-    pub fn findPrimaryModuleIndex(modules: []const CompiledModuleInfo) ?usize {
-        // First look for platform main
-        for (modules, 0..) |mod, i| {
-            if (mod.is_platform_main) return i;
-        }
-        // Fall back to app
-        for (modules, 0..) |mod, i| {
-            if (mod.is_app) return i;
-        }
-        return null;
-    }
-
-    /// Find the index of the app module in a module list.
-    pub fn findAppModuleIndex(modules: []const CompiledModuleInfo) ?usize {
-        for (modules, 0..) |mod, i| {
-            if (mod.is_app) return i;
-        }
-        return null;
     }
 
     /// Get the root semantic data for the app package (convenience method).
@@ -3790,52 +3714,6 @@ pub const BuildEnv = struct {
     pub const RenderDiagnosticsResult = struct {
         errors: usize,
         warnings: usize,
-    };
-
-    /// Get compiled module envs ready for backend use: Builtin at [0], imports resolved.
-    /// Replaces the repeated pattern of getCompiledModules + build array + resolveImports.
-    pub fn getResolvedModuleEnvs(self: *BuildEnv, allocator: Allocator) Allocator.Error!ResolvedModules {
-        const modules = try self.getCompiledModules(allocator);
-        if (modules.len == 0) return error.NoModulesCompiled;
-
-        const builtin_env = self.builtin_modules.builtin_module.env;
-        var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
-        all_module_envs[0] = builtin_env;
-        for (modules, 0..) |mod, i| {
-            all_module_envs[i + 1] = mod.semantic.env;
-        }
-
-        // Resolve imports directly from the assembled module env array.
-        for (all_module_envs) |module| {
-            module.imports.clearResolvedModules();
-            for (module.imports.imports.items.items, 0..) |str_idx, i| {
-                const import_name = module.getString(str_idx);
-                for (all_module_envs, 0..) |candidate_env, module_idx| {
-                    if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
-                        module.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
-                        break;
-                    }
-                }
-            }
-        }
-
-        return .{
-            .all_module_envs = all_module_envs,
-            .compiled_modules = modules,
-        };
-    }
-
-    /// Result of getResolvedModuleEnvs: compiled modules with Builtin at [0] and imports resolved.
-    pub const ResolvedModules = struct {
-        /// Module envs array with Builtin at index 0, ready for backend use.
-        all_module_envs: []*ModuleEnv,
-        /// Metadata for each compiled module (indices correspond to all_module_envs[1..]).
-        compiled_modules: []CompiledModuleInfo,
-
-        /// Get module envs excluding Builtin (for closure pipeline, etc.)
-        pub fn compiledModuleEnvs(self: *const ResolvedModules) []*ModuleEnv {
-            return self.all_module_envs[1..];
-        }
     };
 };
 

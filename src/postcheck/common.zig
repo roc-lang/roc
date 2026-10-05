@@ -188,9 +188,6 @@ pub const ConstNodeId = enum(u32) { _ };
 pub const FnSetId = enum(u32) { _ };
 /// Stage-local erased callable entry set id.
 pub const ErasedFnsId = enum(u32) { _ };
-/// Stage-local capture slot id.
-pub const CaptureSlotId = enum(u32) { _ };
-
 /// The storage layout of a primitive. This is the single source of truth
 /// shared by every post-check layout producer; call it rather than writing a
 /// second switch over `CheckedPrimitive`.

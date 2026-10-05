@@ -130,12 +130,6 @@ pub const LookupResult = union(enum) {
     not_found: void,
 };
 
-/// Result of looking up a type declaration
-pub const TypeLookupResult = union(enum) {
-    found: CIR.Statement.Idx,
-    not_found: void,
-};
-
 /// Result of looking up a type variable
 pub const TypeVarLookupResult = union(enum) {
     found: CIR.TypeAnno.Idx,

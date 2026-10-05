@@ -653,14 +653,6 @@ pub const RocStr = extern struct {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asSliceWithCapacity(self: *const RocStr) []const u8 {
-        return self.asU8ptr()[0..self.getCapacity()];
-    }
-
-    pub fn asSliceWithCapacityMut(self: *RocStr) []u8 {
-        return self.asU8ptrMut()[0..self.getCapacity()];
-    }
-
     pub fn asU8ptr(self: *const RocStr) [*]const u8 {
         if (self.isSmallStr()) {
             return @as([*]const u8, @ptrCast(self));

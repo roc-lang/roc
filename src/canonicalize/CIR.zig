@@ -146,17 +146,6 @@ pub const BuiltinIndices = struct {
     // Tag idents for Try type
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
-
-    /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
-    /// This allows direct ident comparison instead of string comparison for type identification.
-    pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
-        inline for (builtin_type_specs) |spec| {
-            if (spec.num_kind) |num_kind| {
-                if (ident.eql(@field(self, spec.ident_field))) return num_kind;
-            }
-        }
-        return null;
-    }
 };
 
 /// How the builtin compiler should locate a type declaration in Builtin.roc.
@@ -811,49 +800,6 @@ pub const NumKind = enum {
     dec,
 };
 
-/// Base-256 digit storage for Numeral values.
-/// Used to construct Roc Numeral values during compile-time evaluation.
-///
-/// Numeral in Roc stores:
-/// - is_negative: Bool (whether there was a minus sign)
-/// - digits_before_pt: List(U8) (base-256 digits before decimal point)
-/// - digits_after_pt: List(U8) (base-256 digits after decimal point)
-/// - digits_after_pt_count: U64 (how many decimal digits appeared after the point)
-///
-/// Example: "356.5170" becomes:
-/// - is_negative = false
-/// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
-/// - digits_after_pt = [20, 50] (because 5170 = 20*256 + 50)
-/// - digits_after_pt_count = 4
-pub const NumeralDigits = struct {
-    /// Index into the shared digit byte array in ModuleEnv
-    digits_start: u32,
-    /// Number of bytes for digits_before_pt
-    before_pt_len: u16,
-    /// Number of bytes for digits_after_pt
-    after_pt_len: u16,
-    /// Number of decimal digits after the point before base-256 encoding
-    after_pt_digit_count: u64,
-    /// Whether the literal had a minus sign
-    is_negative: bool,
-
-    /// Get the total length of stored digits
-    pub fn totalLen(self: NumeralDigits) u32 {
-        return @as(u32, self.before_pt_len) + @as(u32, self.after_pt_len);
-    }
-
-    /// Extract digits_before_pt from the shared byte array
-    pub fn getDigitsBeforePt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
-        return digit_bytes[self.digits_start..][0..self.before_pt_len];
-    }
-
-    /// Extract digits_after_pt from the shared byte array
-    pub fn getDigitsAfterPt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
-        const after_start = self.digits_start + self.before_pt_len;
-        return digit_bytes[after_start..][0..self.after_pt_len];
-    }
-};
-
 // Re-export of the canonical Dec type so CIR consumers can name it locally.
 pub const RocDec = builtins.dec.RocDec;
 
@@ -1016,15 +962,6 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx < self.resolved_modules.len()) {
                 self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
-            }
-        }
-
-        /// Mark one import as intentionally unavailable because an earlier stage
-        /// already owns the user-facing diagnostic.
-        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
-            const idx = @intFromEnum(import_idx);
-            if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = .failed_before_checking;
             }
         }
 
@@ -1246,24 +1183,6 @@ pub const ExternalDecl = struct {
         const node = tree.beginNode();
         try tree.pushStaticAtom("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
-
-        // Add fully qualified name
-        try tree.pushStringPair("ident", cir.getIdent(self.qualified_name));
-
-        // Add kind
-        switch (self.kind) {
-            .value => try tree.pushStringPair("kind", "value"),
-            .type => try tree.pushStringPair("kind", "type"),
-        }
-
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
-    }
-
-    pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) Allocator.Error!void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
         // Add fully qualified name
         try tree.pushStringPair("ident", cir.getIdent(self.qualified_name));

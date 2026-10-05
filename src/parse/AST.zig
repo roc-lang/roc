@@ -791,20 +791,6 @@ pub const TokenizedRegion = struct {
     pub fn empty() TokenizedRegion {
         return .{ .start = 0, .end = 0 };
     }
-
-    pub fn spanAcross(self: TokenizedRegion, other: TokenizedRegion) TokenizedRegion {
-        return .{
-            .start = self.start,
-            .end = other.end,
-        };
-    }
-
-    pub fn toBase(self: TokenizedRegion) base.Region {
-        return .{
-            .start = base.Region.Position{ .offset = self.start },
-            .end = base.Region.Position{ .offset = self.end },
-        };
-    }
 };
 
 /// Check whether the parsed file has a top-level `main!` declaration.
@@ -3140,11 +3126,6 @@ pub const Expr = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
-        if (self != .string_part) return error.ExpectedStringPartRegion;
-        return self.string_part.region;
-    }
-
     /// Extract the region from any Expr variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
@@ -3781,16 +3762,6 @@ pub const TagExpr = struct {
     token: Token.Idx,
     qualifiers: Token.Span,
     region: TokenizedRegion,
-};
-
-/// An if-else expr
-pub const IfElse = struct {
-    condition: Expr.Idx,
-    body: Expr.Idx,
-    region: TokenizedRegion,
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
 };
 
 /// A match branch

@@ -103,7 +103,6 @@ pub const Op = struct {
     pub const end: u8 = 0x0B;
     pub const br: u8 = 0x0C;
     pub const br_if: u8 = 0x0D;
-    pub const br_table: u8 = 0x0E;
     pub const @"return": u8 = 0x0F;
     pub const call: u8 = 0x10;
     pub const call_indirect: u8 = 0x11;
@@ -128,22 +127,12 @@ pub const Op = struct {
     pub const i32_load8_u: u8 = 0x2D;
     pub const i32_load16_s: u8 = 0x2E;
     pub const i32_load16_u: u8 = 0x2F;
-    pub const i64_load8_s: u8 = 0x30;
-    pub const i64_load8_u: u8 = 0x31;
-    pub const i64_load16_s: u8 = 0x32;
-    pub const i64_load16_u: u8 = 0x33;
-    pub const i64_load32_s: u8 = 0x34;
-    pub const i64_load32_u: u8 = 0x35;
     pub const i32_store: u8 = 0x36;
     pub const i64_store: u8 = 0x37;
     pub const f32_store: u8 = 0x38;
     pub const f64_store: u8 = 0x39;
     pub const i32_store8: u8 = 0x3A;
     pub const i32_store16: u8 = 0x3B;
-    pub const i64_store8: u8 = 0x3C;
-    pub const i64_store16: u8 = 0x3D;
-    pub const i64_store32: u8 = 0x3E;
-
     // Constants
     pub const i32_const: u8 = 0x41;
     pub const i64_const: u8 = 0x42;
@@ -178,7 +167,6 @@ pub const Op = struct {
 
     // f32 comparison
     pub const f32_eq: u8 = 0x5B;
-    pub const f32_ne: u8 = 0x5C;
     pub const f32_lt: u8 = 0x5D;
     pub const f32_gt: u8 = 0x5E;
     pub const f32_le: u8 = 0x5F;
@@ -186,7 +174,6 @@ pub const Op = struct {
 
     // f64 comparison
     pub const f64_eq: u8 = 0x61;
-    pub const f64_ne: u8 = 0x62;
     pub const f64_lt: u8 = 0x63;
     pub const f64_gt: u8 = 0x64;
     pub const f64_le: u8 = 0x65;
@@ -211,9 +198,6 @@ pub const Op = struct {
     pub const i32_shl: u8 = 0x74;
     pub const i32_shr_s: u8 = 0x75;
     pub const i32_shr_u: u8 = 0x76;
-    pub const i32_rotl: u8 = 0x77;
-    pub const i32_rotr: u8 = 0x78;
-
     // i64 unary
     pub const i64_clz: u8 = 0x79;
     pub const i64_ctz: u8 = 0x7A;
@@ -233,53 +217,32 @@ pub const Op = struct {
     pub const i64_shl: u8 = 0x86;
     pub const i64_shr_s: u8 = 0x87;
     pub const i64_shr_u: u8 = 0x88;
-    pub const i64_rotl: u8 = 0x89;
-    pub const i64_rotr: u8 = 0x8A;
-
     // f32 arithmetic
     pub const f32_abs: u8 = 0x8B;
     pub const f32_neg: u8 = 0x8C;
     pub const f32_ceil: u8 = 0x8D;
     pub const f32_floor: u8 = 0x8E;
     pub const f32_trunc: u8 = 0x8F;
-    pub const f32_nearest: u8 = 0x90;
     pub const f32_sqrt: u8 = 0x91;
     pub const f32_add: u8 = 0x92;
     pub const f32_sub: u8 = 0x93;
     pub const f32_mul: u8 = 0x94;
     pub const f32_div: u8 = 0x95;
-    pub const f32_min: u8 = 0x96;
-    pub const f32_max: u8 = 0x97;
-    pub const f32_copysign: u8 = 0x98;
-
     // f64 arithmetic
     pub const f64_abs: u8 = 0x99;
     pub const f64_neg: u8 = 0x9A;
     pub const f64_ceil: u8 = 0x9B;
     pub const f64_floor: u8 = 0x9C;
     pub const f64_trunc: u8 = 0x9D;
-    pub const f64_nearest: u8 = 0x9E;
     pub const f64_sqrt: u8 = 0x9F;
     pub const f64_add: u8 = 0xA0;
     pub const f64_sub: u8 = 0xA1;
     pub const f64_mul: u8 = 0xA2;
     pub const f64_div: u8 = 0xA3;
-    pub const f64_min: u8 = 0xA4;
-    pub const f64_max: u8 = 0xA5;
-    pub const f64_copysign: u8 = 0xA6;
-
     // Conversions
     pub const i32_wrap_i64: u8 = 0xA7;
-    pub const i32_trunc_f32_s: u8 = 0xA8;
-    pub const i32_trunc_f32_u: u8 = 0xA9;
-    pub const i32_trunc_f64_s: u8 = 0xAA;
-    pub const i32_trunc_f64_u: u8 = 0xAB;
     pub const i64_extend_i32_s: u8 = 0xAC;
     pub const i64_extend_i32_u: u8 = 0xAD;
-    pub const i64_trunc_f32_s: u8 = 0xAE;
-    pub const i64_trunc_f32_u: u8 = 0xAF;
-    pub const i64_trunc_f64_s: u8 = 0xB0;
-    pub const i64_trunc_f64_u: u8 = 0xB1;
     pub const f32_convert_i32_s: u8 = 0xB2;
     pub const f32_convert_i32_u: u8 = 0xB3;
     pub const f32_convert_i64_s: u8 = 0xB4;
@@ -896,12 +859,6 @@ pub fn findDefinedFunctionSymbolExact(self: *const Self, name: []const u8) Symbo
     return found orelse error.MissingSymbol;
 }
 
-/// Find exactly one defined function symbol by exact name and return its function index.
-pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) SymbolLookupError!u32 {
-    const symbol = try self.findDefinedFunctionSymbolExact(name);
-    return self.linking.symbol_table.items[symbol.raw()].index;
-}
-
 /// Find a symbol table index by exact symbol name and linking symbol kind.
 pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
     for (self.linking.symbol_table.items, 0..) |sym, i| {
@@ -1041,18 +998,6 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
     return self.func_type_indices.items[local];
 }
 
-/// Assert that a function has the expected wasm type index.
-pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_type_idx: u32) void {
-    if (self.functionType(function) == expected_type_idx) return;
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic(
-            "WasmModule invariant violated: function {d} has type {d}, expected {d}",
-            .{ function.raw(), self.functionType(function), expected_type_idx },
-        );
-    }
-    unreachable;
-}
-
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
 pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) Allocator.Error!void {
     const local_idx = global_func_idx - self.importCount();
@@ -1103,17 +1048,6 @@ pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
     self.memory_import = false;
     self.memory_min_pages = min_pages;
-}
-
-/// Ensure the module's memory minimum covers at least `byte_count` bytes.
-pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
-    const page_size: usize = 65536;
-    const requested_pages: u32 = @intCast(@max(1, (byte_count + page_size - 1) / page_size));
-    self.has_memory = true;
-    self.memory_min_pages = @max(self.memory_min_pages, requested_pages);
-    if (self.has_stack_pointer and self.stack_pointer_init < self.memory_min_pages * @as(u32, 65536)) {
-        self.stack_pointer_init = self.memory_min_pages * @as(u32, 65536);
-    }
 }
 
 /// First byte after all statically assigned data addresses.
@@ -1431,31 +1365,6 @@ pub fn addTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
 pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: []const u8, roc_call_type_idx: u32) Allocator.Error!u32 {
     const func_idx = try self.addImport(module_name, fn_name, roc_call_type_idx);
     return try self.addTableElement(func_idx);
-}
-
-/// Find an imported function's index by module and field name.
-/// Returns null if no matching import exists.
-pub fn findImportFuncIdx(self: *const Self, module_name: []const u8, field_name: []const u8) ?u32 {
-    for (self.imports.items, 0..) |imp, i| {
-        if (std.mem.eql(u8, imp.module_name, module_name) and std.mem.eql(u8, imp.field_name, field_name)) {
-            return @intCast(i);
-        }
-    }
-    return null;
-}
-
-/// Find a function index by its resolved symbol/import name.
-pub fn findFunctionIdxByName(self: *const Self, name: []const u8) ?u32 {
-    if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |sym_idx| {
-        const sym = self.linking.symbol_table.items[sym_idx];
-        if (sym.kind == .function) return sym.index;
-    }
-
-    for (self.imports.items, 0..) |imp, i| {
-        if (std.mem.eql(u8, imp.field_name, name)) return @intCast(i);
-    }
-
-    return null;
 }
 
 /// Find a defined function whose resolved name ends with `suffix`.
@@ -2473,33 +2382,6 @@ pub fn resolveRelocations(self: *Self) RelocationError!void {
     try self.resolveDataRelocations();
 }
 
-/// Transfer function bodies added via setFunctionBody into the code_bytes
-/// representation. This makes app-generated functions compatible with
-/// linkHostToAppCalls, resolveCodeRelocations, eliminateDeadCode, and
-/// materializeFuncBodies.
-///
-/// Must be called after all addFunction/setFunctionBody calls are complete
-/// and before linkHostToAppCalls.
-pub fn transferAppFunctions(self: *Self) Allocator.Error!void {
-    const host_defined_count = self.function_offsets.items.len;
-    const total_defined_count = self.func_type_indices.items.len;
-
-    if (total_defined_count <= host_defined_count) return;
-
-    for (host_defined_count..total_defined_count) |i| {
-        if (i >= self.func_bodies.items.len) break;
-        const body = self.func_bodies.items[i].body;
-        if (body.len == 0) continue;
-
-        const fn_offset: u32 = @intCast(self.code_bytes.items.len);
-        try self.function_offsets.append(self.allocator, fn_offset);
-
-        // Write body length + body to code_bytes
-        try leb128WriteU32(self.allocator, &self.code_bytes, @intCast(body.len));
-        try self.code_bytes.appendSlice(self.allocator, body);
-    }
-}
-
 /// Convert code_bytes + function_offsets into func_bodies for encoding.
 ///
 /// After `resolveRelocations()` has patched all relocation sites, this method
@@ -3145,33 +3027,6 @@ fn traceLiveFunctions(
 
 // --- Phase 5: Memory, Table, and Stack Pointer Ownership ---
 
-/// Promote globally-visible, defined function symbols from the linking section
-/// to actual WASM exports. In relocatable objects, `export fn` in Zig generates
-/// symbols with `binding=global vis=default`, but no Export section exists.
-/// This must be called after preload so that the surgical linker pipeline can
-/// see and preserve these exports.
-pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
-        if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
-        const name = sym.name orelse continue;
-        // Skip roc-internal symbols (roc__p*, roc__num_*); entrypoints use
-        // the literal provides symbols and are exported like any host export.
-        if (std.mem.startsWith(u8, name, "roc__")) continue;
-        // Avoid duplicate exports.
-        var already_exported = false;
-        for (self.exports.items) |exp| {
-            if (exp.kind == .func and std.mem.eql(u8, exp.name, name)) {
-                already_exported = true;
-                break;
-            }
-        }
-        if (!already_exported) {
-            try self.addExport(name, .func, sym.index);
-        }
-    }
-}
-
 /// Prepare the explicit Wasm object ABI symbols for a final surgical link.
 ///
 /// Memory and table ownership is already represented by module state. Imported
@@ -3300,12 +3155,6 @@ pub const FinalMemoryConfig = struct {
     maximum_memory: ?usize = null,
     export_memory: bool = true,
 };
-
-/// Set the byte offset where this module's data segments begin.
-pub fn setDataBase(self: *Self, offset: u32) void {
-    std.debug.assert(self.data_segments.items.len == 0);
-    self.data_offset = offset;
-}
 
 /// Finalization step (called after all code generation and surgical linking,
 /// before encode):

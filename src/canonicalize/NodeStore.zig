@@ -2033,35 +2033,6 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
     }
 }
 
-/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
-/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithZeroArgumentTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    closure_name: Ident.Idx,
-    variant_var: types.Var,
-    ext_var: types.Var,
-    name: Ident.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
-    _ = try store.zero_arg_tag_data.append(store.gpa, .{
-        .closure_name = @bitCast(closure_name),
-        .variant_var = @intFromEnum(variant_var),
-        .ext_var = @intFromEnum(ext_var),
-        .name = @bitCast(name),
-    });
-
-    var node = Node.init(.expr_zero_argument_tag);
-    node.setPayload(.{ .expr_zero_argument_tag = .{
-        .zero_arg_tag_idx = zero_arg_tag_idx,
-    } });
-    store.nodes.set(node_idx, node);
-}
-
 /// Replaces an imported-type associated lookup with its exact checked target.
 pub fn replaceExprWithResolvedAssociatedLookup(
     store: *NodeStore,
@@ -2284,32 +2255,6 @@ pub fn replaceTypeAnnoWithRuntimeError(
     store.nodes.set(node_idx, node);
 }
 
-/// Replaces an existing expression with an e_tuple expression in-place.
-/// This is used for constant folding tuples during compile-time evaluation.
-/// The elem_indices slice contains the indices of the tuple element expressions.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithTuple(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    elem_indices: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    // Store element indices in index_data
-    const index_data_start = store.index_data.len();
-    for (elem_indices) |elem_idx| {
-        _ = try store.index_data.append(store.gpa, @intFromEnum(elem_idx));
-    }
-
-    var node = Node.init(.expr_tuple);
-    node.setPayload(.{ .expr_tuple = .{
-        .elems_start = @intCast(index_data_start),
-        .elems_len = @intCast(elem_indices.len),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
 /// Replaces an existing expression with an explicit structural equality node.
 /// This is used when the checker has already decided that equality is structural
 /// rather than an attached method dispatch.
@@ -2523,35 +2468,6 @@ pub fn replaceExprWithTypeDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
-/// Replaces an existing expression with an if expression in-place.
-/// Replaces an existing expression with an e_tag expression in-place.
-/// This is used for constant folding tag unions with payloads during compile-time evaluation.
-/// The arg_indices slice contains the indices of the tag argument expressions.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    name: Ident.Idx,
-    arg_indices: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    // Store argument indices in index_data
-    const index_data_start = store.index_data.len();
-    for (arg_indices) |arg_idx| {
-        _ = try store.index_data.append(store.gpa, @intFromEnum(arg_idx));
-    }
-
-    var node = Node.init(.expr_tag);
-    node.setPayload(.{ .expr_tag = .{
-        .name = @bitCast(name),
-        .args_start = @intCast(index_data_start),
-        .args_len = @intCast(arg_indices.len),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
 /// Replaces an existing expression with an in-place runtime error node.
 /// Used when an earlier compilation stage has already determined that the
 /// expression is erroneous and later stages must observe an explicit crash.
@@ -2668,20 +2584,6 @@ pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: C
         .body = @intFromEnum(body_idx),
     } });
     store.nodes.set(node_idx, node);
-}
-
-/// Get the more-specific expr index. Used to make error messages nicer.
-///
-/// For example, if the provided expr is a `block`, then this will return the
-/// expr idx of the last expr in that block. This allows the error message to
-/// reference the exact expr that has a problem, making the problem easier to
-/// understand.
-///
-/// But for most exprs, this just returns the same expr idx provided.
-pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
-    const expr = store.getExpr(expr_idx);
-    if (expr == .e_block) return expr.e_block.final_expr;
-    return expr_idx;
 }
 
 /// Retrieves a 'when' branch from the store.
@@ -5409,11 +5311,6 @@ pub fn strPatternStepSpanFromSlice(store: *NodeStore, steps: []const CIR.Pattern
     return .{ .span = .{ .start = start, .len = @intCast(steps.len) } };
 }
 
-/// Clears scratch definitions starting from a specified index.
-pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("defs", start);
-}
-
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     if (span.len == 0) return &.{};
@@ -5439,11 +5336,6 @@ pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def
 /// Returns a slice of expressions from the store.
 pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
-}
-
-/// Returns a single expression index from a span.
-pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
-    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CanIR.Pattern.Idx`
@@ -5494,26 +5386,6 @@ pub fn sliceMatchBranches(store: *const NodeStore, span: CIR.Expr.Match.Branch.S
 /// Retrieve a slice of Match.BranchPattern Idx's from a span
 pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.BranchPattern.Span) []CIR.Expr.Match.BranchPattern.Idx {
     return store.sliceFromSpan(CIR.Expr.Match.BranchPattern.Idx, span.span);
-}
-
-/// Creates a slice corresponding to a span.
-pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.index_data.items.items[span.start]));
-}
-
-/// Creates a slice corresponding to a span.
-pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.index_data.items.items[span.start + span.len - 1]));
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) CIR.Expr.IfBranch.Idx {
-    return store.firstFromSpan(CIR.Expr.IfBranch.Idx, span.span);
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR.Statement.Idx {
-    return store.lastFromSpan(CIR.Statement.Idx, span.span);
 }
 
 /// Returns a slice of if branches from the store.
@@ -6646,46 +6518,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
 /// Computes the span of a diagnostic starting from a given index.
 pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Diagnostic.Span {
     return try store.spanFrom("diagnostics", CIR.Diagnostic.Span, start);
-}
-
-/// Ensure the node store has capacity for at least the requested number of
-/// slots. Then return the *final* index.
-pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx {
-    const start_idx = store.nodes.len();
-    try store.nodes.ensureTotalCapacity(store.gpa, start_idx + count);
-    // Return where the LAST node will actually be placed
-    return @enumFromInt(start_idx + count - 1);
-}
-
-/// Adds an type variable slot to the store.
-///
-/// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
-    var node = Node.init(.type_var_slot);
-    node.setPayload(.{ .type_var_slot = .{
-        .parent_node_idx = @intFromEnum(parent_node_idx),
-    } });
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(nid));
-}
-
-/// Given a target node idx, check that the it is in bounds
-/// If it is, do nothing
-/// If it's not, then fill in the store with type_var_slots for all missing
-/// intervening nodes, *up to and including* the provided node
-pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) Allocator.Error!void {
-    const idx = @intFromEnum(target_idx);
-    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
-    while (store.nodes.items.len <= idx) {
-        var node = Node.init(.type_var_slot);
-        node.setPayload(.{ .type_var_slot = .{
-            .parent_node_idx = @intFromEnum(parent_node_idx),
-        } });
-        store.nodes.items.appendAssumeCapacity(node);
-        _ = try store.regions.append(store.gpa, region);
-    }
 }
 
 /// Return the current top index for scratch match branches.

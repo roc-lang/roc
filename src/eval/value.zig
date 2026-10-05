@@ -79,11 +79,6 @@ pub const Value = struct {
         return .{ .ptr = self.ptr + n };
     }
 
-    /// Get a usize-aligned pointer (for RocStr/RocList field access).
-    pub fn asOpaquePtr(self: Value) *anyopaque {
-        return @ptrCast(self.ptr);
-    }
-
     /// Check if this is the ZST sentinel.
     pub fn isZst(self: Value) bool {
         return @intFromPtr(self.ptr) == 0xDEAD_BEEF;
@@ -116,12 +111,6 @@ pub const LayoutHelper = struct {
     /// Whether a layout is zero-sized.
     pub fn isZeroSized(self: LayoutHelper, idx: layout_mod.Idx) bool {
         return self.sizeOf(idx) == 0;
-    }
-
-    /// Offset of a struct field (by sorted field index).
-    pub fn structFieldOffset(self: LayoutHelper, idx: layout_mod.Idx, sorted_field_idx: u32) u32 {
-        const l = self.store.getLayout(idx);
-        return self.store.getStructFieldOffset(l.getStruct().idx, sorted_field_idx);
     }
 
     /// Offset of the discriminant in a tag union.
@@ -160,12 +149,6 @@ pub const LayoutHelper = struct {
             else => unreachable,
         }
     }
-
-    /// Whether the given layout contains refcounted data.
-    pub fn containsRefcounted(self: LayoutHelper, idx: layout_mod.Idx) bool {
-        const l = self.store.getLayout(idx);
-        return self.store.layoutContainsRefcounted(l);
-    }
 };
 
 /// Allocate `size` bytes on a general-purpose allocator, returning a Value
@@ -175,10 +158,4 @@ pub fn allocValue(allocator: Allocator, size: u32) Allocator.Error!Value {
     const slice = try allocator.alloc(u8, size);
     @memset(slice, 0);
     return Value.fromSlice(slice);
-}
-
-/// Free a value's memory allocated with `allocValue`.
-pub fn freeValue(allocator: Allocator, val: Value, size: u32) void {
-    if (val.isZst() or size == 0) return;
-    allocator.free(val.ptr[0..size]);
 }

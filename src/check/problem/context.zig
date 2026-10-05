@@ -194,14 +194,6 @@ pub const Context = union(enum) {
         match_expr: CIR.Expr.Idx,
     };
 
-    /// Context for tag argument type errors
-    pub const TagArgContext = struct {
-        /// Name of the tag
-        tag_name: Ident.Idx,
-        /// 0-based index of the argument
-        arg_index: u32,
-    };
-
     /// Context for binary operator type errors
     pub const BinopContext = struct {
         operator: Binop,
@@ -248,14 +240,6 @@ pub const Context = union(enum) {
         record_region_idx: base.Region.Idx,
         /// Name of the record being update
         record_name: ?Ident.Idx,
-    };
-
-    /// Context for method call type errors
-    pub const MethodCallContext = struct {
-        /// Name of the method being called
-        method_name: Ident.Idx,
-        /// The type variable of the dispatcher (receiver)
-        dispatcher_var: Var,
     };
 
     /// Context for list element type errors

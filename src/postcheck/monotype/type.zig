@@ -41,9 +41,6 @@ pub const SidePoolSpan = extern struct {
 /// Compatibility name for existing Monotype type side-pool spans.
 pub const Span = SidePoolSpan;
 
-/// Cached structural digest stored beside a durable Monotype type node.
-pub const MonoTypeDigest = names.TypeDigest;
-
 /// Primitive type copied from checked module data.
 pub const Primitive = checked.CheckedPrimitive;
 

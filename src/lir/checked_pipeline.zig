@@ -1206,12 +1206,6 @@ pub const PreparedMonotype = struct {
     root_count: usize,
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
 
-    /// Fork only the target-dependent continuation. Specialization output is
-    /// copied exactly; checked lowering and its executor are not run again.
-    pub fn forkForTarget(self: *const PreparedMonotype, target_usize: base.target.TargetUsize) Allocator.Error!PreparedMonotype {
-        return self.forkForConsumer(target_usize, self.target.inline_expects);
-    }
-
     /// A shared program preserves both expect semantics explicitly. A program
     /// specialized for one mode cannot acquire the missing continuation later.
     pub fn forkForConsumer(self: *const PreparedMonotype, target_usize: base.target.TargetUsize, inline_expects: InlineExpectMode) Allocator.Error!PreparedMonotype {

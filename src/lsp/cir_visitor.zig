@@ -697,20 +697,6 @@ pub fn CirVisitor(comptime Context: type) type {
                 if (self.stopped) return;
             }
         }
-
-        /// Walk all definitions in a module (Def contains pattern, expr, and optional annotation).
-        pub fn walkDefs(self: *Self, store: *const NodeStore, defs: []const CIR.Def) void {
-            for (defs) |def| {
-                self.walkPattern(store, def.pattern);
-                if (self.stopped) return;
-                self.walkExpr(store, def.expr);
-                if (self.stopped) return;
-                if (def.annotation) |anno| {
-                    self.walkAnnotation(store, anno);
-                    if (self.stopped) return;
-                }
-            }
-        }
     };
 }
 

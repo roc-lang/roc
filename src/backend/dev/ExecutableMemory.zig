@@ -310,12 +310,6 @@ pub const ExecutableMemory = struct {
         return func();
     }
 
-    /// Call the code as a function that takes no arguments and returns f64
-    pub fn callReturnF64(self: *const Self) f64 {
-        const func: *const fn () callconv(.c) f64 = @ptrCast(@alignCast(self.entryPtr()));
-        return func();
-    }
-
     /// Call using the internal entrypoint convention:
     /// fn(ret_ptr, args_ptr) callconv(.c) void. The host the calling thread
     /// entered through `builtins.in_process_host` serves the code's host calls.

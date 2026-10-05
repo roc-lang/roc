@@ -13,7 +13,6 @@ const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
 
 const Relocation = @import("../Relocation.zig").IndexedRelocation;
-const SymbolTable = @import("../SymbolTable.zig");
 
 /// x86_64 instruction emitter for generating machine code.
 /// Parameterized by target for cross-compilation support.
@@ -291,14 +290,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, 4, src.enc())); // /4 = MUL
         }
 
-        /// IMUL r64 - signed widening multiply: RDX:RAX = RAX * src (single operand form)
-        /// Result: low 64 bits in RAX, high 64 bits in RDX
-        pub fn imulRegWidening(self: *Self, width: RegisterWidth, src: GeneralReg) Allocator.Error!void {
-            try self.emitRex(width, null, src);
-            try self.buf.append(self.allocator, 0xF7); // IMUL r/m
-            try self.buf.append(self.allocator, modRM(0b11, 5, src.enc())); // /5 = IMUL
-        }
-
         /// ADD reg, imm32 (sign-extended)
         pub fn addRegImm32(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) Allocator.Error!void {
             if (width.requiresSizeOverride()) {
@@ -318,11 +309,6 @@ pub fn Emit(comptime target: RocTarget) type {
         /// ADD reg, imm (convenience wrapper using 64-bit width)
         pub fn addImm(self: *Self, dst: GeneralReg, imm: i32) Allocator.Error!void {
             try self.addRegImm32(.w64, dst, imm);
-        }
-
-        /// ADD reg, imm (small immediate, alias for addRegImm32)
-        pub fn addRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) Allocator.Error!void {
-            try self.addRegImm32(width, dst, imm);
         }
 
         /// SUB reg, imm32 (sign-extended)
@@ -605,19 +591,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(rel)));
         }
 
-        /// CALL with relocation (address resolved at link time)
-        pub fn callRelocated(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
-            const call_offset = self.offset();
-            try self.buf.append(self.allocator, 0xE8);
-            try self.buf.appendSlice(self.allocator, &[4]u8{ 0, 0, 0, 0 }); // Placeholder
-            try self.relocs.append(self.allocator, .{
-                .linked_function = .{
-                    .offset = call_offset + 1, // Offset of the rel32 operand
-                    .symbol = symbol,
-                },
-            });
-        }
-
         /// CALL r64 (call to address in register)
         pub fn callReg(self: *Self, reg: GeneralReg) Allocator.Error!void {
             // CALL r64: FF /2
@@ -638,12 +611,6 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn jmpRel32(self: *Self, rel: i32) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xE9);
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(rel)));
-        }
-
-        /// JMP rel8 (short relative jump)
-        pub fn jmpRel8(self: *Self, rel: i8) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xEB);
-            try self.buf.append(self.allocator, @bitCast(rel));
         }
 
         /// Condition codes for conditional jumps and moves
@@ -686,11 +653,6 @@ pub fn Emit(comptime target: RocTarget) type {
         /// JNE rel32 (jump if not equal)
         pub fn jne(self: *Self, rel: i32) Allocator.Error!void {
             try self.jccRel32(.not_equal, rel);
-        }
-
-        /// JAE rel32 (jump if above or equal, unsigned >=)
-        pub fn jae(self: *Self, rel: i32) Allocator.Error!void {
-            try self.jccRel32(.above_or_equal, rel);
         }
 
         /// CMOVcc reg, reg (conditional move)
@@ -771,25 +733,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
             }
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
-        }
-
-        /// MOV [base + disp32], imm32 (store immediate to memory)
-        pub fn movMemImm32(self: *Self, width: RegisterWidth, base: GeneralReg, disp: i32, imm: i32) Allocator.Error!void {
-            if (width.requiresSizeOverride()) {
-                try self.buf.append(self.allocator, 0x66);
-            }
-            try self.emitRex(width, null, base);
-            try self.buf.append(self.allocator, 0xC7); // MOV r/m, imm32
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, 0, 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, 0, base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
         }
 
         /// MOVZX r32, BYTE [base + disp32] (zero-extend byte to 64 bits)
@@ -1031,25 +974,6 @@ pub fn Emit(comptime target: RocTarget) type {
             imm: u8,
         ) Allocator.Error!void {
             try self.sseRegReg(map, prefix, opcode, dst, src);
-            try self.buf.append(self.allocator, imm);
-        }
-
-        /// Packed shift by immediate in the legacy encoding. The destination is
-        /// ModR/M.r/m and ModR/M.reg carries the opcode extension.
-        pub fn ssePackedShiftImm8(
-            self: *Self,
-            opcode: u8,
-            extension: u3,
-            dst: FloatReg,
-            imm: u8,
-        ) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x66);
-            if (dst.rexB() == 1) {
-                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
-            }
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, opcode);
-            try self.buf.append(self.allocator, modRM(0b11, extension, dst.enc()));
             try self.buf.append(self.allocator, imm);
         }
 
@@ -1563,34 +1487,6 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x2A);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
-        }
-
-        /// CVTTSD2SI reg, xmm (convert scalar double to integer with truncation)
-        pub fn cvttsd2siRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            const w: u1 = if (width.requiresRexW()) 1 else 0;
-            const r: u1 = dst.rexB();
-            const b: u1 = src.rexB();
-            if (w == 1 or r == 1 or b == 1) {
-                try self.buf.append(self.allocator, rex(w, r, 0, b));
-            }
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x2C);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
-        }
-
-        /// CVTTSS2SI reg, xmm (convert scalar single to integer with truncation)
-        pub fn cvttss2siRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            const w: u1 = if (width.requiresRexW()) 1 else 0;
-            const r: u1 = dst.rexB();
-            const b: u1 = src.rexB();
-            if (w == 1 or r == 1 or b == 1) {
-                try self.buf.append(self.allocator, rex(w, r, 0, b));
-            }
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x2C);
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 

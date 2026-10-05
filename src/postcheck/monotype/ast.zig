@@ -1942,10 +1942,6 @@ pub const ProgramBuilder = struct {
         self.defs.set(@intFromEnum(id), def);
     }
 
-    pub fn setDefFn(self: *ProgramBuilder, id: DefId, fn_id: FnId) void {
-        self.defs.getPtrImmediate(@intFromEnum(id)).fn_id = fn_id;
-    }
-
     pub fn defsView(self: *const ProgramBuilder) []const Def {
         return self.defs.unsafeRawItemsForView();
     }
@@ -1976,14 +1972,6 @@ pub const ProgramBuilder = struct {
         const id: SpecId = @enumFromInt(@as(u32, @intCast(self.specs.len())));
         try self.specs.append(self.allocator, record);
         return id;
-    }
-
-    pub fn getSpec(self: *const ProgramBuilder, id: SpecId) SpecRecord {
-        return self.specs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    pub fn setSpecStatus(self: *ProgramBuilder, id: SpecId, status: SpecStatus) void {
-        self.specs.getPtrImmediate(@intFromEnum(id)).status = status;
     }
 
     pub fn specsView(self: *const ProgramBuilder) []const SpecRecord {
@@ -2089,10 +2077,6 @@ pub const ProgramBuilder = struct {
 
     pub fn patCount(self: *const ProgramBuilder) usize {
         return self.pats.len();
-    }
-
-    pub fn patsView(self: *const ProgramBuilder) []const Pat {
-        return self.pats.unsafeRawItemsForView();
     }
 
     pub fn getPat(self: *const ProgramBuilder, id: PatId) Pat {
@@ -2382,11 +2366,6 @@ pub const ProgramBuilder = struct {
         try self.runtime_schema_requests.append(self.allocator, request);
     }
 
-    pub fn addStaticDataValue(self: *ProgramBuilder, value: StaticDataValue) std.mem.Allocator.Error!Common.StaticDataId {
-        try self.ensureStaticDataValueCapacity(1);
-        return self.addStaticDataValueAssumeCapacity(value);
-    }
-
     /// Preflight static-data publication so parallel identity tables cannot
     /// diverge if allocation fails midway through a logical append.
     pub fn ensureStaticDataValueCapacity(
@@ -2459,10 +2438,6 @@ pub const ProgramBuilder = struct {
 
     pub fn getFieldExprAt(self: *const ProgramBuilder, index: usize) FieldExpr {
         return self.field_exprs.get(index);
-    }
-
-    pub fn getFieldAccessSegmentAt(self: *const ProgramBuilder, index: usize) FieldAccessSegment {
-        return self.field_access_segments.get(index);
     }
 
     pub fn getRecordDestructAt(self: *const ProgramBuilder, index: usize) RecordDestruct {
@@ -2617,12 +2592,6 @@ pub const ProgramBuilder = struct {
 
 /// Compatibility name for existing Monotype builder-owned program storage.
 pub const Program = ProgramBuilder;
-
-/// Design-document name for mutable Monotype builder storage.
-pub const MonoProgramBuilder = ProgramBuilder;
-
-/// Design-document name for the read-only Monotype program view.
-pub const MonoProgramView = ProgramView;
 
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());

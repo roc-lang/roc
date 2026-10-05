@@ -5,7 +5,6 @@
 //! for stack allocations in the interpreter.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 /// The highest alignment any Roc type can have.
 /// This is used as the base alignment for the allocation used
@@ -87,65 +86,6 @@ pub const NonEmptyRange = struct {
         };
     }
 };
-
-/// A key-value map that uses direct array indexing instead of hashing.
-/// Keys must be enums that are convertible to indices. The value type V must
-/// have a `none` constant that serves as the sentinel value for empty slots.
-pub fn ArrayListMap(comptime K: type, comptime V: type) type {
-    return struct {
-        const Self = @This();
-
-        entries: []V,
-
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) Allocator.Error!Self {
-            const entries = try allocator.alloc(V, capacity);
-            @memset(entries, V.none);
-
-            return .{ .entries = entries };
-        }
-
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.entries);
-        }
-
-        pub fn get(self: Self, key: K) ?V {
-            const idx = @intFromEnum(key);
-            if (idx >= self.entries.len) return null;
-
-            const value = self.entries[idx];
-            if (value == V.none) {
-                return null;
-            }
-            return value;
-        }
-
-        const init_capacity = @as(comptime_int, @max(1, std.atomic.cache_line / @sizeOf(V)));
-
-        /// Called when memory growth is necessary. Returns a capacity larger than
-        /// minimum that grows super-linearly. Copied from std.ArrayList.
-        inline fn growCapacity(minimum: usize) usize {
-            return minimum +| (minimum / 2 + init_capacity);
-        }
-
-        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) Allocator.Error!void {
-            const idx = @intFromEnum(key);
-
-            // Grow if necessary
-            if (idx >= self.entries.len) {
-                const new_size = growCapacity(idx);
-                const new_entries = try allocator.realloc(self.entries, new_size);
-                @memset(new_entries[self.entries.len..], V.none);
-                self.entries = new_entries;
-            }
-
-            self.entries[idx] = value;
-        }
-
-        pub fn contains(self: Self, key: K) bool {
-            return self.get(key) != null;
-        }
-    };
-}
 
 test "collections tests" {
     std.testing.refAllDecls(@import("CompactWriter.zig"));

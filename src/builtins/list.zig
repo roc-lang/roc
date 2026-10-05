@@ -25,9 +25,6 @@ pub const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 
 /// The low bit tags whether a List is a seamless slice.
 pub const SEAMLESS_SLICE_TAG: usize = 1;
-/// Deprecated compatibility alias for the seamless-slice tag bit.
-pub const SEAMLESS_SLICE_BIT: usize = SEAMLESS_SLICE_TAG;
-
 /// Runtime representation of Roc's List type with reference counting and seamless slice optimization.
 pub const RocList = extern struct {
     bytes: ?[*]u8,
@@ -522,28 +519,6 @@ pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool, roc_o
     list.incref(amount, elements_refcounted, roc_ops);
 }
 
-/// Get the number of elements in the list.
-pub fn listLen(list: RocList) callconv(.c) usize {
-    return list.len();
-}
-
-/// Check if the list is empty.
-pub fn listIsEmpty(list: RocList) callconv(.c) bool {
-    return list.isEmpty();
-}
-
-/// Get a pointer to an element at the given index without bounds checking.
-/// UNSAFE: No bounds checking is performed. Index must be < list.len().
-/// This is intended for internal use by low-level operations only.
-/// Returns a pointer to the element at the given index.
-pub fn listGetUnsafe(list: RocList, index: u64, element_width: usize) callconv(.c) ?[*]u8 {
-    if (list.bytes) |bytes| {
-        const byte_offset = @as(usize, @intCast(index)) * element_width;
-        return bytes + byte_offset;
-    }
-    return null;
-}
-
 /// Decrement reference count and deallocate when no longer shared.
 pub fn listDecref(
     list: RocList,
@@ -585,29 +560,6 @@ pub fn listWithCapacity(
         null,
         rcNone,
         .InPlace,
-        roc_ops,
-    );
-}
-
-/// C-compatible wrapper for listWithCapacity that writes result via output pointer.
-/// This avoids ABI issues with returning 24-byte structs on aarch64.
-pub fn listWithCapacityC(
-    out: *RocList,
-    capacity: u64,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    inc_context: ?*anyopaque,
-    inc: Inc,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    out.* = listWithCapacity(
-        capacity,
-        alignment,
-        element_width,
-        elements_refcounted,
-        inc_context,
-        inc,
         roc_ops,
     );
 }
@@ -1157,101 +1109,6 @@ pub fn listAppendUnsafe(
     return output;
 }
 
-/// C-compatible wrapper for listAppendUnsafe that writes result via output pointer.
-/// Takes explicit scalar arguments to avoid ABI issues with 24-byte struct on aarch64.
-pub fn listAppendUnsafeC(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_length: usize,
-    list_capacity_or_alloc_ptr: usize,
-    element: Opaque,
-    element_width: usize,
-    copy: CopyFallbackFn,
-) callconv(.c) void {
-    const list = RocList{
-        .bytes = list_bytes,
-        .length = list_length,
-        .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr,
-    };
-    const result = listAppendUnsafe(list, element, element_width, copy);
-    out.* = result;
-}
-
-/// C-compatible wrapper for the SAFE listAppend that reserves capacity first.
-/// Takes explicit scalar arguments to avoid ABI issues with 24-byte struct on aarch64.
-pub fn listAppendSafeC(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_length: usize,
-    list_capacity_or_alloc_ptr: usize,
-    element: Opaque,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    copy: CopyFallbackFn,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    const list = RocList{
-        .bytes = list_bytes,
-        .length = list_length,
-        .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr,
-    };
-    const result = listAppend(
-        list,
-        alignment,
-        element,
-        element_width,
-        elements_refcounted,
-        null, // inc_context
-        rcNone, // inc - no refcount increment needed
-        null, // dec_context
-        rcNone, // dec - elements are not refcounted here
-        .InPlace, // update_mode - try to update in place
-        copy,
-        roc_ops,
-    );
-    out.* = result;
-}
-
-/// List.append - adds an element to the end of a list.
-///
-/// ## Ownership
-/// - `list`: **consumes** - caller loses ownership
-/// - `element`: **borrows** - copied into list, caller retains original
-/// - Returns: **copy-on-write** - may be same allocation if unique with capacity
-///
-/// Reserves capacity if needed, then appends element. If the list is unique
-/// with sufficient capacity, modifies in place and returns same pointer.
-pub fn listAppend(
-    list: RocList,
-    alignment: u32,
-    element: Opaque,
-    element_width: usize,
-    elements_refcounted: bool,
-    inc_context: ?*anyopaque,
-    inc: Inc,
-    dec_context: ?*anyopaque,
-    dec: Dec,
-    update_mode: UpdateMode,
-    copy_fn: CopyFallbackFn,
-    roc_ops: *RocOps,
-) callconv(.c) RocList {
-    const with_capacity = listReserveForAppend(
-        list,
-        alignment,
-        1,
-        element_width,
-        elements_refcounted,
-        inc_context,
-        inc,
-        dec_context,
-        dec,
-        update_mode,
-        roc_ops,
-    );
-    return listAppendUnsafe(with_capacity, element, element_width, copy_fn);
-}
-
 /// Directly mutate the given list to push an element onto the end, and then return it.
 /// If there isn't enough capacity, uses roc_realloc to get more.
 ///
@@ -1312,56 +1169,6 @@ pub fn pushInPlace(
 
         return resized_list;
     }
-}
-
-/// Make a new list of nonzero-sized elements, with the given *POSITIVE* capacity, by
-/// shallowly copying an existing list's elements. (That is, doing a memcpy of the heap bytes this list points to.)
-/// The new list has a default refcount, and the same length as the existing list.
-/// This function assumes you always want a heap allocation to be performed, so passing 0 capacity to
-/// this function is illegal behavior and will panic in debug builds. If you don't want a heap allocation
-/// performed, then don't call this function! Same with passing an element with either a size or alignment of 0.
-///
-/// NOTE: This does *not* increment any refcounts! If the existing list's elements are refcounted,
-/// the *caller* is responsible for incrementing their refcounts, as this function does not know
-/// where their refcounts are stored in memory, and therefore cannot increment them.
-///
-/// (Refcounting elements would require passing a function pointer, which LLVM does not optimize well.)
-pub fn shallowClone(
-    old_list: RocList,
-    desired_capacity: usize,
-    elem_size: usize,
-    elem_alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) RocList {
-    std.debug.assert(desired_capacity > 0);
-    std.debug.assert(elem_size > 0);
-    std.debug.assert(elem_alignment > 0);
-
-    const len = old_list.len();
-    const new_list = RocList{
-        .bytes = utils.allocateWithRefcount(
-            desired_capacity * elem_size,
-            elem_alignment,
-            elements_refcounted,
-            roc_ops,
-        ),
-        .length = len,
-        .capacity_or_alloc_ptr = RocList.encodeCapacity(desired_capacity),
-    };
-
-    // Only copy bytes over if the original list was nonempty.
-    // It's fine if the original list was empty and this one will be nonempty;
-    // we just make the allocation, set its length to 0, and return it.
-    if (old_list.bytes) |source_bytes| {
-        // We know the new list has a valid pointer because otherwise roc_alloc would have crashed.
-        var dest_bytes = new_list.bytes orelse unreachable;
-
-        const copy_size = len * elem_size;
-        @memcpy(dest_bytes[0..copy_size], source_bytes[0..copy_size]);
-    }
-
-    return new_list;
 }
 
 /// List.prepend - adds an element to the beginning of a list.
@@ -2348,110 +2155,6 @@ pub fn listConcatUtf8(
 
         return result;
     }
-}
-
-/// Specialized copy fn which takes pointers as pointers to U8 and copies from src to dest.
-pub fn copy_u8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u8 = utils.alignedPtrCast(*u8, dest.?, @src());
-    const src_ptr: *const u8 = utils.alignedPtrCast(*const u8, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to I8 and copies from src to dest.
-pub fn copy_i8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i8 = utils.alignedPtrCast(*i8, dest.?, @src());
-    const src_ptr: *const i8 = utils.alignedPtrCast(*const i8, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to U16 and copies from src to dest.
-pub fn copy_u16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u16 = utils.alignedPtrCast(*u16, dest.?, @src());
-    const src_ptr: *const u16 = utils.alignedPtrCast(*const u16, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to I16 and copies from src to dest.
-pub fn copy_i16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i16 = utils.alignedPtrCast(*i16, dest.?, @src());
-    const src_ptr: *const i16 = utils.alignedPtrCast(*const i16, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to U32 and copies from src to dest.
-pub fn copy_u32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u32 = utils.alignedPtrCast(*u32, dest.?, @src());
-    const src_ptr: *const u32 = utils.alignedPtrCast(*const u32, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to I32 and copies from src to dest.
-pub fn copy_i32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i32 = utils.alignedPtrCast(*i32, dest.?, @src());
-    const src_ptr: *const i32 = utils.alignedPtrCast(*const i32, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to U64 and copies from src to dest.
-pub fn copy_u64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u64 = utils.alignedPtrCast(*u64, dest.?, @src());
-    const src_ptr: *const u64 = utils.alignedPtrCast(*const u64, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to I64 and copies from src to dest.
-pub fn copy_i64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i64 = utils.alignedPtrCast(*i64, dest.?, @src());
-    const src_ptr: *const i64 = utils.alignedPtrCast(*const i64, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to U128 and copies from src to dest.
-pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u128 = utils.alignedPtrCast(*u128, dest.?, @src());
-    const src_ptr: *const u128 = utils.alignedPtrCast(*const u128, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to I128 and copies from src to dest.
-pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i128 = utils.alignedPtrCast(*i128, dest.?, @src());
-    const src_ptr: *const i128 = utils.alignedPtrCast(*const i128, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to Boxes and copies from src to dest.
-pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *usize = utils.alignedPtrCast(*usize, dest.?, @src());
-    const src_ptr: *const usize = utils.alignedPtrCast(*const usize, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to ZST Boxes and copies from src to dest.
-pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *usize = utils.alignedPtrCast(*usize, dest.?, @src());
-    dest_ptr.* = 0;
-}
-
-/// Specialized copy fn which takes pointers as pointers to Lists and copies from src to dest.
-pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *RocList = utils.alignedPtrCast(*RocList, dest.?, @src());
-    const src_ptr: *const RocList = utils.alignedPtrCast(*const RocList, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to ZST Lists and copies from src to dest.
-pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *RocList = utils.alignedPtrCast(*RocList, dest.?, @src());
-    const src_ptr: *const RocList = utils.alignedPtrCast(*const RocList, src.?, @src());
-    dest_ptr.* = src_ptr.*;
-}
-
-/// Specialized copy fn which takes pointers as pointers to a RocStr and copies from src to dest.
-pub fn copy_str(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *RocStr = utils.alignedPtrCast(*RocStr, dest.?, @src());
-    const src_ptr: *const RocStr = utils.alignedPtrCast(*const RocStr, src.?, @src());
-    dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to u8 and copies from src to dest.

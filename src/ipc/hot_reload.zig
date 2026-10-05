@@ -72,21 +72,10 @@ pub fn controlFromHeader(header: *SharedMemoryAllocator.Header) *Control {
     return @ptrCast(@alignCast(&header.reserved));
 }
 
-/// Reinterpret a const shared-memory header as its embedded control block.
-pub fn controlFromConstHeader(header: *const SharedMemoryAllocator.Header) *const Control {
-    return @ptrCast(@alignCast(&header.reserved));
-}
-
 /// Locate the mutable control block from the base pointer of a shared mapping.
 pub fn controlFromBase(base_ptr: [*]align(1) u8) *Control {
     const header: *SharedMemoryAllocator.Header = @ptrCast(@alignCast(base_ptr));
     return controlFromHeader(header);
-}
-
-/// Locate the const control block from the base pointer of a shared mapping.
-pub fn controlFromConstBase(base_ptr: [*]align(1) const u8) *const Control {
-    const header: *const SharedMemoryAllocator.Header = @ptrCast(@alignCast(base_ptr));
-    return controlFromConstHeader(header);
 }
 
 /// Return whether the control block has the expected magic and format version.
@@ -266,16 +255,6 @@ pub fn descriptorFromOffset(base_ptr: [*]align(1) u8, total_size: usize, descrip
     return descriptor;
 }
 
-/// Locate a const image descriptor by shared-memory byte offset.
-pub fn descriptorFromConstOffset(base_ptr: [*]align(1) const u8, total_size: usize, descriptor_offset: usize) ?*const ImageDescriptor {
-    if (!validDescriptorRange(total_size, descriptor_offset)) return null;
-    const ptr = base_ptr + descriptor_offset;
-    if (@intFromPtr(ptr) % @alignOf(ImageDescriptor) != 0) return null;
-    const descriptor: *const ImageDescriptor = @ptrCast(@alignCast(ptr));
-    if (descriptor.magic != DESCRIPTOR_MAGIC) return null;
-    return descriptor;
-}
-
 /// Coherent snapshot of one image descriptor's reclamation metadata.
 pub const ImageDescriptorSnapshot = struct {
     state: DescriptorState,
@@ -298,12 +277,6 @@ pub fn descriptorSnapshot(descriptor: *const ImageDescriptor) ImageDescriptorSna
         .allocation_start = @intCast(loadU64(&descriptor.allocation_start, .acquire)),
         .allocation_end = @intCast(loadU64(&descriptor.allocation_end, .acquire)),
     };
-}
-
-/// Return the current state of a descriptor addressed by offset.
-pub fn descriptorSnapshotFromOffset(base_ptr: [*]align(1) const u8, total_size: usize, descriptor_offset: usize) ?ImageDescriptorSnapshot {
-    const descriptor = descriptorFromConstOffset(base_ptr, total_size, descriptor_offset) orelse return null;
-    return descriptorSnapshot(descriptor);
 }
 
 /// Mark a descriptor as no longer published but not yet known reusable.

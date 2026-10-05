@@ -49,11 +49,6 @@ pub const CallingConvention = struct {
     /// ABI packs; AAPCS64 everywhere else and both x86_64 conventions do not.
     packs_stack_args: bool,
 
-    pub const ParamReg = union(enum) {
-        x86_64: x86_64.GeneralReg,
-        aarch64: aarch64.GeneralReg,
-    };
-
     const ParamRegs = union(enum) {
         x86_64: []const x86_64.GeneralReg,
         aarch64: []const aarch64.GeneralReg,
@@ -107,14 +102,6 @@ pub const CallingConvention = struct {
             std.debug.panic("CallingConvention.forTarget called for unsupported arch: {s}", .{@tagName(target.toCpuArch())});
         }
         unreachable;
-    }
-
-    /// Get argument register at index as an architecture-tagged register
-    pub fn getParamReg(self: CallingConvention, index: usize) ParamReg {
-        return switch (self.param_regs) {
-            .x86_64 => |regs| .{ .x86_64 = regs[index] },
-            .aarch64 => |regs| .{ .aarch64 = regs[index] },
-        };
     }
 
     /// Get argument register at index for x86_64 targets.
@@ -360,13 +347,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
-        /// Add an integer-class argument at the register index assigned by the
-        /// ABI allocator. This is authoritative placement, not a sequential
-        /// hint: aligned multi-register values can intentionally leave holes.
-        pub fn addRegArgAt(self: *Self, register_index: u16, src_reg: GeneralReg) void {
-            self.addDeferredRegArg(register_index, .{ .from_reg = src_reg });
-        }
-
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
@@ -530,25 +510,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
-        /// Add a struct argument, handling pass-by-pointer per platform ABI.
-        /// Windows x64: Only 1, 2, 4, 8 byte structs pass by value; all others by pointer.
-        /// System V: Structs up to 16 bytes can be passed in registers.
-        pub fn addStructArg(self: *Self, offset: i32, size: usize) Allocator.Error!void {
-            if (CC_EMIT.canPassStructByValue(size)) {
-                // Struct can be passed by value in register(s)
-                if (size <= 8) {
-                    try self.addMemArg(CC_EMIT.BASE_PTR, offset);
-                } else {
-                    // System V only: 9-16 byte structs use two registers
-                    try self.addMemArg(CC_EMIT.BASE_PTR, offset);
-                    try self.addMemArg(CC_EMIT.BASE_PTR, offset + 8);
-                }
-            } else {
-                // Pass by pointer (Windows for non-power-of-2 or >8 bytes, System V for >16 bytes)
-                try self.addLeaArg(CC_EMIT.BASE_PTR, offset);
-            }
-        }
-
         /// Add a float argument from a float register.
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         ///              A float arg at position 1 goes in XMM1, consuming both int and float slots.
@@ -678,21 +639,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add a f32 float argument by loading from memory (convenience wrapper).
         pub fn addF32MemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             try self.addFloatMemArg(base_reg, offset, 4);
-        }
-
-        /// Get the number of float argument registers available
-        pub fn getNumFloatArgRegs() usize {
-            return CC_EMIT.FLOAT_PARAM_REGS.len;
-        }
-
-        /// Get float argument register at index
-        pub fn getFloatArgReg(index: usize) FloatReg {
-            return CC_EMIT.FLOAT_PARAM_REGS[index];
-        }
-
-        /// Get the float return register (XMM0 on x86_64)
-        pub fn getFloatReturnReg() FloatReg {
-            return CC_EMIT.FLOAT_PARAM_REGS[0];
         }
 
         /// Emit a single argument instruction: move source to destination register.
@@ -1282,11 +1228,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.adjustStackPointerAarch64(.up, total_space);
                 }
             }
-        }
-
-        /// Get the return register for the result
-        pub fn getReturnReg() GeneralReg {
-            return CC_EMIT.RETURN_REGS[0];
         }
 
         /// Get the number of argument registers available

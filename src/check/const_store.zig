@@ -557,12 +557,6 @@ pub const ConstTypeStore = struct {
         return self.declared_field_pool.items[range.start .. range.start + range.len];
     }
 
-    pub fn cloneTypeFrom(self: *ConstTypeStore, source: *const ConstTypeStore, ty: ConstTypeId) Allocator.Error!ConstTypeId {
-        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
-        defer map.deinit();
-        return try self.cloneTypeFromInner(source, null, ty, &map);
-    }
-
     pub fn cloneTypeFromTranslated(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,

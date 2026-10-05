@@ -40,9 +40,6 @@ pub const Class = enum {
 
     pub const one_integer: [8]Class = .{ .integer, .none, .none, .none, .none, .none, .none, .none };
     pub const two_integers: [8]Class = .{ .integer, .integer, .none, .none, .none, .none, .none, .none };
-    pub const three_integers: [8]Class = .{ .integer, .integer, .integer, .none, .none, .none, .none, .none };
-    pub const four_integers: [8]Class = .{ .integer, .integer, .integer, .integer, .none, .none, .none, .none };
-
     pub const @"f32": [8]Class = .{ .float, .none, .none, .none, .none, .none, .none, .none };
     pub const @"f64": [8]Class = .{ .sse, .none, .none, .none, .none, .none, .none, .none };
 

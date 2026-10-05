@@ -31,16 +31,6 @@ pub fn fromPtr(raw_ptr: *const anyopaque, lay_val: Layout) RocValue {
     return .{ .ptr = @ptrCast(raw_ptr), .lay = lay_val };
 }
 
-/// Wrap an opaque pointer, its layout, and the layout index into a `RocValue`.
-pub fn fromPtrWithIdx(raw_ptr: *const anyopaque, lay_val: Layout, idx: Idx) RocValue {
-    return .{ .ptr = @ptrCast(raw_ptr), .lay = lay_val, .layout_idx = idx };
-}
-
-/// Wrap a raw byte pointer and its layout into a `RocValue`.
-pub fn fromRawBytes(raw_ptr: [*]const u8, lay_val: Layout) RocValue {
-    return .{ .ptr = raw_ptr, .lay = lay_val };
-}
-
 /// Create a `RocValue` for a zero-sized type (null pointer).
 pub fn zst(lay_val: Layout) RocValue {
     return .{ .ptr = null, .lay = lay_val };

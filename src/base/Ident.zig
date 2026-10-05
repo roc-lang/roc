@@ -418,21 +418,6 @@ pub const Store = struct {
         return self.findByString("Builtin.Str") orelse unreachable;
     }
 
-    /// Calculate the size needed to serialize this Ident.Store
-    pub fn serializedSize(self: *const Store) usize {
-        var size: usize = 0;
-
-        // SmallStringInterner components
-        size += @sizeOf(u32); // bytes_len
-        size += self.interner.bytes.len(); // bytes data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        size += @sizeOf(u32); // next_unique_name
-
-        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT.toByteUnits());
-    }
-
     /// Serialize this Store to the given CompactWriter. The resulting Store
     /// in the writer's buffer will have offsets instead of pointers. Calling any
     /// methods on it or dereferencing its internal "pointers" (which are now

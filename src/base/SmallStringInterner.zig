@@ -108,9 +108,6 @@ const Policy = struct {
     pub fn count(self: *const SmallStringInterner) u32 {
         return self.entry_count;
     }
-    pub fn entryCount(self: *const SmallStringInterner, _: *const Index) u32 {
-        return self.entry_count;
-    }
     pub fn cellForId(id: Id) Cell {
         return id;
     }

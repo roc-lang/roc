@@ -354,15 +354,6 @@ pub const Solution = struct {
         return self.unique.isSet(index);
     }
 
-    /// True when some occurrence can add another holder to the local's
-    /// value (or consume it a second time), so a born-unique seed on this
-    /// local would not survive to a consuming use.
-    pub fn isUniqueDestroyed(self: *const Solution, local: LIR.LocalId) bool {
-        const index = @intFromEnum(local);
-        if (index >= self.leader.len) return true;
-        return self.unique_destroyed.isSet(index);
-    }
-
     /// True when the local's value is unique in an emission of its proc
     /// whose demand vector seeds the parameter positions in `seeds`
     /// born-unique: its birth holds under those seeds and nothing adds a

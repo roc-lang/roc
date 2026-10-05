@@ -471,10 +471,6 @@ const StringLiteralPolicy = struct {
         return owner.store.appendFresh(gpa, string);
     }
 
-    pub fn entryCount(_: anytype, index: *const InternedBytes.Index(StringLiteralPolicy)) u32 {
-        return index.len;
-    }
-
     pub fn hash(string: []const u8) u64 {
         return InternedBytes.hash(string);
     }

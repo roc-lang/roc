@@ -224,37 +224,6 @@ fn createWithMinSizeKind(
     }
 }
 
-/// Opens an existing shared memory region by reading its header first.
-/// This function will map only the required amount of memory as specified in the header.
-pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize) (platform.SharedMemoryError || error{InvalidSharedMemory})!SharedMemoryAllocator {
-    // Open the named shared memory
-    const handle = try platform.openMapping(gpa, name);
-    errdefer platform.closeHandle(handle, false);
-
-    // First map just the header
-    const header_ptr = try platform.mapMemory(handle, @sizeOf(Header), platform.SHARED_MEMORY_BASE_ADDR);
-    const header = @as(*const Header, @ptrCast(@alignCast(header_ptr))).*;
-    platform.unmapMemory(header_ptr, @sizeOf(Header));
-
-    if (header.magic != HEADER_MAGIC) {
-        return error.InvalidSharedMemory;
-    }
-
-    // Now map the actual size from the header
-    const actual_size = @as(usize, @intCast(header.used_size));
-    const base_ptr = try platform.mapMemory(handle, actual_size, platform.SHARED_MEMORY_BASE_ADDR);
-    errdefer platform.unmapMemory(base_ptr, actual_size);
-
-    return SharedMemoryAllocator{
-        .handle = handle,
-        .base_ptr = @ptrCast(@alignCast(base_ptr)),
-        .total_size = actual_size,
-        .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
-        .is_owner = false,
-        .page_size = page_size,
-    };
-}
-
 /// Opens an existing shared memory region created by another process.
 ///
 /// IMPORTANT: The `size` parameter should be the actual used size from the parent
@@ -537,43 +506,9 @@ pub fn getUsedSize(self: *const SharedMemoryAllocator) usize {
     return self.offset.load(.monotonic);
 }
 
-/// Get the recommended size for a child process to map.
-/// This is the used size aligned to page boundaries.
-///
-/// IMPORTANT: The parent process MUST communicate this size to the child process
-/// (e.g., via command line arguments or environment variables). The child should
-/// then use this size when calling open() to map only what's needed.
-///
-/// Example:
-/// ```zig
-/// // Parent process
-/// const map_size = shm.getRecommendedMapSize();
-/// // Pass map_size to child via command line: --shm-size=409600
-///
-/// // Child process
-/// const page_size = try SharedMemoryAllocator.getSystemPageSize();
-/// const shm = try SharedMemoryAllocator.open(allocator, name, map_size, page_size);
-/// ```
-pub fn getRecommendedMapSize(self: *const SharedMemoryAllocator) usize {
-    const used = self.getUsedSize();
-    if (used == 0) return self.page_size; // Map at least one page
-    return std.mem.alignForward(usize, used, self.page_size);
-}
-
 /// Get the remaining available memory
 pub fn getAvailableSize(self: *const SharedMemoryAllocator) usize {
     return self.total_size - self.offset.load(.monotonic);
-}
-
-/// Get the platform handle for this shared memory
-/// Useful for child processes that need to manage the handle directly
-pub fn getHandle(self: *const SharedMemoryAllocator) Handle {
-    return self.handle;
-}
-
-/// Get the base pointer for this shared memory
-pub fn getBasePtr(self: *const SharedMemoryAllocator) [*]align(1) u8 {
-    return self.base_ptr;
 }
 
 /// Reset the user-data region to allow reuse.

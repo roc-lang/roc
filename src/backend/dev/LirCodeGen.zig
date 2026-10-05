@@ -1233,14 +1233,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             num_regs: u8,
         };
 
-        /// Info about a mutable variable's fixed stack slot
-        pub const MutableVarInfo = struct {
-            /// The fixed stack slot offset (from frame pointer)
-            slot: i32,
-            /// The size of the variable in bytes
-            size: u32,
-        };
-
         /// Compiled procedure information for two-pass compilation.
         /// After a procedure is fully compiled (including RET), it's registered here.
         pub const CompiledProc = struct {
@@ -1540,18 +1532,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             epilogue_offset: u32 = 0,
             /// Whether function uses frame pointer
             uses_frame_pointer: bool = true,
-        };
-
-        /// Result of entrypoint compilation for native code generation.
-        pub const EntrypointResult = struct {
-            /// Generated machine code containing all entrypoints
-            code: []const u8,
-            /// Exported symbols for object file generation
-            symbols: []const ExportedSymbol,
-            /// Relocations for external references
-            relocations: []const Relocation,
-            /// Name column owning the relocation IDs.
-            symbol_names: []const []const u8,
         };
 
         /// Errors that can occur during code generation
@@ -26074,15 +26054,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
     };
 }
-
-/// x86_64 OpenBSD
-pub const X64OpenbsdLirCodeGen = LirCodeGen(.x64openbsd);
-/// x86_64 NetBSD
-pub const X64NetbsdLirCodeGen = LirCodeGen(.x64netbsd);
-/// x86_64 Linux (generic)
-pub const X64LinuxLirCodeGen = LirCodeGen(.x64linux);
-/// x86_64 ELF (generic)
-pub const X64ElfLirCodeGen = LirCodeGen(.x64elf);
 
 /// Native target used by host dev codegen and its runtime static-data tables.
 pub const host_lir_codegen_target = RocTarget.detectNative();

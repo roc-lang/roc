@@ -65,12 +65,6 @@ pub fn safeRead(comptime T: type, ptr: ?*anyopaque, offset: usize, total_size: u
     return typed_ptr.*;
 }
 
-/// Safely write a value to memory with bounds checking
-pub fn safeWrite(comptime T: type, ptr: ?*anyopaque, offset: usize, total_size: usize, value: T) MemoryError!void {
-    const typed_ptr = try safeCast(T, ptr, offset, total_size);
-    typed_ptr.* = value;
-}
-
 test "safeCopy basic functionality" {
     var dst: [10]u8 = undefined;
     const src = "hello";

@@ -1846,19 +1846,6 @@ pub const ProgramPlan = struct {
         return self.stored_callable_capture_sources.items[span.start .. span.start + span.len];
     }
 
-    pub fn uniqueNestedCallableUseType(self: *const ProgramPlan, worker: WorkerPlanId) ?CheckedTypeIdentity {
-        var found: ?CheckedTypeIdentity = null;
-        for (self.nested_callable_uses.items) |use| {
-            if (use.worker != worker) continue;
-            if (found) |existing| {
-                if (!typeRefEql(existing, use.callable_ty)) return null;
-                continue;
-            }
-            found = use.callable_ty;
-        }
-        return found;
-    }
-
     pub fn nestedCallableUsePlan(
         self: *const ProgramPlan,
         use: CheckedExprIdentity,

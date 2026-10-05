@@ -127,12 +127,6 @@ pub const ErasedFnsId = enum(u32) { _ };
 /// Identifier for one finite callable variant.
 pub const FnVariantId = enum(u32) { _ };
 
-/// Callable lowering result used by const plans.
-pub const FnResult = union(enum) {
-    finite: FnSetId,
-    erased: ErasedFnsId,
-};
-
 /// Exact member context in the common target-independent Lambda Solved graph.
 /// Own captures belong to `source`; solved captures name their producer span.
 pub const FrozenCallableContext = struct {
@@ -772,13 +766,6 @@ pub const Result = struct {
         self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
-    }
-
-    pub fn requestedLayoutForType(self: *const Result, ty: names.TypeDigest) ?layout.Idx {
-        for (self.requested_layouts.items) |entry| {
-            if (std.mem.eql(u8, entry.ty.bytes[0..], ty.bytes[0..])) return entry.layout_idx;
-        }
-        return null;
     }
 
     pub fn addComptimeSite(

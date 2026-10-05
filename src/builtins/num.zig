@@ -237,17 +237,6 @@ fn parseIntNoFmt(comptime T: type, bytes: []const u8) ParseIntError!T {
     }
 }
 
-/// Parse an unsigned decimal integer, returning null on invalid input or overflow.
-pub fn parseUnsignedDecimal(comptime T: type, bytes: []const u8) ?T {
-    const info = @typeInfo(T).int;
-    const limit: u128 = switch (info.signedness) {
-        .signed => @intCast(std.math.maxInt(T)),
-        .unsigned => @intCast(std.math.maxInt(T)),
-    };
-    const magnitude = parseMagnitude(limit, bytes, 0, 10) catch return null;
-    return @intCast(magnitude);
-}
-
 fn detectRadix(bytes: []const u8, index: *usize) u8 {
     if (bytes.len - index.* >= 2 and bytes[index.*] == '0') {
         switch (bytes[index.* + 1]) {

@@ -13958,16 +13958,6 @@ const Builder = struct {
         return sealed.ids.expr(encoder_expr);
     }
 
-    fn restoreConstNode(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        node: checked.ConstNodeId,
-        checked_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.ExprId {
-        return try self.restoreConstNodeAtType(store_view, type_view, node, try self.lowerType(type_view, checked_ty));
-    }
-
     fn restoreConstNodeAtType(
         self: *Builder,
         store_view: ModuleView,
@@ -14106,12 +14096,6 @@ const Builder = struct {
     /// but the supplied TypeIds are durable rather than active snapshots.
     fn closedFunctionType(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
         return try self.activeTypeStore().internFunc(self.activeNameStore(), arg_tys, ret_ty);
-    }
-
-    fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
-        const args = self.activeTypeStore().span(span);
-        if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
-        return GuardedList.at(args, 0);
     }
 
     fn localExpr(self: *Builder, local: Ast.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -20208,12 +20192,6 @@ const BodyContext = struct {
 
     fn specializationTypeDigest(self: *BodyContext, ty: Type.TypeId) names.TypeDigest {
         return self.builder.specializationTypeDigestIn(self.typeStore(), self.nameStore(), ty);
-    }
-
-    fn singleTypeArg(self: *const BodyContext, span: Type.Span, comptime owner: []const u8) Type.TypeId {
-        const args = self.typeStore().span(span);
-        if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
-        return GuardedList.at(args, 0);
     }
 
     fn recordField(self: *const BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
@@ -43973,16 +43951,6 @@ const BodyContext = struct {
         );
         if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
         return restored;
-    }
-
-    fn restoreConstNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        node: checked.ConstNodeId,
-        checked_ty: checked.CheckedTypeId,
-    ) Allocator.Error!DraftExprId {
-        return try self.restoreConstNodeAtType(store_view, type_view, node, try self.lowerTypeFromView(type_view, checked_ty));
     }
 
     fn restoreConstNodeAtType(

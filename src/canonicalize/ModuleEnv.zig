@@ -1539,11 +1539,6 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.runtime_prepared = false;
 }
 
-/// Alias for initCIRFields for backwards compatibility with tests
-pub fn initModuleEnvFields(self: *Self, module_name: []const u8) Allocator.Error!void {
-    return self.initCIRFields(module_name);
-}
-
 /// Initialize the module environment with capacity heuristics based on source size.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     var common = try CommonEnv.init(gpa, source);
@@ -4472,11 +4467,6 @@ pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
     return self.common.calcRegionInfo(region);
 }
 
-/// Extract a literal from source code between given byte offsets
-pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32) []const u8 {
-    return self.common.source[start_offset..end_offset];
-}
-
 /// Get the source line for a given region
 pub fn getSourceLine(self: *const Self, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }![]const u8 {
     return self.common.getSourceLine(region);
@@ -5064,15 +5054,6 @@ pub fn recordForLoopDispatchPlan(
     });
 }
 
-/// Return the checked iterator dispatch functions for a semantic `for` loop node.
-pub fn forLoopDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?ForLoopDispatchPlan {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.for_loop_dispatch_plans.items.items) |plan| {
-        if (plan.node_idx == raw_node) return plan;
-    }
-    return null;
-}
-
 /// Record exact base-256 digits for a numeric source node.
 ///
 /// The table is kept sorted by `node_idx` so lookups are O(log n).
@@ -5562,11 +5543,6 @@ pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
     self.common.exposed_items.ensureSorted(allocator);
 }
 
-/// Checks whether the given identifier is exposed by this module.
-pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
-    return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
-}
-
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
@@ -5764,47 +5740,6 @@ pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, re
     return expr_idx;
 }
 
-/// Add a new type variable to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeSlot(
-    self: *Self,
-    parent_node: CIR.Node.Idx,
-    region: Region,
-    comptime RetIdx: type,
-) std.mem.Allocator.Error!RetIdx {
-    comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
-    const node_idx = try self.store.addTypeVarSlot(parent_node, region);
-    self.debugAssertArraysInSync();
-    return @enumFromInt(@intFromEnum(node_idx));
-}
-
-/// Adds an external declaration and returns its index
-pub fn pushExternalDecl(self: *Self, decl: CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Idx {
-    const idx = @as(u32, @intCast(self.external_decls.len()));
-    _ = try self.external_decls.append(self.gpa, decl);
-    return @enumFromInt(idx);
-}
-
-/// Retrieves an external declaration by its index
-pub fn getExternalDecl(self: *const Self, idx: CIR.ExternalDecl.Idx) *const CIR.ExternalDecl {
-    return self.external_decls.get(@as(CIR.ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
-}
-
-/// Adds multiple external declarations and returns a span
-pub fn pushExternalDecls(self: *Self, decls: []const CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Span {
-    const start = @as(u32, @intCast(self.external_decls.len()));
-    for (decls) |decl| {
-        _ = try self.external_decls.append(self.gpa, decl);
-    }
-    return CIR.ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
-}
-
-/// Gets a slice of external declarations from a span
-pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []const CIR.ExternalDecl {
-    const range = CIR.ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
-    return self.external_decls.sliceRange(range);
-}
-
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
@@ -5819,30 +5754,6 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
 pub fn qualifiedModuleName(self: *const Self) []const u8 {
     if (self.qualified_module_name.len == 0) return self.module_name;
     return self.qualified_module_name;
-}
-
-/// Builds a mapping from platform for-clause alias ident indices to the
-/// equivalent ident indices in the app module's store.
-///
-/// This encapsulates all cross-module string-based ident resolution so that
-/// downstream code (e.g. in src/eval/) only needs to do index lookups via `map.get()`.
-pub fn buildPlatformToAppIdentMap(
-    self: *const Self,
-    gpa: std.mem.Allocator,
-    app_env: *const Self,
-) std.mem.Allocator.Error!std.AutoHashMap(Ident.Idx, Ident.Idx) {
-    var map = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
-    errdefer map.deinit();
-    const all_aliases = self.for_clause_aliases.items.items;
-    for (self.requires_types.items.items) |required_type| {
-        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-        for (type_aliases_slice) |alias| {
-            if (app_env.common.findIdentFrom(&self.common, alias.alias_name)) |app_ident| {
-                try map.put(alias.alias_name, app_ident);
-            }
-        }
-    }
-    return map;
 }
 
 /// Helper function to generate the S-expression node for the entire module.
@@ -5900,12 +5811,6 @@ pub fn appendRegionInfoToSExprTreeFromRegion(self: *const Self, tree: *SExprTree
         region.end.offset,
         info,
     );
-}
-
-/// Get region information for a node.
-pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
-    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
-    return self.getRegionInfo(region);
 }
 
 /// Helper function to convert type information to an SExpr node
@@ -6290,15 +6195,6 @@ pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Id
     return self.module_identity_displays.items.items[@intFromEnum(idx)];
 }
 
-/// Look up an env-local module identity entry by its env-local display ident.
-/// Callers must use the returned identity's content hash for identity decisions.
-pub fn moduleIdentityForDisplayIdent(self: *const Self, display: Ident.Idx) ?base.ModuleIdentity.Idx {
-    for (self.module_identity_displays.items.items, 0..) |candidate, i| {
-        if (candidate.eql(display)) return @enumFromInt(i);
-    }
-    return null;
-}
-
 /// Display text for an env-local identity index. Diagnostics only.
 pub fn moduleIdentityDisplayText(self: *const Self, idx: base.ModuleIdentity.Idx) []const u8 {
     const display = self.moduleIdentityDisplayIdent(idx);
@@ -6465,12 +6361,6 @@ pub fn lookupMethodBindingForMethodOwnerConst(self: *const Self, owner: MethodOw
 pub fn finalizeMethodTables(self: *Self) void {
     self.method_idents.ensureSortedUnique();
     self.method_defs.ensureSortedUnique();
-}
-
-/// Looks up method metadata using a type declaration owner from one environment
-/// and a method ident from the same source environment.
-pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
-    return self.lookupMethodBindingFromOwnerAndMethodEnvsConst(source_env, source_decl, source_env, method_ident);
 }
 
 /// Looks up method metadata using a type declaration owner and a method ident

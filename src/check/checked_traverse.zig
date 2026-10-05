@@ -79,10 +79,6 @@ pub fn BoolPredicateTraversal(comptime Key: type, comptime Context: type) type {
             self.memo.deinit();
         }
 
-        pub fn resetRetainingCapacity(self: *Self) void {
-            self.memo.clearRetainingCapacity();
-        }
-
         pub fn visit(self: *Self, root: Key) Allocator.Error!bool {
             errdefer {
                 for (self.frames.items) |frame| _ = self.memo.remove(frame.key);
@@ -187,21 +183,6 @@ pub fn ReserveThenFillTraversal(comptime Key: type, comptime Result: type, compt
             self.active.deinit();
         }
 
-        pub fn resetRetainingCapacity(self: *Self) void {
-            self.active.clearRetainingCapacity();
-        }
-
-        /// Return whether `result` is currently the reserved value for some
-        /// in-progress key. Used by pending-tolerant scans that must recognize a
-        /// root they are themselves mid-way through building.
-        pub fn hasReservedResult(self: *const Self, result: Result) bool {
-            var it = self.active.valueIterator();
-            while (it.next()) |value| {
-                if (std.meta.eql(value.*, result)) return true;
-            }
-            return false;
-        }
-
         pub fn visit(self: *Self, root: Key) Allocator.Error!Result {
             errdefer {
                 for (self.frames.items) |frame| _ = self.active.remove(frame.key);
@@ -290,10 +271,6 @@ pub fn DigestTraversal(comptime Key: type, comptime Context: type) type {
             self.children.deinit(self.allocator);
             self.frames.deinit(self.allocator);
             self.active.deinit();
-        }
-
-        pub fn resetRetainingCapacity(self: *Self) void {
-            self.active.clearRetainingCapacity();
         }
 
         pub fn activeCount(self: *const Self) u32 {

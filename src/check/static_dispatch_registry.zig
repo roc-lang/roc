@@ -2669,18 +2669,6 @@ pub const StaticDispatchPlanTable = struct {
         return if (lookupPlanKV(self.by_expr, @intFromEnum(expr))) |v| @enumFromInt(v) else null;
     }
 
-    pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.numeral_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
-    }
-
-    pub fn lookupQuoteByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.quote_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
-    }
-
-    pub fn lookupIteratorForByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?IteratorForPlanId {
-        return if (lookupPlanKV(self.iterator_for_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
-    }
-
     pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
         return self.evidence_nodes[@intFromEnum(id)];
     }
@@ -3090,37 +3078,6 @@ fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedT
     while (true) {
         const payload = checked_types.store.payload(current);
         if (std.meta.activeTag(payload) != .alias) return current;
-        if (remaining == 0) {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
-            }
-            unreachable;
-        }
-        remaining -= 1;
-        current = payload.alias.backing;
-    }
-}
-
-/// Public `methodOwnerForCheckedType` declaration: the method owner of a
-/// published checked type, walking alias chains transparently.
-pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
-    var current = ty;
-    // Aliases are transparent for static dispatch: an alias's method owner is its
-    // backing's owner. Walk the (finite) alias chain so an alias-over-nominal,
-    // alias-over-alias, or alias-over-builtin resolves to the underlying owner
-    // rather than the alias's own identity, where no methods are registered. The
-    // bound on iterations is the store size, so a cyclic chain cannot loop here.
-    var remaining = checked_types.store.payloads.items.len;
-    while (true) {
-        const raw = @intFromEnum(current);
-        if (raw >= checked_types.store.payloads.items.len) {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
-            }
-            unreachable;
-        }
-        const payload = checked_types.store.payloads.items[raw];
-        if (std.meta.activeTag(payload) != .alias) return methodOwnerForCheckedPayload(payload);
         if (remaining == 0) {
             if (@import("builtin").mode == .Debug) {
                 std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});

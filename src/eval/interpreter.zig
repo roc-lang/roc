@@ -783,28 +783,6 @@ pub const Interpreter = struct {
         );
     }
 
-    /// Construct an interpreter with an explicit hosted-call dependency. When
-    /// present, every hosted call is routed exclusively through this handler
-    /// and the RocOps function table is never consulted.
-    pub fn initWithHostedCallHandler(
-        allocator: Allocator,
-        store: *const LirStore,
-        layout_store: *const layout_mod.Store,
-        static_strings: backend.StaticStringData.View,
-        caller_roc_ops: *RocOps,
-        hosted_call_handler: ?HostedCallHandler,
-    ) Allocator.Error!LirInterpreter {
-        return initWithBoxyTablesAndHostedCallHandler(
-            allocator,
-            store,
-            layout_store,
-            .{},
-            static_strings,
-            caller_roc_ops,
-            hosted_call_handler,
-        );
-    }
-
     /// Construct an interpreter from the checked LIR image's explicit Boxy
     /// tables and optional hosted-call dependency.
     pub fn initWithBoxyTablesAndHostedCallHandler(
@@ -962,10 +940,6 @@ pub const Interpreter = struct {
         return self.roc_env.runtime_error_message;
     }
 
-    pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
-        return self.roc_env.expect_message;
-    }
-
     pub fn getExpectFailures(self: *const LirInterpreter) []const ExpectFailure {
         return self.roc_env.expect_failures.items;
     }
@@ -980,10 +954,6 @@ pub const Interpreter = struct {
     /// The source region of the `?` whose Err failed the expect.
     pub fn getExpectErrRegion(self: *const LirInterpreter) ?base.Region {
         return self.roc_env.expect_err_region;
-    }
-
-    pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
-        return self.failed_call_stack.items;
     }
 
     /// The crash statement that ended the last evaluation, if one did.
@@ -2232,125 +2202,6 @@ pub const Interpreter = struct {
                 .loop_break,
                 => break,
             };
-        }
-    }
-
-    fn debugPrintLayoutShapeLines(
-        self: *LirInterpreter,
-        layout_idx: layout_mod.Idx,
-        indent: usize,
-        visited: *std.ArrayList(u32),
-    ) void {
-        for (visited.items) |existing| {
-            if (existing == @intFromEnum(layout_idx)) {
-                debugPrint("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
-                return;
-            }
-        }
-
-        visited.append(self.evalAllocator(), @intFromEnum(layout_idx)) catch return;
-        defer _ = visited.pop();
-
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .erased_box, .list_of_zst, .erased_callable => {},
-            .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
-            .struct_ => {
-                const info = self.layout_store.getStructInfo(layout_val);
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    debugPrint("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
-                    self.debugPrintLayoutShapeLines(field.layout, indent + 2, visited);
-                }
-            },
-            .tag_union => {
-                const info = self.layout_store.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |i| {
-                    const variant = info.variants.get(@intCast(i));
-                    debugPrint("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
-                    self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
-                }
-            },
-        }
-    }
-
-    fn debugIndent(indent: usize) []const u8 {
-        const spaces = "                                ";
-        return spaces[0..@min(indent * 2, spaces.len)];
-    }
-
-    fn debugPrintValueSummary(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx, depth: u8) void {
-        if (depth > 2) {
-            debugPrint("...", .{});
-            return;
-        }
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{d}:{s}", .{ @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar => {
-                const size = self.helper.sizeOf(layout_idx);
-                const raw = switch (size) {
-                    0 => @as(u64, 0),
-                    1 => @as(u64, value.read(u8)),
-                    2 => @as(u64, value.read(u16)),
-                    4 => @as(u64, value.read(u32)),
-                    8 => value.read(u64),
-                    else => @as(u64, 0),
-                };
-                debugPrint("(raw={d})", .{raw});
-            },
-            .tag_union => {
-                const disc = self.helper.readTagDiscriminant(value, layout_idx);
-                debugPrint("(disc={d}", .{disc});
-                const payload_layout = self.requireBoxyTagPayloadLayout(layout_idx, disc);
-                debugPrint(",payload=", .{});
-                if (self.helper.sizeOf(payload_layout) == 0) {
-                    debugPrint("{d}:zst", .{@intFromEnum(payload_layout)});
-                } else {
-                    self.debugPrintValueSummary(value, payload_layout, depth + 1);
-                }
-                debugPrint(")", .{});
-            },
-            .struct_ => {
-                const struct_idx = layout_val.getStruct().idx;
-                const data = self.layout_store.getStructData(struct_idx);
-                debugPrint("(", .{});
-                var field_index: u32 = 0;
-                while (field_index < data.fields.count) : (field_index += 1) {
-                    if (field_index != 0) debugPrint(",", .{});
-                    const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(struct_idx, field_index);
-                    const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, field_index);
-                    debugPrint("f{d}=", .{field_index});
-                    if (self.helper.sizeOf(field_layout) == 0) {
-                        debugPrint("{d}:zst", .{@intFromEnum(field_layout)});
-                    } else {
-                        self.debugPrintValueSummary(value.offset(field_offset), field_layout, depth + 1);
-                    }
-                }
-                debugPrint(")", .{});
-            },
-            .list, .list_of_zst => {
-                const list = self.valueToRocListForLayout(value, layout_idx);
-                debugPrint("(len={d},bytes={any})", .{ list.len(), list.bytes });
-            },
-            .box, .box_of_zst => {
-                debugPrint("(ptr={any})", .{self.readBoxedDataPointer(value)});
-            },
-            .erased_callable => {
-                const ptr = self.readBoxedDataPointer(value);
-                debugPrint("(ptr={any}", .{ptr});
-                if (ptr) |data_ptr| {
-                    debugPrint(",proc={d}", .{@intFromEnum(erasedCallableInterpreterProcId(data_ptr))});
-                }
-                debugPrint(")", .{});
-            },
-            .zst => {},
-            .ptr, .closure => {
-                debugPrint("(ptr=0x{x})", .{@intFromPtr(value.ptr)});
-            },
         }
     }
 

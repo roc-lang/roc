@@ -387,14 +387,6 @@ pub const ProgramView = struct {
         return self.locals.len;
     }
 
-    pub fn exprTy(self: ProgramView, id: ExprId) Type.TypeId {
-        return self.exprs[@intFromEnum(id)].ty;
-    }
-
-    pub fn patTy(self: ProgramView, id: PatId) Type.TypeId {
-        return self.pats[@intFromEnum(id)].ty;
-    }
-
     pub fn pat(self: ProgramView, id: PatId) Pat {
         return self.pats[@intFromEnum(id)];
     }
@@ -1509,10 +1501,6 @@ pub const Program = struct {
         return self.row("locals", @intFromEnum(id));
     }
 
-    pub fn getLocalAt(self: *const Program, index: usize) Local {
-        return self.row("locals", index);
-    }
-
     pub fn localsView(self: *const Program) []const Local {
         std.debug.assert(self.body_prefix == null);
         return self.locals.unsafeRawItemsForView();
@@ -1859,14 +1847,6 @@ pub const Program = struct {
 
     pub fn localCount(self: *const Program) usize {
         return self.rowCount("locals");
-    }
-
-    pub fn exprTy(self: *const Program, id: ExprId) Type.TypeId {
-        return self.getExpr(id).ty;
-    }
-
-    pub fn patTy(self: *const Program, id: PatId) Type.TypeId {
-        return self.getPat(id).ty;
     }
 
     pub fn pat(self: *const Program, id: PatId) Pat {

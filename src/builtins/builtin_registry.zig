@@ -481,23 +481,6 @@ pub const core_root_symbols: std.StaticStringMap(void) = blk: {
     break :blk std.StaticStringMap(void).initComptime(frozen);
 };
 
-/// Fully qualified names of annotation-only Builtin.roc declarations that are
-/// compiler intrinsics rather than low-level-op wrappers: checking and
-/// post-check lowering handle them from checked data, so canonicalization
-/// exempts them from the rule that every annotation-only builtin def must map
-/// to a low-level op.
-pub const intrinsic_annotation_names = [_][]const u8{
-    "Builtin.Str.inspect",
-    "Builtin.Str.Utf8Problem.is_eq",
-    "Builtin.Encoding.ParseTagUnionSpec.parse",
-    "Builtin.Encoding.FieldName.FieldNames.rename_fields",
-    "Builtin.Encoding.FieldName.FieldNames.shortest_name",
-    "Builtin.Encoding.FieldName.FieldNames.longest_name",
-    "Builtin.Encoding.FieldName.FieldNames.iter",
-    "Builtin.Encoding.FieldName.FieldNames.for_size",
-    "Builtin.Encoding.FieldName.name",
-};
-
 comptime {
     @setEvalBranchQuota(200_000);
     // Every member is backed by a wrapper with the exact symbol name.

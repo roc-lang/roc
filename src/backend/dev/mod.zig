@@ -210,38 +210,6 @@ pub fn Storage(
             self.stack_size = 0;
         }
 
-        /// Claim a general-purpose register for a symbol.
-        /// Panics if no registers are free.
-        /// TODO: Implement register spilling/reload.
-        pub fn claimGeneralReg(self: *Self, symbol: u32) Allocator.Error!GeneralReg {
-            const reg = self.general_free.popOrNull() orelse
-                @panic("TODO: no free general registers; spilling/reload is not implemented");
-            try self.symbol_storage.put(symbol, .{ .general_reg = reg });
-            return reg;
-        }
-
-        /// Claim a floating-point register for a symbol.
-        /// Panics if no registers are free.
-        /// TODO: Implement register spilling/reload.
-        pub fn claimFloatReg(self: *Self, symbol: u32) Allocator.Error!FloatReg {
-            const reg = self.float_free.popOrNull() orelse
-                @panic("TODO: no free float registers; spilling/reload is not implemented");
-            try self.symbol_storage.put(symbol, .{ .float_reg = reg });
-            return reg;
-        }
-
-        /// Free the storage for a symbol (when it's no longer needed)
-        pub fn freeSymbol(self: *Self, symbol: u32) Allocator.Error!void {
-            if (self.symbol_storage.fetchRemove(symbol)) |entry| {
-                switch (entry.value) {
-                    .general_reg => |reg| try self.general_free.append(self.allocator, reg),
-                    .float_reg => |reg| try self.float_free.append(self.allocator, reg),
-                    // Stack slots are reclaimed on function return; no_data has nothing to free
-                    .stack, .no_data => {},
-                }
-            }
-        }
-
         /// Allocate space on the stack
         pub fn allocStack(self: *Self, size: u32, alignment: u32) i32 {
             // Align the stack size

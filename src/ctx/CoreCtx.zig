@@ -209,11 +209,6 @@ pub fn mapFilePrivate(self: Self, path: []const u8) ?MappedFile {
     return self.vtable.mapFilePrivate(self.ctx, self.std_io, path);
 }
 
-/// Backward-compat alias for `stat`.
-pub fn getFileInfo(self: Self, path: []const u8) StatError!FileInfo {
-    return self.vtable.stat(self.ctx, self.std_io, path);
-}
-
 /// List all entries under `path` recursively. Caller owns the returned slice
 /// and every `.path` string in it (free with `allocator`).
 pub fn listDir(self: Self, path: []const u8, allocator: Allocator) ListError![]FileEntry {
@@ -367,9 +362,6 @@ pub const StatError = error{
     AccessDenied,
     IoError,
 };
-
-/// Backward-compat alias.
-pub const GetFileInfoError = StatError;
 
 /// Errors that can occur when listing directory contents.
 pub const ListError = error{

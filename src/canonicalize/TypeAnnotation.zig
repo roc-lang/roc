@@ -448,28 +448,6 @@ pub const TypeAnno = union(enum) {
         f64,
         dec,
 
-        /// Convert a builtin type to it's name
-        pub fn toBytes(self: @This()) []const u8 {
-            switch (self) {
-                .list => return "List",
-                .box => return "Box",
-                .num => return "Num",
-                .u8 => return "U8",
-                .u16 => return "U16",
-                .u32 => return "U32",
-                .u64 => return "U64",
-                .u128 => return "U128",
-                .i8 => return "I8",
-                .i16 => return "I16",
-                .i32 => return "I32",
-                .i64 => return "I64",
-                .i128 => return "I128",
-                .f32 => return "F32",
-                .f64 => return "F64",
-                .dec => return "Dec",
-            }
-        }
-
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
             if (std.mem.eql(u8, bytes, "List")) return .list;
@@ -488,28 +466,6 @@ pub const TypeAnno = union(enum) {
             if (std.mem.eql(u8, bytes, "F64")) return .f64;
             if (std.mem.eql(u8, bytes, "Dec")) return .dec;
             return null;
-        }
-
-        /// Check if an identifier index matches any builtin type name.
-        /// This is more efficient than fromBytes() as it compares indices directly.
-        pub fn isBuiltinTypeIdent(ident: base.Ident.Idx, idents: anytype) bool {
-            return ident.eql(idents.list) or
-                ident.eql(idents.box) or
-                ident.eql(idents.str) or
-                ident.eql(idents.num) or
-                ident.eql(idents.u8) or
-                ident.eql(idents.u16) or
-                ident.eql(idents.u32) or
-                ident.eql(idents.u64) or
-                ident.eql(idents.u128) or
-                ident.eql(idents.i8) or
-                ident.eql(idents.i16) or
-                ident.eql(idents.i32) or
-                ident.eql(idents.i64) or
-                ident.eql(idents.i128) or
-                ident.eql(idents.f32) or
-                ident.eql(idents.f64) or
-                ident.eql(idents.dec);
         }
     };
 };

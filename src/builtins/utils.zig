@@ -303,20 +303,6 @@ else
 /// - As a placeholder when the decrement operation is handled elsewhere
 pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
-/// Enum representing different integer widths and signedness for runtime type information
-pub const IntWidth = enum(u8) {
-    U8 = 0,
-    U16 = 1,
-    U32 = 2,
-    U64 = 3,
-    U128 = 4,
-    I8 = 5,
-    I16 = 6,
-    I32 = 7,
-    I64 = 8,
-    I128 = 9,
-};
-
 const Refcount = enum {
     none,
     normal,
@@ -787,26 +773,6 @@ pub inline fn rcConstant(refcount: isize) bool {
     }
 }
 
-/// Debug-only assertion that a data pointer has a valid refcount.
-/// Panics if the refcount is poisoned (use-after-free) or invalid (underflow).
-/// Compiles to nothing in release builds - zero overhead.
-///
-/// Use this at key points in slice-creating or refcount-manipulating functions
-/// to catch bugs early during development.
-pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
-    if (builtin.mode != .Debug) return;
-    if (data_ptr) |ptr| {
-        const rc_ptr: [*]isize = alignedPtrCast([*]isize, ptr - @sizeOf(usize), @src());
-        const rc = rc_ptr[0];
-        if (rc == POISON_VALUE) {
-            roc_ops.crash("assertValidRefcount: Use-after-free detected");
-        }
-        if (rc <= 0 and !rcConstant(rc)) {
-            roc_ops.crash("assertValidRefcount: Invalid refcount (underflow or corruption)");
-        }
-    }
-}
-
 // Growth roughly follows [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md):
 // an empty collection grows to at least 64 bytes, medium-sized ones grow by
 // 1.5x, and very small or very large ones double.
@@ -869,12 +835,6 @@ pub fn allocateWithRefcount(
 
     return data_ptr;
 }
-
-/// A C-compatible slice structure containing a pointer and length
-pub const CSlice = extern struct {
-    pointer: *anyopaque,
-    len: usize,
-};
 
 /// Reallocates memory for a list to accommodate growth
 /// Preserves existing data and handles refcount placement

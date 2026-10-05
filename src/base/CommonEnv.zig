@@ -273,12 +273,6 @@ pub fn findIdentFrom(self: *const CommonEnv, source: *const CommonEnv, source_id
     return self.findIdent(source.getIdent(source_idx));
 }
 
-/// Finds or creates an identifier from another CommonEnv's store in this store.
-/// Performs cross-store ident resolution without exposing string operations to callers.
-pub fn insertIdentFrom(self: *CommonEnv, gpa: std.mem.Allocator, source: *const CommonEnv, source_idx: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
-    return self.insertIdent(gpa, Ident.for_text(source.getIdent(source_idx)));
-}
-
 /// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const CommonEnv, idx: Ident.Idx) []const u8 {
     return self.idents.getText(idx);
@@ -298,11 +292,6 @@ pub fn insertString(self: *CommonEnv, gpa: std.mem.Allocator, string: []const u8
 /// Retrieves a string literal by its index.
 pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
-}
-
-/// Returns a mutable reference to the string literal store.
-pub fn getStringStore(self: *CommonEnv) *StringLiteral.Store {
-    return &self.strings;
 }
 
 fn assertStringsInsertable(self: *const CommonEnv) void {

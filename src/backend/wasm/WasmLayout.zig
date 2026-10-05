@@ -152,16 +152,6 @@ fn scalarValType(l: layout.Layout) ValType {
     };
 }
 
-/// Get the wasm ValType for a result that is returned directly from a function.
-/// For primitives, this is the value type itself.
-/// For composites, the function returns an i32 pointer to linear memory.
-pub fn resultValType(layout_idx: layout.Idx) ValType {
-    return switch (wasmRepr(layout_idx)) {
-        .primitive => |vt| vt,
-        .stack_memory => .i32,
-    };
-}
-
 /// Get the wasm ValType for a result, using the layout store for composites.
 pub fn resultValTypeWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!ValType {
     return switch (try wasmReprWithStore(layout_idx, ls)) {

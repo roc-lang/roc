@@ -51,18 +51,6 @@ pub fn PackedDataSpan(comptime start_bits: u6, comptime length_bits: u6) type {
             };
         }
 
-        /// Create a PackedDataSpan from a DataSpan, panics if values exceed limits
-        /// Only use this when you're certain the values fit
-        pub fn fromDataSpanUnchecked(span: DataSpan) Self {
-            std.debug.assert(span.start <= MAX_START);
-            std.debug.assert(span.len <= MAX_LENGTH);
-
-            return Self{
-                .start = @intCast(span.start),
-                .len = @intCast(span.len),
-            };
-        }
-
         /// Create a PackedDataSpan from raw start and length values
         pub fn init(start: u32, len: u32) error{ StartTooLarge, LengthTooLarge }!Self {
             return fromDataSpan(DataSpan{ .start = start, .len = len });
@@ -99,12 +87,6 @@ pub const FunctionArgs = PackedDataSpan(20, 12);
 
 /// Good for small collections with high start range (up to 255 items, 16M+ start positions)
 pub const SmallCollections = PackedDataSpan(24, 8);
-
-/// Balanced allocation (up to 65K items, 65K+ start positions)
-pub const Balanced = PackedDataSpan(16, 16);
-
-/// Good for large collections with lower start range (up to 1M items, 4K+ start positions)
-pub const LargeCollections = PackedDataSpan(12, 20);
 
 test "PackedDataSpan limits" {
     const Packed = PackedDataSpan(16, 16);
