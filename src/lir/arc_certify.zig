@@ -4365,12 +4365,10 @@ const Certifier = struct {
     };
 
     fn ensureReadBeforeRebindNode(
-        self: *Certifier,
         graph: *ReadBeforeRebindGraph,
         work: *std.ArrayList(LIR.CFStmtId),
         stmt: LIR.CFStmtId,
     ) Allocator.Error!void {
-        _ = self;
         if (graph.indices.contains(stmt)) return;
 
         const index = graph.nodes.items.len;
@@ -4388,7 +4386,6 @@ const Certifier = struct {
     }
 
     fn appendReadBeforeRebindSuccessor(
-        self: *Certifier,
         graph: *ReadBeforeRebindGraph,
         work: *std.ArrayList(LIR.CFStmtId),
         node_index: usize,
@@ -4400,7 +4397,7 @@ const Certifier = struct {
         }
         try graph.successors.append(graph.allocator, successor);
         graph.nodes.items[node_index].successor_len += 1;
-        try self.ensureReadBeforeRebindNode(graph, work, successor);
+        try ensureReadBeforeRebindNode(graph, work, successor);
     }
 
     fn setReadBeforeRebindDef(
@@ -4430,7 +4427,7 @@ const Certifier = struct {
         var work = std.ArrayList(LIR.CFStmtId).empty;
         var cache_roots = std.ArrayList(LIR.CFStmtId).empty;
 
-        try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
+        try ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
 
         var node_reads = std.ArrayList(u32).empty;
         defer node_reads.deinit(self.allocator);
@@ -4442,20 +4439,20 @@ const Certifier = struct {
                 .assign_ref => |assign| {
                     try self.noteExposedRefOpRead(&node_reads, assign.op);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_literal => |assign| {
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .init_uninitialized => |init| {
                     self.setReadBeforeRebindDef(&graph, node_index, init.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
                 },
                 .assign_call => |assign| {
                     try self.noteExposedReadSpan(&node_reads, assign.args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_call_erased => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.closure);
@@ -4466,7 +4463,7 @@ const Certifier = struct {
                     }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     if (assign.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| try self.noteExposedReadLocal(&node_reads, capture);
@@ -4475,7 +4472,7 @@ const Certifier = struct {
                     }
                     if (assign.reuse) |reuse| try self.noteExposedReadLocal(&node_reads, reuse);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| {
                     if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
@@ -4485,7 +4482,7 @@ const Certifier = struct {
                         try self.noteExposedReadLocal(&node_reads, local);
                     }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_dict_ref => |assign| {
                     if (assign.dict.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
@@ -4494,13 +4491,13 @@ const Certifier = struct {
                         try self.noteExposedReadLocal(&node_reads, GuardedList.at(captures, index));
                     }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_box => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.payload);
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_record_update => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.base);
@@ -4508,33 +4505,33 @@ const Certifier = struct {
                     if (assign.base_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     if (assign.fields_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_reuse_box => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.source);
                     if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_unbox => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_adapt => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.source);
                     if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_inspect => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_tag => |assign| {
                     if (assign.target_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
@@ -4543,20 +4540,20 @@ const Certifier = struct {
                         if (desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_tag_payload => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     if (assign.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .boxy_tag_match => |tag_match| {
                     try self.noteExposedReadLocal(&node_reads, tag_match.source);
                     if (tag_match.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
                 },
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
@@ -4567,22 +4564,22 @@ const Certifier = struct {
                     try self.noteExposedReadSpan(&node_reads, assign.arg_descs);
                     try self.noteExposedReadSpan(&node_reads, assign.hidden_args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_low_level => |assign| {
                     try self.noteExposedReadSpan(&node_reads, assign.args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_list => |assign| {
                     try self.noteExposedReadSpan(&node_reads, assign.elems);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_struct => |assign| {
                     try self.noteExposedReadSpan(&node_reads, assign.fields);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_tag => |assign| {
                     if (assign.target_desc) |target_desc| {
@@ -4590,65 +4587,65 @@ const Certifier = struct {
                     }
                     if (assign.payload) |payload| try self.noteExposedReadLocal(&node_reads, payload);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .store_struct => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.dest);
                     try self.noteExposedReadSpan(&node_reads, assign.fields);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .store_tag => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.dest);
                     if (assign.payload) |payload| try self.noteExposedReadLocal(&node_reads, payload);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .set_local => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.value);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .debug => |debug_stmt| {
                     try self.noteExposedReadLocal(&node_reads, debug_stmt.message);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, debug_stmt.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, debug_stmt.next);
                 },
                 .expect_err => |expect_err_stmt| try self.noteExposedReadLocal(&node_reads, expect_err_stmt.message),
                 .expect => |expect_stmt| {
                     try self.noteExposedReadLocal(&node_reads, expect_stmt.condition);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
                 },
                 .incref => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref_if_initialized => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.cond);
                     try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .free => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .switch_stmt => |switch_stmt| {
                     try self.noteExposedReadLocal(&node_reads, switch_stmt.cond);
                     if (switch_stmt.continuation) |continuation| {
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, continuation);
+                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, continuation);
                     }
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.default_branch);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.default_branch);
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, branch.body);
+                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, branch.body);
                     }
                 },
                 .switch_initialized_payload => |switch_stmt| {
                     try self.noteExposedReadLocal(&node_reads, switch_stmt.cond);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
                 },
                 .str_match => |str_match| {
                     try self.noteExposedReadLocal(&node_reads, str_match.source);
@@ -4665,8 +4662,8 @@ const Certifier = struct {
                             .view => {},
                         }
                     }
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_match);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_miss);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_match);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_miss);
                 },
                 .str_match_set => |str_match_set| {
                     try self.noteExposedReadLocal(&node_reads, str_match_set.source);
@@ -4681,18 +4678,18 @@ const Certifier = struct {
                                 .view => {},
                             }
                         }
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, arm.on_match);
+                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, arm.on_match);
                     }
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match_set.on_miss);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
-                    try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
+                    try ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
                     try cache_roots.append(graph_allocator, join_stmt.body);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
+                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
                 .jump => |jump_stmt| {
                     if (self.join_bodies.get(jump_stmt.target)) |target_body| {
-                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
+                        try appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
                     }
                 },
                 .ret => |ret_stmt| try self.noteExposedReadLocal(&node_reads, ret_stmt.value),
@@ -4700,7 +4697,7 @@ const Certifier = struct {
                     try self.noteExposedReadLocal(&node_reads, message);
                 },
                 .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                .comptime_branch_taken => |marker| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
+                .comptime_branch_taken => |marker| try appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
             graph.nodes.items[node_index].read_start = @intCast(graph.read_bits.items.len);
             graph.nodes.items[node_index].read_len = @intCast(node_reads.items.len);
@@ -5049,7 +5046,7 @@ const Certifier = struct {
             var summary = LocalSummary{ .dense = dense, .class = .unbound, .repr = 0, .balance = 0, .condition = no_dense, .condition_mask = 0 };
             const condition_unresolved = state.maybeUninitializedIsUnresolved(dense);
             const condition_released = state.maybeUninitializedMayBeReleased(dense);
-            const declared_by_target = std.mem.indexOfScalar(u32, record.maybe_uninitialized, dense) != null;
+            const declared_by_target = std.mem.findScalar(u32, record.maybe_uninitialized, dense) != null;
             const value = state.valueAtDense(dense);
             const declared_condition = self.maybe_uninitialized.get(local);
             // A producer-declared maybe-uninitialized cell represents one

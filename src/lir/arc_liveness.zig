@@ -463,7 +463,7 @@ const TestGraph = struct {
     }
 };
 
-fn expectRowBits(row: *const Row, expected: []const usize) !void {
+fn expectRowBits(row: *const Row, expected: []const usize) error{TestExpectedEqual}!void {
     var iterator = row.iterator();
     for (expected) |bit| try std.testing.expectEqual(@as(?usize, bit), iterator.next());
     try std.testing.expectEqual(@as(?usize, null), iterator.next());

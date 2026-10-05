@@ -1494,7 +1494,7 @@ const ExactBitSet = struct {
 //   continuation statement without crossing a join frame.
 //
 // Cost: a loop nest's keep-sets each hold every enclosing loop's iteration
-// state, so no step may rebuild or scan a keep-set per join. Each keep is the
+// state, so no step may allocate or scan a keep-set per join. Each keep is the
 // state it filters (entry_state, jump_common) with its rejected units
 // removed, so it shares that state's structure, and release differences and
 // equality tests against it cost only their divergence. The rejected units

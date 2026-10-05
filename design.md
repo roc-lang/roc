@@ -16650,7 +16650,7 @@ descending ownership fixed point. Until a jump reaches a join's body, the
 only reader of its body keep-set is the entry keep-set's membership test, so
 the seed stays represented by that exact membership predicate. A join whose
 body or remainder reaches a loop edge materializes the seed, because
-loop-keyed liveness enumerates the keep-set as boundary facts.
+loop-keyed liveness enumerates the keep-set as boundary data.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
