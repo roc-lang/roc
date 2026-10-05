@@ -18713,7 +18713,9 @@ const Builder = struct {
         while (index < self.plan.nested_callable_uses.items.len) : (index += 1) {
             const use = self.plan.nested_callable_uses.items[index];
             const worker = self.plan.workers.items[@intFromEnum(use.worker)];
-            if (worker.hidden_dicts.len == 0 or use.hidden_dict_args.len != 0) continue;
+            // A worker gains dictionary parameters as planning iterates, so
+            // arguments planned for fewer of them are planned again.
+            if (use.hidden_dict_args.len == worker.hidden_dicts.len) continue;
 
             var source: ?Span = null;
             var source_is_ambiguous = false;
@@ -18770,7 +18772,7 @@ const Builder = struct {
 
         for (self.plan.nested_callable_uses.items) |use| {
             const worker = self.plan.workers.items[@intFromEnum(use.worker)];
-            if (worker.hidden_dicts.len != 0 and use.hidden_dict_args.len == 0) {
+            if (use.hidden_dict_args.len != worker.hidden_dicts.len) {
                 boxyPlanInvariant("nested callable value had no checked dictionary capture source");
             }
         }
