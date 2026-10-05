@@ -5518,7 +5518,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer allocator.free(image_bytes);
     var fba = std.heap.FixedBufferAllocator.init(image_bytes);
     const header = try fba.allocator().create(lir.LirImage.Header);
-    const image_program = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(fba.allocator(), image_bytes.ptr, image_bytes.len, &program, &.{.{ .ordinal = 0, .root_proc = caller }}, copied);
+    const image_program = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(fba.allocator(), image_bytes.ptr, image_bytes.len, .mapped, &program, &.{.{ .ordinal = 0, .root_proc = caller }}, copied);
     try image_program.fillHeader(header, fba.end_index);
     var view = try lir.LirImage.viewMappedImageWithAllocator(header, image_bytes.ptr, fba.end_index, .native, allocator);
     defer view.deinit();

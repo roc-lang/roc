@@ -1730,10 +1730,10 @@ fn generatePlatformHostShimFromLirData(
     };
     defer bitcode_result.deinit();
 
-    // Name the scratch artifacts by the shim's deterministic inputs. The raw
-    // image bytes contain uninitialized struct padding from serialization, so
-    // hash the derived entrypoint ABI, the hosted table, and the image length
-    // instead of the bytes themselves.
+    // Name the scratch artifacts by the shim's deterministic inputs. This path
+    // also serves `LirImage.ByteContract.mapped` images, whose raw bytes are
+    // not a function of the program, so hash the derived entrypoint ABI, the
+    // hosted table, and the image length instead of the bytes themselves.
     var hash = std.hash.Crc32.init();
     const abi_digest = try entrypointAbiDigestFromLirData(ctx, store, layouts, platform_entrypoints, target);
     hash.update(&abi_digest);
@@ -6961,6 +6961,7 @@ pub fn buildLirImageWithBuildEnv(
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
+        .mapped,
         &lowered.lir_result,
         platform_entrypoints,
         lowered_result.internal_static_data.?,
@@ -11297,6 +11298,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
+        .persisted,
         &lowered.lir_result,
         platform_entrypoints,
         image_static_data,
@@ -11304,6 +11306,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
 
+    // These bytes are embedded in the output executable. The image was copied
+    // under the persisted contract into newly created shared memory, which the
+    // OS supplies zero-filled, so every byte here is a function of the program.
     const lir_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {

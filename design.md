@@ -3214,8 +3214,10 @@ bytes.
 This section governs the raw-byte boundaries: the paths that persist a value by
 copying its in-memory representation rather than encoding it field by field, which
 is how the checked module cache, the baked builtin `CheckedModule` blob, and the
-`SafeList` and `SafeMultiList` tables they hold are written. Other serialized forms
-in the compiler encode explicitly and are not bound by the rules here.
+`SafeList` and `SafeMultiList` tables they hold are written, and how a persisted
+LirImage and the Boxy sidecar copy their tables into an executable. Other
+serialized forms in the compiler encode explicitly and are not bound by the rules
+here.
 
 Every byte such a boundary writes is a function of the logical contents alone. A
 byte no declaration accounts for holds whatever that memory held before—allocator-
@@ -19139,6 +19141,22 @@ columns with its supplied scratch allocator, and owns those reconstructed
 columns until `deinit`. The mapped bytes and the scratch allocator must both
 outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
+
+The producer of a copied LirImage states which of two byte contracts the image
+has. A *persisted* image is one whose bytes are written into an artifact that
+outlives the compiler process, as `roc build --opt=interpreter` embeds one in the
+executable it links. It is a raw-byte boundary under "Fully Defined Persisted
+Bytes": every scrubbable table item is canonicalized in the image's own copy,
+never in the store it was copied from, and the producer supplies a zero-filled
+image buffer so the bytes between allocations are defined too. A *mapped* image
+lives in shared or process memory for one run, is read only through typed views,
+and is never hashed, compared, or written to a file, so its tables are copied
+verbatim with no canonicalization pass. Both contracts classify every table
+item type at compile time, so a type with undefined bytes that nothing
+identifies cannot enter either form, and moving a producer from mapped to
+persisted never meets an item that cannot be canonicalized. The rows the
+image authors itself, such as its header and frozen-graph export and relocation
+rows, are fixed layouts that declare every byte.
 
 An interpreter-mode host entry pins each root's `LirInterpreter` on the heap.
 Every interpreter-created erased-callable allocation owns one reference to that

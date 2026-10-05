@@ -1949,6 +1949,7 @@ fn lowerCheckedRootWithViews(
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
+        .mapped,
         &lowered.lir_result,
         &.{},
         image_data,
