@@ -96,8 +96,8 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
 /// Options controlling download and extraction.
 pub const DownloadOptions = struct {
     /// Maximum allowed decompressed size of the bundle in bytes, or null for
-    /// no limit.
-    max_expanded_bytes: ?u64 = null,
+    /// an explicit opt-out. Defaults to the shared 512 MiB bundle limit.
+    max_expanded_bytes: ?u64 = base.max_bundle_expanded_bytes,
 };
 
 /// Download and extract a bundled tar.zst file from a URL.

@@ -480,6 +480,7 @@ const CustomCase = enum {
     bundle_issue_11608_output_dir_cross_device,
     install_run_roundtrip,
     install_hash_mismatch,
+    url_bundle_expanded_limit,
     install_glue_roundtrip,
     glue_debug,
     glue_debug_dev,
@@ -2543,6 +2544,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run --help prints run usage", .body = .{ .command = .{ .args = &.{ "run", "--help" }, .contains = &.{.{ .stream = .stdout, .text = "Usage: roc run" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run rejects --watch for installed shorthands", .body = .{ .command = .{ .args = &.{ "run", "sometool", "--watch" }, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "--watch is not supported for installed shorthands" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install/run roundtrip over loopback HTTP", .body = .{ .custom = .install_run_roundtrip } },
+    .{ .id = 0, .suite = .subcommands, .name = "URL and platform bundles enforce expanded-size limits during extraction", .body = .{ .custom = .url_bundle_expanded_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a hash mismatch and leaves no entry", .body = .{ .custom = .install_hash_mismatch } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install/glue roundtrip for a glue spec plugin", .body = .{ .custom = .install_glue_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs pure expects for a wasm-only platform (issue 9668)", .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "shared libraries" }, .{ .stream = .stderr, .text = ".so/.dylib/.dll" } } } } },
@@ -3956,6 +3958,7 @@ fn runCustomCase(
         .bundle_issue_11608_output_dir_cross_device => customBundleIssue11608OutputDirCrossDevice(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .install_hash_mismatch => customInstallHashMismatch(io, allocator, &env, &timer, timeout_ms),
+        .url_bundle_expanded_limit => customUrlBundleExpandedLimit(io, allocator, &env, &timer, timeout_ms),
         .install_glue_roundtrip => customInstallGlueRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
         .glue_debug_dev => customGlueDebugDev(io, allocator, &env, &timer, timeout_ms),
@@ -10789,6 +10792,87 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         .contains = &.{.{ .stream = .stderr, .text = "installed as a glue spec" }},
     })) |failure| return failure;
 
+    return null;
+}
+
+/// A small Zstandard frame expanding to a tar file just over the shared cap.
+/// RLE blocks avoid allocating or storing the expanded fixture in the runner.
+fn oversizedUrlBundle(allocator: Allocator) ![]const u8 {
+    var bytes: std.Io.Writer.Allocating = .init(allocator);
+    defer bytes.deinit();
+    // Zstandard magic, no content-size/checksum, 1 MiB window.
+    try bytes.writer.writeAll(&.{ 0x28, 0xb5, 0x2f, 0xfd, 0, 0x50 });
+    var header = [_]u8{0} ** 512;
+    @memcpy(header[0..11], "payload.bin");
+    _ = try std.fmt.bufPrint(header[124..135], "{o:0>11}", .{base.max_bundle_expanded_bytes + 512});
+    @memset(header[148..156], ' ');
+    header[156] = '0';
+    var checksum: u32 = 0;
+    for (header) |byte| checksum += byte;
+    _ = try std.fmt.bufPrint(header[148..154], "{o:0>6}", .{checksum});
+    header[154] = 0;
+    header[155] = ' ';
+    // One raw block containing the tar header.
+    try bytes.writer.writeInt(u24, 512 << 3, .little);
+    try bytes.writer.writeAll(&header);
+    var remaining: u64 = base.max_bundle_expanded_bytes + 512 + 1024;
+    while (remaining > 0) {
+        const size: u24 = @intCast(@min(remaining, 128 * 1024));
+        remaining -= size;
+        // Block type 1 is RLE; bit zero marks the last block.
+        try bytes.writer.writeInt(u24, (size << 3) | 2 | @intFromBool(remaining == 0), .little);
+        try bytes.writer.writeByte(0);
+    }
+    return bytes.toOwnedSlice();
+}
+
+fn customUrlBundleExpandedLimit(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const bundle_bytes = oversizedUrlBundle(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create oversized bundle: {}", .{err});
+    const loopback = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch |err|
+        return customInfraFailure(allocator, timer, "failed to parse loopback: {}", .{err});
+    var server = loopback.listen(io, .{ .reuse_address = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to listen: {}", .{err});
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+    // Extraction must hit its cap before reaching hash verification.
+    const url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst", .{port}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate URL: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const app_source = std.fmt.allocPrint(allocator, "app [main!] {{ pf: platform \"{s}\" }}\nmain! = || {{}}\n", .{url}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
+    for ([_]bool{ false, true }) |platform| {
+        var server_ctx = InstallBundleServer{ .server = &server, .bundle_data = bundle_bytes, .io = io };
+        const thread = std.Thread.spawn(.{}, InstallBundleServer.run, .{&server_ctx}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to spawn bundle server: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = if (platform) &.{ "check", "--max-transitive-mb=1", app_path } else &.{ "run", url },
+            .exit = .{ .code = 1 },
+            .contains = if (platform)
+                &.{ .{ .stream = .stderr, .text = "1048576 bytes" }, .{ .stream = .stderr, .text = "--max-transitive-mb" } }
+            else
+                &.{.{ .stream = .stderr, .text = "ExpandedSizeLimitExceeded" }},
+        })) |failure| {
+            pokeInstallBundleServer(io, port);
+            thread.join();
+            return failure;
+        }
+        thread.join();
+    }
+    // Neither a published bundle nor a partially extracted staging directory survives.
+    const cache_path = std.fs.path.join(allocator, &.{ env.dirs.roc_cache_dir, "roc", "packages" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate package cache path: {}", .{err});
+    var cache = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to open package cache: {}", .{err});
+    defer cache.close(io);
+    var entries = cache.iterate();
+    while (entries.next(io) catch |err| return customInfraFailure(allocator, timer, "failed to inspect cache: {}", .{err})) |entry| {
+        if (std.mem.startsWith(u8, entry.name, "AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc"))
+            return customInfraFailure(allocator, timer, "failed extraction left a cache entry: {s}", .{entry.name});
+    }
     return null;
 }
 

@@ -103,7 +103,7 @@ pub const default_build_opt: OptLevel = .speed;
 /// Values are in megabytes; 0 means unlimited; null uses the default.
 pub const ResolveLimitArgs = struct {
     max_package_mb: ?u32 = null, // per-package decompressed size limit (default 10)
-    max_transitive_mb: ?u32 = null, // overrides both transitive limits (defaults: packages 100, platforms 512)
+    max_transitive_mb: ?u32 = null, // overrides transitive limits and platform bundle cap (defaults: packages 100, platforms 512)
     replace_deps: ReplaceDepArgs = .{}, // `--replace-dep OLD NEW` occurrences, in command-line order
 };
 
@@ -253,6 +253,7 @@ const install_resolve_limit_help = resolve_limit_core_help;
 const resolve_limit_core_help =
     \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
     \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+    \\                               Also caps each platform bundle during extraction
     \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
 ;
 
