@@ -1236,8 +1236,7 @@ fn emitHasherFloatBits(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.
     if (is_f32) {
         const raw_f32 = try self.emitSetNewLocal(.f32);
         try self.emitLocalGet(raw_f32);
-        self.currentCode().append(self.allocator, Op.i32_reinterpret_f32) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_reinterpret_f32, Op.i64_extend_i32_u });
     } else {
         const raw_f64 = try self.emitSetNewLocal(.f64);
         try self.emitLocalGet(raw_f64);
@@ -1362,8 +1361,7 @@ fn emitHasherLowLevel(self: *Self, op: HasherLowLevel, args: anytype) Allocator.
             // load would read garbage. emitExtractStrPtrLen yields the correct
             // (ptr, len) for both small and heap strings, matching every other
             // backend's str hashing/equality and keeping cross-backend hashes equal.
-            const str_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const str_len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            const str_ptr_local, const str_len_local = try self.allocAnonymousLocals(.i32, 2);
             try self.emitExtractStrPtrLen(str_ptr, str_ptr_local, str_len_local);
 
             try self.emitHasherState(GuardedList.at(args, 0));
@@ -2710,8 +2708,7 @@ fn emitRawDirectRcPlan(
         .noop => return true,
         .str_incref => {
             if (count_local) |count| {
-                const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                const alloc_ptr_local, const is_small_local = try self.allocAnonymousLocals(.i32, 2);
                 try self.emitDecodeStrAllocPtr(value_ptr_local, alloc_ptr_local, is_small_local);
 
                 try self.emitVoidBlock();
@@ -2734,8 +2731,7 @@ fn emitRawDirectRcPlan(
         },
         .list_incref => |list_plan| {
             if (list_plan.child != null) return false;
-            const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            const alloc_ptr_local, const is_slice_local = try self.allocAnonymousLocals(.i32, 2);
             try self.emitDecodeListAllocPtr(value_ptr_local, alloc_ptr_local, is_slice_local);
             if (count_local) |count| {
                 try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count);
@@ -2854,8 +2850,7 @@ fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, 
     self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
     try self.emitI32Const(-2);
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_and, Op.@"else" });
     try self.emitLoadAt(list_ptr_local, .i32, 0);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     try self.emitLocalSet(out_alloc_ptr);
@@ -2888,8 +2883,7 @@ fn emitDecodeStrAllocPtr(self: *Self, str_ptr_local: u32, out_alloc_ptr: u32, ou
     self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
     try self.emitI32Const(-2);
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_and, Op.@"else" });
     try self.emitLoadAt(str_ptr_local, .i32, 0);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     try self.emitLocalSet(out_alloc_ptr);
@@ -2912,8 +2906,7 @@ fn emitLoadI32AtPtrOffset(self: *Self, ptr_local: u32, offset: i32, out_local: u
 }
 
 fn emitPrepareListSliceMetadata(self: *Self, list_ptr_local: u32, elements_refcounted: bool, out_encoded_cap: u32) Allocator.Error!void {
-    const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const source_alloc_ptr, const source_is_slice = try self.allocAnonymousLocals(.i32, 2);
     try self.emitDecodeListAllocPtr(list_ptr_local, source_alloc_ptr, source_is_slice);
 
     if (elements_refcounted) {
@@ -2984,9 +2977,7 @@ fn emitBuiltinInternalFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignmen
 fn emitDataPtrIncref(self: *Self, data_ptr_local: u32, amount: u32) Allocator.Error!void {
     if (amount == 0) return;
 
-    const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
 
     try self.emitVoidBlock();
 
@@ -3018,9 +3009,7 @@ fn emitDataPtrIncref(self: *Self, data_ptr_local: u32, amount: u32) Allocator.Er
 }
 
 fn emitDataPtrIncrefByLocal(self: *Self, data_ptr_local: u32, amount_local: u32) Allocator.Error!void {
-    const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
 
     try self.emitVoidBlock();
 
@@ -3051,9 +3040,7 @@ fn emitDataPtrIncrefByLocal(self: *Self, data_ptr_local: u32, amount_local: u32)
 }
 
 fn emitDataPtrDecref(self: *Self, data_ptr_local: u32, alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-    const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
 
     try self.emitVoidBlock();
 
@@ -3092,8 +3079,7 @@ fn emitDataPtrDecref(self: *Self, data_ptr_local: u32, alignment: u32, elements_
 }
 
 fn emitDataPtrFree(self: *Self, data_ptr_local: u32, alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-    const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const masked_ptr, const rc_ptr = try self.allocAnonymousLocals(.i32, 2);
 
     try self.emitVoidBlock();
 
@@ -3127,10 +3113,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     const elem_size: u32 = @intCast(elem_width);
     if (elem_size == 0) return;
 
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const idx_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const elem_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const rc_val, const count_local, const idx_local, const elem_ptr_local = try self.allocAnonymousLocals(.i32, 4);
 
     try self.emitVoidBlock();
 
@@ -3163,8 +3146,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
 
     try self.emitLocalGets(.{ alloc_ptr_local, idx_local });
     try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
     try self.emitLocalSet(elem_ptr_local);
 
     try self.emitRawRcHelperCallByKey(child_key, atomicity, elem_ptr_local, null);
@@ -3176,9 +3158,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
 
     try self.emitBr(0);
 
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end, Op.end });
 }
 
 /// Emit shallow list RC (allocation refcount only, no element teardown). Used by
@@ -3194,8 +3174,7 @@ fn emitBuiltinInternalListRcShallow(
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRcShallow.builtin_list_abi", list_layout_idx);
 
-    const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const alloc_ptr_local, const is_slice_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitDecodeListAllocPtr(list_ptr_local, alloc_ptr_local, is_slice_local);
 
     switch (kind) {
@@ -3216,8 +3195,7 @@ fn emitBuiltinInternalListRc(
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRc.builtin_list_abi", list_layout_idx);
 
-    const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const alloc_ptr_local, const is_slice_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitDecodeListAllocPtr(list_ptr_local, alloc_ptr_local, is_slice_local);
 
     switch (kind) {
@@ -3251,8 +3229,7 @@ fn emitBuiltinInternalListIncrefByLocal(
     count_local: u32,
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListIncrefByLocal.builtin_list_abi", list_layout_idx);
-    const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const alloc_ptr_local, const is_slice_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitDecodeListAllocPtr(list_ptr_local, alloc_ptr_local, is_slice_local);
 
     if (list_abi.elements_refcounted and list_plan.child != null) {
@@ -3277,8 +3254,7 @@ fn emitBuiltinInternalListIncrefByLocal(
 }
 
 fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u32) Allocator.Error!void {
-    const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const alloc_ptr_local, const is_small_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitDecodeStrAllocPtr(str_ptr_local, alloc_ptr_local, is_small_local);
 
     try self.emitVoidBlock();
@@ -3446,8 +3422,7 @@ fn generateBuiltinInternalRcHelperBody(
     switch (self.getLayoutStore().rcHelperPlan(helper_key)) {
         .noop => {},
         .str_incref => {
-            const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            const alloc_ptr_local, const is_small_local = try self.allocAnonymousLocals(.i32, 2);
             try self.emitDecodeStrAllocPtr(value_ptr_local, alloc_ptr_local, is_small_local);
 
             try self.emitVoidBlock();
@@ -4218,8 +4193,7 @@ fn runEqWork(self: *Self, initial: EqWork) Allocator.Error!void {
                 try self.emitBr(0);
 
                 // end loop, end block
-                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                try self.emitOps(.{ Op.end, Op.end });
 
                 // Push final result
                 try self.emitLocalGet(state.result_local);
@@ -4505,14 +4479,8 @@ fn expandListLoop(
     elem_size: u32,
 ) Allocator.Error!void {
     // Allocate scratch locals
-    const lhs_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rhs_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const lhs_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rhs_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const idx_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const lhs_elem = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rhs_elem = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const lhs_len, const rhs_len, const lhs_data, const rhs_data, const idx_local, const result_local = try self.allocAnonymousLocals(.i32, 6);
+    const lhs_elem, const rhs_elem = try self.allocAnonymousLocals(.i32, 2);
 
     // Load lhs length (offset 4 in RocList)
     try self.emitLoadAt(lhs_local, .i32, 4);
@@ -4554,15 +4522,13 @@ fn expandListLoop(
     // lhs_elem = lhs_data + idx * elem_size
     try self.emitLocalGets(.{ lhs_data, idx_local });
     try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
     try self.emitLocalSet(lhs_elem);
 
     // rhs_elem = rhs_data + idx * elem_size
     try self.emitLocalGets(.{ rhs_data, idx_local });
     try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
     try self.emitLocalSet(rhs_elem);
 
     // The post-child glue (accumulate result, idx++, loop, close blocks, push
@@ -4864,43 +4830,31 @@ fn emitCompositeI128BitCount(self: *Self, ptr_local: u32, op: NumericOp) Allocat
             try self.emitLoadAt(ptr_local, .i64, 0);
             self.currentCode().append(self.allocator, Op.i64_popcnt) catch return error.OutOfMemory;
             try self.emitLoadAt(ptr_local, .i64, 8);
-            self.currentCode().append(self.allocator, Op.i64_popcnt) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_popcnt, Op.i64_add, Op.i32_wrap_i64 });
         },
         .num_count_leading_zero_bits => {
             // high == 0 ? 64 + clz(low) : clz(high)
             try self.emitLoadAt(ptr_local, .i64, 8);
-            self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_eqz, Op.@"if" });
             self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
             try self.emitLoadAt(ptr_local, .i64, 0);
             self.currentCode().append(self.allocator, Op.i64_clz) catch return error.OutOfMemory;
             try self.emitI64Const(64);
-            self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_add, Op.i32_wrap_i64, Op.@"else" });
             try self.emitLoadAt(ptr_local, .i64, 8);
-            self.currentCode().append(self.allocator, Op.i64_clz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_clz, Op.i32_wrap_i64, Op.end });
         },
         .num_count_trailing_zero_bits => {
             // low == 0 ? 64 + ctz(high) : ctz(low)
             try self.emitLoadAt(ptr_local, .i64, 0);
-            self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_eqz, Op.@"if" });
             self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
             try self.emitLoadAt(ptr_local, .i64, 8);
             self.currentCode().append(self.allocator, Op.i64_ctz) catch return error.OutOfMemory;
             try self.emitI64Const(64);
-            self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_add, Op.i32_wrap_i64, Op.@"else" });
             try self.emitLoadAt(ptr_local, .i64, 0);
-            self.currentCode().append(self.allocator, Op.i64_ctz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_ctz, Op.i32_wrap_i64, Op.end });
         },
         .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_negate, .num_abs, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => unreachable,
     }
@@ -4984,8 +4938,7 @@ fn emitCompositeIsZero(self: *Self, value_local: u32) Allocator.Error!void {
     try self.emitLoadAt(value_local, .i64, 0);
     self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
     try self.emitLoadAt(value_local, .i64, 8);
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eqz, Op.i32_and });
 }
 
 fn emitCompositeIsSignedMinNegOne(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void {
@@ -4994,16 +4947,13 @@ fn emitCompositeIsSignedMinNegOne(self: *Self, lhs_local: u32, rhs_local: u32) A
     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
     try self.emitLoadAt(lhs_local, .i64, 8);
     try self.emitI64Const(std.math.minInt(i64));
-    self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eq, Op.i32_and });
     try self.emitLoadAt(rhs_local, .i64, 0);
     try self.emitI64Const(-1);
-    self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eq, Op.i32_and });
     try self.emitLoadAt(rhs_local, .i64, 8);
     try self.emitI64Const(-1);
-    self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eq, Op.i32_and });
 }
 
 fn emitCheckedCompositeSignedLowestValue(self: *Self, value_local: u32, checked_op: LIR.LowLevel, operand_layout: layout.Idx) Allocator.Error!void {
@@ -5012,8 +4962,7 @@ fn emitCheckedCompositeSignedLowestValue(self: *Self, value_local: u32, checked_
     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
     try self.emitLoadAt(value_local, .i64, 8);
     try self.emitI64Const(std.math.minInt(i64));
-    self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eq, Op.i32_and });
     try self.emitCrashIfStackBool(CheckedArithmetic.overflowMessageForLayout(checked_op, operand_layout) orelse unreachable);
 }
 
@@ -5377,9 +5326,7 @@ fn emitCheckedI32Mul(self: *Self, checked_op: LIR.LowLevel, args: anytype, layou
     const signed = CheckedArithmetic.isSignedIntegerLayout(layout_idx);
     const lhs = try self.emitScalarArgLocal(GuardedList.at(args, 0), .i32);
     const rhs = try self.emitScalarArgLocal(GuardedList.at(args, 1), .i32);
-    const lhs64 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const rhs64 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const product = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const lhs64, const rhs64, const product = try self.allocAnonymousLocals(.i64, 3);
 
     try self.emitLocalGet(lhs);
     self.currentCode().append(self.allocator, if (signed) Op.i64_extend_i32_s else Op.i64_extend_i32_u) catch return error.OutOfMemory;
@@ -5434,8 +5381,7 @@ fn emitI64CorrectionIfNegative(self: *Self, value_local: u32, condition_local: u
     try self.emitI64Const(0);
     try self.emitLocalGet(condition_local);
     try self.emitI64Const(0);
-    self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_lt_s, Op.select });
 }
 
 fn emitCheckedI64Mul(self: *Self, checked_op: LIR.LowLevel, args: anytype) Allocator.Error!void {
@@ -5459,8 +5405,7 @@ fn emitCheckedI64Mul(self: *Self, checked_op: LIR.LowLevel, args: anytype) Alloc
 
     try self.emitLocalGets(.{ signed_high, low });
     try self.emitI64Const(63);
-    self.currentCode().append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_ne) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_shr_s, Op.i64_ne });
     try self.emitCrashIfStackBool(checkedOverflowMessage(checked_op));
 
     try self.emitLocalGet(low);
@@ -5694,8 +5639,7 @@ fn emitScalarOverflowPredicate(self: *Self, plain_op: NumericOp, args: anytype, 
                 self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
                 try self.emitLocalGet(product);
                 try self.emitI64Const(signedMaxForScalar(layout_idx));
-                self.currentCode().append(self.allocator, Op.i64_gt_s) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+                try self.emitOps(.{ Op.i64_gt_s, Op.i32_or });
             } else {
                 try self.emitLocalGet(product);
                 try self.emitI64Const(unsignedMaxForI32Scalar(layout_idx));
@@ -5726,8 +5670,7 @@ fn emitScalarOverflowPredicate(self: *Self, plain_op: NumericOp, args: anytype, 
                 self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
                 try self.emitLocalGet(low);
                 try self.emitI64Const(63);
-                self.currentCode().append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i64_ne) catch return error.OutOfMemory;
+                try self.emitOps(.{ Op.i64_shr_s, Op.i64_ne });
             }
             if (self.pending_overflow_result_target) |target| {
                 try self.emitLoadAt(result_ptr, .i64, 0);
@@ -5799,8 +5742,7 @@ fn emitI128Add(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 
     // carry = (result_low < a_low) ? 1 : 0
     try self.emitLocalGets(.{ result_low, a_low });
-    self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_lt_u, Op.i64_extend_i32_u });
 
     // result_high = a_high + b_high + carry
     try self.emitLocalGet(a_high);
@@ -5846,8 +5788,7 @@ fn emitI128Sub(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 
     // borrow = (a_low < b_low) ? 1 : 0
     try self.emitLocalGets(.{ a_low, b_low });
-    self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_lt_u, Op.i64_extend_i32_u });
     const borrow_local = try self.emitSetNewLocal(.i64);
 
     // result_high = (a_high - b_high) - borrow
@@ -5910,16 +5851,14 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
     try self.emitLocalSet(shift_local);
 
     // Locals for result
-    const r_low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const r_high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const r_low, const r_high = try self.allocAnonymousLocals(.i64, 2);
 
     // Shifting by zero (modulo 128, so also counts that are multiples of 128)
     // leaves the value unchanged. Handling it explicitly keeps the < 64 path
     // below from computing `word >> 64`, which wasm would mask to `>> 0` and so
     // produce the wrong result.
     try self.emitLocalGet(shift_local);
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eqz, Op.@"if" });
     self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.void)) catch return error.OutOfMemory;
     try self.emitLocalGet(a_low);
     try self.emitLocalSet(r_low);
@@ -5943,8 +5882,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
             try self.emitLocalSet(r_low);
             try self.emitLocalGets(.{ a_low, shift_local });
             try self.emitI64Const(64);
-            self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_sub, Op.i64_shl });
             try self.emitLocalSet(r_high);
         },
         .num_shift_right_by => {
@@ -5955,8 +5893,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
             try self.emitLocalSet(r_high);
             try self.emitLocalGets(.{ a_high, shift_local });
             try self.emitI64Const(64);
-            self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_sub, Op.i64_shr_s });
             try self.emitLocalSet(r_low);
         },
         .num_shift_right_zf_by => {
@@ -5965,8 +5902,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
             try self.emitLocalSet(r_high);
             try self.emitLocalGets(.{ a_high, shift_local });
             try self.emitI64Const(64);
-            self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_sub, Op.i64_shr_u });
             try self.emitLocalSet(r_low);
         },
         .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_negate, .num_abs, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => unreachable,
@@ -5992,8 +5928,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
             try self.emitLocalGets(.{ a_high, shift_local });
             self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
             try self.emitLocalGets(.{ a_low, inv_local });
-            self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_shr_u, Op.i64_or });
             try self.emitLocalSet(r_high);
         },
         .num_shift_right_by => {
@@ -6005,8 +5940,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
             try self.emitLocalGets(.{ a_low, shift_local });
             self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
             try self.emitLocalGets(.{ a_high, inv_local });
-            self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_shl, Op.i64_or });
             try self.emitLocalSet(r_low);
         },
         .num_shift_right_zf_by => {
@@ -6018,8 +5952,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
             try self.emitLocalGets(.{ a_low, shift_local });
             self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
             try self.emitLocalGets(.{ a_high, inv_local });
-            self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_shl, Op.i64_or });
             try self.emitLocalSet(r_low);
         },
         .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_negate, .num_abs, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => unreachable,
@@ -6073,8 +6006,7 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 
     // --- Compute high64(a_lo * b_lo) using 32-bit schoolbook method ---
     // Split a_lo into 32-bit halves: al0 = a_lo & 0xFFFFFFFF, al1 = a_lo >> 32
-    const al0 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const al1 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const al0, const al1 = try self.allocAnonymousLocals(.i64, 2);
     try self.emitLocalGet(a_lo);
     try self.emitI64Const(0xFFFFFFFF);
     self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
@@ -6086,8 +6018,7 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
     try self.emitLocalSet(al1);
 
     // Split b_lo similarly
-    const bl0 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const bl1 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const bl0, const bl1 = try self.allocAnonymousLocals(.i64, 2);
     try self.emitLocalGet(b_lo);
     try self.emitI64Const(0xFFFFFFFF);
     self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
@@ -6110,8 +6041,7 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
     try self.emitI64Const(32);
     self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ al1, bl0 });
-    self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_mul, Op.i64_add });
     try self.emitLocalSet(cross);
 
     // cross = cross + al0*bl1 (may overflow u64—need to track carry)
@@ -6121,15 +6051,13 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
     try self.emitLocalSet(old_cross);
 
     try self.emitLocalGets(.{ cross, al0, bl1 });
-    self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_mul, Op.i64_add });
     try self.emitLocalSet(cross);
 
     // carry = (cross < old_cross) ? 1 : 0  (unsigned overflow detection)
     const carry = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ cross, old_cross });
-    self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_lt_u, Op.i64_extend_i32_u });
     try self.emitLocalSet(carry);
 
     // high64_of_lo_mul = al1*bl1 + (cross >> 32) + (carry << 32)
@@ -6138,13 +6066,11 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
     self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
     try self.emitLocalGet(cross);
     try self.emitI64Const(32);
-    self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_shr_u, Op.i64_add });
     // Add carry << 32 (carry is 0 or 1, so carry << 32 is 0 or 0x100000000)
     try self.emitLocalGet(carry);
     try self.emitI64Const(32);
-    self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_shl, Op.i64_add });
     try self.emitLocalSet(hi_of_lo_mul);
 
     // --- result_hi = high64(a_lo * b_lo) + (a_lo * b_hi) + (a_hi * b_lo) ---
@@ -6153,13 +6079,11 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 
     // + a_lo * b_hi (truncating, only lower 64 bits matter)
     try self.emitLocalGets(.{ a_lo, b_hi });
-    self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_mul, Op.i64_add });
 
     // + a_hi * b_lo (truncating, only lower 64 bits matter)
     try self.emitLocalGets(.{ a_hi, b_lo });
-    self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_mul, Op.i64_add });
 
     // Store result_hi
     const result_hi_val = try self.emitSetNewLocal(.i64);
@@ -6262,8 +6186,7 @@ fn emitCompositeI128NegateFromLocal(self: *Self, src_local: u32) Allocator.Error
 
     // carry = (result_low == 0) ? 1 : 0
     try self.emitLocalGet(result_low_local);
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eqz, Op.i64_extend_i32_u });
 
     // high = ~a_high + carry
     try self.emitI64Const(-1);
@@ -6355,8 +6278,7 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
     const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
     // Split a into 32-bit halves: a0 = a & 0xFFFFFFFF, a1 = a >> 32
-    const a0 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const a1 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const a0, const a1 = try self.allocAnonymousLocals(.i64, 2);
     // a0 = a & 0xFFFFFFFF
     try self.emitLocalGet(a_local);
     try self.emitI64Const(0xFFFFFFFF);
@@ -6369,8 +6291,7 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
     try self.emitLocalSet(a1);
 
     // Split b similarly
-    const b0 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const b1 = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const b0, const b1 = try self.allocAnonymousLocals(.i64, 2);
     try self.emitLocalGet(b_local);
     try self.emitI64Const(0xFFFFFFFF);
     self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
@@ -6402,8 +6323,7 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
     try self.emitI64Const(32);
     self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ a1, b0 });
-    self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_mul, Op.i64_add });
     try self.emitLocalSet(cross);
 
     // cross2 = cross1 + a0*b1 (can carry past 64 bits—must track carry)
@@ -6413,15 +6333,13 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
     try self.emitLocalSet(old_cross);
 
     try self.emitLocalGets(.{ cross, a0, b1 });
-    self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_mul, Op.i64_add });
     try self.emitLocalSet(cross);
 
     // carry = (cross < old_cross) ? 1 : 0  (unsigned overflow detection)
     const carry = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ cross, old_cross });
-    self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_lt_u, Op.i64_extend_i32_u });
     try self.emitLocalSet(carry);
 
     // high = a1*b1 + (cross >> 32) + (carry << 32)
@@ -6429,13 +6347,11 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
     self.currentCode().append(self.allocator, Op.i64_mul) catch return error.OutOfMemory;
     try self.emitLocalGet(cross);
     try self.emitI64Const(32);
-    self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_shr_u, Op.i64_add });
     // Add carry << 32
     try self.emitLocalGet(carry);
     try self.emitI64Const(32);
-    self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_shl, Op.i64_add });
     try self.emitStoreOp(.i64, 8);
 
     // Push result pointer
@@ -6455,8 +6371,7 @@ fn emitI64MulToI128Signed(self: *Self, a_local: u32, b_local: u32) Allocator.Err
     self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i64)) catch return error.OutOfMemory;
     try self.emitI64Const(0);
     try self.emitLocalGet(a_local);
-    self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_sub, Op.@"else" });
     try self.emitLocalGet(a_local);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     try self.emitLocalSet(abs_val);
@@ -6588,20 +6503,17 @@ fn emitDecToIntTryUnsafe(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, 
 
         try self.emitLocalGet(low);
         try self.emitI64Const(0);
-        self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i64_lt_s, Op.select });
 
         if (val_size < 8) {
             const magnitude_bits: u6 = @intCast(spec.dst.bits() - 1);
             try self.emitLocalGet(low);
             try self.emitI64Const(-(@as(i64, 1) << magnitude_bits));
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_ge_s, Op.i32_and });
 
             try self.emitLocalGet(low);
             try self.emitI64Const(@as(i64, 1) << magnitude_bits);
-            self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_lt_s, Op.i32_and });
         }
     } else {
         try self.emitLocalGet(high);
@@ -6611,8 +6523,7 @@ fn emitDecToIntTryUnsafe(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, 
         if (val_size < 8) {
             try self.emitLocalGet(low);
             try self.emitI64Const(@as(i64, 1) << @intCast(spec.dst.bits()));
-            self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_lt_u, Op.i32_and });
         }
     }
     try self.emitLocalSet(in_range);
@@ -6653,8 +6564,7 @@ const FloatMagnitudeInputs = struct {
 fn emitFloatMagnitudeInputs(self: *Self, arg: ProcLocalId, src_is_f32: bool) Allocator.Error!FloatMagnitudeInputs {
     try self.emitProcLocal(arg);
     if (src_is_f32) {
-        self.currentCode().append(self.allocator, Op.i32_reinterpret_f32) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_reinterpret_f32, Op.i64_extend_i32_u });
     } else {
         self.currentCode().append(self.allocator, Op.i64_reinterpret_f64) catch return error.OutOfMemory;
     }
@@ -6663,9 +6573,7 @@ fn emitFloatMagnitudeInputs(self: *Self, arg: ProcLocalId, src_is_f32: bool) All
     try self.emitLocalGet(raw);
     if (src_is_f32) {
         try self.emitI64Const(0x8000_0000);
-        self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i64_and, Op.i64_eqz, Op.i32_eqz });
     } else {
         try self.emitI64Const(0);
         self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
@@ -6685,12 +6593,10 @@ fn emitFloatMagnitudeInputs(self: *Self, arg: ProcLocalId, src_is_f32: bool) All
     const exponent = try self.emitSetNewLocal(.i64);
 
     try self.emitLocalGet(exponent);
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eqz, Op.i32_eqz });
     try self.emitLocalGet(exponent);
     try self.emitI64Const(exponent_mask);
-    self.currentCode().append(self.allocator, Op.i64_ne) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_ne, Op.i32_and });
     const finite_normal = try self.emitSetNewLocal(.i32);
 
     try self.emitLocalGet(raw);
@@ -6730,8 +6636,7 @@ fn emitFloatToIntWrap64(self: *Self, arg: ProcLocalId, src_is_f32: bool, target_
     try self.emitLocalGets(.{ inputs.significand, inputs.shift });
     self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
     try self.emitLocalSet(magnitude);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.@"else" });
 
     try self.emitI64Const(0);
     try self.emitLocalGet(inputs.shift);
@@ -6744,8 +6649,7 @@ fn emitFloatToIntWrap64(self: *Self, arg: ProcLocalId, src_is_f32: bool, target_
     try self.emitLocalGets(.{ inputs.significand, right_shift });
     self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
     try self.emitLocalSet(magnitude);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     if (target_bits < 64) {
         try self.emitLocalGet(magnitude);
@@ -6764,8 +6668,7 @@ fn emitFloatToIntWrap64(self: *Self, arg: ProcLocalId, src_is_f32: bool, target_
         self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
     }
     try self.emitLocalSet(magnitude);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     try self.emitLocalGet(magnitude);
     if (target_bits <= 32) {
@@ -6777,8 +6680,7 @@ fn emitFloatToIntWrap64(self: *Self, arg: ProcLocalId, src_is_f32: bool, target_
 /// conversion and leave a pointer to the 16 result bytes on the stack.
 fn emitFloatToIntWrap128(self: *Self, arg: ProcLocalId, src_is_f32: bool) Allocator.Error!void {
     const inputs = try self.emitFloatMagnitudeInputs(arg, src_is_f32);
-    const low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const low, const high = try self.allocAnonymousLocals(.i64, 2);
     try self.emitI64Const(0);
     try self.emitLocalSet(low);
     try self.emitI64Const(0);
@@ -6804,25 +6706,21 @@ fn emitFloatToIntWrap128(self: *Self, arg: ProcLocalId, src_is_f32: bool) Alloca
     try self.emitLocalSet(low);
 
     try self.emitLocalGet(inputs.shift);
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eqz, Op.i32_eqz });
     try self.emitVoidIf();
     try self.emitLocalGet(inputs.significand);
     try self.emitI64Const(64);
     try self.emitLocalGet(inputs.shift);
-    self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_sub, Op.i64_shr_u });
     try self.emitLocalSet(high);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGets(.{ inputs.significand, inputs.shift });
     try self.emitI64Const(64);
-    self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_sub, Op.i64_shl });
     try self.emitLocalSet(high);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitI64Const(0);
@@ -6836,14 +6734,12 @@ fn emitFloatToIntWrap128(self: *Self, arg: ProcLocalId, src_is_f32: bool) Alloca
     try self.emitLocalGets(.{ inputs.significand, right_shift });
     self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
     try self.emitLocalSet(low);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     try self.emitLocalGet(inputs.negative);
     try self.emitVoidIf();
     try self.emitLocalGet(low);
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_eqz, Op.i32_eqz });
     const borrow = try self.emitSetNewLocal(.i32);
     try self.emitI64Const(0);
     try self.emitLocalGet(low);
@@ -6853,11 +6749,9 @@ fn emitFloatToIntWrap128(self: *Self, arg: ProcLocalId, src_is_f32: bool) Alloca
     try self.emitLocalGet(high);
     self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
     try self.emitLocalGet(borrow);
-    self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_sub });
     try self.emitLocalSet(high);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     const result_offset = try self.allocStackMemory(16, 8);
     const result = try self.emitFpOffsetToNewLocal(result_offset);
@@ -6866,6 +6760,58 @@ fn emitFloatToIntWrap128(self: *Self, arg: ProcLocalId, src_is_f32: bool) Alloca
     try self.emitLocalGets(.{ result, high });
     try self.emitStoreOp(.i64, 8);
     try self.emitLocalGet(result);
+}
+
+/// Emit a proc local as an i32, wrapping it when its slot holds an i64.
+fn emitProcLocalAsI32(self: *Self, value: ProcLocalId) Allocator.Error!void {
+    try self.emitProcLocal(value);
+    if (try self.procLocalValType(value) == .i64) {
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+    }
+}
+
+/// Emit the refcounted flag and the incref and decref table indices for a list's element callbacks.
+fn emitListElementCallbackArgs(self: *Self, callbacks: RocListElementCallbacks) Allocator.Error!void {
+    try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+    try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+    try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+}
+
+fn emitIntTryConst(self: *Self, vt: ValType, value: i64) Allocator.Error!void {
+    if (vt == .i32) try self.emitI32Const(@intCast(value)) else try self.emitI64Const(value);
+}
+
+/// Emit a try conversion of the integer on the stack that is Ok when
+/// `lo <= value <= hi` under signed comparison. The payload is `size` bytes
+/// with the discriminant right after it.
+fn emitIntTrySignedRange(self: *Self, vt: ValType, size: u32, lo: i64, hi: i64) Allocator.Error!void {
+    const r = try self.emitIntTryResult(vt, size, size);
+    try self.emitLocalGet(r.val_local);
+    try self.emitIntTryConst(vt, lo);
+    self.currentCode().append(self.allocator, if (vt == .i32) Op.i32_ge_s else Op.i64_ge_s) catch return error.OutOfMemory;
+    try self.emitLocalGet(r.val_local);
+    try self.emitIntTryConst(vt, hi);
+    self.currentCode().append(self.allocator, if (vt == .i32) Op.i32_le_s else Op.i64_le_s) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitIntTryFinish(r.result_local, r.val_local, vt, size);
+}
+
+/// Emit a try conversion of the integer on the stack that is Ok when
+/// comparing it against `bound` with `cmp_op` holds.
+fn emitIntTryBound(self: *Self, vt: ValType, size: u32, bound: i64, cmp_op: u8) Allocator.Error!void {
+    const r = try self.emitIntTryResult(vt, size, size);
+    try self.emitLocalGet(r.val_local);
+    try self.emitIntTryConst(vt, bound);
+    self.currentCode().append(self.allocator, cmp_op) catch return error.OutOfMemory;
+    try self.emitIntTryFinish(r.result_local, r.val_local, vt, size);
+}
+
+/// Store the Ok payload when the condition on the stack holds, then leave the result pointer on the stack.
+fn emitIntTryFinish(self: *Self, result_local: u32, val_local: u32, vt: ValType, size: u32) Allocator.Error!void {
+    try self.emitVoidIf();
+    try self.emitIntTryOk(result_local, val_local, vt, size, size);
+    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitLocalGet(result_local);
 }
 
 /// Emit an integer try conversion that returns a Result(TargetInt, {}) tag union.
@@ -6985,8 +6931,7 @@ fn emitI128TryNarrow(
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
             const max_val: i64 = (@as(i64, 1) << @intCast(target_bytes * 8)) - 1;
             WasmModule.leb128WriteI64(self.allocator, self.currentCode(), max_val) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_le_u, Op.i32_and });
         }
         // For target_bytes == 8: just high == 0 is sufficient
     } else if (!signed_source) {
@@ -6998,8 +6943,7 @@ fn emitI128TryNarrow(
         self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
         const max_signed: i64 = (@as(i64, 1) << @intCast(target_bytes * 8 - 1)) - 1;
         WasmModule.leb128WriteI64(self.allocator, self.currentCode(), max_signed) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i64_le_u, Op.i32_and });
     } else {
         // Signed target from signed source (i128 → i8/i16/i32/i64)
         // Value fits if sign-extending the low N bits back to i128 gives the same value.
@@ -7034,15 +6978,12 @@ fn emitI128TryNarrow(
             // AND high == (sign_ext_low >> 63)  (sign extension of the sign-extended low)
             try self.emitLocalGets(.{ high, sign_ext_low });
             try self.emitI64Const(63);
-            self.currentCode().append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_shr_s, Op.i64_eq, Op.i32_and });
         } else {
             // i128 → i64: high must equal (low >> 63) (sign extension)
             try self.emitLocalGets(.{ high, low });
             try self.emitI64Const(63);
-            self.currentCode().append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_shr_s, Op.i64_eq });
         }
     }
 
@@ -7367,9 +7308,7 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
     // The erased-callable ABI's leading ops slot is unused by generated code.
     _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const args_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const ret_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const ret_desc_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const args_local, const ret_local, const ret_desc_local = try self.allocAnonymousLocals(.i32, 3);
 
     const params = self.store.getLocalSpan(proc.args);
     for (0..params.len) |i| {
@@ -7547,11 +7486,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     const ErasedReturnParams = struct { value_ptr: u32, desc_ptr: u32 };
     const erased_return_params: ?ErasedReturnParams = if (proc.abi == .erased_callable) blk: {
-        const ret_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const args_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const capture_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const reuse_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const ret_desc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const ret_ptr, const args_ptr, const capture_ptr, const reuse_ptr, const ret_desc_ptr = try self.allocAnonymousLocals(.i32, 5);
         self.erased_ret_desc_ptr_local = ret_desc_ptr;
         try self.bindErasedCallableAdapterParams(
             proc,
@@ -7981,8 +7916,7 @@ fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
         };
         const ids_offset = try self.allocStackMemory(@intCast(captures.len * 4), 4);
         const descs_offset = try self.allocStackMemory(@intCast(captures.len * 4), 4);
-        const ids_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const descs_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const ids_ptr, const descs_ptr = try self.allocAnonymousLocals(.i32, 2);
         try self.emitFpOffset(ids_offset);
         try self.emitLocalSet(ids_ptr);
         try self.emitFpOffset(descs_offset);
@@ -8033,8 +7967,7 @@ fn generateBoxyDictRef(self: *Self, assign: anytype) Allocator.Error!void {
     };
     const ids_offset = try self.allocStackMemory(@intCast(captures.len * 4), 4);
     const values_offset = try self.allocStackMemory(@intCast(captures.len * 4), 4);
-    const ids_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const values_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const ids_ptr, const values_ptr = try self.allocAnonymousLocals(.i32, 2);
     try self.emitFpOffset(ids_offset);
     try self.emitLocalSet(ids_ptr);
     try self.emitFpOffset(values_offset);
@@ -9034,8 +8967,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                     .{ @intFromEnum(expect_stmt.condition), @tagName(condition_vt) },
                 ),
             }
-            self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_eqz, Op.@"if" });
             self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory;
             self.cf_depth += 1;
 
@@ -9502,8 +9434,7 @@ fn emitRocStrCall(self: *Self, message: ProcLocalId, diagnostic: RuntimeDiagnost
 
     const str_local = try self.emitProcLocalToNewLocal(message, .i32);
 
-    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const ptr_local, const len_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(str_local, ptr_local, len_local);
 
     const args_slot = try self.allocStackMemory(8, 4);
@@ -10092,8 +10023,7 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
     _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitVoidBlock();
     try self.emitLocalGet(capture_local);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_eqz, Op.br_if });
     try WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0);
 
     try self.emitLocalGet(capture_local);
@@ -10105,8 +10035,7 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
     try self.emitI32Const(@intCast(@intFromEnum(RcAtomicity.atomic)));
     try self.emitBoxyCall("roc_boxy_drop");
 
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
     try self.encodeLocalsDecl(&self.currentBody().preamble, @intCast(param_types.len));
     self.endFunction();
     self.restoreState(saved);
@@ -10855,15 +10784,13 @@ fn emitU32SaturatingSub(self: *Self, a: u32, b: u32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
     try self.emitI32Const(0);
     try self.emitLocalGets(.{ a, b });
-    self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_ge_u, Op.select });
 }
 
 /// Push `@min(a, b)` for the unsigned i32 locals `a` and `b`.
 fn emitU32Min(self: *Self, a: u32, b: u32) Allocator.Error!void {
     try self.emitLocalGets(.{ a, b, a, b });
-    self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_lt_u, Op.select });
 }
 
 fn generateList(self: *Self, l: anytype) Allocator.Error!void {
@@ -11086,31 +11013,18 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Safe integer widenings (no-op or single instruction)
         .u8_to_i16, .u8_to_i32, .u8_to_u16, .u8_to_u32 => {
             // u8 is already i32 in wasm, and widening to larger types is a no-op
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            // If arg produces i64 (e.g. from i64_literal), wrap to i32
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
         },
         .i8_to_i16, .i8_to_i32 => {
             // i8 is i32 in wasm, sign-extend from 8 bits
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             try self.emitSignExtendI32(8);
         },
         .u16_to_i32, .u16_to_u32 => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
         },
         .i16_to_i32 => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             try self.emitSignExtendI32(16);
         },
 
@@ -11218,26 +11132,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
         .i8_to_u64_wrap => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             try self.emitSignExtendI32(8);
             self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i16_to_u64_wrap => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             try self.emitSignExtendI32(16);
             self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i32_to_u64_wrap => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i32_to_u128_wrap => {
@@ -11293,31 +11198,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Int to float
         .i32_to_f32, .i8_to_f32, .i16_to_f32 => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f32_convert_i32_s) catch return error.OutOfMemory;
         },
         .u32_to_f32, .u8_to_f32, .u16_to_f32 => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f32_convert_i32_u) catch return error.OutOfMemory;
         },
         .i32_to_f64, .i8_to_f64, .i16_to_f64 => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f64_convert_i32_s) catch return error.OutOfMemory;
         },
         .u32_to_f64, .u8_to_f64, .u16_to_f64 => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f64_convert_i32_u) catch return error.OutOfMemory;
         },
         .i64_to_f32 => {
@@ -11357,14 +11250,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitI32Const(0x7fff_ffff);
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
             try self.emitI32Const(0x7f80_0000);
-            self.currentCode().append(self.allocator, Op.i32_gt_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_gt_u, Op.select });
         },
         .f32_from_bits => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f32_reinterpret_i32) catch return error.OutOfMemory;
         },
         .f64_to_bits => {
@@ -11376,8 +11265,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitI64Const(0x7fff_ffff_ffff_ffff);
             self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
             try self.emitI64Const(0x7ff0_0000_0000_0000);
-            self.currentCode().append(self.allocator, Op.i64_gt_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i64_gt_u, Op.select });
         },
         .f64_from_bits => {
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -11504,15 +11392,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_and, Op.@"if" });
             self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
             try self.emitLocalGet(len_local);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_shr_u, Op.end });
 
             const ret_vt = try self.resolveValType(ll.ret_layout);
             if (ret_vt == .i64) {
@@ -11533,17 +11419,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Generate index as i32
             const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             try self.emitLocalSet(index_local);
 
             try self.emitLoadAt(list_local, .i32, 0);
             try self.emitLocalGet(index_local);
             try self.emitI32Const(@intCast(elem_size));
-            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
 
             if (elem_is_composite) {
                 const src_local = try self.emitSetNewLocal(.i32);
@@ -11583,17 +11465,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Seamless slices tag the low bit of the capacity field.
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_and, Op.@"if" });
             self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(0);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             // Zero capacity has no heap refcount and counts as unique.
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_shr_u, Op.i32_eqz, Op.@"if" });
             self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(1);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
@@ -11603,9 +11482,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
             try self.emitLoadOp(.i32, 0);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_eq, Op.end, Op.end });
         },
 
         .list_map_cast_unsafe => {
@@ -11634,17 +11511,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
             const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             try self.emitLocalSet(index_local);
 
             try self.emitLoadAt(list_local, .i32, 0);
             try self.emitLocalGet(index_local);
             try self.emitI32Const(@intCast(elem_size));
-            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
 
             if (elem_is_composite) {
                 const src_local = try self.emitSetNewLocal(.i32);
@@ -11679,18 +11552,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
 
             const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             try self.emitLocalSet(index_local);
 
             const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLoadAt(list_local, .i32, 0);
             try self.emitLocalGet(index_local);
             try self.emitI32Const(@intCast(elem_size));
-            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
             try self.emitLocalSet(dst_local);
 
             if (elem_is_composite) {
@@ -11780,8 +11649,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitI32Const(1);
             self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
             try self.emitI32Const(@intCast(elem_size));
-            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
 
             if (elem_is_composite) {
                 const src_local = try self.emitSetNewLocal(.i32);
@@ -11802,10 +11670,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // No allocation needed—returns a view
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             const count_local = try self.emitSetNewLocal(.i32);
 
             // Allocate result RocList (12 bytes)
@@ -11830,8 +11695,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLoadAt(list_local, .i32, 0);
             try self.emitLocalGet(count_local);
             try self.emitI32Const(@intCast(elem_size));
-            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
             try self.emitStoreOp(.i32, 0);
 
             // new_len = old_len - count
@@ -11856,10 +11720,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Returns a RocList with adjusted length (pointer stays same)
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             const count_local = try self.emitSetNewLocal(.i32);
 
             // Zero-width elements have no bytes to drop, so removing a suffix
@@ -11903,10 +11764,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Same as list but with length = min(count, len)
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             const count_local = try self.emitSetNewLocal(.i32);
 
             // Zero-width elements have no bytes to keep, so taking a prefix
@@ -11935,8 +11793,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLoadAt(list_local, .i32, 4);
             try self.emitLocalGet(count_local);
             try self.emitLoadAt(list_local, .i32, 4);
-            self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_le_u, Op.select });
             try self.emitStoreOp(.i32, 4);
 
             // Same capacity
@@ -11952,10 +11809,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // length = min(count, len)
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            }
+            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             const count_local = try self.emitSetNewLocal(.i32);
 
             // Load length
@@ -11964,8 +11818,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // actual_count = min(count, len)
             try self.emitLocalGets(.{ count_local, len_local, count_local, len_local });
-            self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_le_u, Op.select });
             const actual_count = try self.emitSetNewLocal(.i32);
 
             const result_offset = try self.allocStackMemory(12, 4);
@@ -11988,8 +11841,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGets(.{ len_local, actual_count });
             self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
             try self.emitI32Const(@intCast(elem_size));
-            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
             try self.emitStoreOp(.i32, 0);
 
             // new_len = actual_count
@@ -12197,8 +12049,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // SSO path
             try self.emitLocalGet(tag_byte);
             try self.emitI32Const(0x7F);
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_and, Op.@"else" });
             // Heap path
             try self.emitLoadAt(str_local, .i32, 8);
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -12965,9 +12816,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         try self.emitSetI32Local(result_ptr, 0);
                         self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
-                        const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                        const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                        const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
                         try self.emitLocalGet(box_ptr);
                         try self.emitI32Const(-4);
                         self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
@@ -13003,8 +12852,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         try self.emitLocalGet(fresh_ptr);
                         try self.emitLocalSet(result_ptr);
 
-                        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-                        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                        try self.emitOps(.{ Op.end, Op.end });
                         try self.emitLocalGet(result_ptr);
                     }
                 }
@@ -13164,8 +13012,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                             try self.emitI128CompareWithSignedness(a, b, .lt, is_signed);
                             try self.emitI128CompareWithSignedness(a, b, .eq, is_signed);
                             try self.emitI32Const(2);
-                            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
                             return;
                         },
                         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {},
@@ -13191,8 +13038,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGets(.{ a, b });
                     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
                     try self.emitI32Const(2);
-                    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
                 },
                 .f32 => {
                     const a = self.storage.allocAnonymousLocal(.f32) catch return error.OutOfMemory;
@@ -13203,8 +13049,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGets(.{ a, b });
                     self.currentCode().append(self.allocator, Op.f32_eq) catch return error.OutOfMemory;
                     try self.emitI32Const(2);
-                    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
                 },
                 .f64 => {
                     const a = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
@@ -13215,8 +13060,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGets(.{ a, b });
                     self.currentCode().append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
                     try self.emitI32Const(2);
-                    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
                 },
                 .v128 => unreachable,
             }
@@ -13232,137 +13076,51 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Narrowing i32 → smaller signed
         .i32_to_i8_try, .i16_to_i8_try, .u16_to_i8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 1, 1);
             // Check: val >= -128 && val <= 127
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(-128);
-            self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(127);
-            self.currentCode().append(self.allocator, Op.i32_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i32, 1, -128, 127);
         },
         .u8_to_i8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 1, 1);
             // u8 → i8: check val <= 127
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(127);
-            self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i32, 1, 127, Op.i32_le_u);
         },
         // Narrowing to u8
         .i32_to_u8_try, .i16_to_u8_try, .u16_to_u8_try, .i8_to_u8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(0);
-            self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(255);
-            self.currentCode().append(self.allocator, Op.i32_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i32, 1, 0, 255);
         },
         // Narrowing to i16
         .i32_to_i16_try, .u32_to_i16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(-32768);
-            self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(32767);
-            self.currentCode().append(self.allocator, Op.i32_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i32, 2, -32768, 32767);
         },
         .u16_to_i16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(32767);
-            self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i32, 2, 32767, Op.i32_le_u);
         },
         // Narrowing to u16
         .i32_to_u16_try, .u32_to_u16_try, .i16_to_u16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(0);
-            self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(65535);
-            self.currentCode().append(self.allocator, Op.i32_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i32, 2, 0, 65535);
         },
         // i32 <-> u32 try
         .i32_to_u32_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 4, 4);
             // i32 → u32: check val >= 0
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(0);
-            self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 4, 4);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i32, 4, 0, Op.i32_ge_s);
         },
         .u32_to_i32_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 4, 4);
             // u32 → i32: check high bit is 0 (val <= 0x7FFFFFFF)
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(0);
-            self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 4, 4);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i32, 4, 0, Op.i32_ge_s);
         },
         .u32_to_i8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(127);
-            self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i32, 1, 127, Op.i32_le_u);
         },
         .u32_to_u8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i32, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI32Const(255);
-            self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i32, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i32, 1, 255, Op.i32_le_u);
         },
         // i8/i16 → unsigned wider types (always succeed since value fits—but need sign check)
         .i8_to_u16_try,
@@ -13401,184 +13159,62 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // i64 → narrowing try conversions
         .i64_to_i8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(-128);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(127);
-            self.currentCode().append(self.allocator, Op.i64_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i64, 1, -128, 127);
         },
         .i64_to_i16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(-32768);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(32767);
-            self.currentCode().append(self.allocator, Op.i64_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i64, 2, -32768, 32767);
         },
         .i64_to_i32_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 4, 4);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(-2147483648);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(2147483647);
-            self.currentCode().append(self.allocator, Op.i64_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 4, 4);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i64, 4, -2147483648, 2147483647);
         },
         .i64_to_u8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(0);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(255);
-            self.currentCode().append(self.allocator, Op.i64_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i64, 1, 0, 255);
         },
         .i64_to_u16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(0);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(65535);
-            self.currentCode().append(self.allocator, Op.i64_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i64, 2, 0, 65535);
         },
         .i64_to_u32_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 4, 4);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(0);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(4294967295);
-            self.currentCode().append(self.allocator, Op.i64_le_s) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 4, 4);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTrySignedRange(.i64, 4, 0, 4294967295);
         },
         .i64_to_u64_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 8, 8);
             // i64 → u64: check val >= 0
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(0);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 8, 8);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 8, 0, Op.i64_ge_s);
         },
         // u64 → narrowing try conversions
         .u64_to_i8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(127);
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 1, 127, Op.i64_le_u);
         },
         .u64_to_i16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(32767);
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 2, 32767, Op.i64_le_u);
         },
         .u64_to_i32_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 4, 4);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(2147483647);
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 4, 4);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 4, 2147483647, Op.i64_le_u);
         },
         .u64_to_i64_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 8, 8);
             // u64 → i64: check high bit is 0
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(0);
-            self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 8, 8);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 8, 0, Op.i64_ge_s);
         },
         .u64_to_u8_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 1, 1);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(255);
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 1, 1);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 1, 255, Op.i64_le_u);
         },
         .u64_to_u16_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 2, 2);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(65535);
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 2, 2);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 2, 65535, Op.i64_le_u);
         },
         .u64_to_u32_try => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            const r = try self.emitIntTryResult(.i64, 4, 4);
-            try self.emitLocalGet(r.val_local);
-            try self.emitI64Const(4294967295);
-            self.currentCode().append(self.allocator, Op.i64_le_u) catch return error.OutOfMemory;
-            try self.emitVoidIf();
-            try self.emitIntTryOk(r.result_local, r.val_local, .i64, 4, 4);
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-            try self.emitLocalGet(r.result_local);
+            try self.emitIntTryBound(.i64, 4, 4294967295, Op.i64_le_u);
         },
         // 128-bit try conversions: narrowing from i128/u128 to smaller types
         .i128_to_i8_try => {
@@ -14889,8 +14525,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                     self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
                     try self.emitLocalGet(temp);
                     try self.emitI64Const(0);
-                    self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i64_ge_s, Op.select });
                 },
                 .v128 => unreachable,
             }
@@ -14943,11 +14578,9 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
                     try self.emitLocalGets(.{ lhs, rhs });
-                    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i32_sub, Op.@"else" });
                     try self.emitLocalGets(.{ rhs, lhs });
-                    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i32_sub, Op.end });
                 },
                 .i64 => {
                     const lhs = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i64);
@@ -14958,23 +14591,19 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i64)) catch return error.OutOfMemory;
                     try self.emitLocalGets(.{ lhs, rhs });
-                    self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i64_sub, Op.@"else" });
                     try self.emitLocalGets(.{ rhs, lhs });
-                    self.currentCode().append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.i64_sub, Op.end });
                 },
                 .f32 => {
                     try self.emitProcLocal(GuardedList.at(args, 0));
                     try self.emitProcLocal(GuardedList.at(args, 1));
-                    self.currentCode().append(self.allocator, Op.f32_sub) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.f32_abs) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.f32_sub, Op.f32_abs });
                 },
                 .f64 => {
                     try self.emitProcLocal(GuardedList.at(args, 0));
                     try self.emitProcLocal(GuardedList.at(args, 1));
-                    self.currentCode().append(self.allocator, Op.f64_sub) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
+                    try self.emitOps(.{ Op.f64_sub, Op.f64_abs });
                 },
                 .v128 => unreachable,
             }
@@ -15386,8 +15015,7 @@ fn emitMemCopyLoop(self: *Self, dst_base_local: u32, dst_offset_local: u32, src_
 
     // if loop_i >= len, break
     try self.emitLocalGets(.{ loop_i, len_local });
-    self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_ge_u, Op.br_if });
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 1) catch return error.OutOfMemory; // break out of block
 
     // dst address = dst_base + dst_offset + loop_i
@@ -15597,8 +15225,7 @@ fn emitFloatToStr(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.Error
     if (is_f32) {
         const raw_f32 = try self.emitProcLocalToNewLocal(value, .f32);
         try self.emitLocalGet(raw_f32);
-        self.currentCode().append(self.allocator, Op.i32_reinterpret_f32) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_reinterpret_f32, Op.i64_extend_i32_u });
     } else {
         const raw_f64 = try self.emitProcLocalToNewLocal(value, .f64);
         try self.emitLocalGet(raw_f64);
@@ -15712,14 +15339,10 @@ fn emitStrEscapeAndQuote(self: *Self, value: ProcLocalId) Allocator.Error!void {
 fn emitStrGetUtf8ByteUnsafe(self: *Self, args: anytype) Allocator.Error!void {
     const str_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-    const data_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const data_ptr, const len = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(str_ptr, data_ptr, len);
 
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
+    try self.emitProcLocalAsI32(GuardedList.at(args, 1));
     try self.emitLocalGet(data_ptr);
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLoadOpSized(.i32, 1, 0);
@@ -15729,28 +15352,20 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
     const str_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
     const start = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
+    try self.emitProcLocalAsI32(GuardedList.at(args, 1));
     try self.emitLocalSet(start);
 
     const length = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitProcLocal(GuardedList.at(args, 2));
-    if (try self.procLocalValType(GuardedList.at(args, 2)) == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
+    try self.emitProcLocalAsI32(GuardedList.at(args, 2));
     try self.emitLocalSet(length);
 
-    const data_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const source_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const data_ptr, const source_len = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(str_ptr, data_ptr, source_len);
 
     const result_offset = try self.allocStackMemory(12, 4);
     const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
 
-    const is_small = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const allocation_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const is_small, const allocation_ptr = try self.allocAnonymousLocals(.i32, 2);
     try self.emitDecodeStrAllocPtr(str_ptr, allocation_ptr, is_small);
 
     try self.emitLocalGet(is_small);
@@ -15842,9 +15457,7 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
     // else (non-SSO)
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     {
-        const str_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const str_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const str_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const str_data, const str_len, const str_cap = try self.allocAnonymousLocals(.i32, 3);
 
         try self.emitLoadAt(str_ptr, .i32, 0);
         try self.emitLocalSet(str_data);
@@ -15858,8 +15471,7 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
         // A seamless string slice's data pointer points inside its allocation,
         // so decode the allocation pointer before retaining the shared backing.
-        const alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const is_small = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const alloc_ptr, const is_small = try self.allocAnonymousLocals(.i32, 2);
         try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, is_small);
         try self.emitDataPtrIncref(alloc_ptr, 1);
 
@@ -16022,6 +15634,18 @@ fn emitMemOp(self: *Self, op: u8, align_log2: u32, mem_offset: u32) Allocator.Er
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), mem_offset) catch return error.OutOfMemory;
 }
 
+/// Helper: emit each single-byte opcode in the tuple, in order
+inline fn emitOps(self: *Self, ops: anytype) Allocator.Error!void {
+    inline for (ops) |op| self.currentCode().append(self.allocator, op) catch return error.OutOfMemory;
+}
+
+/// Helper: allocate `n` anonymous locals of one type, in order
+fn allocAnonymousLocals(self: *Self, val_type: ValType, comptime n: usize) Allocator.Error![n]u32 {
+    var locals: [n]u32 = undefined;
+    inline for (0..n) |i| locals[i] = self.storage.allocAnonymousLocal(val_type) catch return error.OutOfMemory;
+    return locals;
+}
+
 /// Helper: emit an unconditional branch to the enclosing label at `depth`
 fn emitBr(self: *Self, depth: u32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
@@ -16076,14 +15700,10 @@ fn generateLLStrEqStaticSmall(self: *Self, args: anytype) Allocator.Error!void {
 
     const str_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const ptr_local, const len_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(str_local, ptr_local, len_local);
 
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
+    try self.emitProcLocalAsI32(GuardedList.at(args, 1));
     const static_len = try self.emitSetNewLocal(.i32);
 
     const words = [3]u32{
@@ -16103,8 +15723,7 @@ fn generateLLStrEqStaticSmall(self: *Self, args: anytype) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
     try self.emitLocalGet(static_len);
     try self.emitI32Const(24);
-    self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_le_u, Op.i32_and });
 
     try self.emitVoidIf();
 
@@ -16130,8 +15749,7 @@ fn generateLLStrEqStaticSmall(self: *Self, args: anytype) Allocator.Error!void {
         }
         self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
         try self.emitI32Const(0xff);
-        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_and, Op.i32_ne });
 
         try self.emitVoidIf();
         try self.emitSetI32Local(result, 0);
@@ -16141,8 +15759,7 @@ fn generateLLStrEqStaticSmall(self: *Self, args: anytype) Allocator.Error!void {
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
 
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     try self.emitLocalGet(result);
 }
@@ -16165,20 +15782,13 @@ fn generateLLStrStaticSmallWordCompare(self: *Self, args: anytype, comptime mode
 
     const str_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const ptr_local, const len_local = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(str_local, ptr_local, len_local);
 
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    if (try self.procLocalValType(GuardedList.at(args, 1)) == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
+    try self.emitProcLocalAsI32(GuardedList.at(args, 1));
     const offset_local = try self.emitSetNewLocal(.i32);
 
-    try self.emitProcLocal(GuardedList.at(args, 2));
-    if (try self.procLocalValType(GuardedList.at(args, 2)) == .i64) {
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-    }
+    try self.emitProcLocalAsI32(GuardedList.at(args, 2));
     const active_len_local = try self.emitSetNewLocal(.i32);
 
     try self.emitProcLocal(GuardedList.at(args, 3));
@@ -16191,12 +15801,9 @@ fn generateLLStrStaticSmallWordCompare(self: *Self, args: anytype, comptime mode
     try self.emitI32Const(8);
     self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ offset_local, len_local });
-    self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_le_u, Op.i32_and });
     try self.emitLocalGets(.{ active_len_local, len_local, offset_local });
-    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_sub, Op.i32_le_u, Op.i32_and });
 
     try self.emitVoidIf();
 
@@ -16264,10 +15871,7 @@ fn generateLLStrStaticSmallWordCompare(self: *Self, args: anytype, comptime mode
                 try self.emitI32Const('z');
                 self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
 
-                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                try self.emitOps(.{ Op.i32_and, Op.i32_and, Op.i32_or, Op.i32_eqz });
             },
         }
 
@@ -16279,8 +15883,7 @@ fn generateLLStrStaticSmallWordCompare(self: *Self, args: anytype, comptime mode
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
 
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     try self.emitLocalGet(result);
 }
@@ -16293,11 +15896,9 @@ fn generateLLStrSearch(self: *Self, args: anytype, mode: StrSearchMode) Allocato
     const b_str = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
 
     // Extract ptr+len from each
-    const a_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const a_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const a_ptr, const a_len = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(a_str, a_ptr, a_len);
-    const b_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const b_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const b_ptr, const b_len = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(b_str, b_ptr, b_len);
 
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -17053,8 +16654,7 @@ fn emitSimdVectorHalves(self: *Self, vector_arg: ProcLocalId) Allocator.Error!st
     try self.emitLocalGet(scratch);
     try self.emitProcLocal(vector_arg);
     try self.emitStoreOp(.v128, 0);
-    const low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const low, const high = try self.allocAnonymousLocals(.i64, 2);
     try self.emitLoadAt(scratch, .i64, 0);
     try self.emitLocalSet(low);
     try self.emitLoadAt(scratch, .i64, 8);
@@ -17176,15 +16776,13 @@ fn emitSimdRoundedShift(self: *Self, args: anytype, kind: layout.Vector) Allocat
     const count = try self.emitSetNewLocal(.i32);
 
     try self.emitLocalGet(count);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_eqz, Op.@"if" });
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.v128)) catch return error.OutOfMemory;
     try self.emitLocalGet(value);
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGet(count);
     try self.emitI32Const(@intCast(kind.laneBits()));
-    self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_ge_u, Op.@"if" });
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.v128)) catch return error.OutOfMemory;
     try self.emitV128Const([_]u8{0} ** 16);
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
@@ -17203,15 +16801,12 @@ fn emitSimdRoundedShift(self: *Self, args: anytype, kind: layout.Vector) Allocat
             try self.emitI32Const(1);
             try self.emitLocalGet(count);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_sub, Op.i32_shl });
         } else {
             try self.emitI64Const(1);
             try self.emitLocalGet(count);
             try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_sub, Op.i64_extend_i32_u, Op.i64_shl });
         }
         try self.emitSimdOp(wasmSimdSplatOpcode(widened_kind));
         try self.emitSimdOp(wasmSimdAddOpcode(widened_kind));
@@ -17225,8 +16820,7 @@ fn emitSimdRoundedShift(self: *Self, args: anytype, kind: layout.Vector) Allocat
         .{ 0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29 }
     else
         .{ 0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27 });
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 }
 
 fn emitSimdNarrowSat(self: *Self, args: anytype, src: layout.Vector, dst: layout.Vector) Allocator.Error!void {
@@ -17311,11 +16905,7 @@ fn emitSimdClmul(self: *Self, args: anytype, high_lane: bool) Allocator.Error!vo
     try self.emitProcLocal(GuardedList.at(args, 1));
     try self.emitStoreOp(.v128, 16);
 
-    const x_lo = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const x_hi = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const y = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const out_lo = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    const out_hi = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const x_lo, const x_hi, const y, const out_lo, const out_hi = try self.allocAnonymousLocals(.i64, 5);
     const count = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLoadAt(input, .i64, if (high_lane) 8 else 0);
     try self.emitLocalSet(x_lo);
@@ -17333,8 +16923,7 @@ fn emitSimdClmul(self: *Self, args: anytype, high_lane: bool) Allocator.Error!vo
     try self.emitVoidLoop();
     try self.emitLocalGet(y);
     try self.emitI64Const(1);
-    self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_and, Op.i64_eqz });
     try self.emitVoidIf();
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGets(.{ out_lo, x_lo });
@@ -17350,8 +16939,7 @@ fn emitSimdClmul(self: *Self, args: anytype, high_lane: bool) Allocator.Error!vo
     self.currentCode().append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
     try self.emitLocalGet(x_lo);
     try self.emitI64Const(63);
-    self.currentCode().append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i64_shr_u, Op.i64_or });
     try self.emitLocalSet(x_hi);
     try self.emitLocalGet(x_lo);
     try self.emitI64Const(1);
@@ -17367,8 +16955,7 @@ fn emitSimdClmul(self: *Self, args: anytype, high_lane: bool) Allocator.Error!vo
     try self.emitLocalSet(count);
     try self.emitLocalGet(count);
     try self.emitBrIf(0);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.end, Op.end });
 
     try self.emitLocalGets(.{ input, out_lo });
     try self.emitStoreOp(.i64, 0);
@@ -17445,8 +17032,7 @@ fn emitStaticBytesEqualAtOffset(
         try self.emitMemOp(Op.i32_load8_u, 0, @intCast(index));
 
         try self.emitI32Const(@intCast(byte));
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_eq, Op.i32_and });
         try self.emitLocalSet(result_local);
     }
 }
@@ -17558,8 +17144,7 @@ fn emitStrMatchFindDelimiter(
         {
             try self.emitSetI32Local(found, 1);
             try self.emitLocalGets(.{ pos, mask });
-            self.currentCode().append(self.allocator, Op.i32_ctz) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.i32_ctz, Op.i32_add });
             try self.emitLocalSet(found_pos);
             try self.emitBr(2);
         }
@@ -17572,8 +17157,7 @@ fn emitStrMatchFindDelimiter(
 
         try self.emitBr(0);
 
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.end, Op.end });
 
         try self.emitLocalGet(found);
         self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
@@ -17606,9 +17190,7 @@ fn emitStrMatchFindDelimiter(
 
         try self.emitBr(0);
 
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.end, Op.end, Op.end });
     }
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
@@ -17723,8 +17305,7 @@ fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!u32 {
 }
 
 fn generateStrMatchWithSource(self: *Self, source: StrMatchSourceShape, str_match: anytype) Allocator.Error!u32 {
-    const cursor = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const matched = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const cursor, const matched = try self.allocAnonymousLocals(.i32, 2);
     try self.emitSetI32Local(cursor, 0);
     try self.emitSetI32Local(matched, 1);
 
@@ -17754,8 +17335,7 @@ fn generateStrMatchWithSource(self: *Self, source: StrMatchSourceShape, str_matc
                 try self.emitLocalGet(source.len);
                 try self.emitLocalSet(cursor);
             } else {
-                const found_pos = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                const found = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                const found_pos, const found = try self.allocAnonymousLocals(.i32, 2);
                 try self.emitStrMatchFindDelimiter(source.bytes, source.len, cursor, delimiter, found_pos, found);
 
                 try self.emitLocalGet(found);
@@ -17943,9 +17523,7 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitLocalGet(elem_ptr);
                 try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitBuiltinCall(.list_prepend, null);
             }
@@ -17974,8 +17552,7 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
         const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLoadAt(list_ptr, .i32, 4);
         try self.emitLocalGet(count_local);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
         try self.emitLocalSet(len);
 
         const zero = try self.emitI32ConstToNewLocal(0);
@@ -18001,9 +17578,7 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
             try self.emitLocalGets(.{ start_local, count_local });
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
-            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+            try self.emitListElementCallbackArgs(callbacks);
             try self.emitI32Const(@intCast(unique_args & 1));
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
         },
@@ -18050,9 +17625,7 @@ fn generateLLListCopyRangeWithin(self: *Self, args: anytype, ret_layout: layout.
             try self.emitLocalGets(.{ dest_local, src_local, count_local });
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
-            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+            try self.emitListElementCallbackArgs(callbacks);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)), null);
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_copy_range_within", .{}),
@@ -18082,8 +17655,7 @@ fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout:
         const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLoadAt(list_ptr, .i32, 4);
         try self.emitLocalGet(count_local);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
         try self.emitLocalSet(len);
 
         const zero = try self.emitI32ConstToNewLocal(0);
@@ -18202,8 +17774,7 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
         const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLoadAt(list_ptr, .i32, 4);
         try self.emitLocalGet(len_local);
-        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
         try self.emitLocalSet(len);
 
         const zero = try self.emitI32ConstToNewLocal(0);
@@ -18231,9 +17802,7 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
             try self.emitLocalGets(.{ start_local, len_local });
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
-            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+            try self.emitListElementCallbackArgs(callbacks);
             try self.emitI32Const(@intCast(unique_args & 1));
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), null);
         },
@@ -18302,9 +17871,7 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
                 try self.emitRocListFields(b_fields);
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI64Const(@intCast(unique_args & 0b11));
                 try self.emitBuiltinCall(.list_concat, null);
             }
@@ -18379,9 +17946,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitI32Const(@intCast(elem_size));
                 try self.emitLocalGet(index_local);
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitBuiltinCall(.list_drop_at, null);
             }
@@ -18431,9 +17996,7 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
                 try self.emitRocListFields(fields);
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitBuiltinCall(.list_reverse, null);
             }
@@ -18477,9 +18040,7 @@ fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, ta
                 try self.emitLocalGet(callable_ptr);
                 try self.emitI32Const(@intCast(list_abi.elem_align));
                 try self.emitI32Const(@intCast(list_abi.elem_size));
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitI32Const(0);
                 try self.emitI32Const(0);
@@ -18664,9 +18225,7 @@ fn emitListReplaceCall(
             try self.emitLocalGets(.{ index_local, elem_ptr });
             try self.emitI32Const(@intCast(elem_size));
             try self.emitFpOffset(out_element_offset);
-            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+            try self.emitListElementCallbackArgs(callbacks);
             try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_replace_unsafe)), null);
         },
@@ -18702,9 +18261,7 @@ fn emitListSetCall(
             try self.emitI32Const(@intCast(elem_align));
             try self.emitLocalGets(.{ index_local, elem_ptr });
             try self.emitI32Const(@intCast(elem_size));
-            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+            try self.emitListElementCallbackArgs(callbacks);
             try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitBuiltinCall(.list_set, null);
         },
@@ -18860,9 +18417,7 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitI32Const(@intCast(elem_size));
                 try self.emitLocalGets(.{ index_1_local, index_2_local });
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitBuiltinCall(.list_swap, null);
             }
@@ -18923,9 +18478,7 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, host_import: ?u32, boxy
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitLocalGet(spare_local);
                 try self.emitI32Const(@intCast(elem_size));
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitListElementCallbackArgs(callbacks);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitBuiltinCall(kind, null);
             }
@@ -18999,8 +18552,7 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
 
         // actual_start = min(start, old_len)
         try self.emitLocalGets(.{ start_local, old_len, start_local, old_len });
-        self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_le_u, Op.select });
         const actual_start = try self.emitSetNewLocal(.i32);
 
         // remaining = old_len - actual_start
@@ -19010,8 +18562,7 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
 
         // actual_len = min(sub_len, remaining)
         try self.emitLocalGets(.{ sub_len, remaining, sub_len, remaining });
-        self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_le_u, Op.select });
         const actual_len = try self.emitSetNewLocal(.i32);
 
         // Allocate result RocList (12 bytes)
@@ -19026,8 +18577,7 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
         try self.emitLoadAt(list_local, .i32, 0);
         try self.emitLocalGet(actual_start);
         try self.emitI32Const(@intCast(elem_size));
-        self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitOps(.{ Op.i32_mul, Op.i32_add });
         try self.emitStoreOp(.i32, 0);
 
         // new_len = actual_len
@@ -19250,8 +18800,7 @@ fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) 
     const last_src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ old_data, rest_len });
     try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
     try self.emitLocalSet(last_src);
 
     const bytes_local = try self.emitI32ConstToNewLocal(@intCast(elem_size));
