@@ -2256,7 +2256,7 @@ pub const BuildEnv = struct {
             if (self.version_notes.get(drained[i].pkg_name)) |note| {
                 if (!noted_pkgs.contains(drained[i].pkg_name)) {
                     for (drained[i].reports) |*report| {
-                        if (report.severity != .runtime_error and report.severity != .fatal) continue;
+                        if (!report.severity.isError()) continue;
                         try noted_pkgs.put(self.gpa, drained[i].pkg_name, {});
                         const owned = try report.addOwnedString(note);
                         try report.addNote(owned);
@@ -3361,10 +3361,7 @@ pub const BuildEnv = struct {
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => total_error_count += 1,
-                    .warning => total_warning_count += 1,
-                }
+                if (report.severity.isError()) total_error_count += 1 else total_warning_count += 1;
                 reporting.renderReportToTerminal(report, writer, palette, config) catch {};
             }
         }

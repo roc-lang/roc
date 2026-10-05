@@ -253,63 +253,11 @@ fn generateAllReports(
     can_ir: *ModuleEnv,
     solver: *Check,
     snapshot_path: []const u8,
-    module_env: *ModuleEnv,
 ) Allocator.Error!std.array_list.Managed(reporting.Report) {
-    var reports = std.array_list.Managed(reporting.Report).init(allocator);
-    errdefer reports.deinit();
-
-    // Generate tokenize reports
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create tokenize report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate parse reports
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate canonicalization reports
-    const diagnostics = try can_ir.getDiagnostics();
-    defer allocator.free(diagnostics);
-    for (diagnostics) |diagnostic| {
-        const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    _ = try solver.problems.flushPendingStaticExhaustiveness(allocator);
-
-    // Generate type checking reports
-    for (solver.problems.problems.items) |problem| {
-        const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = try check.ReportBuilder.init(
-            allocator,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            &solver.problems,
-            snapshot_path,
-            empty_modules,
-            &solver.import_mapping,
-            &solver.regions,
-            null,
-        );
-        defer report_builder.deinit();
-
-        const report = report_builder.build(problem) catch |err| {
-            std.debug.panic("Failed to create type checking report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    return reports;
+    var reports: std.ArrayList(reporting.Report) = .empty;
+    errdefer check.module_reports.deinit(allocator, &reports);
+    try check.module_reports.appendUnfinalizedModule(allocator, &reports, parse_ast, can_ir, solver, snapshot_path, &.{});
+    return reports.toManaged(allocator);
 }
 
 /// Render reports to PROBLEMS section format (markdown and HTML).
@@ -1323,7 +1271,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path, can_ir);
+    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -4869,7 +4817,7 @@ fn renderSnapshotReplTypeProblems(
     };
     check_result catch |err| if (!isTypeCheckError(err)) return err;
 
-    var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl", can_ir);
+    var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl");
     defer {
         for (reports.items) |*report| {
             report.deinit();
@@ -5281,6 +5229,86 @@ test "snapshot validation" {
     if (!try checkSnapshotExpectations(allocator)) {
         return error.SnapshotValidationFailed;
     }
+}
+
+test "a snapshot reports what a build reports for the same module" {
+    app_io = std.testing.io;
+    const gpa = std.testing.allocator;
+    const source =
+        \\Fixture :: [].{
+        \\    describe : [Red, Green, Blue] -> Str
+        \\    describe = |color| match color {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\    }
+        \\
+        \\    count : U64
+        \\    count = "three"
+        \\}
+        \\
+    ;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(app_io, .{ .sub_path = "Fixture.roc", .data = source });
+    const dir_path = try tmp_dir.dir.realPathFileAlloc(app_io, ".", gpa);
+    defer gpa.free(dir_path);
+    const module_path = try tmp_dir.dir.realPathFileAlloc(app_io, "Fixture.roc", gpa);
+    defer gpa.free(module_path);
+
+    // The reports `roc check` collects.
+    var build_env = try compile.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), dir_path, app_io);
+    defer build_env.deinit();
+    try build_env.build(module_path);
+    const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReports(drained);
+
+    // The reports of the same module checked on its own, as a file snapshot is.
+    var builtin_modules = try eval_mod.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+    var module_env = try single_module.ModuleEnv.init(gpa, source);
+    defer module_env.deinit();
+    const parse_ast = try single_module.parseSingleModule(gpa, &module_env, .file, .{ .module_name = "Fixture" });
+    defer parse_ast.deinit();
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+    var checker = try compile.package.canonicalizeAndTypeCheckModule(
+        CoreCtx.default(gpa, gpa, app_io),
+        gpa,
+        &module_env,
+        parse_ast,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+        &.{@constCast(builtin_modules.builtin_module.env)},
+        &module_envs,
+        dir_path,
+        .none,
+    );
+    defer checker.deinit();
+    var snapshot_reports = try generateAllReports(gpa, parse_ast, &module_env, &checker, module_path);
+    defer {
+        for (snapshot_reports.items) |*report| report.deinit();
+        snapshot_reports.deinit();
+    }
+
+    var compared: usize = 0;
+    for (drained) |module_reports| {
+        for (module_reports.reports) |*built| {
+            try std.testing.expect(compared < snapshot_reports.items.len);
+            const snapshot = &snapshot_reports.items[compared];
+            try std.testing.expectEqualStrings(built.title, snapshot.title);
+            const built_loc = reportRegionLoc(built);
+            const snapshot_loc = reportRegionLoc(snapshot);
+            try std.testing.expectEqual(
+                [4]u32{ built_loc.sl, built_loc.sc, built_loc.el, built_loc.ec },
+                [4]u32{ snapshot_loc.sl, snapshot_loc.sc, snapshot_loc.el, snapshot_loc.ec },
+            );
+            compared += 1;
+        }
+    }
+    try std.testing.expectEqual(snapshot_reports.items.len, compared);
+    try std.testing.expectEqualStrings("Type Mismatch", snapshot_reports.items[0].title);
+    try std.testing.expectEqualStrings("Non Exhaustive Match", snapshot_reports.items[1].title);
 }
 
 test "snapshot markdown avoids removed keyword text" {

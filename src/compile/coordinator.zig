@@ -2299,10 +2299,7 @@ pub const Coordinator = struct {
             const pkg = entry.value_ptr.*;
             for (pkg.modules.items) |*mod| {
                 for (mod.reports.items) |rep| {
-                    switch (rep.severity) {
-                        .warning => {},
-                        .runtime_error, .fatal => return true,
-                    }
+                    if (rep.severity.isError()) return true;
                 }
             }
         }
@@ -3270,11 +3267,6 @@ pub const Coordinator = struct {
         for (external_imports.items) |imp| allocator.free(imp.import_name);
         external_imports.deinit(allocator);
         external_imports.* = std.ArrayList(DiscoveredExternalImport).empty;
-    }
-
-    fn deinitReports(reports: *std.ArrayList(Report), allocator: Allocator) void {
-        for (reports.items) |*rep| rep.deinit();
-        reports.deinit(allocator);
     }
 
     fn destroyModuleEnvAndSource(env: *ModuleEnv) void {
@@ -5590,7 +5582,7 @@ pub const Coordinator = struct {
         try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } });
 
         var parse_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&parse_reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &parse_reports);
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
@@ -5629,21 +5621,16 @@ pub const Coordinator = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.CorruptParseStageRecord => {
                 releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
-                deinitReports(&parse_reports, worker_alloc);
+                check.module_reports.deinit(worker_alloc, &parse_reports);
                 manager.recordInvalidationFor(.canonicalized);
                 return null;
             },
         };
 
         var canonicalize_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&canonicalize_reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &canonicalize_reports);
 
-        const diags = try env.getDiagnostics();
-        defer env.gpa.free(diags);
-        for (diags) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &canonicalize_reports, rep);
-        }
+        try check.module_reports.appendCanonicalize(worker_alloc, &canonicalize_reports, env, 0, task.path);
 
         env_owned = false;
         return .{
@@ -5768,20 +5755,13 @@ pub const Coordinator = struct {
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
         const parse_ast = try parse.file(worker_alloc, &env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
-        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const rep = try parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
-        for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            const rep = try parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
+        try check.module_reports.appendSyntax(worker_alloc, &reports, parse_ast, &env.common, task.path);
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
@@ -5940,14 +5920,9 @@ pub const Coordinator = struct {
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
-        const diags = try env.getDiagnostics();
-        defer env.gpa.free(diags);
-        for (diags) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
+        try check.module_reports.appendCanonicalize(worker_alloc, &reports, env, 0, task.path);
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
         return .{
@@ -6054,33 +6029,18 @@ pub const Coordinator = struct {
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
-        var rb = try check.ReportBuilder.init(
+        try check.module_reports.appendCanonicalize(worker_alloc, &reports, env, canonicalize_diagnostics, task.path);
+        try check.module_reports.appendTypes(
             worker_alloc,
+            &reports,
             env,
-            env,
-            &typecheck_output.checker.snapshots,
-            &typecheck_output.checker.problems,
+            &typecheck_output.checker,
             task.path,
             task.imported_envs,
-            &typecheck_output.checker.import_mapping,
-            &typecheck_output.checker.regions,
             if (task.platform_requirements) |requirements| .{ .env = requirements.env, .filename = requirements.path } else null,
         );
-        defer rb.deinit();
-
-        const import_diagnostics = try env.getDiagnosticsFrom(canonicalize_diagnostics);
-        defer env.gpa.free(import_diagnostics);
-        for (import_diagnostics) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
-
-        for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = try rb.build(prob);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
 
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
@@ -6603,7 +6563,7 @@ fn compileAppRootIdentityExpecting(
     var reports = coord.iterReports();
     var error_count: usize = 0;
     while (reports.next()) |entry| {
-        if (entry.report.severity == .warning) continue;
+        if (!entry.report.severity.isError()) continue;
         try std.testing.expect(error_count < expected_errors.len);
         try std.testing.expect(std.mem.eql(u8, expected_errors[error_count], entry.report.title));
         error_count += 1;

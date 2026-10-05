@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
+const check = @import("check");
 const compile = @import("compile");
 const eval = @import("eval");
 const parse = @import("parse");
@@ -1550,21 +1551,14 @@ fn renderAstDiagnostics(
     var out: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer out.deinit();
 
-    var rendered_any = false;
-    for (ast.tokenize_diagnostics.items) |diagnostic| {
-        var report = try ast.tokenizeDiagnosticToReport(diagnostic, self.allocator, filename);
-        defer report.deinit();
-        try reporting.renderReportWithConfig(&report, &out.writer, report_config);
-        rendered_any = true;
-    }
-    for (ast.parse_diagnostics.items) |diagnostic| {
-        var report = try ast.parseDiagnosticToReport(env, diagnostic, self.allocator, filename);
-        defer report.deinit();
-        try reporting.renderReportWithConfig(&report, &out.writer, report_config);
-        rendered_any = true;
+    var reports: std.ArrayList(reporting.Report) = .empty;
+    defer check.module_reports.deinit(self.allocator, &reports);
+    try check.module_reports.appendSyntax(self.allocator, &reports, ast, env, filename);
+    for (reports.items) |*report| {
+        try reporting.renderReportWithConfig(report, &out.writer, report_config);
     }
 
-    if (!rendered_any) {
+    if (reports.items.len == 0) {
         out.deinit();
         return self.renderFallbackParseDiagnostic(env.source, report_config);
     }

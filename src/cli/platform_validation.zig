@@ -11,6 +11,7 @@
 const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
+const check = @import("check");
 const reporting = @import("reporting");
 const target_mod = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
@@ -85,21 +86,12 @@ pub fn validatePlatformHeader(
     if (ast.hasErrors()) {
         const owned_filename = try allocator.dupe(u8, platform_source_path);
         defer allocator.free(owned_filename);
-        for (ast.tokenize_diagnostics.items) |diagnostic| {
-            var report = try ast.tokenizeDiagnosticToReport(diagnostic, allocator, owned_filename);
-            defer report.deinit();
+        var reports: std.ArrayList(reporting.Report) = .empty;
+        defer check.module_reports.deinit(allocator, &reports);
+        try check.module_reports.appendSyntax(allocator, &reports, ast, &env, owned_filename);
+        for (reports.items) |*report| {
             reporting.renderReportToTerminal(
-                &report,
-                stderr,
-                reporting.ColorUtils.getPaletteForConfig(report_config),
-                report_config,
-            ) catch {};
-        }
-        for (ast.parse_diagnostics.items) |diagnostic| {
-            var report = try ast.parseDiagnosticToReport(&env, diagnostic, allocator, owned_filename);
-            defer report.deinit();
-            reporting.renderReportToTerminal(
-                &report,
+                report,
                 stderr,
                 reporting.ColorUtils.getPaletteForConfig(report_config),
                 report_config,

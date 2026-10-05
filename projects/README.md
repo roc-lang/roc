@@ -72,10 +72,6 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/severity-and-report-collection.md](small/severity-and-report-collection.md)—
-  `Severity.isError`/`toLspSeverity` helpers; snapshot tool and
-  playground call the compiler's report-collection loop instead of
-  copying it.
 - [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
   one module inventory (seven restatements plus minici's copy, with
   existing test-coverage divergence), one CI gate list, one Zig pin.

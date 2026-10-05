@@ -5982,10 +5982,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     for (drained) |mod| {
         for (mod.reports) |*report| {
-            switch (report.severity) {
-                .fatal, .runtime_error => counts.errors += 1,
-                .warning => counts.warnings += 1,
-            }
+            if (report.severity.isError()) counts.errors += 1 else counts.warnings += 1;
             if (!builtin.is_test) {
                 reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch {};
             }
@@ -16232,7 +16229,7 @@ fn printTestProblem(
     };
     if (should_print_detail) {
         if (failure_detail) |msg| {
-            if (severity == .warning) try report.addWarningMessage(msg) else try report.addErrorMessage(msg);
+            if (severity.isError()) try report.addErrorMessage(msg) else try report.addWarningMessage(msg);
         }
     }
 
@@ -17990,10 +17987,7 @@ fn checkFileWithBuildEnvPreserved(
         var warning_count: u32 = 0;
         for (drained) |mod| {
             for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => error_count += 1,
-                    .warning => warning_count += 1,
-                }
+                if (report.severity.isError()) error_count += 1 else warning_count += 1;
             }
         }
 
@@ -18042,10 +18036,7 @@ fn checkFileWithBuildEnvPreserved(
 
     for (drained) |mod| {
         for (mod.reports) |report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
+            if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
 
@@ -18137,10 +18128,7 @@ fn checkFileWithBuildEnv(
         var warning_count: u32 = 0;
         for (drained) |mod| {
             for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => error_count += 1,
-                    .warning => warning_count += 1,
-                }
+                if (report.severity.isError()) error_count += 1 else warning_count += 1;
             }
         }
 
@@ -18177,10 +18165,7 @@ fn checkFileWithBuildEnv(
     var warning_count: u32 = 0;
     for (drained) |mod| {
         for (mod.reports) |report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
+            if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
 

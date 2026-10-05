@@ -2340,36 +2340,12 @@ fn moduleDiagnosticsHaveErrors(
     module_env: *ModuleEnv,
     checker: *Check,
 ) Allocator.Error!bool {
-    const diagnostics = try module_env.getDiagnostics();
-    defer module_env.gpa.free(diagnostics);
-    for (diagnostics) |diagnostic| {
-        var report = try module_env.diagnosticToReport(diagnostic, allocator, "repl");
-        defer report.deinit();
-        switch (report.severity) {
-            .warning => {},
-            .runtime_error, .fatal => return true,
-        }
-    }
-    for (checker.problems.problems.items) |problem| {
-        var report_builder = try check.ReportBuilder.init(
-            allocator,
-            module_env,
-            module_env,
-            &checker.snapshots,
-            &checker.problems,
-            "repl",
-            &.{},
-            &checker.import_mapping,
-            &checker.regions,
-            null,
-        );
-        defer report_builder.deinit();
-        var report = try report_builder.build(problem);
-        defer report.deinit();
-        switch (report.severity) {
-            .warning => {},
-            .runtime_error, .fatal => return true,
-        }
+    var reports: std.ArrayList(reporting.Report) = .empty;
+    defer check.module_reports.deinit(allocator, &reports);
+    try check.module_reports.appendCanonicalize(allocator, &reports, module_env, 0, "repl");
+    try check.module_reports.appendTypes(allocator, &reports, module_env, checker, "repl", &.{}, null);
+    for (reports.items) |report| {
+        if (report.severity.isError()) return true;
     }
     return false;
 }
@@ -2414,47 +2390,9 @@ fn renderCheckedModuleProblemsWithConfig(
     filename: []const u8,
     config: reporting.ReportingConfig,
 ) Error![]u8 {
-    var reports = std.array_list.Managed(reporting.Report).init(allocator);
-    defer {
-        for (reports.items) |*r| r.deinit();
-        reports.deinit();
-    }
-
-    for (main.parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = try main.parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, filename);
-        try reports.append(report);
-    }
-
-    for (main.parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = try main.parse_ast.parseDiagnosticToReport(&main.module_env.common, diagnostic, allocator, filename);
-        try reports.append(report);
-    }
-
-    const diagnostics = try main.module_env.getDiagnostics();
-    defer allocator.free(diagnostics);
-    for (diagnostics) |diagnostic| {
-        const report = try main.module_env.diagnosticToReport(diagnostic, allocator, filename);
-        try reports.append(report);
-    }
-
-    for (main.checker.problems.problems.items) |problem| {
-        var report_builder = try check.ReportBuilder.init(
-            allocator,
-            main.module_env,
-            main.module_env,
-            &main.checker.snapshots,
-            &main.checker.problems,
-            filename,
-            &.{},
-            &main.checker.import_mapping,
-            &main.checker.regions,
-            null,
-        );
-        defer report_builder.deinit();
-
-        const report = try report_builder.build(problem);
-        try reports.append(report);
-    }
+    var reports: std.ArrayList(reporting.Report) = .empty;
+    defer check.module_reports.deinit(allocator, &reports);
+    try check.module_reports.appendModule(allocator, &reports, main.parse_ast, main.module_env, main.checker, filename, &.{});
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();

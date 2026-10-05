@@ -602,7 +602,7 @@ pub const SyntaxChecker = struct {
                             .start = .{ .line = 0, .character = 0 },
                             .end = .{ .line = 0, .character = 1 },
                         },
-                        .severity = 1,
+                        .severity = reporting.Severity.fatal.toLspSeverity(),
                         .source = "roc",
                         .message = try std.fmt.allocPrint(self.allocator, "Failed to retrieve diagnostics for {s}", .{absolute_path}),
                     },
@@ -736,10 +736,7 @@ pub const SyntaxChecker = struct {
         for (drained) |entry| {
             if (std.mem.eql(u8, entry.abs_path, absolute_path)) {
                 for (entry.reports) |report| {
-                    switch (report.severity) {
-                        .runtime_error, .fatal => return false,
-                        .warning => {},
-                    }
+                    if (report.severity.isError()) return false;
                 }
             }
         }
@@ -940,11 +937,6 @@ pub const SyntaxChecker = struct {
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
         const range = rangeFromReport(rep);
-        const severity: u32 = switch (rep.severity) {
-            .warning => 2,
-            .runtime_error, .fatal => 1,
-        };
-
         var writer: std.Io.Writer.Allocating = .init(self.allocator);
         defer writer.deinit();
         try reporting.renderReportToLsp(&rep, &writer.writer, reporting.ReportingConfig.initLsp());
@@ -954,7 +946,7 @@ pub const SyntaxChecker = struct {
 
         return .{
             .range = range,
-            .severity = severity,
+            .severity = rep.severity.toLspSeverity(),
             .source = "roc",
             .message = message,
         };

@@ -144,7 +144,7 @@ const DiagnosticRegion = struct {
 };
 
 /// Diagnostic information for frontend integration
-const DiagnosticSeverity = enum { @"error", warning, info };
+const DiagnosticSeverity = enum { @"error", warning };
 
 const Diagnostic = struct {
     severity: DiagnosticSeverity,
@@ -169,20 +169,10 @@ const CompilerStageData = struct {
     formatted_code: ?[]const u8 = null,
 
     // Diagnostic reports from each stage
-    tokenize_reports: std.array_list.Managed(reporting.Report),
-    parse_reports: std.array_list.Managed(reporting.Report),
-    can_reports: std.array_list.Managed(reporting.Report),
-    type_reports: std.array_list.Managed(reporting.Report),
-
-    pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
-        return CompilerStageData{
-            .module_env = module_env,
-            .tokenize_reports = std.array_list.Managed(reporting.Report).init(alloc),
-            .parse_reports = std.array_list.Managed(reporting.Report).init(alloc),
-            .can_reports = std.array_list.Managed(reporting.Report).init(alloc),
-            .type_reports = std.array_list.Managed(reporting.Report).init(alloc),
-        };
-    }
+    tokenize_reports: std.ArrayList(reporting.Report) = .empty,
+    parse_reports: std.ArrayList(reporting.Report) = .empty,
+    can_reports: std.ArrayList(reporting.Report) = .empty,
+    type_reports: std.ArrayList(reporting.Report) = .empty,
 
     pub fn deinit(self: *CompilerStageData) void {
         // Deinit solver first, as it may hold references to other data
@@ -205,25 +195,10 @@ const CompilerStageData = struct {
         if (self.formatted_code) |code| allocator.free(code);
 
         // Deinit reports, which may reference data in the AST or ModuleEnv
-        for (self.tokenize_reports.items) |*report| {
-            report.deinit();
-        }
-        self.tokenize_reports.deinit();
-
-        for (self.parse_reports.items) |*report| {
-            report.deinit();
-        }
-        self.parse_reports.deinit();
-
-        for (self.can_reports.items) |*report| {
-            report.deinit();
-        }
-        self.can_reports.deinit();
-
-        for (self.type_reports.items) |*report| {
-            report.deinit();
-        }
-        self.type_reports.deinit();
+        check.module_reports.deinit(allocator, &self.tokenize_reports);
+        check.module_reports.deinit(allocator, &self.parse_reports);
+        check.module_reports.deinit(allocator, &self.can_reports);
+        check.module_reports.deinit(allocator, &self.type_reports);
 
         // Deinit the AST, which depends on the ModuleEnv's allocator and source
         if (self.parse_ast) |ast| {
@@ -1069,14 +1044,8 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     return .{ .lowered = lowered };
 }
 
-fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
-    for (reports.items) |report| {
-        switch (report.severity) {
-            .runtime_error, .fatal => return true,
-            .warning => {},
-        }
-    }
-    return false;
+fn hasBlockingReports(reports: std.ArrayList(reporting.Report)) bool {
+    return countDiagnostics(reports.items).errors > 0;
 }
 
 fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
@@ -1251,7 +1220,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         module_env.* = try ModuleEnv.init(allocator, owned_source);
         errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        var result = CompilerStageData.init(allocator, module_env);
+        var result: CompilerStageData = .{ .module_env = module_env };
         result.owned_source = owned_source;
         return result;
     }
@@ -1268,7 +1237,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         module_env.* = try ModuleEnv.init(allocator, owned_source);
         errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        var result = CompilerStageData.init(allocator, module_env);
+        var result: CompilerStageData = .{ .module_env = module_env };
         result.owned_source = owned_source;
         return result;
     }
@@ -1289,7 +1258,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     try module_env.common.calcLineStarts(module_env.gpa);
     logDebug("compileSource: ModuleEnv initialized\n", .{});
 
-    var result = CompilerStageData.init(allocator, module_env);
+    var result: CompilerStageData = .{ .module_env = module_env };
     result.owned_source = stable_source;
 
     // Stage 1: Parse (includes tokenization)
@@ -1355,25 +1324,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         logDebug("compileSource: Formatted code complete\n", .{});
     }
 
-    // Collect tokenize diagnostics with additional error handling
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, null) catch {
-            // Log the error and continue processing other diagnostics
-            // This prevents crashes on malformed diagnostics or empty input
-            continue;
-        };
-        try result.tokenize_reports.append(report);
-    }
-
-    // Collect parse diagnostics with additional error handling
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, "main.roc") catch {
-            // Log the error and continue processing other diagnostics
-            // This prevents crashes on malformed diagnostics or empty input
-            continue;
-        };
-        try result.parse_reports.append(report);
-    }
+    try check.module_reports.appendTokenize(allocator, &result.tokenize_reports, parse_ast, null);
+    try check.module_reports.appendParse(allocator, &result.parse_reports, parse_ast, &module_env.common, "main.roc");
 
     if (parse_ast.source_rejected) return result;
 
@@ -1443,18 +1395,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     // Copy the modified AST back into the main result to ensure state consistency
     result.parse_ast = parse_ast;
 
-    // Collect canonicalization diagnostics
-    const diagnostics = try env.getDiagnostics();
-
-    // Process and store CAN diagnostics
-    for (diagnostics) |diagnostic| {
-        const report = env.diagnosticToReport(diagnostic, allocator, "main.roc") catch {
-            // Log the error and continue processing other diagnostics
-            // This prevents crashes on malformed diagnostics or empty input
-            continue;
-        };
-        try result.can_reports.append(report);
-    }
+    try check.module_reports.appendCanonicalize(allocator, &result.can_reports, env, 0, "main.roc");
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
@@ -1497,35 +1438,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         };
         logDebug("compileSource: Type checking complete\n", .{});
 
-        // Collect type checking problems and convert them to reports using ReportBuilder
-        var report_builder = check.report.ReportBuilder.init(
-            allocator,
-            result.module_env,
-            type_can_ir,
-            &solver.snapshots,
-            &solver.problems,
-            "main.roc",
-            imported_envs,
-            &solver.import_mapping,
-            &solver.regions,
-            null,
-        ) catch |err| {
-            // On allocation failure, return result with current reports
-            logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
-            return result;
-        };
-        defer report_builder.deinit();
-
-        for (solver.problems.problems.items) |type_problem| {
-            const report = report_builder.build(type_problem) catch |build_err| {
-                logDebug("compileSource: report_builder.build failed: {}\n", .{build_err});
-                return build_err;
-            };
-            result.type_reports.append(report) catch |append_err| {
-                logDebug("compileSource: append TYPE report failed: {}\n", .{append_err});
-                return append_err;
-            };
-        }
+        try check.module_reports.appendUnfinalizedTypes(allocator, &result.type_reports, type_can_ir, solver, "main.roc", imported_envs);
     }
 
     logDebug("compileSource: Compilation complete\n", .{});
@@ -2235,17 +2148,14 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
     var errors: u32 = 0;
     var warnings: u32 = 0;
     for (reports) |report| {
-        switch (report.severity) {
-            .warning => warnings += 1,
-            .runtime_error, .fatal => errors += 1,
-        }
+        if (report.severity.isError()) errors += 1 else warnings += 1;
     }
     return .{ .errors = errors, .warnings = warnings };
 }
 
 fn extractDiagnosticsFromReports(
     diagnostics: *std.array_list.Managed(Diagnostic),
-    reports: std.array_list.Managed(reporting.Report),
+    reports: std.ArrayList(reporting.Report),
 ) Allocator.Error!void {
     var count: usize = 0;
     const max_diagnostics = 100;
@@ -2262,13 +2172,8 @@ fn extractDiagnosticsFromReports(
         // lives as long as the borrowed title would have.
         const message = try report.addOwnedString(report.title);
         for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
-        const diagnostic_severity = switch (report.severity) {
-            .warning => DiagnosticSeverity.warning,
-            .runtime_error => DiagnosticSeverity.@"error",
-            .fatal => DiagnosticSeverity.@"error",
-        };
         try diagnostics.append(Diagnostic{
-            .severity = diagnostic_severity,
+            .severity = if (report.severity.isError()) .@"error" else .warning,
             .message = message,
             .region = DiagnosticRegion{
                 .start_line = region_info.start_line_idx,

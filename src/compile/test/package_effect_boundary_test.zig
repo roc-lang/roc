@@ -275,10 +275,7 @@ fn buildRootWithMain(
     var has_user_errors = false;
     for (drained) |module_reports| {
         for (module_reports.reports) |report| {
-            switch (report.severity) {
-                .warning => {},
-                .runtime_error, .fatal => has_user_errors = true,
-            }
+            if (report.severity.isError()) has_user_errors = true;
             try titles.append(gpa, try gpa.dupe(u8, report.title));
         }
     }
