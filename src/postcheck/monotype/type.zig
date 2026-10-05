@@ -358,6 +358,10 @@ pub const Store = struct {
     /// borrowed store never computes a digest, so it never touches these.
     digest_storage: DigestEngine.Storage = .{},
     read_sharing_prepared: bool = false,
+    /// How many rollbacks have run. A rollback truncates type ids that a
+    /// later construction reuses, so a cache kept outside the store and keyed
+    /// by type id is valid only while this is unchanged.
+    rollbacks: u64 = 0,
     read_sharing_coverage: ReadSharingQueries = .{},
 
     /// Workers declare their query needs so unrelated caches stay cold.
@@ -1168,6 +1172,7 @@ pub const Store = struct {
 
     fn restore(self: *Store, mark_: Mark) void {
         self.assertMutable();
+        self.rollbacks += 1;
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);

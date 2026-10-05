@@ -227,6 +227,14 @@ pub const Store = struct {
     /// cloned, or relocated.
     class_watch: ClassWatch = .{},
 
+    /// Advances whenever a write could make a variable-free type reach a
+    /// variable or an error: a class merged into a leaf from concrete
+    /// content, a poisoned occurrence, or a direct content rewrite or
+    /// redirect. While it is unchanged, a type the solver found
+    /// variable-free still is. Runtime-only: never serialized, cloned, or
+    /// relocated.
+    ground_epoch: u64 = 0,
+
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
     /// representative, or structural rank that existed before the probe began
@@ -816,13 +824,41 @@ pub const Store = struct {
     pub fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
+        self.noteContentRewrite(resolved.desc.content);
         try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Whether the solver can still refine or poison what this content
+    /// denotes: a variable, a field presence, or an error.
+    fn contentIsLeaf(content: Content) bool {
+        return switch (content) {
+            .flex, .rigid, .field_presence, .err => true,
+            .alias, .structure => false,
+        };
+    }
+
+    /// Note that a direct write replaces content `old`. Rewriting concrete
+    /// content can make a variable-free type reach a variable.
+    fn noteContentRewrite(self: *Self, old: Content) void {
+        if (!contentIsLeaf(old)) self.ground_epoch +%= 1;
+    }
+
+    /// Whether two descriptors agree on every flag an instantiated copy
+    /// carries over.
+    fn sameCopiedFlags(a: types.DescriptorFlags, b: types.DescriptorFlags) bool {
+        return a.empty_tag_union_is_default == b.empty_tag_union_is_default and
+            a.nominal_backing_structure == b.nominal_backing_structure;
+    }
+
+    pub fn groundEpoch(self: *const Self) u64 {
+        return self.ground_epoch;
     }
 
     /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
+        self.noteContentRewrite(resolved.desc.content);
         var desc = resolved.desc;
         desc.content = content;
         desc.flags.empty_tag_union_is_default = false;
@@ -834,6 +870,7 @@ pub const Store = struct {
     pub fn setVarToEmptyTagUnionDefault(self: *Self, target_var: Var) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
+        self.noteContentRewrite(resolved.desc.content);
         var desc = resolved.desc;
         desc.content = .{ .structure = .empty_tag_union };
         desc.flags.empty_tag_union_is_default = true;
@@ -880,6 +917,7 @@ pub const Store = struct {
             const root: u32 = @intFromEnum(resolved.var_);
             if (root < start or root >= end) continue;
             if (resolved.desc.flags.nominal_backing_structure) continue;
+            self.ground_epoch +%= 1;
             var desc = resolved.desc;
             desc.flags.nominal_backing_structure = true;
             try self.setDesc(resolved.desc_idx, desc);
@@ -967,6 +1005,7 @@ pub const Store = struct {
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
         const target_storage = self.resolveStorageRoot(target_var);
         const redirect_storage = self.resolveStorageRoot(redirect_to);
+        self.ground_epoch +%= 1;
         // Joining a class to itself is always an invalid invocation of a
         // solver-mutating rewrite, even if the two source vars differ.
         if (target_storage.storage_var == redirect_storage.storage_var) {
@@ -1726,6 +1765,13 @@ pub const Store = struct {
         // an opened nominal backing component is that component.
         merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
             b_data.desc.flags.nominal_backing_structure;
+        if ((contentIsLeaf(merged_desc.content) and
+            (!contentIsLeaf(a_data.desc.content) or !contentIsLeaf(b_data.desc.content))) or
+            !sameCopiedFlags(merged_desc.flags, a_data.desc.flags) or
+            !sameCopiedFlags(merged_desc.flags, b_data.desc.flags))
+        {
+            self.ground_epoch +%= 1;
+        }
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);
@@ -1752,6 +1798,7 @@ pub const Store = struct {
     /// class's checked representative owns the mismatch, so its whole class
     /// joins the error class.
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
+        self.ground_epoch +%= 1;
         var a = self.resolveStorageRoot(a_var);
         var b = self.resolveStorageRoot(b_var);
         // Poisoning replaces the content, not the rejection history: a class
@@ -1855,6 +1902,7 @@ pub const Store = struct {
         switch (slot) {
             .root => |desc_idx| {
                 var desc = self.descs.get(desc_idx);
+                self.noteContentRewrite(desc.content);
                 desc.content = content;
                 try self.setDesc(desc_idx, desc);
             },

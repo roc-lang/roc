@@ -68,17 +68,23 @@ pub const Memo = struct {
     /// The one-step unfolding of every cyclic group position rendered so far,
     /// mapped to that position's digest.
     unfoldings: std.AutoHashMap(Identity, Identity),
+    /// Reduction node maps kept across reductions. A fresh map spanning old
+    /// and new variables would allocate and clear a chunk table for that
+    /// whole span on every reduction.
+    node_maps: collections.DenseMapPool(SolvedType.TypeVarId, u32),
 
     pub fn init(allocator: Allocator) Memo {
         return .{
             .digests = collections.DenseMap(SolvedType.TypeVarId, Identity).init(allocator),
             .unfoldings = std.AutoHashMap(Identity, Identity).init(allocator),
+            .node_maps = collections.DenseMapPool(SolvedType.TypeVarId, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *Memo) void {
         self.digests.deinit();
         self.unfoldings.deinit();
+        self.node_maps.deinit();
     }
 };
 
@@ -201,13 +207,13 @@ const Engine = struct {
         return .{
             .renderer = renderer,
             .gpa = renderer.allocator,
-            .node_of_ty = collections.DenseMap(SolvedType.TypeVarId, u32).init(renderer.allocator),
+            .node_of_ty = renderer.memo.node_maps.acquire(),
         };
     }
 
     fn deinit(self: *Engine) void {
         self.nodes.deinit(self.gpa);
-        self.node_of_ty.deinit();
+        self.renderer.memo.node_maps.release(&self.node_of_ty);
         self.items.deinit(self.gpa);
         self.children.deinit(self.gpa);
         self.bytes.deinit(self.gpa);

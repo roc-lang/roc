@@ -2514,7 +2514,6 @@ fn hostedExternAbiViolationMessage(
     ) catch "a hosted extern was specialized at a type other than the one its host ABI declares";
 }
 
-
 fn relateCheckedNodeToMono(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!void {
     _ = try checkedMonoRequestNode(graph, checked_node, mono_node, .exact);
 }
@@ -4210,6 +4209,13 @@ const Builder = struct {
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
+    /// `monoTypeMentionsFunction`'s answers, valid while the program type
+    /// store's rollback count equals `function_mentions_rollbacks`.
+    function_mentions: collections.DenseMap(Type.TypeId, bool),
+    function_mentions_rollbacks: u64 = 0,
+    /// The types on `monoTypeMentionsFunction`'s current walk path and those
+    /// its walk finished open, kept for its capacity between walks.
+    function_scan_path: collections.DenseMap(Type.TypeId, void),
     /// Resolved copies of symbolic callable evidence vectors, by callee
     /// template. Repeated requests over the same open leaves resolve every
     /// slot identically, so they read an equal copy back instead of
@@ -4402,6 +4408,8 @@ const Builder = struct {
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
+            .function_mentions = collections.DenseMap(Type.TypeId, bool).init(allocator),
+            .function_scan_path = collections.DenseMap(Type.TypeId, void).init(allocator),
             .resolved_callable_vectors = std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
@@ -4635,6 +4643,8 @@ const Builder = struct {
         self.reassigned_binder_pool.deinit(self.allocator);
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        self.function_mentions.deinit();
+        self.function_scan_path.deinit();
         var resolved_vectors = self.resolved_callable_vectors.valueIterator();
         while (resolved_vectors.next()) |vectors| vectors.deinit(self.allocator);
         self.resolved_callable_vectors.deinit();
@@ -6494,34 +6504,122 @@ const Builder = struct {
     /// erased callable anywhere, nominal backings included.
     fn monoFnTypeMentionsFunction(self: *Builder, fn_ty: Type.TypeId) Allocator.Error!bool {
         const types = self.program.types.view();
-        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(Type.TypeId).empty;
-        defer stack.deinit(self.allocator);
         switch (types.get(fn_ty)) {
             .func => |func| {
-                try stack.appendSlice(self.allocator, types.span(func.args));
-                try stack.append(self.allocator, func.ret);
+                for (types.span(func.args)) |arg| if (try self.monoTypeMentionsFunction(arg)) return true;
+                return try self.monoTypeMentionsFunction(func.ret);
             },
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => try stack.append(self.allocator, fn_ty),
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return try self.monoTypeMentionsFunction(fn_ty),
         }
-        while (stack.pop()) |ty| {
-            const gop = try visited.getOrPut(ty);
-            if (gop.found_existing) continue;
-            switch (types.get(ty)) {
-                .primitive, .zst => {},
-                .erased, .func => return true,
-                .named => |named| {
-                    try stack.appendSlice(self.allocator, types.span(named.args));
-                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
-                },
-                .record => |span| for (types.fieldSpan(span)) |field| try stack.append(self.allocator, field.ty),
-                .tuple => |span| try stack.appendSlice(self.allocator, types.span(span)),
-                .tag_union => |span| for (types.tagSpan(span)) |tag| try stack.appendSlice(self.allocator, types.span(tag.payloads)),
-                .list, .box => |elem| try stack.append(self.allocator, elem),
+    }
+
+    /// Whether a `func` or `erased` type is reachable from `root`. Answers
+    /// persist in `function_mentions` across requests, so a later scan stops
+    /// at every type an earlier one answered instead of walking the same
+    /// nested types again.
+    fn monoTypeMentionsFunction(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
+        if (self.function_mentions_rollbacks != self.program.types.rollbacks) {
+            self.function_mentions.clearRetainingCapacity();
+            self.function_mentions_rollbacks = self.program.types.rollbacks;
+        }
+        if (self.function_mentions.get(root)) |known| return known;
+        if (functionContent(self.program.types.view().get(root))) {
+            try self.function_mentions.put(root, true);
+            return true;
+        }
+
+        // A depth-first walk. A type whose walk finishes without finding a
+        // function is function-free unless it reached a type still on the
+        // walk's path (a cycle), whose answer is not known yet; such a type
+        // is `open` and is answered only when the whole walk finishes.
+        const Frame = struct {
+            ty: Type.TypeId,
+            /// This type's children are `children[start..end]`.
+            start: usize,
+            next: usize,
+            end: usize,
+            open: bool = false,
+        };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(self.allocator);
+        var children = std.ArrayList(Type.TypeId).empty;
+        defer children.deinit(self.allocator);
+        const on_path = &self.function_scan_path;
+        on_path.clearRetainingCapacity();
+        defer on_path.clearRetainingCapacity();
+        var open_finished = std.ArrayList(Type.TypeId).empty;
+        defer open_finished.deinit(self.allocator);
+
+        try self.pushFunctionMentionFrame(Frame, &frames, &children, on_path, root);
+        while (frames.items.len != 0) {
+            const top = &frames.items[frames.items.len - 1];
+            if (top.next < top.end) {
+                const child = children.items[top.next];
+                top.next += 1;
+                const found = if (self.function_mentions.get(child)) |known|
+                    known
+                else
+                    functionContent(self.program.types.view().get(child));
+                if (found) {
+                    try self.function_mentions.put(child, true);
+                    for (frames.items) |frame| try self.function_mentions.put(frame.ty, true);
+                    return true;
+                }
+                if (self.function_mentions.contains(child)) continue;
+                // On the path, or finished open earlier in this walk.
+                if (on_path.contains(child)) {
+                    top.open = true;
+                    continue;
+                }
+                try self.pushFunctionMentionFrame(Frame, &frames, &children, on_path, child);
+                continue;
+            }
+            const finished = frames.pop().?;
+            children.shrinkRetainingCapacity(finished.start);
+            if (finished.open) {
+                try open_finished.append(self.allocator, finished.ty);
+                if (frames.items.len != 0) frames.items[frames.items.len - 1].open = true;
+            } else {
+                _ = on_path.remove(finished.ty);
+                try self.function_mentions.put(finished.ty, false);
             }
         }
+        // The walk from `root` found no function anywhere, so every type it
+        // left open is function-free too.
+        for (open_finished.items) |ty| try self.function_mentions.put(ty, false);
         return false;
+    }
+
+    fn functionContent(content: Type.Content) bool {
+        return switch (content) {
+            .erased, .func => true,
+            .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => false,
+        };
+    }
+
+    fn pushFunctionMentionFrame(
+        self: *Builder,
+        comptime Frame: type,
+        frames: *std.ArrayList(Frame),
+        children: *std.ArrayList(Type.TypeId),
+        on_path: *collections.DenseMap(Type.TypeId, void),
+        ty: Type.TypeId,
+    ) Allocator.Error!void {
+        const types = self.program.types.view();
+        try on_path.put(ty, {});
+        const start = children.items.len;
+        switch (types.get(ty)) {
+            .primitive, .zst, .erased, .func => {},
+            .named => |named| {
+                try children.appendSlice(self.allocator, types.span(named.args));
+                if (named.backing) |backing| try children.append(self.allocator, backing.ty);
+            },
+            .record => |span| for (types.fieldSpan(span)) |field| try children.append(self.allocator, field.ty),
+            .tuple => |span| try children.appendSlice(self.allocator, types.span(span)),
+            .tag_union => |span| for (types.tagSpan(span)) |tag| try children.appendSlice(self.allocator, types.span(tag.payloads)),
+            .list, .box => |elem| try children.append(self.allocator, elem),
+        }
+        try frames.append(self.allocator, .{ .ty = ty, .start = start, .next = start, .end = children.items.len });
     }
 
     /// Everything a result-row widening adapter needs beyond the reservation
@@ -26595,7 +26693,8 @@ const BodyContext = struct {
                 },
                 .named,
                 .unresolved,
-                .redirect, .leaf,
+                .redirect,
+                .leaf,
                 => .mismatch,
             };
         };

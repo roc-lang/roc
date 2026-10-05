@@ -1260,7 +1260,8 @@ pub const InterfaceConstraints = struct {
                             return .{ .value = false };
                         };
                     },
-                    .redirect, .leaf,
+                    .redirect,
+                    .leaf,
                     .unresolved,
                     .primitive,
                     .list,
@@ -1424,7 +1425,8 @@ pub const InterfaceConstraints = struct {
                             return false;
                         };
                     },
-                    .redirect, .leaf,
+                    .redirect,
+                    .leaf,
                     .primitive,
                     .list,
                     .box,
@@ -2196,6 +2198,9 @@ pub const InstGraph = struct {
     /// Begin an unrelated specialization while retaining this lane's allocated
     /// graph capacity. Every prior node identity and snapshot becomes invalid;
     /// the cumulative destination type and name stores remain unchanged.
+    /// Slots a reset keeps in a hash index whose clear touches every slot.
+    const reset_retained_capacity = 4096;
+
     pub fn reset(self: *InstGraph) void {
         self.relation_state = .producing;
         self.diagnostics = null;
@@ -2221,7 +2226,7 @@ pub const InstGraph = struct {
         self.leaf_alias_origins.clearRetainingCapacity();
         self.imported_monos.clearRetainingCapacity();
         self.class_finished_monos.clearRetainingCapacity();
-        self.nominal_backing_index.clearRetainingCapacity();
+        self.nominal_backing_index.clearRetainingCapacityAtMost(reset_retained_capacity);
         self.nominal_backing_instances.clearRetainingCapacity();
         var backing_occurrences = self.nominal_backings_by_root.valueIterator();
         while (backing_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
@@ -2247,7 +2252,7 @@ pub const InstGraph = struct {
         self.structure_epoch = 0;
         self.generated_private_nodes = 0;
         self.generated_iterator_nodes = 0;
-        self.generated_iterator_index.clearRetainingCapacity();
+        self.generated_iterator_index.clearRetainingCapacityAtMost(reset_retained_capacity);
         self.generated_iterator_entries.clearRetainingCapacity();
         var iterator_occurrences = self.generated_iterators_by_root.valueIterator();
         while (iterator_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
@@ -3761,9 +3766,10 @@ pub const InstGraph = struct {
 
     /// `content` of a class root.
     fn rootContent(self: *InstGraph, root: NodeId) Allocator.Error!InstNode {
-        return switch (self.nodes.items[@intFromEnum(root)]) {
+        const root_content = self.nodes.items[@intFromEnum(root)];
+        return switch (root_content) {
             .leaf => |leaf| try self.expandLeaf(root, leaf),
-            else => |root_content| root_content,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => root_content,
         };
     }
 
@@ -3772,7 +3778,7 @@ pub const InstGraph = struct {
     pub fn leafType(self: *InstGraph, id: NodeId) ?Type.TypeId {
         return switch (self.nodes.items[@intFromEnum(self.find(id))]) {
             .leaf => |leaf| leaf.ty,
-            else => null,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
         };
     }
 
@@ -4313,7 +4319,8 @@ pub const InstGraph = struct {
                 .empty_tag_union => return kind == .tag_union,
                 .empty_record => return kind == .record,
                 .unresolved => return false,
-                .redirect, .leaf,
+                .redirect,
+                .leaf,
                 .primitive,
                 .list,
                 .box,
@@ -5895,7 +5902,7 @@ pub const InstGraph = struct {
         return switch (node_content) {
             .named => true,
             .leaf => |leaf| self.types.get(leaf.ty) == .named,
-            else => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
     }
 
@@ -6025,7 +6032,8 @@ pub const InstGraph = struct {
                     }
                 }
             },
-            .redirect, .leaf,
+            .redirect,
+            .leaf,
             .unresolved,
             .primitive,
             .empty_tag_union,
@@ -6155,7 +6163,7 @@ pub const InstGraph = struct {
         if (other != .unresolved) return false;
         return switch (self.types.get(leaf.ty)) {
             .named => |named| named.kind != .alias,
-            else => true,
+            .primitive, .zst, .erased, .func, .record, .tuple, .tag_union, .list, .box => true,
         };
     }
 
@@ -6166,9 +6174,9 @@ pub const InstGraph = struct {
             .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
             .leaf => |leaf| switch (self.types.get(leaf.ty)) {
                 .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
-                else => false,
+                .primitive, .zst, .erased, .func, .record, .tuple, .tag_union, .list, .box => false,
             },
-            else => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
     }
 
@@ -6666,7 +6674,8 @@ pub const InstGraph = struct {
                 .record => true,
                 .tag_union => Common.invariant("tag row terminated in an empty record extension"),
             },
-            .redirect, .leaf,
+            .redirect,
+            .leaf,
             .primitive,
             .list,
             .box,
@@ -6809,7 +6818,8 @@ pub const InstGraph = struct {
                     ext = self.find(tail.ext);
                 },
                 .unresolved, .empty_tag_union => break,
-                .redirect, .leaf,
+                .redirect,
+                .leaf,
                 .primitive,
                 .list,
                 .box,
@@ -6894,7 +6904,8 @@ pub const InstGraph = struct {
                     ext = self.find(backing.node);
                 },
                 .unresolved, .empty_record => break,
-                .redirect, .leaf,
+                .redirect,
+                .leaf,
                 .primitive,
                 .list,
                 .box,

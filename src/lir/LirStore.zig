@@ -53,7 +53,10 @@ const Self = @This();
 /// global-sized index. Sorting before borrowing preserves overlapping spans.
 fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
     return struct {
-        indices: collections.DenseMap(u32, u32),
+        /// Hashed rather than dense: a procedure's rows span from where
+        /// its body was first lowered to wherever earlier passes appended
+        /// rewritten rows, which can be most of the program's id range.
+        indices: std.AutoHashMap(u32, u32),
         ids: std.ArrayList(u32) = .empty,
         rows: GuardedList.List(T, "LirStore." ++ field) = .empty,
         dirty: std.ArrayList(bool) = .empty,
@@ -62,7 +65,7 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
         const Column = @This();
 
         fn init(allocator: Allocator) Column {
-            return .{ .indices = collections.DenseMap(u32, u32).init(allocator) };
+            return .{ .indices = std.AutoHashMap(u32, u32).init(allocator) };
         }
 
         fn deinit(self: *Column, allocator: Allocator) void {
