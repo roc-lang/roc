@@ -5,6 +5,7 @@
 //! caller's responsibility.
 
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const coff = @import("object/coff.zig");
@@ -85,7 +86,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         for (functions) |function| {
             if (function.start_offset >= function.end_offset) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
+                    base.invariant("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
                 }
                 unreachable;
             }
@@ -123,7 +124,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         for (sorted_functions, 0..) |function, i| {
             if (function.start_offset >= function.end_offset or function.end_offset > code_size or function.start_offset < previous_end) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
+                    base.invariant("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
                 }
                 unreachable;
             }

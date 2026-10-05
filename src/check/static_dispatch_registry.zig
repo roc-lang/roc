@@ -53,7 +53,7 @@ fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Va
     const tag = std.meta.activeTag(stmt);
     if (tag == .s_type_var_alias) return ModuleEnv.varFrom(stmt.s_type_var_alias.type_var_anno);
     if (tag == .s_alias_decl) return ModuleEnv.varFrom(stmt_idx);
-    @panic("type dispatch owner statement was not a type-var alias or type alias");
+    base.invariant("{s}", .{"type dispatch owner statement was not a type-var alias or type alias"});
 }
 
 fn typeDispatchCallDispatcherVar(module: TypedCIR.Module, owner: CIR.TypeDispatchOwner) Var {
@@ -710,7 +710,7 @@ pub const CheckedMethodLookup = union(enum) {
     pub fn requireTarget(self: CheckedMethodLookup, comptime context: []const u8) MethodTarget {
         return switch (self) {
             .target => |target| target,
-            .rejected => std.debug.panic(
+            .rejected => base.invariant(
                 "checked method lookup invariant violated: rejected declaration reached " ++ context,
                 .{},
             ),
@@ -788,7 +788,7 @@ pub const MethodRegistry = struct {
                 std.debug.panic("checked static dispatch registry invariant violated: rejected declaration was recorded as an inspect override", .{}),
             .callable_ty = callable_ty,
             .evidence = found.inspect_evidence orelse
-                std.debug.panic("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
+                base.invariant("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
         };
     }
 
@@ -815,7 +815,7 @@ pub const MethodRegistry = struct {
         const module_idx = module.moduleIndex();
         if (module_idx != local_templates.module_idx) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked static dispatch registry invariant violated: template lookup module {d} does not match module {d}",
                     .{ local_templates.module_idx, module_idx },
                 );
@@ -830,7 +830,7 @@ pub const MethodRegistry = struct {
         for (module.methodDefEntries()) |entry| {
             const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
                         .{ @intFromEnum(entry.key.owner), entry.key.method_ident_bits },
                     );
@@ -999,7 +999,7 @@ fn methodBindingExpr(
     const raw_node = @intFromEnum(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
                 .{raw_node},
             );
@@ -1036,7 +1036,7 @@ fn localProcedureTargetForMethodBinding(
     const raw_node = @intFromEnum(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
                 .{raw_node},
             );
@@ -1055,7 +1055,7 @@ fn localProcedureTargetForMethodBinding(
     const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
     const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
                 .{@intFromEnum(decl.pattern)},
             );
@@ -1065,7 +1065,7 @@ fn localProcedureTargetForMethodBinding(
 
     const context_anchor = checked_bodies.statementIdForSource(owner_statement) orelse {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
                 .{@intFromEnum(owner_statement)},
             );
@@ -1218,7 +1218,7 @@ fn methodOwnerForRegistryEntry(
 
     const identity_hash = owner_env.contentIdentityHash() orelse {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch registry invariant violated: module '{s}' has no content identity",
                 .{owner_env.module_name},
             );
@@ -1233,7 +1233,7 @@ fn methodOwnerForRegistryEntry(
         stmt.s_alias_decl.header
     else {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
                 .{@intFromEnum(owner.owner)},
             );
@@ -1264,7 +1264,7 @@ fn methodOwnerEnvForRegistryEntry(
     }
 
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic(
+        base.invariant(
             "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
             .{ @intFromEnum(owner.owner), module_env.module_name },
         );
@@ -1279,7 +1279,7 @@ fn methodOwnerIdentityHashForRegistryEntry(
     const owner_identity = owner.moduleIdentity() orelse {
         return module_env.contentIdentityHash() orelse {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
+                base.invariant(
                     "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
                     .{module_env.module_name},
                 );
@@ -1373,7 +1373,7 @@ fn assertMethodRegistryKeysUnique(entries: []const MethodRegistryEntry) void {
     while (i < entries.len) : (i += 1) {
         if (methodKeyOrder(entries[i - 1].key, entries[i].key) != .eq) continue;
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch registry invariant violated: duplicate method registry key", .{});
+            base.invariant("checked static dispatch registry invariant violated: duplicate method registry key", .{});
         }
         unreachable;
     }
@@ -2434,7 +2434,7 @@ pub const StaticDispatchPlanTable = struct {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
                 .unresolved => if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("unresolved numeral dispatch plan reached checked publication", .{});
+                    base.invariant("unresolved numeral dispatch plan reached checked publication", .{});
                 } else unreachable,
             }
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
@@ -2446,7 +2446,7 @@ pub const StaticDispatchPlanTable = struct {
             if (checked_expr_tag == .runtime_error) continue;
             if (checked_expr_tag != .numeral) {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
                         .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
                     );
@@ -2455,7 +2455,7 @@ pub const StaticDispatchPlanTable = struct {
             }
             const literal = module_env.numeralLiteralForNode(node) orelse {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
                         .{numeral_plan.node_idx},
                     );
@@ -2464,7 +2464,7 @@ pub const StaticDispatchPlanTable = struct {
             };
             if (!literal.isMaterialized()) {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch invariant violated: runtime from_numeral plan {d} has an unmaterialized literal",
                         .{numeral_plan.node_idx},
                     );
@@ -2497,7 +2497,7 @@ pub const StaticDispatchPlanTable = struct {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
                 .unresolved => if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("unresolved quote dispatch plan reached checked publication", .{});
+                    base.invariant("unresolved quote dispatch plan reached checked publication", .{});
                 } else unreachable,
             }
             const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
@@ -2509,7 +2509,7 @@ pub const StaticDispatchPlanTable = struct {
             if (checked_expr_tag == .runtime_error) continue;
             if (checked_expr_tag == .str or checked_expr_tag == .str_segment) {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
                         .{quote_plan.node_idx},
                     );
@@ -2518,7 +2518,7 @@ pub const StaticDispatchPlanTable = struct {
             }
             if (checked_expr_tag != .str_from_quote) {
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
                         .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
                     );
@@ -2706,7 +2706,7 @@ pub const StaticDispatchPlanTable = struct {
             .resolved => |resolved| resolved,
             .from_callable => {
                 if (builtin_config.mode == .Debug) {
-                    std.debug.panic("callable-derived target evidence has no resolved checked-evidence span", .{});
+                    base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
                 }
                 unreachable;
             },
@@ -2719,19 +2719,19 @@ pub const StaticDispatchPlanTable = struct {
             .callable => |node_id| self.evidenceNode(node_id),
             .pending => {
                 if (builtin_config.mode == .Debug) {
-                    std.debug.panic("unlinked generated codec call had no checked evidence", .{});
+                    base.invariant("unlinked generated codec call had no checked evidence", .{});
                 }
                 unreachable;
             },
             .checked_error => {
                 if (builtin_config.mode == .Debug) {
-                    std.debug.panic("rejected generated codec call had no checked evidence", .{});
+                    base.invariant("rejected generated codec call had no checked evidence", .{});
                 }
                 unreachable;
             },
             .structural => {
                 if (builtin_config.mode == .Debug) {
-                    std.debug.panic("structural generated codec call had no callable evidence", .{});
+                    base.invariant("structural generated codec call had no callable evidence", .{});
                 }
                 unreachable;
             },
@@ -2891,7 +2891,7 @@ const StaticDispatchConstraintIndex = struct {
                 const existing = index.constraints[entry.value_ptr.*];
                 if (staticDispatchConstraintsEquivalent(existing, constraint)) continue;
                 if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "checked static dispatch constraint invariant violated: duplicate fn_var {d}; existing idx={d} name={s} origin={s} negated={} new idx={d} name={s} origin={s} negated={}",
                         .{
                             @intFromEnum(constraint.fn_var),
@@ -3027,7 +3027,7 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     const raw = @intFromEnum(ty);
     if (raw >= checked_types.store.payloadCount()) {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
+            base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
         }
         unreachable;
     }
@@ -3106,7 +3106,7 @@ fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedT
         if (std.meta.activeTag(payload) != .alias) return current;
         if (remaining == 0) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+                base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
             }
             unreachable;
         }
@@ -3129,7 +3129,7 @@ pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?Met
         const raw = @intFromEnum(current);
         if (raw >= checked_types.store.payloads.items.len) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
+                base.invariant("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
             }
             unreachable;
         }
@@ -3137,7 +3137,7 @@ pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?Met
         if (std.meta.activeTag(payload) != .alias) return methodOwnerForCheckedPayload(payload);
         if (remaining == 0) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+                base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
             }
             unreachable;
         }
@@ -3258,7 +3258,7 @@ fn checkedTypeIdForVar(
 ) Allocator.Error!CheckedTypeId {
     return checked_types.rootForSourceVar(module, var_) orelse {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});
+            base.invariant("checked static dispatch invariant violated: dispatch type root was not published", .{});
         }
         unreachable;
     };
@@ -3288,7 +3288,7 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {
     return checked_bodies.exprIdForSource(expr) orelse {
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
                 .{@intFromEnum(expr)},
             );

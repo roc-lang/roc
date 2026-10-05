@@ -47,6 +47,7 @@
 //! ARC-stage-local and is dropped when insertion ends.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -2646,7 +2647,7 @@ fn noteBorrowDef(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void
     const source_index = solver.domain.indexOf(source) orelse {
         if (solver.domain.indexOf(target) != null) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
+                invariant(
                     "ARC borrow source was outside the ARC-local domain: target={d} source={d} target_rc={} source_rc={}",
                     .{
                         @intFromEnum(target),
@@ -6852,7 +6853,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
 }
 
 fn solveInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .Debug) invariant(message, .{});
     unreachable;
 }
 

@@ -7,6 +7,7 @@
 //! receives a var checking must have recorded, with the invariant it states.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const can = @import("can");
 const types = @import("types");
 
@@ -47,7 +48,7 @@ pub fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
         .s_where_alias_decl,
         .s_type_anno,
         .s_runtime_error,
-        => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+        => invariant("{s}", .{"type dispatch owner statement was not a type-var alias or type alias"}),
     };
 }
 

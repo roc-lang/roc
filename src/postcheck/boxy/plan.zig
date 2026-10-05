@@ -6,6 +6,7 @@
 //! arguments. It only consumes checked type data.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
@@ -7255,7 +7256,7 @@ const Builder = struct {
                     }
                     const ext = extension orelse {
                         if (@import("builtin").mode == .Debug) {
-                            std.debug.panic(
+                            base.invariant(
                                 "boxy plan invariant violated: static tag {s} was absent from {s} representation {d} for checked type {d}",
                                 .{ tag.tag_name, @tagName(rep.kind), @intFromEnum(rep_id), @intFromEnum(rep.source_type.ty) },
                             );
@@ -14662,12 +14663,12 @@ const Builder = struct {
         caller: ?WorkerPlanId,
         hidden_dict_args: Span,
     ) Allocator.Error!ContextualizedCall {
-        const base = self.plan.workers.items[@intFromEnum(callee)].context_base orelse callee;
+        const generic_worker = self.plan.workers.items[@intFromEnum(callee)].context_base orelse callee;
         var collected = ContextInputs{};
         defer collected.deinit(self.allocator);
         try self.collectContextInputs(caller, hidden_dict_args, &collected);
-        if (collected.inputs.items.len == 0) return .{ .worker = base };
-        const worker = try self.ensureContextWorker(base, collected.inputs.items);
+        if (collected.inputs.items.len == 0) return .{ .worker = generic_worker };
+        const worker = try self.ensureContextWorker(generic_worker, collected.inputs.items);
         const start: u32 = @intCast(self.plan.context_args.items.len);
         try self.plan.context_args.appendSlice(self.allocator, collected.args.items);
         return .{ .worker = worker, .args = .{ .start = start, .len = @intCast(collected.args.items.len) } };
@@ -14683,13 +14684,13 @@ const Builder = struct {
         caller: ?WorkerPlanId,
         hidden_dict_args: Span,
     ) Allocator.Error!ContextualizedCall {
-        const base = self.plan.workers.items[@intFromEnum(callee)].context_base orelse callee;
-        if (!self.workerIsCapturingLocalProc(base)) return try self.contextualizeCall(callee, caller, hidden_dict_args);
+        const generic_worker = self.plan.workers.items[@intFromEnum(callee)].context_base orelse callee;
+        if (!self.workerIsCapturingLocalProc(generic_worker)) return try self.contextualizeCall(callee, caller, hidden_dict_args);
         var collected = ContextInputs{};
         defer collected.deinit(self.allocator);
         try self.collectContextInputs(caller, hidden_dict_args, &collected);
-        try self.collectLocalProcInput(caller, self.plan.workers.items[@intFromEnum(base)].source.nested_expr, &collected);
-        const worker = try self.ensureContextWorker(base, collected.inputs.items);
+        try self.collectLocalProcInput(caller, self.plan.workers.items[@intFromEnum(generic_worker)].source.nested_expr, &collected);
+        const worker = try self.ensureContextWorker(generic_worker, collected.inputs.items);
         const start: u32 = @intCast(self.plan.context_args.items.len);
         try self.plan.context_args.appendSlice(self.allocator, collected.args.items);
         return .{ .worker = worker, .args = .{ .start = start, .len = @intCast(collected.args.items.len) } };
@@ -14862,13 +14863,13 @@ const Builder = struct {
         return true;
     }
 
-    /// The specialization of `base` that receives `inputs`, planning its body
+    /// The specialization of `generic_worker` that receives `inputs`, planning its body
     /// under that specialization the first time.
-    fn ensureContextWorker(self: *Builder, base: WorkerPlanId, inputs: []const ContextInput) Allocator.Error!WorkerPlanId {
+    fn ensureContextWorker(self: *Builder, generic_worker: WorkerPlanId, inputs: []const ContextInput) Allocator.Error!WorkerPlanId {
         for (self.plan.workers.items) |worker| {
-            if (worker.context_base == base and self.contextInputsEql(worker.context, inputs)) return worker.id;
+            if (worker.context_base == generic_worker and self.contextInputsEql(worker.context, inputs)) return worker.id;
         }
-        const base_worker = self.plan.workers.items[@intFromEnum(base)];
+        const base_worker = self.plan.workers.items[@intFromEnum(generic_worker)];
         switch (base_worker.source) {
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => {},
             .generated_codec, .generated_field_iterator => boxyPlanInvariant("a generated worker received a dictionary needing a frame's context"),
@@ -14877,13 +14878,13 @@ const Builder = struct {
         try self.plan.context_inputs.appendSlice(self.allocator, inputs);
         const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
         // The specialization plans the same body, so it starts from its
-        // base's hidden inputs; later planning passes recompute both alike.
+        // the generic worker's hidden inputs; later planning passes recompute both alike.
         var specialized = base_worker;
         specialized.id = worker_id;
         specialized.root_request = null;
         specialized.erased_captures = .{};
         specialized.context = .{ .start = start, .len = @intCast(inputs.len) };
-        specialized.context_base = base;
+        specialized.context_base = generic_worker;
         try self.plan.workers.append(self.allocator, specialized);
         // Each structural input is a derivation this worker performs.
         for (inputs) |input| switch (input.key) {
@@ -21931,7 +21932,7 @@ fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {
 
 fn boxyPlanInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("boxy plan invariant violated: {s}", .{message});
+        base.invariant("boxy plan invariant violated: {s}", .{message});
     }
     unreachable;
 }

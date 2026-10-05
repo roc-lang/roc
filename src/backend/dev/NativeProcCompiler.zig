@@ -111,7 +111,7 @@ pub const Retained = struct {
 fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.Error {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        else => std.debug.panic("native fragment compiler invariant: {s}", .{@errorName(err)}),
+        else => base.invariant("native fragment compiler invariant: {s}", .{@errorName(err)}),
     };
 }
 

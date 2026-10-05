@@ -57,6 +57,7 @@
 //! - `-Dprint-ir-after-trmc=true`: full IR dump of each transformed proc.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
@@ -996,7 +997,7 @@ const Detection = struct {
                 .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(&candidate)) {
-                std.debug.panic(
+                invariant(
                     "TRMC invariant violated: candidate reached transform after touching a shared rewrite path",
                     .{},
                 );

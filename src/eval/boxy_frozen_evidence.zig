@@ -1,6 +1,7 @@
 //! Match a materialized CTFE environment to its producer's closed recipe.
 //! Traversal follows explicit descriptor and dictionary references only.
 const std = @import("std");
+const invariant = @import("base").invariant;
 const lir = @import("lir");
 const Program = lir.Program;
 const Runtime = @import("boxy_runtime.zig").BoxyRuntime;
@@ -59,7 +60,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyTypeDesc(id),
             .runtime => |id| self.runtime.runtime_boxy_type_descs.items[id],
-            .local, .dict_method_arg, .dict_method_hidden => @panic("materialized freeze witness retained frame evidence"),
+            .local, .dict_method_arg, .dict_method_hidden => invariant("{s}", .{"materialized freeze witness retained frame evidence"}),
         };
     }
 
@@ -67,7 +68,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyDict(id),
             .runtime => |id| self.runtime.runtime_boxy_dicts.dicts.items[id],
-            .local => @panic("materialized freeze witness retained a dictionary local"),
+            .local => invariant("{s}", .{"materialized freeze witness retained a dictionary local"}),
         };
     }
 
@@ -153,7 +154,7 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = true };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        if (a.template or b.template) @panic("frozen dictionary witness retained frame captures");
+        if (a.template or b.template) invariant("{s}", .{"frozen dictionary witness retained frame captures"});
         if (a.method_slots.len != b.method_slots.len) return false;
         for (self.runtime.requireBoxyMethodSlots(a.method_slots), self.runtime.requireBoxyMethodSlots(b.method_slots)) |left, right| {
             if (left.present != right.present) return false;

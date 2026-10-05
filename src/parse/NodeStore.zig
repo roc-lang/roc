@@ -662,7 +662,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.region = default_app.region;
         },
         .malformed => {
-            @panic("Use addMalformed instead");
+            base.invariant("{s}", .{"Use addMalformed instead"});
         },
     }
 
@@ -907,7 +907,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.rhs = fi.type_tok | (if (fi.is_bytes) @as(u32, 1) << 31 else 0);
         },
         .malformed => {
-            @panic("Use addMalformed instead");
+            base.invariant("{s}", .{"Use addMalformed instead"});
         },
     }
     const nid = try store.nodes.append(store.gpa, node);
@@ -1037,7 +1037,7 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.data.lhs = @intFromEnum(a.pattern);
         },
         .malformed => {
-            @panic("Use addMalformed instead");
+            base.invariant("{s}", .{"Use addMalformed instead"});
         },
     }
     const nid = try store.nodes.append(store.gpa, node);
@@ -1339,7 +1339,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.region = e.region;
         },
         .malformed => {
-            @panic("Use addMalformed instead");
+            base.invariant("{s}", .{"Use addMalformed instead"});
         },
     }
     const nid = try store.nodes.append(store.gpa, node);
@@ -1494,7 +1494,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.data.lhs = @intFromEnum(c.alias);
         },
         .malformed => {
-            @panic("Use addMalformed instead");
+            base.invariant("{s}", .{"Use addMalformed instead"});
         },
     }
 
@@ -1634,7 +1634,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.data.lhs = @intFromEnum(p.anno);
         },
         .malformed => {
-            @panic("Use addMalformed instead");
+            base.invariant("{s}", .{"Use addMalformed instead"});
         },
     }
 
@@ -1777,7 +1777,7 @@ pub fn fieldAccessContainsOptional(store: *const NodeStore, expr_idx: AST.Expr.I
 pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     const tag = narrowNodeTag(HeaderNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
         .app_header => {
             const ed_start = node.data.rhs;
@@ -1874,7 +1874,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
 pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
         .exposed_item_lower => {
             if (node.data.rhs == 2) {
@@ -1950,7 +1950,7 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
 pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(statement_idx)));
     const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
         .decl => {
             return .{ .decl = .{
@@ -2160,7 +2160,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
 pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(pattern_idx)));
     const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
         .ident_patt => {
             return .{ .ident = .{
@@ -2315,7 +2315,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
 pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
     const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
         .int => {
             return .{ .int = .{
@@ -2783,7 +2783,7 @@ pub fn typeAnnoIsMalformed(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Id
 pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
     const tag = narrowNodeTag(WhereClauseNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
     switch (tag) {
         .where_mod_method => {
             return .{ .mod_method = .{
@@ -3811,7 +3811,7 @@ pub fn getTargetEntry(store: *const NodeStore, idx: AST.TargetEntry.Idx) AST.Tar
 pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.TargetFile {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     const tag = narrowNodeTag(TargetFileNodeTag, node.tag) orelse
-        std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
+        base.invariant("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
 
     switch (tag) {
         .target_file_string => {

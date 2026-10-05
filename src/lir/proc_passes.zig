@@ -250,7 +250,7 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
+            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
                 counts.committed_by_phase[@intFromEnum(phase)] +|= 1;

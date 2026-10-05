@@ -2190,7 +2190,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         // Each direct call instantiates its callee's checked type once per
         // body and shares that request across its result-type queries and
         // its own lowering.
-        .nominal_backing_instantiations = 32,
+        .nominal_backing_instantiations = 25,
     });
 }
 
@@ -2666,7 +2666,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         // Each template miss also instantiates the template's root once for
         // its interface relations' summarized expansion.
         .nominal_backing_reuses = 31,
-        .nominal_backing_instantiations = 86,
+        .nominal_backing_instantiations = 71,
     });
 }
 

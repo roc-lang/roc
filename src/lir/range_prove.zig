@@ -64,6 +64,7 @@
 //! and the comparison's facts flow there without any merge in between.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const collections = @import("collections");
@@ -4495,7 +4496,7 @@ const Pass = struct {
                 switch (fact.origin) {
                     .branch => |origin_stmt| {
                         if (!doms.dominates(origin_stmt, record.stmt)) {
-                            std.debug.panic(
+                            invariant(
                                 "range_prove certification failed: fact from s{d} does not dominate rewritten s{d}",
                                 .{ @intFromEnum(origin_stmt), @intFromEnum(record.stmt) },
                             );
@@ -4507,7 +4508,7 @@ const Pass = struct {
             switch (record.claim) {
                 .ordering => |claim| {
                     if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, claim.a, claim.b, claim.m)) {
-                        std.debug.panic(
+                        invariant(
                             "range_prove certification failed: claim at s{d} does not follow from its facts",
                             .{@intFromEnum(record.stmt)},
                         );
@@ -4517,7 +4518,7 @@ const Pass = struct {
                     if (!doms.dominates(claim.edge_head, record.stmt) or
                         !RangeProveCertify.isFalseOverflowEdge(self.store, claim))
                     {
-                        std.debug.panic(
+                        invariant(
                             "range_prove certification failed: overflow claim at s{d} does not follow from its false predicate edge",
                             .{@intFromEnum(record.stmt)},
                         );

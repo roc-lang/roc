@@ -113,6 +113,11 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
+    /// The class is a frozen copy of a settled ground instance that several
+    /// uses share (design.md "Concrete dispatch replay"). Its descriptor
+    /// never changes while checking: merges keep it, and writes aimed at a
+    /// member detach that member instead.
+    frozen: bool = false,
     /// This class is structure written below the root of a nominal
     /// declaration's backing, reached by opening that declaration rather than
     /// by substituting one of its formals. The declaration fixes this
@@ -131,7 +136,7 @@ pub const DescriptorFlags = packed struct(u8) {
     /// describe the type the program wrote rather than the default owner.
     /// See design.md's "Diagnostics About Defaulted Types" section.
     default_decided: bool = false,
-    _unused: u2 = 0,
+    _unused: u1 = 0,
 };
 
 /// A type descriptor

@@ -3315,7 +3315,7 @@ pub const Evaluator = struct {
     /// of them crashes, and `roc_crashed` never returns, so reaching this is a
     /// bug in the evaluator.
     fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        std.debug.panic("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
+        base.invariant("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
     }
 };
 

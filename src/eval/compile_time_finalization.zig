@@ -4877,14 +4877,14 @@ fn lowerFinalizationModulesToLir(
 /// A splice invariant failure names the symbol the link stopped at.
 fn spliceInvariant(splice: *const backend.dev.HostSplice, comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("compile-time finalization invariant violated: {s}: {s}", .{ message, splice.unresolved orelse "" });
+        base.invariant("compile-time finalization invariant violated: {s}: {s}", .{ message, splice.unresolved orelse "" });
     }
     finalizationInvariant(message);
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("compile-time finalization invariant violated: {s}", .{message});
+        base.invariant("compile-time finalization invariant violated: {s}", .{message});
     }
     unreachable;
 }

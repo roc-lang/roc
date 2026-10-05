@@ -324,7 +324,7 @@ pub fn rocComptimeCallEnter(start_offset: u32, end_offset: u32, file: u32, line:
 pub fn rocComptimeCallExit() callconv(.c) void {
     const self = enteredHost();
     if (self.call_regions.items.len == 0) {
-        @panic("compile-time call-region stack underflow");
+        base.invariant("{s}", .{"compile-time call-region stack underflow"});
     }
     _ = self.call_regions.pop();
 }
@@ -332,7 +332,7 @@ pub fn rocComptimeCallExit() callconv(.c) void {
 /// The ops of the evaluation this thread entered, which the hooks above are
 /// only ever called from.
 fn enteredOps() *RocOps {
-    return builtins.in_process_host.current() orelse @panic("compile-time hook ran on a thread that entered no host");
+    return builtins.in_process_host.current() orelse base.invariant("{s}", .{"compile-time hook ran on a thread that entered no host"});
 }
 
 fn enteredHost() *CompileTimeHost {
@@ -394,7 +394,7 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
             longjmp(active_jmp_buf, 1);
         }
     }
-    @panic("compile-time host failure escaped without an active crash boundary");
+    base.invariant("{s}", .{"compile-time host failure escaped without an active crash boundary"});
 }
 
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
@@ -413,14 +413,14 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *any
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps deallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
     };
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps reallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
     };
     const alloc_len = @max(new_length, 1);
     const arena_allocator = self.arena.allocator();
@@ -473,7 +473,7 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
         4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
         8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
         16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => @panic("unsupported compile-time RocOps allocation alignment"),
+        else => base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"}),
     };
 }
 

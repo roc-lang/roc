@@ -1162,7 +1162,7 @@ fn resolveExternalTypeBinding(
     } };
     // The compiler's baked Builtin module takes no part in deferred import
     // resolution, so its bindings are installed with their declarations.
-    if (external.is_compiler_builtin) std.debug.panic("compiler invariant violated: compiler builtin type binding has no declaration", .{});
+    if (external.is_compiler_builtin) base.invariant("compiler invariant violated: compiler builtin type binding has no declaration", .{});
     return .{ .deferred = externalTypeBindingRef(external, import_idx, item_name, kind, region) };
 }
 
@@ -1219,7 +1219,7 @@ fn deferredTypeAnnoLookup(
     name: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!TypeAnno.Idx {
-    const module_idx = ref.import_idx orelse std.debug.panic(
+    const module_idx = ref.import_idx orelse base.invariant(
         "compiler invariant violated: a deferred type reference names a module import",
         .{},
     );
@@ -1457,7 +1457,7 @@ fn registerMethodForDispatchOwner(
             // The associated-value duplicate check owns this source error.
             .declaration_owner => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
+                    base.invariant("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
                 }
                 unreachable;
             },
@@ -1696,7 +1696,7 @@ pub fn setupAutoImportedBuiltinTypes(
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
             const stmt_idx = type_entry.statement_idx orelse
-                std.debug.panic("compiler invariant violated: auto-imported builtin type {s} has no declaration", .{type_name_text});
+                base.invariant("compiler invariant violated: auto-imported builtin type {s} has no declaration", .{type_name_text});
             const target_node_idx = type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx);
 
             // Compiler-owned builtin seed data is installed before any source
@@ -3979,7 +3979,7 @@ fn localAssociatedContext(
 ) BlockStatementContext {
     return block_context orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("local associated value invariant violated: missing enclosing block context", .{});
+            base.invariant("local associated value invariant violated: missing enclosing block context", .{});
         }
         unreachable;
     };
@@ -9024,10 +9024,10 @@ fn canonicalizeUnqualifiedIdentExpr(
 fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget {
     if (self.builtin_auto_imported_types.get(self.env.idents.@"try")) |try_info| {
         const try_stmt_idx = try_info.statement_idx orelse {
-            @panic("Builtin Try had no statement during try suffix canonicalization");
+            base.invariant("{s}", .{"Builtin Try had no statement during try suffix canonicalization"});
         };
         const target_node_idx = try_info.env.getExposedNodeIndexByStatementIdx(try_stmt_idx) orelse {
-            @panic("Builtin Try had no target node during try suffix canonicalization");
+            base.invariant("{s}", .{"Builtin Try had no target node during try suffix canonicalization"});
         };
         return TryNominalTarget{ .external = .{
             .import_idx = try self.getOrCreateCompilerBuiltinAutoImport(),
@@ -9036,25 +9036,25 @@ fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget
     }
 
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.@"try")) orelse {
-        @panic("Try type binding was absent during try suffix canonicalization");
+        base.invariant("{s}", .{"Try type binding was absent during try suffix canonicalization"});
     };
 
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| TryNominalTarget{ .local = stmt },
-        .local_where_alias => @panic("Try type binding resolved to a where alias"),
+        .local_where_alias => base.invariant("{s}", .{"Try type binding resolved to a where alias"}),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
-                @panic("Try type binding had no import during try suffix canonicalization");
+                base.invariant("{s}", .{"Try type binding had no import during try suffix canonicalization"});
             };
             const target_node_idx = external.target_node_idx orelse {
-                @panic("Try type binding had no target node during try suffix canonicalization");
+                base.invariant("{s}", .{"Try type binding had no target node during try suffix canonicalization"});
             };
             break :blk TryNominalTarget{ .external = .{
                 .import_idx = import_idx,
                 .target_node_idx = target_node_idx,
             } };
         },
-        .local_alias => @panic("Try type binding was not a nominal type during try suffix canonicalization"),
+        .local_alias => base.invariant("{s}", .{"Try type binding was not a nominal type during try suffix canonicalization"}),
     };
 }
 
@@ -14769,10 +14769,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
 
     if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
         const bool_stmt_idx = bool_info.statement_idx orelse {
-            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+            base.invariant("{s}", .{"Builtin Bool had no statement during boolean operator canonicalization"});
         };
         const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
-            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+            base.invariant("{s}", .{"Builtin Bool had no target node during boolean operator canonicalization"});
         };
         const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
         const import_idx = try self.env.imports.getOrPutWithIdent(
@@ -14792,10 +14792,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
     }
 
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
-        @panic("Bool type binding was absent during boolean operator canonicalization");
+        base.invariant("{s}", .{"Bool type binding was absent during boolean operator canonicalization"});
     };
     return switch (binding_location.binding.*) {
-        .local_where_alias => @panic("Bool type binding resolved to a where alias"),
+        .local_where_alias => base.invariant("{s}", .{"Bool type binding resolved to a where alias"}),
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
                 .nominal_type_decl = stmt,
@@ -14805,10 +14805,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         }, region),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
-                @panic("Bool type binding had no import during boolean operator canonicalization");
+                base.invariant("{s}", .{"Bool type binding had no import during boolean operator canonicalization"});
             };
             const target_node_idx = external.target_node_idx orelse {
-                @panic("Bool type binding had no target node during boolean operator canonicalization");
+                base.invariant("{s}", .{"Bool type binding had no target node during boolean operator canonicalization"});
             };
             break :blk try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
@@ -14819,7 +14819,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
                 },
             }, region);
         },
-        .local_alias => @panic("Bool type binding was not a nominal type during boolean operator canonicalization"),
+        .local_alias => base.invariant("{s}", .{"Bool type binding was not a nominal type during boolean operator canonicalization"}),
     };
 }
 
@@ -21662,7 +21662,7 @@ pub fn introduceType(
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
-        => std.debug.panic("introduceType requires a type declaration statement", .{}),
+        => base.invariant("introduceType requires a type declaration statement", .{}),
     };
 
     const decision = try Scope.introduceTypeBinding(
@@ -22624,7 +22624,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
     }
     // This should not happen for builtin types like Str/Try—if it does,
     // it indicates a missing type binding in the scope or module_envs.
-    @panic("getExternalTypeBase: type not found in scope or auto-imports");
+    base.invariant("{s}", .{"getExternalTypeBase: type not found in scope or auto-imports"});
 }
 
 const MainFunctionStatus = enum { valid, invalid, not_found };
@@ -22717,7 +22717,7 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
         const stmt_id: AST.Statement.Idx = @enumFromInt(decl.statement);
         const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
+                base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
             }
             unreachable;
         };

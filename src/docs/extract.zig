@@ -1122,7 +1122,7 @@ fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -1266,7 +1266,7 @@ fn extractDefEntry(
         .underscore,
         .runtime_error,
         => return null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -3196,7 +3196,7 @@ fn expectLineIndexMatches(source: []const u8) Allocator.Error!void {
         const expected = oldByteOffsetToLine(source, offset);
         const actual = index.lineOf(offset);
         if (expected != actual) {
-            std.debug.panic("lineOf({d}): expected {d}, got {d}", .{ offset, expected, actual });
+            base.invariant("lineOf({d}): expected {d}, got {d}", .{ offset, expected, actual });
         }
     }
 }

@@ -5580,7 +5580,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
-            std.debug.panic(
+            base.invariant(
                 "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
                 .{ cir_nodes, region_nodes },
             );
@@ -6322,7 +6322,7 @@ pub fn contentIdentityHash(self: *const Self) ?*const base.ModuleIdentity.Hash {
 /// callers run after import resolution, where the identity must exist.
 pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
     if (self.self_module_identity.isNone()) {
-        std.debug.panic("module content identity not finalized for module '{s}'", .{self.module_name});
+        base.invariant("module content identity not finalized for module '{s}'", .{self.module_name});
     }
     return self.self_module_identity;
 }
@@ -6332,7 +6332,7 @@ pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
 pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.Allocator.Error!void {
     if (self.contentIdentityHash()) |existing| {
         if (!std.mem.eql(u8, existing, &hash)) {
-            std.debug.panic("conflicting module content identity for module '{s}'", .{self.module_name});
+            base.invariant("conflicting module content identity for module '{s}'", .{self.module_name});
         }
         return;
     }
@@ -6354,7 +6354,7 @@ pub fn ensureContentIdentity(
     for (imported_envs) |imported_env| {
         if (imported_env == @as(*const Self, self)) continue;
         const import_hash = imported_env.contentIdentityHash() orelse {
-            std.debug.panic(
+            base.invariant(
                 "module content identity missing for import '{s}' of module '{s}'",
                 .{ imported_env.module_name, self.module_name },
             );

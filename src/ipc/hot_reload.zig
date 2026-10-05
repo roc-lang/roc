@@ -168,10 +168,10 @@ pub fn prepareDescriptor(
 pub fn publishDescriptor(control: *Control, generation: u64, descriptor_offset: usize, descriptor: *ImageDescriptor) void {
     if (builtinModeDebug()) {
         if (descriptor_offset == invalid_descriptor_offset) {
-            std.debug.panic("hot reload invariant violated: invalid descriptor offset", .{});
+            invariant("hot reload invariant violated: invalid descriptor offset", .{});
         }
         if (descriptor.magic != DESCRIPTOR_MAGIC) {
-            std.debug.panic("hot reload invariant violated: published descriptor missing magic", .{});
+            invariant("hot reload invariant violated: published descriptor missing magic", .{});
         }
     }
 
@@ -355,7 +355,7 @@ pub fn acquirePublishedImage(control: *Control, base_ptr: [*]align(1) u8, total_
 pub fn retainDescriptor(descriptor: *ImageDescriptor) void {
     const previous_refs = @atomicRmw(u32, &descriptor.refs, .Add, 1, .acquire);
     if (builtinModeDebug() and previous_refs == std.math.maxInt(u32)) {
-        std.debug.panic("hot reload invariant violated: image descriptor refcount overflowed", .{});
+        invariant("hot reload invariant violated: image descriptor refcount overflowed", .{});
     }
 }
 
@@ -363,7 +363,7 @@ pub fn retainDescriptor(descriptor: *ImageDescriptor) void {
 pub fn releaseDescriptor(descriptor: *ImageDescriptor) void {
     const previous = @atomicRmw(u32, &descriptor.refs, .Sub, 1, .acq_rel);
     if (builtinModeDebug() and previous == 0) {
-        std.debug.panic("hot reload invariant violated: released an unreferenced image descriptor", .{});
+        invariant("hot reload invariant violated: released an unreferenced image descriptor", .{});
     }
 }
 
@@ -544,4 +544,12 @@ test "hot reload image retain rejects descriptors that stopped being current" {
     try std.testing.expectEqual(@as(u32, 0), descriptorSnapshot(desc0).refs);
     try std.testing.expectEqual(@as(u32, 1), descriptorSnapshot(desc1).refs);
     releaseDescriptor(retained.descriptor);
+}
+
+/// A violated compiler invariant (design.md): builds with runtime safety
+/// panic with this message, and optimized builds treat it as unreachable.
+/// The `ipc` module does not depend on `base`.
+inline fn invariant(comptime fmt: []const u8, args: anytype) noreturn {
+    if (std.debug.runtime_safety) std.debug.panic(fmt, args);
+    unreachable;
 }

@@ -6,6 +6,7 @@
 //! the LIR interpreter.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const eval = @import("eval");
@@ -227,7 +228,7 @@ fn evaluateEntrypointInState(
     const view = &state.view;
     const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
+            invariant("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;
     };

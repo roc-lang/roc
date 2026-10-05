@@ -6,6 +6,7 @@
 //! not need ownership repair.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 
@@ -752,7 +753,7 @@ const Pass = struct {
 
 fn tagReachabilityInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("tag reachability invariant violated: {s}", .{message});
+        base.invariant("tag reachability invariant violated: {s}", .{message});
     }
     unreachable;
 }

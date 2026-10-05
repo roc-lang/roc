@@ -4,6 +4,7 @@
 //! function prologues/epilogues and instruction selection.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
@@ -703,7 +704,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn branchSiteIndex(self: *Self, loc: usize) u32 {
             return self.branch_site_index.get(loc) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
+                    invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
                 }
                 unreachable;
             };
@@ -841,7 +842,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
             if (builtin.mode == .Debug and self.branch_sites.items[index].kind != .jump and self.branch_sites.items[index].kind != .cond_jump) {
-                std.debug.panic("AArch64 patchJump called for the call site at 0x{x}", .{patch_loc});
+                invariant("AArch64 patchJump called for the call site at 0x{x}", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
         }
@@ -850,7 +851,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn patchCall(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
             if (builtin.mode == .Debug and self.branch_sites.items[index].kind != .call) {
-                std.debug.panic("AArch64 patchCall called for a site at 0x{x} that is not a pending call", .{patch_loc});
+                invariant("AArch64 patchCall called for a site at 0x{x} that is not a pending call", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
         }
@@ -952,7 +953,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             std.debug.assert(site.veneer == null);
             if (builtin.mode == .Debug) {
                 if (!fitsSignedBits(@divExact(branchByteOffset(site.directWordLoc(), veneer), 4), 26)) {
-                    std.debug.panic("AArch64 branch site at 0x{x} cannot reach its veneer at 0x{x}", .{ site.loc, veneer });
+                    invariant("AArch64 branch site at 0x{x} cannot reach its veneer at 0x{x}", .{ site.loc, veneer });
                 }
             }
             if (site.target == null) self.branch_open_unveneered -= 1;
@@ -1021,7 +1022,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (builtin.mode == .Debug) {
                 for (self.branch_sites.items) |site| {
                     if (site.kind != .extern_call and site.target == null) {
-                        std.debug.panic("AArch64 branch site at 0x{x} was never patched", .{site.loc});
+                        invariant("AArch64 branch site at 0x{x} was never patched", .{site.loc});
                     }
                 }
             }
@@ -1090,7 +1091,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                     if (veneer_moved != target_moved) self.writePcRelSequence(veneer, target_loc, .IP0, .IP1);
                 } else if (loc_moved != target_moved) {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
+                        invariant("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
                     }
                     unreachable;
                 }
@@ -1136,7 +1137,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (fitsSignedBits(offset_words, bits)) return;
 
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                invariant(
                     "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
                     .{ kind, offset_words, bits },
                 );

@@ -17,6 +17,7 @@
 //! statements without doing reference-counting analysis.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
@@ -8824,7 +8825,7 @@ const Inserter = struct {
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
             if (comptime builtin.mode == .Debug and builtin.target.os.tag == .freestanding) {
-                @panic("ARC attempted to emit a noop RC helper for a refcounted local");
+                invariant("{s}", .{"ARC attempted to emit a noop RC helper for a refcounted local"});
             } else if (comptime builtin.mode == .Debug) {
                 var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
                 defer buffer.deinit();
@@ -8836,7 +8837,7 @@ const Inserter = struct {
                 } else null;
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
                 const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
-                std.debug.panic("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
+                invariant("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
                     @intFromEnum(local),
                     @intFromEnum(local_layout),
                     self.layouts.getLayout(local_layout),
@@ -9100,7 +9101,7 @@ fn argMaskBit(index: usize) u64 {
 }
 
 fn arcInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .Debug) invariant(message, .{});
     unreachable;
 }
 

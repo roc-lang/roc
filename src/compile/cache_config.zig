@@ -287,7 +287,9 @@ pub const Constants = struct {
     /// constraint discharge are explicit in checked artifacts.
     /// 131: If-expression metadata records source, and, or or origin instead
     ///      of a boolean warning flag.
-    pub const CACHE_VERSION = 131;
+    /// 132: Scheme-use records of replayed uses name their source's
+    ///      substitution.
+    pub const CACHE_VERSION = 132;
 };
 
 /// Configuration for the Roc cache system.

@@ -1,5 +1,6 @@
 //! Relocated immutable data and explicit callable ownership for an interpreter.
 const std = @import("std");
+const base = @import("base");
 const backend = @import("backend");
 const builtins = @import("builtins");
 const Interpreter = @import("interpreter.zig").Interpreter;
@@ -96,5 +97,5 @@ pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *c
 }
 
 fn invariant(message: []const u8) noreturn {
-    std.debug.panic("interpreter static-data invariant violated: {s}", .{message});
+    base.invariant("interpreter static-data invariant violated: {s}", .{message});
 }

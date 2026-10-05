@@ -64,6 +64,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .docs,
         .bump,
         .host_alloc,
+        .fast_memset,
         => &.{},
     };
 }
@@ -422,6 +423,7 @@ pub const ModuleType = enum {
     bump,
     glue,
     host_alloc,
+    fast_memset,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -465,6 +467,7 @@ pub const ModuleType = enum {
             .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
             .glue => &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
             .host_alloc => &.{ .builtins, .build_options },
+            .fast_memset => &.{},
         };
     }
 };
@@ -538,6 +541,11 @@ pub const RocModules = struct {
     // by the compiler.
     host_alloc: *Module,
 
+    // The compiler executable's `memset` on musl targets
+    // (`src/fast_memset.zig`). Built with `no_builtin` so its store loops stay
+    // stores.
+    fast_memset: *Module,
+
     // Vendored-from-Zig modules. Kept out of the `ModuleType` dependency graph
     // (like `embedded_lld`) and wired into their specific consumers via
     // `applyVendorImports`, so it stays clear which code comes from elsewhere.
@@ -601,6 +609,7 @@ pub const RocModules = struct {
             .shim_symbols = b.addModule("shim_symbols", .{ .root_source_file = b.path("src/builtins/shim_symbols.zig") }),
             .raw_pages = b.addModule("raw_pages", .{ .root_source_file = b.path("src/raw_pages.zig") }),
             .host_alloc = b.addModule("host_alloc", .{ .root_source_file = b.path("src/host_alloc/mod.zig") }),
+            .fast_memset = b.addModule("fast_memset", .{ .root_source_file = b.path("src/fast_memset.zig"), .no_builtin = true }),
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
             .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
@@ -683,6 +692,7 @@ pub const RocModules = struct {
             .bump,
             .glue,
             .host_alloc,
+            .fast_memset,
         };
 
         // Setup dependencies for each module
@@ -755,6 +765,7 @@ pub const RocModules = struct {
             .docs,
             .bump,
             .host_alloc,
+            .fast_memset,
             => {},
         }
     }
@@ -792,6 +803,7 @@ pub const RocModules = struct {
         step.root_module.addImport("bump", self.bump);
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
+        step.root_module.addImport("fast_memset", self.fast_memset);
         step.root_module.addImport("embedded_lld", self.embedded_lld);
 
         // Vendored, used by the CLI linker (Mach-O code signing). Harmless where
@@ -854,6 +866,7 @@ pub const RocModules = struct {
             .bump => self.bump,
             .glue => self.glue,
             .host_alloc => self.host_alloc,
+            .fast_memset => self.fast_memset,
         };
     }
 
@@ -912,6 +925,7 @@ pub const RocModules = struct {
             .bump,
             .glue,
             .host_alloc,
+            .fast_memset,
         };
 
         const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch
@@ -942,6 +956,12 @@ pub const RocModules = struct {
                 }),
                 .filters = filter_injection.filters,
             });
+
+            // `fast_memset` is tested as it is built: with its stores kept as
+            // stores.
+            if (module_type == .fast_memset) {
+                test_step.root_module.no_builtin = true;
+            }
 
             // The eval module's host-call trampoline is implemented in assembly;
             // the test compile has its own root module, so it needs the file too.

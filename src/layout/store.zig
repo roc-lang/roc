@@ -922,7 +922,7 @@ pub const Store = struct {
                     },
                 }
             }
-            std.debug.panic("layout.Store invariant violated: logical layout graph contained a nominal-only cycle", .{});
+            base.invariant("layout.Store invariant violated: logical layout graph contained a nominal-only cycle", .{});
         }
 
         /// The single encoding of one non-nominal node: a content-kind
@@ -1670,7 +1670,7 @@ pub const Store = struct {
                 }
 
                 if (!has_boxable_slot_edge) {
-                    std.debug.panic(
+                    base.invariant(
                         "layout.Store invariant violated: recursive layout SCC had no explicit slot edge to box at the shared LIR layout commit",
                         .{},
                     );
@@ -2088,7 +2088,7 @@ pub const Store = struct {
 
             for (resolved, 0..) |done, i| {
                 if (!done) {
-                    std.debug.panic(
+                    base.invariant(
                         "layout.Store invariant violated: logical graph node {d} remained unresolved during the shared LIR layout commit",
                         .{i},
                     );
@@ -2769,7 +2769,7 @@ pub const Store = struct {
             }
         }
 
-        std.debug.panic(
+        base.invariant(
             "layout.Store invariant violated: struct field original index {d} not found in struct {d}",
             .{ original_index, struct_idx.int_idx },
         );
@@ -3112,7 +3112,7 @@ pub const Store = struct {
             }
             return null;
         }
-        std.debug.panic(
+        base.invariant(
             "layout.Store invariant violated: list-layout resolution encountered a cycle starting at layout {d}",
             .{@intFromEnum(start)},
         );

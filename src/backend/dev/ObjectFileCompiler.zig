@@ -12,6 +12,7 @@
 //! ```
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -450,13 +451,13 @@ fn compileWithCodeGen(
         if (proc_specs[i].is_static_initializer) continue;
         const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
+                invariant("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
             }
             unreachable;
         };
         const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
         if (seen_proc_symbol_names.contains(symbol_name)) {
-            std.debug.panic("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
+            invariant("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
         }
         seen_proc_symbol_names.putNoClobber(symbol_name, {}) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
@@ -488,7 +489,7 @@ fn compileWithCodeGen(
     for (static_rc_helpers) |helper_key| {
         const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                invariant(
                     "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
                     .{helper_key.encode()},
                 );
@@ -628,7 +629,7 @@ fn compileWithCodeGen(
             error.UnknownProcIdentity,
             error.UnknownRcHelper,
             error.RoundTripMismatch,
-            => std.debug.panic("dev artifact round trip failed: {s}", .{@errorName(err)}),
+            => invariant("dev artifact round trip failed: {s}", .{@errorName(err)}),
         };
     }
     const code = codegen.getGeneratedCode();
@@ -694,7 +695,7 @@ fn compileWithCodeGen(
     if (pack_mode or capture_artifacts) {
         artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
         };
     }
 
@@ -755,10 +756,10 @@ pub fn spliceExternalProcs(
 
     for (external_procs) |proc_id| {
         const proc = proc_specs[@intFromEnum(proc_id)];
-        if (!proc.external) std.debug.panic("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
+        if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
         const located = source.find(source.context, proc.identity) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
+                invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
             }
             unreachable;
         };
@@ -888,7 +889,7 @@ fn appendStaticDataExport(
     const alignment = @as(usize, @intCast(data_export.alignment));
     const symbol_offset: usize = @intCast(data_export.symbol_offset);
     if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
-        std.debug.panic(
+        invariant(
             "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
             .{ data_export.symbol_offset, data_export.bytes.len },
         );

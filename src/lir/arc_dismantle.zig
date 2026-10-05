@@ -19,6 +19,7 @@
 //! Aggregates".
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -352,7 +353,7 @@ pub const Dismantles = struct {
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .Debug) base.invariant(message, .{});
     unreachable;
 }
 

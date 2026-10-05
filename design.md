@@ -133,17 +133,25 @@ incidental data structure shape.
 All user-facing failures are reported during checking at the latest. Checking is
 not complete until type checking, static-dispatch finalization, platform/app
 relation output, compile-time constant evaluation, and checked module
-output have all completed. After a checked module is output, every
-violated assumption is a compiler bug:
+output have all completed. Post-check stages do not return user-facing checking
+errors, and after a checked module is output, every violated assumption is a
+compiler bug.
+
+A compiler invariant is an assumption that can fail only if the compiler has a
+bug. Every stage of the compiler—parsing, canonicalization, checking, every
+post-check stage, the backends, and the build and cache machinery—handles a
+violated invariant the same way:
 
 ```text
 debug build: debug-only assertion
 release build: unreachable
 ```
 
-Post-check stages do not return user-facing checking errors. They do not emit
-fallback code. They do not silently repair missing data. They do not add
-release-build runtime checks for compiler invariants.
+No stage adds release-build runtime checks for compiler invariants, emits
+fallback code, or silently repairs missing data in response to one. A
+user-facing failure (malformed source, a type error, a missing or unreadable
+file, allocation failure, a corrupt cache entry) is not a compiler invariant:
+it is reported or propagated as described for that failure, never asserted.
 
 Checked identity and runtime encoding are separate data. A stable id, checked
 id, symbol, type variable, procedure reference, callable member, or source row
@@ -3027,10 +3035,12 @@ it is an operational failure and aborts the operation, as below.
 
 Parsing and error reporting may recover malformed source in order to construct
 the explicit malformed/runtime-error nodes that later stages consume. I/O,
-allocation failure, unsupported compiler hosts, corrupt serialized CheckedModule
-inputs, and compiler invariant violations are operational aborts, not user-error
-module outcomes. They must propagate as operation errors rather than being
-converted into a user diagnostic or a module `Failure` value.
+allocation failure, unsupported compiler hosts, and corrupt serialized
+CheckedModule inputs are operational aborts, not user-error module outcomes.
+They must propagate as operation errors rather than being converted into a user
+diagnostic or a module `Failure` value. A compiler invariant violation is
+neither: it is a debug-only assertion and unreachable in release builds, as
+stated above.
 
 Workers carry source-read and type-check operational errors through the existing
 result channel as explicit stage/error data. The coordinator preserves the
@@ -9247,6 +9257,133 @@ depth bound and cannot exhaust the native stack at any depth. Rejection
 poisons only the cyclic relation and does not discard unrelated queued
 relations.
 
+Concrete dispatch replay is a mechanism, not a typing rule: it selects a
+target exactly as a fresh instantiation would, without instantiating it. An
+edge is eligible when it is a root edge (no parent derivation, so its own
+selection and every requirement beneath it are judged on the same empty
+lineage), its receiver is ground (no flex, rigid, unbound effect, error, or
+invalid declaration anywhere), its method's scheme is final and has no
+explicit requirements, it is not a literal conversion, and no probe is active.
+A root edge outside any probe, not a literal conversion, whose target instance
+is ground right after its callable relation is established—before anything
+else can refine it—makes its method binding replayable; when the edge is also
+eligible and encoded its replay shape, it becomes the source for that shape. A
+replay shape is the selected binding and method plus the receiver and callable
+exactly as stored: descriptor flags and content in depth-first order,
+variables numbered by first appearance, and attached constraints omitted,
+since each is a separate relation settled on its own receiver. Equal shapes
+are equal types up to renaming, so relating a fresh instance to either yields
+the same ground instance, and the instance's requirements have ground
+receivers and final targets, so they select the same targets.
+
+A later eligible edge with an equal shape replays the source once every
+requirement the source's instance carried, recursively, has settled without
+rejection. The first replay freezes a copy of the source's instance: fresh
+outermost-rank classes, registered with no solver environment, holding the
+same ground type, and marked frozen in the type store. It does so only while
+the instance is still ground, since a ground type changes later only by being
+poisoned, so a ground instance is still the one the source settled to; an
+instance that is no longer ground, or that holds a row not closed directly, is
+never frozen and its source never replays. The source's scheme-use
+substitution is restated over the copy; its nested-requirement callables stay
+the source's own. The replay walks the frozen instance and the edge's callable
+together. Where the callable already has structure the shapes guarantee it is
+the instance's, so it is kept as is; each callable variable is related to the
+frozen subtree at its position, which is what relating the callable to a fresh
+instance would bind it to, so every replayed edge shares one frozen instance
+rather than copying it. A walk that finds the two stored layouts differ at
+some position (equal rows stored in different orders) replays nothing. The
+edge's scheme-use record is an ordinary dispatch-target record whose
+substitution names the callable node at each instance position, or the frozen
+node where the callable had a variable, and whose nested-requirement callables
+are the source's settled ones, which mention only ground types; evidence
+construction therefore treats it like any other edge's record. Eligibility and
+shape keys are computed only for bindings already proven replayable, so a
+method whose instances never settle ground (one whose result depends on a
+callback's own requirements, for example) pays nothing.
+
+Sharing is safe because the type store keeps a frozen class's meaning fixed
+while uses relate to it. A merge with a frozen class keeps the frozen
+descriptor, which already holds the type both sides agreed on, and, as in
+every merge, the second operand stays the checked representative. Relating a
+frozen class to an error leaves the two apart. A frozen class's rank never
+changes, so no generalization boundary reaches it. Every write aimed at a
+variable—mismatch poisoning, content and descriptor writes, rejection and
+annotation marks, redirects—is occurrence-directed on a frozen class: the
+variable is detached into a class of its own holding the same type, after the
+class is handed back to the variable it was frozen at (its anchor) if the
+target was the checked representative, and the write changes only that
+variable. Mismatch poisoning leaves an anchor operand as it is, since an
+anchor is a type's structure rather than any occurrence; any other write aimed
+at an anchor is an invariant violation. A type error in one use therefore
+poisons that use's own occurrences and never the instance other uses share.
+Checking a module ends by thawing every frozen class, so no later stage,
+serialized store, or import sees the mark. Builds with runtime safety check
+the mechanism against what it replaces: every replay first relates a fresh
+copy of the method's scheme to the edge's callable on a savepoint and requires
+the result to equal the frozen instance exactly; module checking verifies
+before thawing that every frozen instance is still the tree it was frozen as;
+and every in-place descriptor write asserts that its class is not frozen.
+
+The accepted side is pinned by the checker test "concrete dispatch replay
+reuses a settled ground target across uses" and the eval test "replayed method
+chain computes each use's own values"; the rejected sides by "concrete
+dispatch replay keys each call's own argument types", "concrete dispatch
+replay never selects a method whose scheme is still being checked", and "a
+type error in one replayed use leaves the uses sharing its instance intact",
+with the type store's frozen-class rules pinned by its own tests ("poisoning a
+frozen class's checked representative detaches it alone" and the tests beside
+it).
+
+A use's relations settle as one unit. A use's relations are the ones its
+instantiation of a constrained scheme copied, and every relation those
+derive when they select targets. The first time a drain processes one of
+them, every queued relation of the same use, including the ones processing
+appends, is processed before any other queued relation; unrelated relations
+wait in the queue behind them. A relation whose receiver is still a variable
+waits as before, and a later grounding processes it like any other. Settling
+is a scheduling rule: unification and target selection give the same result
+in any order when every relation succeeds, so it changes no error-free
+program, and in a program with errors it decides which relation meets a
+conflict first by the use alone, never by whether another use exists. A use
+instantiated inside a speculative probe is not registered, and one whose
+first relation is processed inside a probe or a queueing derived-parser
+drain settles in the ordinary order. Settling a use is a function of its
+scheme and its copy of the scheme root as it stands when the first relation
+is processed: the relations reach only the use's private copies, fresh
+method instances, final method schemes, and the root, and nothing else runs
+in between.
+
+Whole-use replay is a mechanism built on that rule. A use settles as a
+source would when its relations settled processing only its own relations,
+with none of them touched before its first was processed, every one of them
+and every requirement they selected settled without rejection, and its
+root's arguments and result ground and its effect dependencies ground except
+for effects still open, which only its own relations reach. The first such use
+of a scheme makes the scheme replayable; until then no use of it computes a
+shape. When the first relation of a later use of a replayable scheme is
+processed, its shape—the scheme and the use's copy of its root, encoded like
+a dispatch replay shape—is computed, and if it settles as a source would, it
+becomes the replay source for its shape. A later
+use with an equal shape and untouched relations takes the source's settled
+instance instead of settling its own: settling would produce that instance,
+since equal shapes make settling the same function. The first replay freezes
+a copy of the source's instance, as concrete dispatch replay does: the root's
+parts, every variable the source's scheme-use substitution names, and every
+requirement its relations derived. Functions whose effect is still open may
+be frozen there, because those classes are reached only through relations no
+later relation revisits. The source's substitution and the dispatch-target
+records its relations wrote are restated over the copy. The replayed use
+then relates its root's parts, and every variable of its own substitution
+that carries a relation, to the frozen node at the same position. Its own
+relations are skipped, and its scheme-use record names the source's restated
+substitution, so CheckedModule construction resolves that substitution's
+evidence once for every use that shares it. The use's other copies are
+reachable only from its skipped relations and its former substitution, so
+nothing observes them. Builds with runtime safety check after every replay
+that each variable it related holds exactly the source's frozen type, and
+before thawing that no frozen use instance changed.
+
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
 constraint production to quiescence. Capture transfers a settled local codec
@@ -10681,6 +10818,31 @@ Other solved-graph mutations:
   callable's argument and result variables stay bound to the relation that
   every later use instantiates; a probe that cannot establish the pair keeps
   the copy as an explicit requirement.
+- `replayDispatchTarget`—mechanism: concrete dispatch replay (Pending
+  Dispatch Requirements In Type Schemes, above). A root edge with a ground
+  receiver and a final method without explicit requirements relates each
+  variable of its callable to the matching subtree of an equal-shaped
+  source's frozen instance instead of a fresh instantiation, and records the
+  source's settled nested requirements as its own; it writes exactly the
+  instance and evidence a fresh instantiation would.
+- Frozen classes (`Store.freezeClass`, `Store.thawFrozenClasses`)—mechanism:
+  concrete dispatch replay (above). While a module is checked, a merge with a
+  frozen class keeps its descriptor, its rank never changes, and every write
+  aimed at one of its variables detaches that variable first; none of this
+  changes a type any use observes, and it ends when module checking does.
+  `freezeTypeGraph` and the runtime-safety check `copySchemeForReplayCheck`
+  write descriptors only of the fresh classes they themselves create.
+- `resumeStaticDispatchDrain` settling a use (`finishUseSettling`)—rule: a
+  use's relations settle as one unit (Pending Dispatch Requirements In Type
+  Schemes, above). It changes only the order in which queued relations are
+  processed.
+- `replayUse`—mechanism: whole-use replay (above). A use whose shape equals a
+  settled source's relates its root and the substitution variables that carry
+  relations to the source's frozen instance by ordinary unification, skips its own relations, and names the
+  source's restated substitution in its scheme-use record; it writes exactly
+  the instance and evidence settling its own relations would.
+  `freezeUseReplaySource` writes descriptors only of the fresh classes it
+  creates.
 - `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). Two triggers: the explicit derivation chain and
   alpha-normalized receiver + callable digest prove that target selection has

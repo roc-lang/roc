@@ -213,7 +213,7 @@ pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     if (env.display_module_name_idx.isNone()) {
         if (env.module_name.len == 0) {
-            std.debug.panic("typed_cir invariant violated: missing module_name for env with no display_module_name_idx", .{});
+            base.invariant("typed_cir invariant violated: missing module_name for env with no display_module_name_idx", .{});
         }
 
         env.display_module_name_idx = try env.insertIdent(base.Ident.for_text(env.module_name));
@@ -394,7 +394,7 @@ pub const Module = struct {
                         try args.appendSlice(self.allocator, current_args);
 
                         if (explicit_arg_count != 0 and prev_len < explicit_arg_count and args.items.len > explicit_arg_count) {
-                            std.debug.panic(
+                            base.invariant(
                                 "typed_cir invariant violated: lambda boundary split function arg group while building source function shape",
                                 .{},
                             );
@@ -419,12 +419,12 @@ pub const Module = struct {
                                 .empty_record,
                                 .tag_union,
                                 .empty_tag_union,
-                                => std.debug.panic(
+                                => base.invariant(
                                     "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
                                     .{},
                                 ),
                             },
-                            .flex, .rigid, .field_presence, .err => std.debug.panic(
+                            .flex, .rigid, .field_presence, .err => base.invariant(
                                 "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
                                 .{},
                             ),
@@ -436,12 +436,12 @@ pub const Module = struct {
                     .empty_record,
                     .tag_union,
                     .empty_tag_union,
-                    => std.debug.panic(
+                    => base.invariant(
                         "typed_cir invariant violated: expected function type when building source function shape",
                         .{},
                     ),
                 },
-                .flex, .rigid, .field_presence, .err => std.debug.panic(
+                .flex, .rigid, .field_presence, .err => base.invariant(
                     "typed_cir invariant violated: expected function type when building source function shape",
                     .{},
                 ),
@@ -582,12 +582,12 @@ pub const Module = struct {
                     .empty_record,
                     .tag_union,
                     .empty_tag_union,
-                    => std.debug.panic(
+                    => base.invariant(
                         "typed_cir invariant violated: expected function type when building source function shape",
                         .{},
                     ),
                 },
-                .flex, .rigid, .field_presence, .err => std.debug.panic(
+                .flex, .rigid, .field_presence, .err => base.invariant(
                     "typed_cir invariant violated: expected function type when building source function shape",
                     .{},
                 ),

@@ -157,7 +157,7 @@ pub const Store = struct {
             return;
         }
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
+            base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
         }
         unreachable;
     }
@@ -175,7 +175,7 @@ pub const Store = struct {
             return;
         }
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
+            base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
         }
         unreachable;
     }

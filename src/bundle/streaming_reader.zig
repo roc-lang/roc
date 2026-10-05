@@ -4,6 +4,7 @@
 //! simultaneously computing and verifying BLAKE3 hashes for data integrity.
 
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const c = @cImport({
@@ -82,7 +83,7 @@ pub const DecompressingHashReader = struct {
         const rc = c.ZSTD_freeDCtx(self.dctx);
         if (c.ZSTD_isError(rc) != 0) {
             if (builtin.mode == .Debug) {
-                std.debug.panic("ZSTD_freeDCtx failed: {s}", .{c.ZSTD_getErrorName(rc)});
+                base.invariant("ZSTD_freeDCtx failed: {s}", .{c.ZSTD_getErrorName(rc)});
             }
             unreachable;
         }

@@ -9,6 +9,7 @@
 //! Each target variant is specialized at comptime with the correct calling convention.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
@@ -1023,7 +1024,7 @@ pub fn Emit(comptime target: RocTarget) type {
             if (base != .IP0 and preserved != .IP0) return .IP0;
             if (base != .IP1 and preserved != .IP1) return .IP1;
 
-            std.debug.panic(
+            invariant(
                 "aarch64 memory emitter needs an address scratch register, but base {s} and preserved register {s} occupy both IP0 and IP1",
                 .{ base.name64(), preserved.?.name64() },
             );

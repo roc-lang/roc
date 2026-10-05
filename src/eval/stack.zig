@@ -16,6 +16,7 @@
 //! even after the stack has been reset due to the scope ending.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 /// Error when an alloca is attempted that's too big for the stack
@@ -26,7 +27,7 @@ pub const StackOverflow = error{
 fn assertAligned(ptr: anytype, alignment: usize, context: []const u8) void {
     const addr = @intFromPtr(ptr);
     if (addr % alignment != 0) {
-        std.debug.panic("{s}: ptr 0x{x} not {}-byte aligned", .{ context, addr, alignment });
+        base.invariant("{s}: ptr 0x{x} not {}-byte aligned", .{ context, addr, alignment });
     }
 }
 

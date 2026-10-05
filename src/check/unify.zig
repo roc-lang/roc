@@ -846,7 +846,7 @@ const Unifier = struct {
                 .flex, .rigid, .field_presence, .err => return false,
             }
         }
-        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// The first tag a row carries anywhere along its extension chain.
@@ -866,7 +866,7 @@ const Unifier = struct {
                 .flex, .rigid, .field_presence, .err => return null,
             }
         }
-        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// A bounded extension may close or stay open, never gain a tag. Joining
@@ -896,7 +896,7 @@ const Unifier = struct {
                 .rigid, .field_presence, .err => return null,
             }
         }
-        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
@@ -1561,7 +1561,7 @@ const Unifier = struct {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
+                    base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
                 }
                 unreachable;
             }
@@ -2031,7 +2031,7 @@ const Unifier = struct {
 
         for (self.scratch.in_both_fields.sliceRange(post.shared_fields_range)) |shared| {
             const next_presence = shared.next_presence orelse
-                std.debug.panic("type unifier invariant violated: shared record field had no merged presence", .{});
+                base.invariant("type unifier invariant violated: shared record field had no merged presence", .{});
 
             _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,

@@ -27,6 +27,7 @@
 //! set.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const collections = @import("collections");
 const core = @import("lir_core");
 const BodyClone = @import("body_clone.zig");
@@ -380,7 +381,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        @panic("immortal locals invariant violated: " ++ message);
+        invariant("{s}", .{"immortal locals invariant violated: " ++ message});
     }
     unreachable;
 }

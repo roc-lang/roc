@@ -9,6 +9,7 @@
 //! producer control-flow edge selects the same consumer arm explicitly.
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 const core = @import("lir_core");
 const collections = @import("collections");
@@ -422,7 +423,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
         switch (store.getCFStmt(item.stmt)) {
             .join => |join| {
                 if ((try declarations.getOrPut(join.id)).found_existing) {
-                    std.debug.panic("tag case fusion of j{d} duplicated declaration j{d}", .{ @intFromEnum(fused_id), @intFromEnum(join.id) });
+                    base.invariant("tag case fusion of j{d} duplicated declaration j{d}", .{ @intFromEnum(fused_id), @intFromEnum(join.id) });
                 }
                 try scope.append(allocator, join.id);
                 try work.append(allocator, .{ .stmt = join.body, .depth = scope.items.len });
@@ -434,7 +435,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
                     if (id == jump.target) in_scope = true;
                 }
                 if (!in_scope) {
-                    std.debug.panic("tag case fusion of j{d} in {s} left a jump to j{d} outside its declaration", .{
+                    base.invariant("tag case fusion of j{d} in {s} left a jump to j{d} outside its declaration", .{
                         @intFromEnum(fused_id),
                         store.procDebugName(proc) orelse "an unnamed procedure",
                         @intFromEnum(jump.target),

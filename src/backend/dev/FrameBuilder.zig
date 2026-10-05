@@ -16,6 +16,7 @@
 //! - ForwardFrameBuilder: Takes explicit register list, saves in order specified
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 
 const stack_probe_page_size: u32 = 0x1000;
@@ -131,7 +132,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         pub fn setCallerStackArgBaseReg(self: *Self, reg: GeneralReg) void {
             if (!is_aarch64) {
                 if (std.debug.runtime_safety) {
-                    @panic("caller stack-argument base register is only meaningful on aarch64");
+                    invariant("{s}", .{"caller stack-argument base register is only meaningful on aarch64"});
                 }
                 unreachable;
             }
