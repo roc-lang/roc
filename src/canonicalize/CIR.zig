@@ -291,6 +291,15 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.BLAKE3.Hasher", .type_field = "crypto_blake3_hasher_type", .ident_field = "crypto_blake3_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Hasher" }, .auto_import = false },
 };
 
+/// The registry entry for the builtin type whose `BuiltinIndices` statement
+/// field is `type_field`. Its `display_name` and `qualified_name` are the only
+/// spellings of the type's name the compiler interns.
+pub fn builtinTypeSpec(comptime type_field: []const u8) BuiltinTypeSpec {
+    return comptime for (builtin_type_specs) |spec| {
+        if (std.mem.eql(u8, spec.type_field, type_field)) break spec;
+    } else @compileError("no builtin type spec has the type field '" ++ type_field ++ "'");
+}
+
 /// Nominal declarations that only group nested builtin types rather than representing builtin types.
 pub const builtin_type_container_names = [_][]const u8{
     "Builtin",

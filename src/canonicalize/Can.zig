@@ -6646,28 +6646,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
     }
 }
 
-/// Map a type identifier to the builtin numeric kind it names, if any. Mirrors
-/// the type checker's resolution so the canonicalized suffix target it reads
-/// back is consistent. Compares against the module's cached numeric idents
-/// (both the bare `U8` form and the fully-qualified `Builtin.Num.U8` form).
-fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.NumKind {
-    const ids = self.env.idents;
-    if (type_ident.eql(ids.u8) or type_ident.eql(ids.u8_type)) return .u8;
-    if (type_ident.eql(ids.i8) or type_ident.eql(ids.i8_type)) return .i8;
-    if (type_ident.eql(ids.u16) or type_ident.eql(ids.u16_type)) return .u16;
-    if (type_ident.eql(ids.i16) or type_ident.eql(ids.i16_type)) return .i16;
-    if (type_ident.eql(ids.u32) or type_ident.eql(ids.u32_type)) return .u32;
-    if (type_ident.eql(ids.i32) or type_ident.eql(ids.i32_type)) return .i32;
-    if (type_ident.eql(ids.u64) or type_ident.eql(ids.u64_type)) return .u64;
-    if (type_ident.eql(ids.i64) or type_ident.eql(ids.i64_type)) return .i64;
-    if (type_ident.eql(ids.u128) or type_ident.eql(ids.u128_type)) return .u128;
-    if (type_ident.eql(ids.i128) or type_ident.eql(ids.i128_type)) return .i128;
-    if (type_ident.eql(ids.f32) or type_ident.eql(ids.f32_type)) return .f32;
-    if (type_ident.eql(ids.f64) or type_ident.eql(ids.f64_type)) return .f64;
-    if (type_ident.eql(ids.dec) or type_ident.eql(ids.dec_type)) return .dec;
-    return null;
-}
-
 fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
     const import_idx = external.import_idx orelse return false;
     return self.importIsCompilerBuiltin(import_idx);
@@ -6718,7 +6696,7 @@ fn resolveLiteralTypeSuffix(
                 .external => |external| blk: {
                     if (self.importIsCompilerBuiltin(external.import_idx)) {
                         const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
-                        if (self.builtinNumKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
+                        if (self.env.idents.numKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
                     }
                     break :blk .{ .resolved = .{ .external = .{
                         .import_idx = external.import_idx,
@@ -6757,7 +6735,7 @@ fn resolveUnqualifiedLiteralTypeSuffix(
         .region = region,
     } } };
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
-        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse return undeclared;
+        const num_kind = self.env.idents.numKindFromTypeIdent(type_ident) orelse return undeclared;
         return .{ .resolved = .{ .name = type_ident, .target = .{ .resolved = .{ .builtin = num_kind } } } };
     };
     const target: LiteralSuffixTarget = switch (binding_location.binding.*) {
@@ -6765,7 +6743,7 @@ fn resolveUnqualifiedLiteralTypeSuffix(
         .external_nominal => |external| blk: {
             if (external.import_idx) |import_idx| {
                 if (self.importIsCompilerBuiltin(import_idx)) {
-                    if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                    if (self.env.idents.numKindFromTypeIdent(external.original_ident) orelse self.env.idents.numKindFromTypeIdent(type_ident)) |num_kind| {
                         break :blk .{ .resolved = .{ .builtin = num_kind } };
                     }
                 }

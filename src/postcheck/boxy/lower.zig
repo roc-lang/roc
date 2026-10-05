@@ -3019,10 +3019,10 @@ const ProcedureBuilder = struct {
                 null;
             const fn_type = if (exact_method) |method| method.callable_type else requirement.fn_ty;
             const structural_method: ?Plan.DerivedMethod = if (structural_kind == .equality or
-                (exact_method == null and self.staticDictionarySlotIsStructural("is_eq", rep_id, requirement)))
+                (exact_method == null and self.staticDictionarySlotIsStructural(base.Ident.IS_EQ_METHOD_NAME, rep_id, requirement)))
                 .equality
             else if (structural_kind == .hash or
-                (exact_method == null and self.staticDictionarySlotIsStructural("to_hash", rep_id, requirement)))
+                (exact_method == null and self.staticDictionarySlotIsStructural(base.Ident.TO_HASH_METHOD_NAME, rep_id, requirement)))
                 .hash
             else
                 null;
@@ -9433,7 +9433,7 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated encoder body had no encoding type");
         const encoding = proc.erased_capture_locals.items[0];
 
-        if (proc.generatedCodecCallPlanOrNull(caller, schema_type, "encoder_for", schema_type)) |constructor_call| {
+        if (proc.generatedCodecCallPlanOrNull(caller, schema_type, base.Ident.ENCODER_FOR_METHOD_NAME, schema_type)) |constructor_call| {
             const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
             const function = proc.functionChildrenForRep(worker.rep) orelse
                 boxyLowerInvariant("generated encoder worker was not callable");
@@ -11900,7 +11900,7 @@ const ProcedureBuilder = struct {
             const constructor_call = proc.generatedCodecCallPlanOrNull(
                 context.worker,
                 shape_type,
-                "parser_for",
+                base.Ident.PARSER_FOR_METHOD_NAME,
                 shape_type,
             );
             const scalar_call = if (constructor_call == null) blk: {
@@ -33955,7 +33955,7 @@ const ProcBodyBuilder = struct {
         true_body: LIR.CFStmtId,
         false_body: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         return try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
@@ -34760,7 +34760,7 @@ const ProcBodyBuilder = struct {
         const false_body = try self.assignStringBytesLiteral(target, "False", next);
         const true_body = try self.assignStringBytesLiteral(target, "True", next);
         const discriminant = try self.addFrameLocal(.u32);
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
@@ -36935,7 +36935,7 @@ const ProcBodyBuilder = struct {
         value: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const variant: u32 = if (value) 1 else 0;
+        const variant = Common.boolDiscriminant(value);
         return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = variant,
@@ -42992,10 +42992,8 @@ const ProcBodyBuilder = struct {
     }
 
     fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u32 {
-        const tag_name = self.module.canonical_names.tagLabelText(name);
-        if (std.mem.eql(u8, tag_name, "False")) return 0;
-        if (std.mem.eql(u8, tag_name, "True")) return 1;
-        boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
+        return Common.boolTagDiscriminant(self.module.canonical_names.tagLabelText(name)) orelse
+            boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
     }
 
     fn tagUnionPayloadLayout(self: *const ProcBodyBuilder, tag_union_layout_idx: layout.Idx, variant_index: u32) layout.Idx {
@@ -43865,11 +43863,7 @@ const ConstPlanBuilder = struct {
                 boxyLowerInvariant("Bool checked tag carried a payload");
             }
             const name_text = module.canonical_names.tagLabelText(tag.name);
-            const discriminant: u32 = if (std.mem.eql(u8, name_text, "False"))
-                0
-            else if (std.mem.eql(u8, name_text, "True"))
-                1
-            else
+            const discriminant = Common.boolTagDiscriminant(name_text) orelse
                 boxyLowerInvariant("Bool checked tag union contained a non-boolean tag");
             variant.* = .{
                 .name = try self.allocator.dupe(u8, name_text),

@@ -1123,8 +1123,8 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     _ = try env.insertIdent(Ident.for_text("Builtin"));
     _ = try env.insertIdent(Ident.for_text("Builtin.Num.Dec"));
     _ = try env.insertIdent(Ident.for_text("Builtin.Str"));
-    const from_numeral_ident = try env.insertIdent(Ident.for_text("from_numeral"));
-    const from_quote_ident = try env.insertIdent(Ident.for_text("from_quote"));
+    const from_numeral_ident = try env.insertIdent(Ident.for_text(Ident.FROM_NUMERAL_METHOD_NAME));
+    const from_quote_ident = try env.insertIdent(Ident.for_text(Ident.FROM_QUOTE_METHOD_NAME));
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();

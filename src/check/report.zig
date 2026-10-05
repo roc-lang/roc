@@ -3879,7 +3879,7 @@ pub const ReportBuilder = struct {
 
         if (has_problem_fields) {
             try report.document.addReflowingText("This record does not support equality because these fields have types that don't support ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreaks(2);
 
@@ -3903,9 +3903,9 @@ pub const ReportBuilder = struct {
             }
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Anonymous records only have an ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" method if all of their fields have ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
@@ -3930,7 +3930,7 @@ pub const ReportBuilder = struct {
 
         if (has_problem_elems) {
             try report.document.addReflowingText("This tuple does not support equality because these elements have types that don't support ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreaks(2);
 
@@ -3950,9 +3950,9 @@ pub const ReportBuilder = struct {
             }
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tuples only have an ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" method if all of their elements have ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
@@ -3981,7 +3981,7 @@ pub const ReportBuilder = struct {
 
         if (has_problem_tags) {
             try report.document.addReflowingText("This tag union does not support equality because these tags have payload types that don't support ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreaks(2);
 
@@ -4026,9 +4026,9 @@ pub const ReportBuilder = struct {
             }
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tag unions only have an ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" method if all of their payload types have ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
@@ -4717,13 +4717,13 @@ pub const ReportBuilder = struct {
             D.bytes("Using"),
             D.bytes("_").withAnnotation(.inline_code),
             D.bytes("as the entire annotation requests a compiler-generated implementation. The compiler currently supports this for"),
-            D.bytes("is_eq").withAnnotation(.inline_code),
+            D.bytes(Ident.IS_EQ_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("to_hash").withAnnotation(.inline_code),
+            D.bytes(Ident.TO_HASH_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("parser_for").withAnnotation(.inline_code),
+            D.bytes(Ident.PARSER_FOR_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("encoder_for").withAnnotation(.inline_code),
+            D.bytes(Ident.ENCODER_FOR_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("map").withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),

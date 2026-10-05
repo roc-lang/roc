@@ -11445,7 +11445,7 @@ const Lowerer = struct {
         if (self.result.store.getLocal(target).layout_idx != .bool) {
             Common.invariant("boolean assignment target was not Bool layout");
         }
-        const discriminant: u32 = if (value) 1 else 0;
+        const discriminant = Common.boolDiscriminant(value);
         return try self.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = discriminant,
@@ -11456,7 +11456,7 @@ const Lowerer = struct {
     }
 
     fn boolSwitchNoContinuation(self: *Lowerer, where: LowerSite, cond: LIR.LocalId, true_body: LIR.CFStmtId, false_body: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         return try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try self.result.store.addCFSwitchBranches(&branches),

@@ -26,15 +26,34 @@ const enable_store_tracking = builtin.mode == .Debug;
 pub const PLUS_METHOD_NAME = "plus";
 /// Method name for negation - used by unary - operator desugaring
 pub const NEGATE_METHOD_NAME = "negate";
+/// Method name for equality - used by == desugaring and structural equality
+pub const IS_EQ_METHOD_NAME = "is_eq";
+/// Method name for hashing - used by structural hashing
+pub const TO_HASH_METHOD_NAME = "to_hash";
+/// Method name a type provides to parse itself from an encoding
+pub const PARSER_FOR_METHOD_NAME = "parser_for";
+/// Method name a type provides to encode itself into an encoding
+pub const ENCODER_FOR_METHOD_NAME = "encoder_for";
+/// Method name a type provides to be built from a number literal
+pub const FROM_NUMERAL_METHOD_NAME = "from_numeral";
+/// Method name a type provides to be built from a quoted literal
+pub const FROM_QUOTE_METHOD_NAME = "from_quote";
 
 /// Compare two identifier texts exactly.
 pub fn textEql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
 
-/// Compare two identifier texts in deterministic lexicographic order.
+/// Order two identifier texts by ascending byte value. This is the canonical
+/// order of record fields and tags: rows are sorted and merged by it, and tag
+/// discriminants number the tags of a union in it.
+pub fn textOrder(a: []const u8, b: []const u8) std.math.Order {
+    return std.mem.order(u8, a, b);
+}
+
+/// Whether `a` comes before `b` in `textOrder`.
 pub fn textLessThan(a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
+    return textOrder(a, b) == .lt;
 }
 
 /// Check whether identifier text starts with a fixed prefix.

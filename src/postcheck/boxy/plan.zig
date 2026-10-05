@@ -6,6 +6,7 @@
 //! arguments. It only consumes checked type data.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
@@ -19,6 +20,7 @@ const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
 
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 const checked = check.CheckedModule;
 const checked_names = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -5272,7 +5274,7 @@ const Builder = struct {
                 // a declared one, or the compiler-generated structural parser,
                 // whose body the checker validated as a nested derivation of
                 // its own (reached through the contract's `parser_for` edge).
-                try actions.append(self.allocator, codecCallAction(worker, shape, "parser_for", shape));
+                try actions.append(self.allocator, codecCallAction(worker, shape, Ident.PARSER_FOR_METHOD_NAME, shape));
             },
         }
     }
@@ -5554,7 +5556,7 @@ const Builder = struct {
                 }
 
                 if (methodOwnerForModuleType(view, shape.ty)) |owner| {
-                    if (view.canonical_names.?.lookupMethodName("encoder_for")) |encoder_for| {
+                    if (view.canonical_names.?.lookupMethodName(Ident.ENCODER_FOR_METHOD_NAME)) |encoder_for| {
                         if (self.lookupMethodTarget(view, owner, view, encoder_for)) |lookup| {
                             switch (lookup.target.kind) {
                                 // A declared encoder, or the compiler-generated
@@ -5563,12 +5565,12 @@ const Builder = struct {
                                 // (reached through the contract's `encoder_for`
                                 // edge).
                                 .procedure, .local_proc => {
-                                    try actions.append(self.allocator, codecCallAction(worker, shape, "encoder_for", shape));
+                                    try actions.append(self.allocator, codecCallAction(worker, shape, Ident.ENCODER_FOR_METHOD_NAME, shape));
                                     return;
                                 },
                                 .structural => |kind| switch (kind) {
                                     .encoder => {
-                                        try actions.append(self.allocator, codecCallAction(worker, shape, "encoder_for", shape));
+                                        try actions.append(self.allocator, codecCallAction(worker, shape, Ident.ENCODER_FOR_METHOD_NAME, shape));
                                         return;
                                     },
                                     .parser => boxyPlanInvariant("encoder planning resolved to generated parser target"),
@@ -8311,7 +8313,7 @@ const Builder = struct {
                 .nominal => |nominal| {
                     if (nominal.builtin != null) return shape;
                     if (methodOwnerForModuleType(view, shape.ty)) |owner| {
-                        if (view.canonical_names.?.lookupMethodName("parser_for")) |parser_for| {
+                        if (view.canonical_names.?.lookupMethodName(Ident.PARSER_FOR_METHOD_NAME)) |parser_for| {
                             if (self.lookupMethodTarget(view, owner, view, parser_for)) |lookup| {
                                 switch (lookup.target.kind) {
                                     .procedure, .local_proc => return shape,
@@ -11019,7 +11021,7 @@ const Builder = struct {
             if (top.schema) |params| {
                 if (index >= params.params.len) boxyPlanInvariant("checked numeral evidence exceeded its declared scheme");
                 const param = params.params[index];
-                if (std.mem.eql(u8, params.view.canonical_names.?.methodNameText(param.method), "from_numeral")) {
+                if (std.mem.eql(u8, params.view.canonical_names.?.methodNameText(param.method), Ident.FROM_NUMERAL_METHOD_NAME)) {
                     const owner = methodOwnerForModuleType(view, entry.dispatcher_ty);
                     if (owner != null and owner.? == .nominal and !self.has_custom_numeral) {
                         self.has_custom_numeral = true;
@@ -12189,7 +12191,7 @@ const Builder = struct {
             for (schema.params, 0..) |param, index| {
                 const param_index = schema.start + @as(u32, @intCast(index));
                 const literal_numeral = self.has_custom_numeral and
-                    std.mem.eql(u8, schema.view.canonical_names.?.methodNameText(param.method), "from_numeral");
+                    std.mem.eql(u8, schema.view.canonical_names.?.methodNameText(param.method), Ident.FROM_NUMERAL_METHOD_NAME);
                 if ((param.runtime_dictionary and param.source != .scheme_callable) or literal_numeral) {
                     var hidden = try self.schemeDictionary(.{ .module = schema.view.key, .param = param_index });
                     hidden.evidence_index = @intCast(index);
@@ -12229,7 +12231,7 @@ const Builder = struct {
         // dictionary is passed at runtime.
         const compile_time_only = self.has_custom_numeral and
             key.callable_contract == null and param.source != .scheme_requirement and
-            std.mem.eql(u8, view.canonical_names.?.methodNameText(param.method), "from_numeral");
+            std.mem.eql(u8, view.canonical_names.?.methodNameText(param.method), Ident.FROM_NUMERAL_METHOD_NAME);
         const callable_ty = if (key.callable_contract) |contract| blk: {
             if (contract >= param.callable_contracts.len)
                 boxyPlanInvariant("dictionary callable contract was outside its checked parameter");
@@ -13396,8 +13398,8 @@ const Builder = struct {
 
     fn derivedMethodText(method: DerivedMethod) []const u8 {
         return switch (method) {
-            .equality => "is_eq",
-            .hash => "to_hash",
+            .equality => Ident.IS_EQ_METHOD_NAME,
+            .hash => Ident.TO_HASH_METHOD_NAME,
         };
     }
 
@@ -21353,10 +21355,10 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
     // equality placeholder and yields no dictionary slot (see
     // `constraintIsOwnerlessStructuralEquality`), so the fixture uses another
     // structural method that still requires a runtime dictionary.
-    const root_parser_for = try root_names.internMethodName("parser_for");
-    const root_to_hash = try root_names.internMethodName("to_hash");
-    const source_to_hash = try source_names.internMethodName("to_hash");
-    _ = try source_names.internMethodName("parser_for");
+    const root_parser_for = try root_names.internMethodName(Ident.PARSER_FOR_METHOD_NAME);
+    const root_to_hash = try root_names.internMethodName(Ident.TO_HASH_METHOD_NAME);
+    const source_to_hash = try source_names.internMethodName(Ident.TO_HASH_METHOD_NAME);
+    _ = try source_names.internMethodName(Ident.PARSER_FOR_METHOD_NAME);
     try std.testing.expect(root_to_hash != source_to_hash);
 
     const payloads = [_]checked.StoredCheckedTypePayload{

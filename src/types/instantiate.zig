@@ -1599,11 +1599,7 @@ pub const Instantiator = struct {
                     if (frame.tag_idx == frame.source_tags.count) {
                         // Sort the fresh tags alphabetically by name before appending.
                         // This ensures tag discriminants are consistent after instantiation.
-                        std.mem.sort(Tag, machine.pending_tags.items[frame.tags_base..], @as(*const Self, self), struct {
-                            fn less(instantiator: *const Self, a: Tag, b: Tag) bool {
-                                return std.mem.order(u8, instantiator.getIdentText(a.name), instantiator.getIdentText(b.name)) == .lt;
-                            }
-                        }.less);
+                        std.mem.sort(Tag, machine.pending_tags.items[frame.tags_base..], self.idents, comptime Tag.sortByNameAsc);
                         frame.tags_range = try self.store.appendTags(machine.pending_tags.items[frame.tags_base..]);
                         machine.pending_tags.items.len = frame.tags_base;
                         frame.stage = .await_ext;

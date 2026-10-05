@@ -400,21 +400,14 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "List")) return .list;
-            if (std.mem.eql(u8, bytes, "Box")) return .box;
-            if (std.mem.eql(u8, bytes, "U8")) return .u8;
-            if (std.mem.eql(u8, bytes, "U16")) return .u16;
-            if (std.mem.eql(u8, bytes, "U32")) return .u32;
-            if (std.mem.eql(u8, bytes, "U64")) return .u64;
-            if (std.mem.eql(u8, bytes, "U128")) return .u128;
-            if (std.mem.eql(u8, bytes, "I8")) return .i8;
-            if (std.mem.eql(u8, bytes, "I16")) return .i16;
-            if (std.mem.eql(u8, bytes, "I32")) return .i32;
-            if (std.mem.eql(u8, bytes, "I64")) return .i64;
-            if (std.mem.eql(u8, bytes, "I128")) return .i128;
-            if (std.mem.eql(u8, bytes, "F32")) return .f32;
-            if (std.mem.eql(u8, bytes, "F64")) return .f64;
-            if (std.mem.eql(u8, bytes, "Dec")) return .dec;
+            // A builtin's tag is its `BuiltinIndices` type field without the
+            // `_type` suffix, and its source name is the registry display name.
+            inline for (CIR.builtin_type_specs) |spec| {
+                const tag_name = spec.type_field[0 .. spec.type_field.len - "_type".len];
+                if (@hasField(@This(), tag_name) and std.mem.eql(u8, bytes, spec.display_name)) {
+                    return @field(@This(), tag_name);
+                }
+            }
             return null;
         }
     };

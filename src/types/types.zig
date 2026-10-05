@@ -749,9 +749,7 @@ pub const RecordField = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// Whether a record field's kind is concretely required or still carried
@@ -862,9 +860,7 @@ pub const Tag = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// A safe list of tags

@@ -1550,10 +1550,10 @@ pub const StructuralDerivation = union(enum(u8)) {
 /// classifies its view-local method names by text—both from this single
 /// source.
 pub const structural_method_kinds = [_]struct { method_name: [:0]const u8, common_ident: [:0]const u8, kind: StructuralKind }{
-    .{ .method_name = "is_eq", .common_ident = "is_eq", .kind = .equality },
-    .{ .method_name = "to_hash", .common_ident = "to_hash", .kind = .hash },
-    .{ .method_name = "parser_for", .common_ident = "parser_for", .kind = .parser },
-    .{ .method_name = "encoder_for", .common_ident = "encoder_for", .kind = .encoder },
+    .{ .method_name = Ident.IS_EQ_METHOD_NAME, .common_ident = "is_eq", .kind = .equality },
+    .{ .method_name = Ident.TO_HASH_METHOD_NAME, .common_ident = "to_hash", .kind = .hash },
+    .{ .method_name = Ident.PARSER_FOR_METHOD_NAME, .common_ident = "parser_for", .kind = .parser },
+    .{ .method_name = Ident.ENCODER_FOR_METHOD_NAME, .common_ident = "encoder_for", .kind = .encoder },
     .{ .method_name = "map", .common_ident = "map", .kind = .map },
     .{ .method_name = "map!", .common_ident = "map_bang", .kind = .map_effectful },
 };
@@ -2463,7 +2463,7 @@ pub const StaticDispatchPlanTable = struct {
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             try plans.append(allocator, .{
                 .expr = checked_expr,
-                .method = try names.internMethodName("from_numeral"),
+                .method = try names.internMethodName(Ident.FROM_NUMERAL_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
@@ -2518,7 +2518,7 @@ pub const StaticDispatchPlanTable = struct {
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             try plans.append(allocator, .{
                 .expr = checked_expr,
-                .method = try names.internMethodName("from_quote"),
+                .method = try names.internMethodName(Ident.FROM_QUOTE_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
@@ -2544,7 +2544,7 @@ pub const StaticDispatchPlanTable = struct {
             };
             try plans.append(allocator, .{
                 .expr = literal.equality,
-                .method = try names.internMethodName("is_eq"),
+                .method = try names.internMethodName(Ident.IS_EQ_METHOD_NAME),
                 .dispatcher = .{ .arg = 0 },
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(source.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn),

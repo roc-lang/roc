@@ -9814,25 +9814,6 @@ fn isCheckingBuiltinModuleDirectly(self: *const Self) bool {
     return self.cir.module_role == .builtin;
 }
 
-fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
-    return switch (num_kind) {
-        .u8 => self.cir.idents.u8_type,
-        .i8 => self.cir.idents.i8_type,
-        .u16 => self.cir.idents.u16_type,
-        .i16 => self.cir.idents.i16_type,
-        .u32 => self.cir.idents.u32_type,
-        .i32 => self.cir.idents.i32_type,
-        .u64 => self.cir.idents.u64_type,
-        .i64 => self.cir.idents.i64_type,
-        .u128 => self.cir.idents.u128_type,
-        .i128 => self.cir.idents.i128_type,
-        .f32 => self.cir.idents.f32_type,
-        .f64 => self.cir.idents.f64_type,
-        .dec => self.cir.idents.dec_type,
-        .num_unbound, .int_unbound => unreachable,
-    };
-}
-
 fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind) CIR.Statement.Idx {
     inline for (CIR.builtin_type_specs) |spec| {
         if (spec.num_kind == num_kind) return @field(indices, spec.type_field);
@@ -9850,7 +9831,7 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
         .fields => self.cir.idents.builtin_encoding_field_names,
         .field => self.cir.idents.builtin_encoding_field_name,
         .numeral => self.cir.idents.builtin_numeral,
-        .num => |num_kind| self.builtinNumTypeIdent(num_kind),
+        .num => |num_kind| self.cir.idents.numTypeIdent(num_kind),
     };
 }
 
@@ -9864,21 +9845,11 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
         .fields => "Encoding.FieldName.FieldNames",
         .field => "Encoding.FieldName",
         .numeral => "Num.Numeral",
-        .num => |num_kind| switch (num_kind) {
-            .u8 => "Num.U8",
-            .i8 => "Num.I8",
-            .u16 => "Num.U16",
-            .i16 => "Num.I16",
-            .u32 => "Num.U32",
-            .i32 => "Num.I32",
-            .u64 => "Num.U64",
-            .i64 => "Num.I64",
-            .u128 => "Num.U128",
-            .i128 => "Num.I128",
-            .f32 => "Num.F32",
-            .f64 => "Num.F64",
-            .dec => "Num.Dec",
-            .num_unbound, .int_unbound => unreachable,
+        .num => |num_kind| {
+            inline for (CIR.builtin_type_specs) |spec| {
+                if (spec.num_kind == num_kind) return spec.qualified_name["Builtin.".len..];
+            }
+            unreachable; // unbound kinds name no builtin type
         },
     };
 }
@@ -10183,7 +10154,7 @@ fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind) Allocator.Error!Conte
     defer trace.end();
 
     const type_ident = types_mod.TypeIdent{
-        .ident_idx = self.builtinNumTypeIdent(num_kind),
+        .ident_idx = self.cir.idents.numTypeIdent(num_kind),
     };
 
     // Number types have no type arguments; their backing lives in the
@@ -10198,23 +10169,6 @@ fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind) Allocator.Error!Conte
         true, // Number types are opaque (defined with ::)
         true,
     );
-}
-
-fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumKind {
-    if (type_name.eql(self.cir.idents.u8) or type_name.eql(self.cir.idents.u8_type)) return .u8;
-    if (type_name.eql(self.cir.idents.i8) or type_name.eql(self.cir.idents.i8_type)) return .i8;
-    if (type_name.eql(self.cir.idents.u16) or type_name.eql(self.cir.idents.u16_type)) return .u16;
-    if (type_name.eql(self.cir.idents.i16) or type_name.eql(self.cir.idents.i16_type)) return .i16;
-    if (type_name.eql(self.cir.idents.u32) or type_name.eql(self.cir.idents.u32_type)) return .u32;
-    if (type_name.eql(self.cir.idents.i32) or type_name.eql(self.cir.idents.i32_type)) return .i32;
-    if (type_name.eql(self.cir.idents.u64) or type_name.eql(self.cir.idents.u64_type)) return .u64;
-    if (type_name.eql(self.cir.idents.i64) or type_name.eql(self.cir.idents.i64_type)) return .i64;
-    if (type_name.eql(self.cir.idents.u128) or type_name.eql(self.cir.idents.u128_type)) return .u128;
-    if (type_name.eql(self.cir.idents.i128) or type_name.eql(self.cir.idents.i128_type)) return .i128;
-    if (type_name.eql(self.cir.idents.f32) or type_name.eql(self.cir.idents.f32_type)) return .f32;
-    if (type_name.eql(self.cir.idents.f64) or type_name.eql(self.cir.idents.f64_type)) return .f64;
-    if (type_name.eql(self.cir.idents.dec) or type_name.eql(self.cir.idents.dec_type)) return .dec;
-    return null;
 }
 
 fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u32) ?BuiltinNominalDecl {
@@ -21038,11 +20992,7 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
 
         // Get the slice of tags
         const tags_slice = self.scratch_tags.sliceFromStart(state.scratch_top);
-        std.mem.sort(types_mod.Tag, tags_slice, self, struct {
-            fn less(checker: *const Self, a: types_mod.Tag, b: types_mod.Tag) bool {
-                return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(types_mod.Tag, tags_slice, self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
 
         // Materialize the tags into the types store before processing the
         // ext. `tags_slice` points into the scratch_tags buffer, and
@@ -22972,7 +22922,7 @@ fn borrowExpectedRecordField(self: *Self, base_var: Var, name: Ident.Idx, env: *
         var hi = names.len;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
-            switch (std.mem.order(u8, wanted, idents.getText(names[mid]))) {
+            switch (Ident.textOrder(wanted, idents.getText(names[mid]))) {
                 .lt => hi = mid,
                 .gt => lo = mid + 1,
                 .eq => return field_slice.items(.presence)[mid].typeVar(),
@@ -39183,7 +39133,7 @@ fn resumeStaticDispatchDrain(
                 var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
                 while (constraints_iter.next()) |constraint| {
                     if (constraint.origin == .from_literal) {
-                        if (self.builtinNumKindFromTypeName(rigid.name)) |num_kind| {
+                        if (self.cir.idents.numKindFromTypeIdent(rigid.name)) |num_kind| {
                             if (try self.reportInvalidBuiltinFromNumeralLiteral(
                                 deferred_constraint.var_,
                                 constraint,

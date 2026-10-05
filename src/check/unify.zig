@@ -2874,17 +2874,9 @@ const Unifier = struct {
     ) std.mem.Allocator.Error!PartitionedRecordFields {
         // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, self, struct {
-            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(RecordField, a_fields, self.ident_store, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, self, struct {
-            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(RecordField, b_fields, self.ident_store, comptime RecordField.sortByNameAsc);
 
         // Get the start of index of the new range
         const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
@@ -2897,7 +2889,7 @@ const Unifier = struct {
         while (a_i < a_fields.len and b_i < b_fields.len) {
             const a_next = a_fields[a_i];
             const b_next = b_fields[b_i];
-            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
+            const ord = RecordField.orderByName(self.ident_store, a_next, b_next);
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
@@ -3522,7 +3514,7 @@ const Unifier = struct {
         while (a_i < a_tags.len and b_i < b_tags.len) {
             const a_next = a_tags[a_i];
             const b_next = b_tags[b_i];
-            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
+            const ord = Tag.orderByName(self.ident_store, a_next, b_next);
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
@@ -3569,17 +3561,13 @@ const Unifier = struct {
         var ordered = true;
         var index: usize = 1;
         while (index < tags.len) : (index += 1) {
-            if (std.mem.order(u8, self.getTypeIdentText(tags[index - 1].name), self.getTypeIdentText(tags[index].name)) == .gt) {
+            if (Tag.orderByName(self.ident_store, tags[index - 1], tags[index]) == .gt) {
                 ordered = false;
                 break;
             }
         }
         if (ordered) return;
-        std.mem.sort(Tag, tags, self, struct {
-            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(Tag, tags, self.ident_store, comptime Tag.sortByNameAsc);
     }
 
     /// Given a list of shared tags & a list of extended tags, unify the shared tags.

@@ -44654,7 +44654,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const codec_name = switch (kind) {
             .parser => "parser",
-            .encoder => "encoder_for",
+            .encoder => Ident.ENCODER_FOR_METHOD_NAME,
         };
         const encoding_capture_id = switch (kind) {
             .parser => parserEncodingCaptureId(),
@@ -44782,7 +44782,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const codec_name = switch (kind) {
             .parser => "parser",
-            .encoder => "encoder_for",
+            .encoder => Ident.ENCODER_FOR_METHOD_NAME,
         };
         const encoding_capture_id = switch (kind) {
             .parser => parserEncodingCaptureId(),
@@ -54706,8 +54706,8 @@ const BodyContext = struct {
         shape_node: NodeId,
     ) ?InstantiatedGeneratedCodecCall {
         const method_name = switch (kind) {
-            .parser => "parser_for",
-            .encoder => "encoder_for",
+            .parser => Ident.PARSER_FOR_METHOD_NAME,
+            .encoder => Ident.ENCODER_FOR_METHOD_NAME,
         };
         const active = self.active_codec_contract orelse return null;
         if (self.graph.content(shape_node) != .named) return null;
@@ -56787,7 +56787,7 @@ const BodyContext = struct {
         negated: bool,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        var result = try self.lowerEqualityExpr(operand_ty, lhs, rhs, "is_eq", ret_ty);
+        var result = try self.lowerEqualityExpr(operand_ty, lhs, rhs, Ident.IS_EQ_METHOD_NAME, ret_ty);
         if (negated) {
             result = try self.lowLevelExpr(.bool_not, &.{result}, ret_ty);
         }
@@ -56951,9 +56951,9 @@ const BodyContext = struct {
 
     fn structuralDerivationMethodName(mode: DraftStructuralDerivationMode) []const u8 {
         return switch (mode) {
-            .equality => "is_eq",
+            .equality => Ident.IS_EQ_METHOD_NAME,
             .tag_discriminant => Common.invariant("tag-discriminant equality requested a structural method name"),
-            .hash => "to_hash",
+            .hash => Ident.TO_HASH_METHOD_NAME,
         };
     }
 
@@ -57114,7 +57114,7 @@ const BodyContext = struct {
         hasher_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         return try self.lowerDerivation(HashDeriver, value_ty, .{ .value = value, .hasher = hasher }, .{
-            .method_name = "to_hash",
+            .method_name = Ident.TO_HASH_METHOD_NAME,
             .result_ty = hasher_ty,
         });
     }
@@ -63556,11 +63556,11 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     defer frame_names.deinit();
     var caller_names = names.NameStore.init(gpa);
     defer caller_names.deinit();
-    const frame_encode = try frame_names.internMethodName("encoder_for");
+    const frame_encode = try frame_names.internMethodName(Ident.ENCODER_FOR_METHOD_NAME);
     const frame_decode = try frame_names.internMethodName("decode");
     const caller_decode = try caller_names.internMethodName("decode");
-    const caller_encode = try caller_names.internMethodName("encoder_for");
-    const caller_hash = try caller_names.internMethodName("to_hash");
+    const caller_encode = try caller_names.internMethodName(Ident.ENCODER_FOR_METHOD_NAME);
+    const caller_hash = try caller_names.internMethodName(Ident.TO_HASH_METHOD_NAME);
     try std.testing.expectEqual(frame_encode, caller_decode);
     try std.testing.expect(frame_decode != caller_decode);
 
@@ -63624,7 +63624,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     // even if that inner store assigns its ID to another method.
     var inner_names = names.NameStore.init(gpa);
     defer inner_names.deinit();
-    const inner_method = try inner_names.internMethodName("is_eq");
+    const inner_method = try inner_names.internMethodName(Ident.IS_EQ_METHOD_NAME);
     try std.testing.expectEqual(caller_decode, inner_method);
     var inner_view_data: ModuleViewData = undefined;
     const inner_view = &inner_view_data;
