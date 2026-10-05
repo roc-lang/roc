@@ -702,20 +702,8 @@ pub const ModuleState = struct {
     reports: std.ArrayList(Report),
     /// Minimum dependency depth from root
     depth: u32,
-    /// DFS visit color for cycle detection
-    visit_color: VisitColor,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
-
-    /// DFS colors for cycle detection during import graph traversal
-    pub const VisitColor = enum {
-        /// Not yet visited
-        white,
-        /// Currently being visited (in the DFS stack)
-        gray,
-        /// Fully processed
-        black,
-    };
 
     pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -732,7 +720,6 @@ pub const ModuleState = struct {
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
-            .visit_color = .white,
             .compile_time_ns = 0,
         };
     }
@@ -3229,7 +3216,6 @@ pub const Coordinator = struct {
             .canonicalized_cached,
             .type_checked,
             .operation_failed,
-            .cycle_detected,
             .worker_oom,
             => unreachable,
         };
@@ -3797,7 +3783,6 @@ pub const Coordinator = struct {
 
         mod.phase = .Done;
         mod.completion = .succeeded;
-        mod.visit_color = .black;
 
         if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
             coordinatorInvariant("successful completion counters were already zero for module '{s}'", .{mod.name});
@@ -3894,7 +3879,6 @@ pub const Coordinator = struct {
 
             mod.phase = .Done;
             mod.completion = .failed;
-            mod.visit_color = .black;
 
             if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
                 coordinatorInvariant("failed completion counters were already zero for module '{s}'", .{mod.name});
@@ -3990,7 +3974,6 @@ pub const Coordinator = struct {
             .canonicalized_cached => |*r| try self.handleCanonicalizedCached(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
-            .cycle_detected => |*r| try self.handleCycleDetected(r),
             .worker_oom => return error.OutOfMemory,
             .post_check => unreachable,
         }
@@ -4694,7 +4677,6 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(deferred_imports);
 
         mod.phase = .TypeCheck;
-        mod.visit_color = .black;
         try self.enqueueTask(.{
             .type_check = .{
                 .package_name = pkg.name,
@@ -4855,37 +4837,6 @@ pub const Coordinator = struct {
         const report = try Report.init(self.gpa, title, headline, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
-    }
-
-    /// Handle cycle detection
-    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) Allocator.Error!void {
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
-                result.package_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
-                result.module_id, result.package_name,
-            });
-            unreachable;
-        };
-
-        // Take ownership of module env
-        mod.replaceModuleEnv(result.module_env);
-
-        // Append reports - we take ownership, so clear result.reports after copying
-        for (result.reports.items) |rep| {
-            try mod.reports.append(self.gpa, rep);
-        }
-        // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
-        result.reports.clearRetainingCapacity();
-
-        try self.completeModulesWithFailure(&.{.{
-            .pkg_name = pkg.name,
-            .module_id = result.module_id,
-        }});
     }
 
     /// Handle a cycle after its closing edge has been recorded. Reachability is
@@ -5213,7 +5164,6 @@ pub const Coordinator = struct {
 
         if (self.appShouldWaitForPlatformRequirements(mod)) {
             mod.phase = .WaitingOnPlatformRequirements;
-            mod.visit_color = .black;
             return;
         }
 
@@ -5238,7 +5188,6 @@ pub const Coordinator = struct {
         }
 
         mod.phase = .Canonicalize;
-        mod.visit_color = .black;
         try self.enqueueTask(.{
             .canonicalize = .{
                 .package_name = pkg.name,

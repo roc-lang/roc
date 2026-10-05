@@ -65,16 +65,6 @@ pub const DiscoveredExternalImport = struct {
 /// input type: the coordinator builds these once and the drain consumes them.
 pub const CanonicalizeImport = can.ImportResolution.ResolvedImport;
 
-/// Information about detected import cycles
-pub const CycleInfo = struct {
-    /// The module that caused the cycle
-    module_id: ModuleId,
-    /// The module name that was being imported when cycle was detected
-    import_name: []const u8,
-    /// Path of module IDs forming the cycle (if computed)
-    cycle_path: ?[]const ModuleId,
-};
-
 /// Task to parse a module source file
 pub const ParseTask = struct {
     /// Package this module belongs to
@@ -387,24 +377,6 @@ pub const WorkerOperationFailure = struct {
     source_file_state: ?watch_inputs.State = null,
 };
 
-/// Result when an import cycle is detected during canonicalization
-pub const CycleDetected = struct {
-    /// Package where the cycle was detected
-    package_name: []const u8,
-    /// Module that detected the cycle
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// Information about the cycle
-    cycle_info: CycleInfo,
-    /// Error reports for the cycle
-    reports: std.ArrayList(Report),
-    /// Module environment (ownership returned even on cycle)
-    module_env: *ModuleEnv,
-};
-
 /// Result when a worker stage ran out of memory. Carries just enough identity
 /// to report which module was being processed; the coordinator turns this into
 /// `error.OutOfMemory` and aborts the whole compilation rather than letting the
@@ -430,8 +402,6 @@ pub const WorkerResult = union(enum) {
     type_checked: TypeCheckedResult,
     /// A worker could not complete the compilation operation.
     operation_failed: WorkerOperationFailure,
-    /// Import cycle was detected
-    cycle_detected: CycleDetected,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
     /// Returned in worker arrival order; `Completion.id` identifies the task.
@@ -444,7 +414,6 @@ pub const WorkerResult = union(enum) {
             .canonicalized_cached => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .operation_failed => |r| r.package_name,
-            .cycle_detected => |r| r.package_name,
             .worker_oom => |r| r.package_name,
             .post_check => "",
         };
@@ -457,7 +426,6 @@ pub const WorkerResult = union(enum) {
             .canonicalized_cached => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .operation_failed => |r| r.module_id,
-            .cycle_detected => |r| r.module_id,
             .worker_oom => |r| r.module_id,
             .post_check => 0,
         };
@@ -470,7 +438,6 @@ pub const WorkerResult = union(enum) {
             .canonicalized_cached => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .operation_failed => |r| r.module_name,
-            .cycle_detected => |r| r.module_name,
             .worker_oom => |r| r.module_name,
             .post_check => "",
         };
@@ -490,7 +457,7 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .operation_failed, .cycle_detected, .worker_oom, .post_check => {},
+            .canonicalized, .type_checked, .operation_failed, .worker_oom, .post_check => {},
         }
         self.deinit(gpa);
     }
@@ -546,11 +513,6 @@ pub const WorkerResult = union(enum) {
                 r.reports.deinit(gpa);
             },
             .operation_failed => {},
-            .cycle_detected => |*r| {
-                if (r.cycle_info.cycle_path) |path| gpa.free(path);
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
             .worker_oom => {},
         }
     }
