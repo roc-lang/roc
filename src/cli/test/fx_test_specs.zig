@@ -595,6 +595,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: F64 comparisons use float instructions, not integer bit-pattern",
     },
     .{
+        .roc_file = "test/fx/numeric_abs_runtime.roc",
+        .io_spec = "1>I128 highest abs_diff lowest: 340282366920938463463374607431768211455|1>I128 lowest abs_diff highest: 340282366920938463463374607431768211455|1>I128 highest abs_diff -1: 170141183460469231731687303715884105728|1>F64 7.5 abs_diff 2.25: 5.25|1>F64 2.25 abs_diff 7.5: 5.25|1>F64 -0.5 abs_diff 2.25: 2.75|1>F64 abs of -0: 0|1>F32 7.5 abs_diff 2.25: 5.25|1>F32 abs of -0: 0",
+        .description = "Regression test: float abs_diff keeps fractions, I128.abs_diff spans the whole range, and abs clears negative zero's sign",
+    },
+    .{
         .roc_file = "test/fx/many_args.roc",
         .io_spec = "1>36",
         .description = "Test: Function with 8 arguments exercises register spilling",

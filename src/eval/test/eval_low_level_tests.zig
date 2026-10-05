@@ -3129,6 +3129,60 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "240" },
     },
     .{
+        .name = "low_level - I128.abs_diff spans the whole I128 range",
+        .source =
+        \\{
+        \\a : I128
+        \\a = I128.highest
+        \\b : I128
+        \\b = I128.lowest
+        \\x = I128.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "340282366920938463463374607431768211455" },
+    },
+    .{
+        .name = "low_level - F64.abs_diff keeps the fractional part",
+        .source =
+        \\{
+        \\a : F64
+        \\a = 7.5
+        \\b : F64
+        \\b = 2.25
+        \\x = F64.abs_diff(b, a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5.25" },
+    },
+    .{
+        .name = "low_level - F32.abs_diff keeps the fractional part",
+        .source =
+        \\{
+        \\a : F32
+        \\a = -0.5
+        \\b : F32
+        \\b = 2.25
+        \\x = F32.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2.75" },
+    },
+    .{
+        .name = "low_level - F64.abs of negative zero is positive zero",
+        .source =
+        \\{
+        \\a : F64
+        \\a = -0.0
+        \\x = F64.abs(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
         .name = "low_level - U16.to_str",
         .source =
         \\{

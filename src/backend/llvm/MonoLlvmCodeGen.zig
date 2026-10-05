@@ -6795,42 +6795,45 @@ pub const MonoLlvmCodeGen = struct {
             const is_lowest = wip.icmp(.eq, value, lowest, "") catch return error.OutOfMemory;
             try self.emitCrashIf(is_lowest, CheckedArithmetic.overflowMessageForLayout(checked, target_layout) orelse unreachable);
         }
+        if (isFloatLayout(target_layout)) {
+            try self.storeScalar(self.slot(target).ptr, target_layout, try self.emitFloatAbs(value));
+            return;
+        }
         const zero = builder.zeroInitValue(value.typeOfWip(wip)) catch return error.OutOfMemory;
-        const is_neg = if (isFloatLayout(target_layout))
-            wip.fcmp(.normal, .olt, value, zero, "") catch return error.OutOfMemory
-        else
-            wip.icmp(.slt, value, zero, "") catch return error.OutOfMemory;
-        const neg = if (isFloatLayout(target_layout))
-            wip.un(.fneg, value, "") catch return error.OutOfMemory
-        else
-            wip.neg(value, "") catch return error.OutOfMemory;
+        const is_neg = wip.icmp(.slt, value, zero, "") catch return error.OutOfMemory;
+        const neg = wip.neg(value, "") catch return error.OutOfMemory;
         const result = wip.select(.normal, is_neg, neg, value, "") catch return error.OutOfMemory;
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
-    fn emitNumericAbsDiff(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const lhs_layout = self.localLayout(GuardedList.at(args, 0));
-        const rhs_layout = self.localLayout(GuardedList.at(args, 1));
-        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, lhs_layout), .i128, lhs_layout.isSigned());
-        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, rhs_layout), .i128, rhs_layout.isSigned());
-        const zero = builder.intValue(.i128, 0) catch return error.OutOfMemory;
+    /// A float's magnitude: the value with its sign bit cleared, so the
+    /// magnitude of negative zero is positive zero.
+    fn emitFloatAbs(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.callIntrinsic(.normal, .none, .fabs, &.{value.typeOfWip(wip)}, &.{value}, "") catch return error.OutOfMemory;
+    }
 
-        const result = if (lhs_layout.isSigned() or rhs_layout.isSigned()) blk: {
-            const diff = wip.bin(.sub, lhs, rhs, "") catch return error.OutOfMemory;
-            const is_neg = wip.icmp(.slt, diff, zero, "") catch return error.OutOfMemory;
-            const neg = wip.bin(.sub, zero, diff, "") catch return error.OutOfMemory;
-            break :blk wip.select(.normal, is_neg, neg, diff, "") catch return error.OutOfMemory;
+    /// The absolute difference of two numbers of one layout. Floats subtract
+    /// and take the magnitude. Integers and Dec subtract the smaller operand
+    /// from the larger at the operand's own width, which yields every bit of
+    /// the difference even when it exceeds the operand type's signed range.
+    fn emitNumericAbsDiff(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const operand_layout = self.localLayout(GuardedList.at(args, 0));
+        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, operand_layout);
+        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+
+        const result = if (isFloatLayout(operand_layout)) blk: {
+            const diff = wip.bin(.fsub, lhs, rhs, "") catch return error.OutOfMemory;
+            break :blk try self.emitFloatAbs(diff);
         } else blk: {
-            const lhs_ge_rhs = wip.icmp(.uge, lhs, rhs, "") catch return error.OutOfMemory;
+            const lhs_ge_rhs = wip.icmp(if (operand_layout.isSigned()) .sge else .uge, lhs, rhs, "") catch return error.OutOfMemory;
             const lhs_minus_rhs = wip.bin(.sub, lhs, rhs, "") catch return error.OutOfMemory;
             const rhs_minus_lhs = wip.bin(.sub, rhs, lhs, "") catch return error.OutOfMemory;
             break :blk wip.select(.normal, lhs_ge_rhs, lhs_minus_rhs, rhs_minus_lhs, "") catch return error.OutOfMemory;
         };
 
-        const target_layout = self.localLayout(target);
-        const coerced = try self.coerceScalar(result, self.scalarType(target_layout), false);
-        try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
     /// Narrow `op` to a smaller enum whose variants carry `LowLevel`'s values.
