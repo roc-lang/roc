@@ -278,8 +278,6 @@ DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
-TYPE MISMATCH - fuzz_crash_023.md:175:26:175:27
-TYPE MISMATCH - fuzz_crash_023.md:175:34:175:40
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:201:1:201:25
 MISSING METHOD - fuzz_crash_023.md:189:26:189:40
 MISSING METHOD - fuzz_crash_023.md:189:26:189:66
@@ -1296,56 +1294,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 			(line-break)
 			(line-break)
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 175 26) (end 175 27))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "fuzz_crash_023.md") (start 175 26) (end 175 27) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Str")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 175 34) (end 175 40))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "fuzz_crash_023.md") (start 175 34) (end 175 40) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Str")
-			(annotation-end)))
 	(report
 		(severity warning)
 		(title "Declaration Has No Value")

@@ -77,5 +77,5 @@ Stdout.line ??
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "ok"))
+(expr (type "_a"))
 ~~~

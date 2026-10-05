@@ -40,5 +40,7 @@ test "issue 12024: uninitialized var with an undeclared type nested in its annot
     defer test_env.deinit();
     try test_env.assertOneCanError("Undeclared Type");
     try std.testing.expectEqual(@as(usize, 0), try test_env.typeProblemCount());
-    try std.testing.expect(try test_env.lambdaBodyStatement("f", 0) == .s_runtime_error);
+    // The body's value is a use of a name that binds nothing, so the use is
+    // erroneous and so is the function value it produces.
+    try std.testing.expect(test_env.module_env.store.getExpr(try test_env.defExpr("f")) == .e_runtime_error);
 }

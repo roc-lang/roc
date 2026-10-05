@@ -201,7 +201,6 @@ TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
 MISSING METHOD - fuzz_crash_019.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_019.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
-TYPE MISMATCH - fuzz_crash_019.md:93:22:93:24
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
 MISSING METHOD - fuzz_crash_019.md:105:55:105:66
 MISSING METHOD - fuzz_crash_019.md:105:55:105:72
@@ -1365,31 +1364,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(reflow " ")
 			(annotated code "_ =")
 			(reflow ".")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 93 22) (end 93 24))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 93 22) (end 93 24) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Str")
-			(annotation-end)))
 	(report
 		(severity warning)
 		(title "Declaration Has No Value")

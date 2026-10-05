@@ -3227,13 +3227,13 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.val4"))))
 	(d-let
 		(p-assign (ident "d5_4"))
-		(e-runtime-error (tag "erroneous_value_use")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_5"))
-		(e-runtime-error (tag "erroneous_value_use")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_6"))
-		(e-runtime-error (tag "erroneous_value_use")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))
 		(e-dispatch-call (method "plus") (constraint-fn-var 1698)

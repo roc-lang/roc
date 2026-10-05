@@ -337,20 +337,7 @@ run = |num| {
 		(e-lambda
 			(args
 				(p-assign (ident "num")))
-			(e-block
-				(s-let
-					(p-assign (ident "client"))
-					(e-nominal (nominal "Client")
-						(e-record
-							(fields
-								(field (name "effects")
-									(e-empty_record))))))
-				(s-let
-					(p-assign (ident "done"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-tag (name "Ok")
-					(args
-						(e-runtime-error (tag "erroneous_value_use"))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))

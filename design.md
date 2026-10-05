@@ -748,9 +748,17 @@ checker recovery. The recovery rules:
 - A lambda parameter pattern that the lambda's annotation rejects binds
   nothing, so the lambda is erroneous, exactly as when the pattern fails its
   own check.
-- A binding whose right-hand side is erroneous binds nothing. Every name a
-  destructuring pattern introduces is erroneous, annotated or not; an
-  unannotated assignment's own name is erroneous.
+- A pattern matched against an erroneous value binds nothing, because the
+  value crashes before any pattern sees it. This is one rule wherever a
+  pattern meets a value: a binding whose right-hand side is erroneous, every
+  branch pattern of a `match` whose scrutinee is erroneous (including the
+  `match` a `?` desugars to), and the pattern of a `for` loop whose iterable
+  is erroneous. Every name a destructuring pattern introduces is erroneous,
+  annotated or not; an unannotated assignment's own name is erroneous. A
+  binding of a `?` whose operand is erroneous is a binding of an erroneous
+  `match`, so its name is erroneous too. A lambda parameter binds from no
+  value at its definition; the call that supplies an erroneous argument is
+  retired instead (Erroneous Call Operand Retirement).
 - An uninitialized `var` whose annotation contains an error binds nothing:
   its binders are erroneous and the declaration is a runtime error.
 - An expression statement whose expression's checked type contains an error
@@ -787,9 +795,15 @@ checker recovery. The recovery rules:
   its right-hand side is erroneous (Value Bindings Generalize By Expression).
 - A use of a declaration that already reported its own rejection (a value
   binding whose annotation is rejected, or a hosted declaration that is not an
-  effectful function) is erroneous at the use: the use never relates to the
+  effectful function), or of an erroneous name (one a rejected pattern or a
+  pattern matched against an erroneous value introduces), is erroneous at the
+  use (`Check.markErroneousNameUse`): the use never relates to the
   declaration's type, so uses cannot disagree with one another, and the error
-  lives only in the use's own checker variable.
+  lives only in the use's own checker variable. The binder's own class is
+  never marked, so no `.err` enters a class shared with the pattern, an
+  annotation, or another use. A call-like consumer of such a use, such as a
+  method call on it, is retired before it introduces a dispatch relation
+  (Erroneous Call Operand Retirement), so the use adds no report of its own.
 - A conditional's or match's branch whose value is erroneous (its expression
   is in `call_operand_type_error_exprs`) is retired on its own and does not
   join the enclosing expression's result, whose type comes from the other
@@ -3720,7 +3734,7 @@ the binding shares. Its right-hand side is then retired as a runtime error,
 and, as an unannotated binding of an erroneous value, its name is erroneous,
 so every use becomes a runtime error: a program reaching the binding crashes
 there, and code that does not reach it runs. Each use is erroneous at the use
-(`Check.markRejectedValueAnnotationUse`), exactly like a use of a hosted
+(`Check.markErroneousNameUse`), exactly like a use of a hosted
 declaration that is not an effectful function: it does not relate to the
 binding's type, so using the binding at two types reports nothing further.
 The use's error stays in its own variable; a call-like consumer is retired

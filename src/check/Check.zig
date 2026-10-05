@@ -24131,8 +24131,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 break :blk;
             }
 
-            if (self.rejected_value_annotations.contains(lookup.pattern_idx)) {
-                try self.markRejectedValueAnnotationUse(expr_idx, expr_var);
+            if (self.rejected_value_annotations.contains(lookup.pattern_idx) or
+                self.erroneous_value_patterns.contains(lookup.pattern_idx))
+            {
+                try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
+                try self.markErroneousNameUse(expr_idx, expr_var);
                 break :blk;
             }
 
@@ -25905,8 +25908,11 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
             }
             try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
-            if (applied_annotation == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
-                try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
+            if (self.erroneous_value_exprs.contains(decl_stmt.expr)) {
+                if (applied_annotation == null) try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
+                // Destructuring an erroneous value binds nothing, so every
+                // name the pattern introduces is erroneous, annotated or not.
+                if (self.cir.store.getPattern(decl_stmt.pattern) != .assign) try self.markPatternBindingsErroneous(decl_stmt.pattern);
             }
             try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
             if (decl.decl_is_fn) {
@@ -26208,6 +26214,9 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
     if (!state.valid_pattern) {
         if (state.loop_expr) |expr| try self.retireCallLikeExpr(expr.expr_idx, expr.expr_var);
     }
+    // Iterating an erroneous value binds nothing, so every name the loop
+    // pattern introduces is erroneous before the body uses it.
+    if (self.erroneous_value_exprs.contains(iterable)) try self.markPatternBindingsErroneous(pattern);
     const iterable_is_erroneous = !state.valid_pattern or if (state.loop_expr) |expr|
         try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
     else
@@ -27937,6 +27946,9 @@ const MatchCheck = struct {
     cond_always_crashes: bool = false,
     match_hoist_owner: usize = 0,
     had_type_error: bool = false,
+    /// The scrutinee is an erroneous value, so no branch pattern ever matches
+    /// it and every name a branch pattern introduces is erroneous.
+    scrutinee_erroneous: bool = false,
     has_invalid_try: bool = false,
     ptrn_target_var: Var = undefined,
     val_var: Var = undefined,
@@ -28006,7 +28018,8 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // solving. The match must become the same explicit executable
             // boundary; otherwise later lowering would try to build a
             // decision tree whose scrutinee deliberately has no checked type.
-            state.had_type_error = self.erroneous_value_exprs.contains(match.cond);
+            state.scrutinee_erroneous = self.erroneous_value_exprs.contains(match.cond);
+            state.had_type_error = state.scrutinee_erroneous;
 
             // For matches desugared from `?` operator, verify the condition
             // unifies with Try type FIRST. If it doesn't, report the specific
@@ -28344,6 +28357,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
             // Check the pattern's sub types
             const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
             if (!try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) state.had_type_error = true;
+            if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(other_branch_ptrn.pattern);
 
             // Check the pattern against the cond
             if (!state.cond_always_crashes) {
@@ -28369,6 +28383,8 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         if (!try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) state.had_type_error = true;
+        // Matching an erroneous value binds nothing.
+        if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(branch_ptrn.pattern);
 
         if (!state.cond_always_crashes) {
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -31301,7 +31317,7 @@ fn checkResolvedAssociatedTarget(
     }
 
     if (is_this_module and self.rejected_value_annotations.contains(target_env.store.getDef(target_def_idx).pattern)) {
-        try self.markRejectedValueAnnotationUse(expr_idx, expr_var);
+        try self.markErroneousNameUse(expr_idx, expr_var);
         return;
     }
 
@@ -45885,13 +45901,16 @@ fn markNonEffectfulHostedDeclarationUse(self: *Self, expr_idx: CIR.Expr.Idx, exp
     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
 }
 
-/// A use of a binding whose annotation was rejected
-/// (`rejected_value_annotations`). The binding already reported the problem
-/// and its value is a runtime error, so, exactly like a use of a non-effectful
-/// hosted declaration, the use only becomes erroneous: it never relates to the
-/// binding's type, so uses cannot disagree with one another, and its error
-/// lives in the use's own variable.
-fn markRejectedValueAnnotationUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
+/// A use of an erroneous name: a binding whose annotation was rejected
+/// (`rejected_value_annotations`), or a binder that binds nothing
+/// (`erroneous_value_patterns`) because its pattern was rejected or matched
+/// an erroneous value. The problem was already reported and the name has no
+/// value, so, exactly like a use of a non-effectful hosted declaration, the
+/// use only becomes erroneous: it never relates to the binder's type, so uses
+/// cannot disagree with one another and a call-like consumer is retired
+/// before it introduces a relation, and its error lives in the use's own
+/// variable.
+fn markErroneousNameUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
     try self.markErroneous(expr_var);
     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
 }

@@ -1878,7 +1878,12 @@ pub const ReportBuilder = struct {
         const snapshot_args = self.snapshots.?.sliceVars(content.structure.nominal_type.vars);
         if (snapshot_args.len == 0) return false;
         const err_snapshot = snapshot_args[snapshot_args.len - 1];
-        if (self.snapshots.?.getContent(err_snapshot) == .flex) return false;
+        // An unconstrained payload says nothing, and an erroneous one already
+        // has its own report.
+        switch (self.snapshots.?.getContent(err_snapshot)) {
+            .flex, .err => return false,
+            else => {},
+        }
         const err_type = self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
