@@ -17,7 +17,7 @@ const CompactWriter = @This();
 /// require aligned memory access.
 pub const SERIALIZATION_ALIGNMENT = std.mem.Alignment.@"16";
 
-const ZEROS: [16]u8 = [_]u8{0} ** 16;
+const ZEROS: [16]u8 = @as([16]u8, @splat(0));
 
 iovecs: std.ArrayList(Iovec),
 total_bytes: usize,
@@ -184,21 +184,21 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
             if (tag_size == 0) {
                 // A zero-size tag (e.g. a single-variant union) carries no discriminant; the
                 // sole payload sits at offset 0.
-                if (uinfo.fields.len >= 1 and @sizeOf(uinfo.fields[0].type) > 0) {
-                    zeroValuePadding(uinfo.fields[0].type, ptr);
-                    @memset(ptr[@sizeOf(uinfo.fields[0].type)..vsize], 0);
+                if (uinfo.field_names.len >= 1 and @sizeOf(uinfo.field_types[0]) > 0) {
+                    zeroValuePadding(uinfo.field_types[0], ptr);
+                    @memset(ptr[@sizeOf(uinfo.field_types[0])..vsize], 0);
                 } else {
                     @memset(ptr[0..vsize], 0);
                 }
             } else {
                 const max_payload = comptime blk: {
                     var m: usize = 0;
-                    for (uinfo.fields) |f| m = @max(m, @sizeOf(f.type));
+                    for (uinfo.field_types) |FieldType| m = @max(m, @sizeOf(FieldType));
                     break :blk m;
                 };
                 const max_payload_align = comptime blk: {
                     var a: usize = 1;
-                    for (uinfo.fields) |f| a = @max(a, @alignOf(f.type));
+                    for (uinfo.field_types) |FieldType| a = @max(a, @alignOf(FieldType));
                     break :blk a;
                 };
                 // Zig lays out a tagged union like a 2-field struct {tag, payload}: the tag
@@ -220,7 +220,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                 // width mirrors what the compiler's own tag read sees, so an in-range value
                 // still selects the right variant.
                 const TagInt = @typeInfo(TagType).@"enum".tag_type;
-                const StorageInt = std.meta.Int(.unsigned, tag_size * 8);
+                const StorageInt = @Int(.unsigned, tag_size * 8);
                 const tag_mask: StorageInt = if (@bitSizeOf(TagInt) >= tag_size * 8)
                     ~@as(StorageInt, 0)
                 else
@@ -235,10 +235,10 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                 // masked value rather than the original bytes makes a sub-byte-width tag's
                 // storage byte deterministic without assuming how the compiler extended it.
                 var handled = false;
-                inline for (uinfo.fields) |f| {
-                    if (!handled and @intFromEnum(@field(TagType, f.name)) == tag_val) {
+                inline for (uinfo.field_names, uinfo.field_types) |field_name, FieldType| {
+                    if (!handled and @backingInt(@field(TagType, field_name)) == tag_val) {
                         handled = true;
-                        const active_size = @sizeOf(f.type);
+                        const active_size = @sizeOf(FieldType);
                         const saved_payload: [active_size]u8 = if (active_size > 0)
                             ptr[payload_offset..][0..active_size].*
                         else
@@ -247,7 +247,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                         std.mem.writeInt(StorageInt, ptr[tag_offset..][0..tag_size], masked_tag, native_endian);
                         if (active_size > 0) {
                             ptr[payload_offset..][0..active_size].* = saved_payload;
-                            zeroValuePadding(f.type, ptr + payload_offset);
+                            zeroValuePadding(FieldType, ptr + payload_offset);
                         }
                     }
                 }
@@ -280,10 +280,10 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
         // Zero inter-field gaps
         const covered = comptime blk: {
-            var mask = [_]bool{false} ** vsize;
-            for (vinfo.@"struct".fields) |field| {
-                const start = @offsetOf(V, field.name);
-                const end = start + @sizeOf(field.type);
+            var mask = @as([vsize]bool, @splat(false));
+            for (vinfo.@"struct".field_names, vinfo.@"struct".field_types) |field_name, FieldType| {
+                const start = @offsetOf(V, field_name);
+                const end = start + @sizeOf(FieldType);
                 for (start..end) |j| mask[j] = true;
             }
             break :blk mask;
@@ -303,19 +303,19 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         // bytes are fully defined has nothing to zero, and a field that is neither
         // defined nor scrubbable is a compile error at the serialization boundary, so it
         // cannot reach here.
-        inline for (vinfo.@"struct".fields) |field| {
-            const FType = field.type;
+        inline for (vinfo.@"struct".field_names, vinfo.@"struct".field_types) |field_name, FieldType| {
+            const FType = FieldType;
             if (@sizeOf(FType) > 0 and comptime !serde_validation.isFullyDefined(FType)) {
-                zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                zeroValuePadding(FType, ptr + @offsetOf(V, field_name));
             }
         }
     } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .@"extern") {
         // An extern struct has no implicit gaps (proven at the serialization boundary),
         // but a field may still need scrubbing.
-        inline for (vinfo.@"struct".fields) |field| {
-            const FType = field.type;
+        inline for (vinfo.@"struct".field_names, vinfo.@"struct".field_types) |field_name, FieldType| {
+            const FType = FieldType;
             if (@sizeOf(FType) > 0 and comptime !serde_validation.isFullyDefined(FType)) {
-                zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                zeroValuePadding(FType, ptr + @offsetOf(V, field_name));
             }
         }
     } else if (vinfo == .int or vinfo == .@"enum" or
@@ -327,7 +327,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         // declared width. `bits` comes from the declaration, not from inspection.
         const bits = if (vinfo == .@"enum") @bitSizeOf(vinfo.@"enum".tag_type) else @bitSizeOf(V);
         if (bits < vsize * 8) {
-            const StorageInt = std.meta.Int(.unsigned, vsize * 8);
+            const StorageInt = @Int(.unsigned, vsize * 8);
             const mask: StorageInt = (@as(StorageInt, 1) << bits) - 1;
             const stored = std.mem.readInt(StorageInt, ptr[0..vsize], native_endian);
             std.mem.writeInt(StorageInt, ptr[0..vsize], stored & mask, native_endian);
@@ -472,7 +472,7 @@ pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
     for (self.allocated_memory.items) |memory_slice| {
         const slice = memory_slice.ptr[0..memory_slice.size];
         const alignment_log2 = std.math.log2_int(usize, memory_slice.alignment);
-        const alignment: std.mem.Alignment = @enumFromInt(alignment_log2);
+        const alignment: std.mem.Alignment = @fromBackingInt(@intCast(alignment_log2));
         allocator.rawFree(slice, alignment, @returnAddress());
     }
     self.allocated_memory.deinit(allocator);
@@ -562,9 +562,9 @@ fn writeLeafwiseForTest(comptime V: type, ptr: [*]u8, value: V) void {
                 @as(*align(1) V, @ptrCast(ptr)).* = value;
                 return;
             }
-            inline for (st.fields) |f| {
-                if (@sizeOf(f.type) > 0) {
-                    writeLeafwiseForTest(f.type, ptr + @offsetOf(V, f.name), @field(value, f.name));
+            inline for (st.field_names, st.field_types) |field_name, FieldType| {
+                if (@sizeOf(FieldType) > 0) {
+                    writeLeafwiseForTest(FieldType, ptr + @offsetOf(V, field_name), @field(value, field_name));
                 }
             }
         },
@@ -595,6 +595,7 @@ fn writeLeafwiseForTest(comptime V: type, ptr: [*]u8, value: V) void {
         .frame,
         .@"anyframe",
         .enum_literal,
+        .spirv,
         => @as(*align(1) V, @ptrCast(ptr)).* = value,
     }
 }
@@ -702,8 +703,8 @@ test "zeroValuePadding: canonicalizes a tagged union's inactive bytes" {
     // and the discriminant follows it. Check that before poisoning around it, so a
     // layout change fails here with a clear cause instead of corrupting the value.
     const tag_at = @sizeOf(u64);
-    try std.testing.expectEqual(@intFromEnum(std.meta.Tag(V).small), pair.one[tag_at]);
-    try std.testing.expectEqual(@intFromEnum(std.meta.Tag(V).small), pair.two[tag_at]);
+    try std.testing.expectEqual(@backingInt(std.meta.Tag(V).small), pair.one[tag_at]);
+    try std.testing.expectEqual(@backingInt(std.meta.Tag(V).small), pair.two[tag_at]);
 
     // Everything except the live payload and the discriminant is stale: the tail of the
     // payload area the smaller variant does not reach, and the bytes after the tag.
@@ -809,7 +810,7 @@ test "byteDetermination: implicit padding in a fixed layout is not silently acce
         try std.testing.expect(!serde_validation.isFullyDefined(Short));
 
         const Filled = extern union {
-            small: extern struct { v: u8, _reserved: [@sizeOf(u64) - 1]u8 = .{0} ** (@sizeOf(u64) - 1) },
+            small: extern struct { v: u8, _reserved: [@sizeOf(u64) - 1]u8 = @splat(0) },
             large: u64,
         };
         comptime std.debug.assert(@sizeOf(Filled) == @sizeOf(Short));
