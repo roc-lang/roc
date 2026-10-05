@@ -7719,7 +7719,7 @@ const Cloner = struct {
                 task.budget.* -= 1;
                 // A value whose every part is substitutable is already
                 // reusable: decomposing it would return each part unchanged
-                // and rebuild the same value. Its expanded size bounds
+                // and produce an equal value. Its expanded size bounds
                 // substitution at use sites, not reuse, so it does not
                 // decide this.
                 if (try valueIsSubstitutable(self.pass.program, self.pass.allocator, value)) return retValue(value);
@@ -17988,7 +17988,7 @@ test "making a substitutable value reusable keeps it whole at any size" {
     // A chain of reads past both the substitution expansion limit and the
     // reuse work budget, like a long interpolation's iterator. Every part of
     // it is already reusable, so making it reusable binds nothing and
-    // returns the value itself instead of rebuilding or materializing it.
+    // returns the value itself instead of copying or materializing it.
     var reads: Value = .{ .expr = read };
     for (0..3 * Cloner.make_reusable_work_budget) |_| {
         const payload = try arena.allocator().alloc(Value, 1);
