@@ -263,7 +263,6 @@ TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
 REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
-TYPE MISMATCH - fuzz_crash_028.md:133:5:133:12
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:18
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:25
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:31
@@ -2297,48 +2296,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(line-break)
 			(reflow "Give that declaration a value body, or stop referring to it here.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 133 5) (end 133 12))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "may return early with a type that doesn't match the function body."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "On error, this")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "returns an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow ", so this function must return a")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow ".")
-			(line-break)
-			(line-break)
-			(reflow "But its body evaluates to:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Blue]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "The error types from all")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")

@@ -19670,6 +19670,9 @@ const ProcBodyBuilder = struct {
         }
 
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error produces no value, so returning it is the
+        // crash itself; its own checked type has no representation.
+        if (expr.data == .runtime_error) return exprDone(try self.lowerCheckedRuntimeError());
         const expr_rep = self.repForType(expr.ty);
         const expr_layout = self.workerRuntimeLayoutForRep(expr_rep).layoutIdx();
         const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];

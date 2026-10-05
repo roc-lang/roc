@@ -802,6 +802,34 @@ checker recovery. The recovery rules:
   `match`, so its name is erroneous too. A lambda parameter binds from no
   value at its definition; the call that supplies an erroneous argument is
   retired instead (Erroneous Call Operand Retirement).
+- A value's rejection can be decided after the names bound from it were
+  checked: a literal's conversion is a dispatch on the literal's own type,
+  which only a later relation determines (`"abc"?` relates the literal to
+  `Try`, a branch pattern or a destructure relates it to the pattern's shape,
+  and a literal no relation determines gets its definition's default). No
+  checking step decides it early; instead every name records, as explicit
+  producer data, the value it was bound from (`binder_source_exprs`: an
+  unannotated local assignment's own name and every name a local destructure
+  binds from the right-hand side, every name a `match` branch pattern binds
+  from the scrutinee, and every name a `for` pattern binds from the
+  iterable). `Check.valueIsErroneous` follows these links from a use of a
+  name, through any chain of aliases and destructures, and a value is
+  erroneous when any expression on that path is erroneous or any binder on it
+  binds nothing; every binder on such a path is then recorded erroneous, so
+  the erroneous-use sweep retires each of its uses, including uses checked
+  before the rejection. The query is consulted wherever a consumer decides
+  whether its operand is erroneous: a use of a name, a call-like consumer's
+  operands (Erroneous Call Operand Retirement), a `match` scrutinee (at the
+  start of the `match` and again once its branches are checked, so a `match`
+  whose scrutinee was rejected meanwhile binds nothing and is retired), a
+  `for` iterable, and the settled-state ambiguity verdicts, where a receiver
+  read only from names that bind nothing is retired without a report of its
+  own. Erroneousness only grows and the verdicts are applied at the settled
+  state, so which relation decided the rejection, and when, does not change
+  what is reported. A defaulted literal whose default a requirement then
+  rejects is reported once, as the `undetermined_type` problem for its class
+  (Diagnostics About Defaulted Types), and the warning that announced the
+  default is withdrawn once every problem is recorded.
 - An uninitialized `var` whose annotation contains an error binds nothing:
   its binders are erroneous and the declaration is a runtime error.
 - An expression statement whose expression's checked type contains an error
@@ -850,7 +878,15 @@ checker recovery. The recovery rules:
 - A conditional's or match's branch whose value is erroneous (its expression
   is in `call_operand_type_error_exprs`) is retired on its own and does not
   join the enclosing expression's result, whose type comes from the other
-  branches. Joining it would write the error into the class every branch
+  branches. The same holds for every other value that flows into a result: a
+  `return` whose value is erroneous introduces no return relation, a function
+  body whose value is erroneous is not related to its annotated result
+  (`Check.relateResultValue`), a branch body is not checked against an
+  expected result (`Check.checkBranchBodyAgainstExpected`), and an annotation
+  is related to an erroneous value without reporting a mismatch. An erroneous
+  value already owns its report, so no report relates it to anything else and
+  no report prints the erroneous type. Lowering a `return` of a checked
+  runtime error is the crash itself. Joining it would write the error into the class every branch
   shares and retire the whole expression, so a branch that is never taken
   would crash. A checked runtime error produces no value, so lowering gives it
   its consumer's representation rather than its own type.

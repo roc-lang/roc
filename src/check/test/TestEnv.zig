@@ -924,6 +924,40 @@ pub fn assertTypeErrorTitles(self: *TestEnv, expected: []const []const u8) TestE
     }
 }
 
+/// Assert that no type problem's rendered report prints the erroneous type,
+/// which renders as the word `Error`. An erroneous value already owns its
+/// report, so no report relates it to anything else.
+pub fn assertNoReportRendersErrorType(self: *TestEnv) TestEnvError!void {
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    for (self.checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        try renderReportToMarkdownBuffer(&report_buf, &report);
+
+        const text = report_buf.items;
+        var start: usize = 0;
+        while (std.mem.findPos(u8, text, start, "Error")) |at| {
+            const end = at + "Error".len;
+            const before_ok = at == 0 or !isIdentByte(text[at - 1]);
+            const after_ok = end == text.len or !isIdentByte(text[end]);
+            if (before_ok and after_ok) {
+                std.debug.print("report renders the erroneous type:\n{s}\n", .{text});
+                return error.TestUnexpectedResult;
+            }
+            start = end;
+        }
+    }
+}
+
+fn isIdentByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.
 pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();

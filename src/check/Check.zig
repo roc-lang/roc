@@ -721,6 +721,16 @@ implicit_parse_requests: std.ArrayListUnmanaged(ImplicitParseRequest) = .empty,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// The value each name was bound from, for the names that bind nothing when
+/// that value is erroneous: an unannotated local assignment's own name, every
+/// name a local destructure binds, every name a `match` branch pattern binds
+/// (from the scrutinee), and every name a `for` pattern binds (from the
+/// iterable). A value can be rejected after the names bound from it were
+/// checked (a literal whose conversion a later relation decides), and
+/// `valueIsErroneous` follows these links to find that out.
+binder_source_exprs: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+/// Scratch for the binders `valueIsErroneous` walks through.
+binder_source_path: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// Patterns of value bindings whose annotation writes a type variable the
 /// binding cannot quantify (design.md "Value Bindings Generalize By
 /// Expression"). The annotation is reported and not applied, so the binding
@@ -3482,6 +3492,8 @@ pub fn deinit(self: *Self) void {
     self.codec_row_demand_tags.deinit(self.gpa);
     self.implicit_parse_requests.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.binder_source_exprs.deinit(self.gpa);
+    self.binder_source_path.deinit(self.gpa);
     self.rejected_value_annotations.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
@@ -11577,8 +11589,37 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.finalizeBindingSchemeNodes();
 
     try self.finalizePlatformRequirementSolutions();
+    try self.withdrawSupersededLiteralDefaultWarnings();
 
     self.debugAssertNominalDeclTableComplete();
+}
+
+/// A literal default that a later requirement rejects is reported once, as
+/// the `undetermined_type` problem for the defaulted class (design.md
+/// "Diagnostics About Defaulted Types"), so the warning that announced the
+/// default for that class is withdrawn: the default it names was never a
+/// type the program could have. This runs once every problem is recorded, so
+/// it depends only on the settled state.
+fn withdrawSupersededLiteralDefaultWarnings(self: *Self) Allocator.Error!void {
+    if (self.undetermined_type_reported.count() == 0) return;
+    var undetermined_roots = std.AutoHashMap(Var, void).init(self.gpa);
+    defer undetermined_roots.deinit();
+    var reported = self.undetermined_type_reported.keyIterator();
+    while (reported.next()) |var_| {
+        try undetermined_roots.put(self.types.resolveVar(var_.*).var_, {});
+    }
+    const items = self.problems.problems.items;
+    var kept: usize = 0;
+    for (items) |item| {
+        const superseded = switch (item) {
+            .literal_defaulted => |warning| undetermined_roots.contains(self.types.resolveVar(warning.literal_var).var_),
+            else => false,
+        };
+        if (superseded) continue;
+        items[kept] = item;
+        kept += 1;
+    }
+    self.problems.truncate(kept);
 }
 
 /// Turn every provisional platform-requirement row into the explicit
@@ -14476,6 +14517,18 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
         if (!self.ambiguity_verdict_vars.contains(resolved.var_)) continue;
         const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
         if (self.reported_dispatch_vars.contains(resolved.var_)) continue;
+
+        // A receiver value read from a name that binds nothing is
+        // undetermined only because its source was rejected, which already
+        // owns its report: it becomes a runtime error without a report of its
+        // own, and the receiver is reported only at a use with a real value.
+        if (try self.valueIsErroneous(expr_idx)) {
+            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                .region = self.cir.store.getExprRegion(expr_idx),
+            } });
+            try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+            continue;
+        }
 
         // Re-select the constraint to report at the settled state (see
         // `selectAmbiguityConstraint` for the decision table).
@@ -23473,8 +23526,15 @@ const ExprCheckFrame = struct {
 
         // Check if we have an annotation
         if (self.mb_anno_vars) |anno_vars| {
-            // Unify the anno with the expr var
-            const annotation_result = try checker.unifyInContext(anno_vars.anno_var, self.expr_var, env, anno_vars.context);
+            checker.var_set.clearRetainingCapacity();
+            const expr_is_erroneous = try checker.varContainsError(self.expr_var, &checker.var_set);
+            // Unify the anno with the expr var. An erroneous value already owns
+            // its report, so, like any other consumer of an erroneous value, the
+            // annotation relates to it without reporting a mismatch of its own.
+            const annotation_result = if (expr_is_erroneous)
+                try checker.runUnify(anno_vars.anno_var, self.expr_var, env, unifyOptionsForContext(anno_vars.context, .write_no_report))
+            else
+                try checker.unifyInContext(anno_vars.anno_var, self.expr_var, env, anno_vars.context);
             if (!annotation_result.isEstablished()) {
                 // Suppression by an erroneous annotation does not establish
                 // the relation either; its executable value must be retired.
@@ -24255,7 +24315,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             }
 
             if (self.rejected_value_annotations.contains(lookup.pattern_idx) or
-                self.erroneous_value_patterns.contains(lookup.pattern_idx))
+                try self.binderIsErroneous(lookup.pattern_idx))
             {
                 try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
                 try self.markErroneousNameUse(expr_idx, expr_var);
@@ -26042,6 +26102,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 // Destructuring an erroneous value binds nothing, so every
                 // name the pattern introduces is erroneous, annotated or not.
                 if (self.cir.store.getPattern(decl_stmt.pattern) != .assign) try self.markPatternBindingsErroneous(decl_stmt.pattern);
+            } else if (!decl.decl_is_fn) {
+                try self.recordBinderSources(decl_stmt.pattern, decl_stmt.expr, applied_annotation != null);
             }
             try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
             if (decl.decl_is_fn) {
@@ -26344,12 +26406,18 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
         if (state.loop_expr) |expr| try self.retireCallLikeExpr(expr.expr_idx, expr.expr_var);
     }
     // Iterating an erroneous value binds nothing, so every name the loop
-    // pattern introduces is erroneous before the body uses it.
-    if (self.erroneous_value_exprs.contains(iterable)) try self.markPatternBindingsErroneous(pattern);
+    // pattern introduces is erroneous before the body uses it, and each is
+    // bound from the iterable should the iterable's rejection be decided
+    // later.
+    if (try self.valueIsErroneous(iterable)) {
+        try self.markPatternBindingsErroneous(pattern);
+    } else {
+        try self.recordPatternBinderSources(pattern, iterable);
+    }
     const iterable_is_erroneous = !state.valid_pattern or if (state.loop_expr) |expr|
         try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
     else
-        self.callLikeOperandsContainErroneousValue(&.{iterable});
+        try self.callLikeOperandsContainErroneousValue(&.{iterable});
     const iterator_var = try self.mkForLoopSequenceVar(state.kind, item_var, env, iterable_region);
     const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text(switch (state.kind) {
         .iter => "iter",
@@ -27056,7 +27124,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
     const func_name = state.func_name;
     var arg_relation_failed = false;
     if (state.shape_result.isEstablished() and
-        !self.callLikeOperandsContainErroneousValue(call_arg_expr_idxs))
+        !try self.callLikeOperandsContainErroneousValue(call_arg_expr_idxs))
     {
         for (call_arg_expr_idxs, 0..) |call_arg_idx, arg_index| {
             const expected_arg_var = self.types.getVarAt(state.shape_func.args, @intCast(arg_index));
@@ -27757,6 +27825,11 @@ fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env
     };
     try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
+    // An erroneous returned value already owns its report and crashes before
+    // the function returns, so, like an erroneous branch value, it does not
+    // join the function's result and introduces no return relation.
+    if (self.branchValueIsErroneous(ret.expr)) return .done;
+
     if (expected_return) |annotated_return| {
         if (return_kind == .try_suffix) {
             try self.appendReturnConstraint(ret.lambda, ret.expr, return_kind);
@@ -28147,8 +28220,15 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // solving. The match must become the same explicit executable
             // boundary; otherwise later lowering would try to build a
             // decision tree whose scrutinee deliberately has no checked type.
-            state.scrutinee_erroneous = self.erroneous_value_exprs.contains(match.cond);
+            state.scrutinee_erroneous = try self.valueIsErroneous(match.cond);
             state.had_type_error = state.scrutinee_erroneous;
+            // Every name a branch pattern binds is bound from the scrutinee.
+            for (branch_idxs) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_ptrn_idx| {
+                    try self.recordPatternBinderSources(self.cir.store.getMatchBranchPattern(branch_ptrn_idx).pattern, match.cond);
+                }
+            }
 
             // For matches desugared from `?` operator, verify the condition
             // unifies with Try type FIRST. If it doesn't, report the specific
@@ -28290,6 +28370,15 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 state.mismatch_scope = null;
             }
         },
+    }
+
+    // The scrutinee's own rejection can be decided while the branches are
+    // checked (a literal whose conversion the patterns' relation determined),
+    // and the match then binds nothing, exactly as when it was erroneous
+    // from the start.
+    if (!state.scrutinee_erroneous and try self.valueIsErroneous(match.cond)) {
+        state.scrutinee_erroneous = true;
+        state.had_type_error = true;
     }
 
     // Unify the root expr with the match value
@@ -28564,7 +28653,7 @@ fn retireCallLikeExprWithErroneousOperands(
     expr_var: Var,
     operand_exprs: []const CIR.Expr.Idx,
 ) Allocator.Error!bool {
-    if (!self.callLikeOperandsContainErroneousValue(operand_exprs)) return false;
+    if (!try self.callLikeOperandsContainErroneousValue(operand_exprs)) return false;
 
     try self.retireCallLikeExpr(expr_idx, expr_var);
     return true;
@@ -28587,9 +28676,17 @@ fn branchValueIsErroneous(self: *const Self, value_expr: CIR.Expr.Idx) bool {
     return self.call_operand_type_error_exprs.items[nodeSlot(value_expr)];
 }
 
-fn callLikeOperandsContainErroneousValue(self: *const Self, operand_exprs: []const CIR.Expr.Idx) bool {
+/// Whether any operand is an erroneous value: its checked type contains an
+/// error, or it is a use of a name whose source was rejected after the use
+/// was checked (`valueIsErroneous`). Such a use already related to its
+/// binder's class, so it is not marked here; the erroneous-use sweep retires
+/// it once its binder is recorded erroneous.
+fn callLikeOperandsContainErroneousValue(self: *Self, operand_exprs: []const CIR.Expr.Idx) Allocator.Error!bool {
     for (operand_exprs) |operand_expr| {
         if (self.call_operand_type_error_exprs.items[nodeSlot(operand_expr)]) return true;
+    }
+    for (operand_exprs) |operand_expr| {
+        if (self.cir.store.getExpr(operand_expr) == .e_lookup_local and try self.valueIsErroneous(operand_expr)) return true;
     }
     return false;
 }
@@ -31947,6 +32044,70 @@ fn markPatternBindingsErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
     for (bindings.items) |binding| {
         try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
     }
+}
+
+/// Record the source of each name a local binding statement introduces that
+/// binds nothing once that source is erroneous (`binder_source_exprs`): an
+/// unannotated assignment's own name, and every name a destructure binds.
+fn recordBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR.Expr.Idx, annotated: bool) Allocator.Error!void {
+    if (self.cir.store.getPattern(pattern) == .assign) {
+        if (!annotated) try self.binder_source_exprs.put(self.gpa, pattern, source);
+        return;
+    }
+    try self.recordPatternBinderSources(pattern, source);
+}
+
+/// Record `source` as the value every name `pattern` binds is bound from. A
+/// `var` name a destructure reassigns belongs to its own declaration.
+fn recordPatternBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR.Expr.Idx) Allocator.Error!void {
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern, &bindings);
+    for (bindings.items) |binding| {
+        if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
+        try self.binder_source_exprs.put(self.gpa, binding.pattern_idx, source);
+    }
+}
+
+/// Whether a name binds nothing (`valueIsErroneous` for its use).
+fn binderIsErroneous(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!bool {
+    if (self.erroneous_value_patterns.contains(pattern)) return true;
+    const source = self.binder_source_exprs.get(pattern) orelse return false;
+    if (!try self.valueIsErroneous(source)) return false;
+    try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+    return true;
+}
+
+/// Whether a value is erroneous, following the explicit producer links from
+/// a use of a name to the binder it reads and from that binder to the value
+/// it was bound from (`binder_source_exprs`): the value is erroneous when any
+/// expression on that path is in `erroneous_value_exprs` or any binder on it
+/// binds nothing. A rejection can be decided after the names bound from the
+/// rejected value were checked, so every binder on a path that reaches an
+/// erroneous value is recorded erroneous here, and the erroneous-use sweep
+/// retires each of its uses. Erroneousness only grows, so the answer for a
+/// settled module does not depend on when the query runs.
+fn valueIsErroneous(self: *Self, value: CIR.Expr.Idx) Allocator.Error!bool {
+    const path_start = self.binder_source_path.items.len;
+    defer self.binder_source_path.shrinkRetainingCapacity(path_start);
+    var current = value;
+    var guard = types_mod.debug.IterationGuard.init("valueIsErroneous");
+    while (true) {
+        guard.tick();
+        if (self.erroneous_value_exprs.contains(current)) break;
+        const pattern = switch (self.cir.store.getExpr(current)) {
+            .e_lookup_local => |lookup| lookup.pattern_idx,
+            else => return false,
+        };
+        if (self.erroneous_value_patterns.contains(pattern)) break;
+        const source = self.binder_source_exprs.get(pattern) orelse return false;
+        try self.binder_source_path.append(self.gpa, pattern);
+        current = source;
+    }
+    for (self.binder_source_path.items[path_start..]) |pattern| {
+        try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+    }
+    return true;
 }
 
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
@@ -37292,6 +37453,9 @@ fn relateResultValue(
     env: *Env,
     ctx: problem.Context,
 ) std.mem.Allocator.Error!unifier.Result {
+    // An erroneous result value already owns its report and does not join
+    // the result it would flow into (Every Rejection Is Explicit Recovery).
+    if (self.branchValueIsErroneous(actual_expr)) return .suppressed_by_error;
     const actual = ModuleEnv.varFrom(actual_expr);
     const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isProblem()) return result;
@@ -49969,6 +50133,9 @@ fn checkBranchBodyAgainstExpected(
     const re = self.types.resolveVar(expected_ret);
     if (rb.var_ == re.var_) return;
     if (rb.desc.content == .err or re.desc.content == .err) return;
+    // An erroneous body already owns its report and does not join the result
+    // (Every Rejection Is Explicit Recovery).
+    if (self.branchValueIsErroneous(body_expr_idx)) return;
 
     // Probe (1): does the body match the annotated return type?
     if (!try self.probeBranchCompatible(body_var, expected_ret)) {
