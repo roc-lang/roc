@@ -98,8 +98,7 @@ const Printer = struct {
                 .assign_literal => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     switch (s.value) {
-                        .i64_literal => |l| try writer.print("literal {d}", .{l.value}),
-                        .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
+                        inline .i64_literal, .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
                         .f64_literal => |f| try writer.print("literal f64 {d}", .{f}),
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),

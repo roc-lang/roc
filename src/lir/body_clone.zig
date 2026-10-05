@@ -296,11 +296,7 @@ pub fn appendSuccessorsWithAllocator(
             try work.append(allocator, s.initialized_branch);
             try work.append(allocator, s.uninitialized_branch);
         },
-        .str_match => |s| {
-            try work.append(allocator, s.on_match);
-            try work.append(allocator, s.on_miss);
-        },
-        .boxy_tag_match => |s| {
+        inline .str_match, .boxy_tag_match => |s| {
             try work.append(allocator, s.on_match);
             try work.append(allocator, s.on_miss);
         },
@@ -371,11 +367,7 @@ pub fn redirectSuccessors(
         .decref_if_initialized,
         .free,
         => |*s| s.next = resolve(ctx, s.next),
-        .boxy_tag_match => |*s| {
-            s.on_match = resolve(ctx, s.on_match);
-            s.on_miss = resolve(ctx, s.on_miss);
-        },
-        .str_match => |*s| {
+        inline .boxy_tag_match, .str_match => |*s| {
             s.on_match = resolve(ctx, s.on_match);
             s.on_miss = resolve(ctx, s.on_miss);
         },
@@ -473,12 +465,8 @@ pub fn forEachStmtRead(
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| note(ctx, source),
-            .discriminant => |ref| note(ctx, ref.source),
-            .field => |ref| note(ctx, ref.source),
-            .tag_payload => |ref| note(ctx, ref.source),
-            .tag_payload_struct => |ref| note(ctx, ref.source),
-            .list_reinterpret => |ref| note(ctx, ref.backing_ref),
-            .nominal => |ref| note(ctx, ref.backing_ref),
+            inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| note(ctx, ref.source),
+            inline .list_reinterpret, .nominal => |ref| note(ctx, ref.backing_ref),
         },
         .assign_call => |s| {
             if (s.result_desc) |desc| emitDesc(ctx, note, desc);
@@ -531,7 +519,7 @@ pub fn forEachStmtRead(
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
-        .assign_boxy_inspect => |s| {
+        inline .assign_boxy_inspect, .assign_boxy_tag_payload, .boxy_tag_match => |s| {
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
         },
@@ -539,14 +527,6 @@ pub fn forEachStmtRead(
             emitDesc(ctx, note, s.target_desc);
             if (s.payload) |payload| note(ctx, payload);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
-        },
-        .assign_boxy_tag_payload => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
-        },
-        .boxy_tag_match => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
         },
         .assign_call_dict => |s| {
             emitDict(ctx, note, s.dict);
@@ -577,26 +557,20 @@ pub fn forEachStmtRead(
             note(ctx, s.dest);
             if (s.payload) |payload| note(ctx, payload);
         },
-        .set_local => |s| note(ctx, s.value),
-        .debug => |s| note(ctx, s.message),
+        inline .set_local, .ret, .incref, .decref, .free => |s| note(ctx, s.value),
+        inline .debug, .expect_err => |s| note(ctx, s.message),
         .expect => |s| note(ctx, s.condition),
-        .expect_err => |s| note(ctx, s.message),
         .switch_stmt => |s| note(ctx, s.cond),
         .switch_initialized_payload => |s| {
             note(ctx, s.cond);
             note(ctx, s.payload);
         },
-        .str_match => |s| note(ctx, s.source),
-        .str_match_set => |s| note(ctx, s.source),
-        .ret => |s| note(ctx, s.value),
+        inline .str_match, .str_match_set => |s| note(ctx, s.source),
         .crash => |s| if (s.msg.localId()) |message| note(ctx, message),
-        .incref => |s| note(ctx, s.value),
-        .decref => |s| note(ctx, s.value),
         .decref_if_initialized => |s| {
             note(ctx, s.cond);
             note(ctx, s.value);
         },
-        .free => |s| note(ctx, s.value),
         .init_uninitialized,
         .assign_literal,
         .comptime_branch_taken,
@@ -673,11 +647,7 @@ pub fn forEachStmtDef(
         .assign_tag,
         .set_local,
         => |s| note(ctx, s.target),
-        .assign_call => |s| {
-            note(ctx, s.target);
-            if (s.out_desc) |out_desc| note(ctx, out_desc);
-        },
-        .assign_call_erased => |s| {
+        inline .assign_call, .assign_call_erased => |s| {
             note(ctx, s.target);
             if (s.out_desc) |out_desc| note(ctx, out_desc);
         },
@@ -886,11 +856,7 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_struct,
         .assign_tag,
         => |stmt| noteDefinition(defined, stmt.target),
-        .assign_call => |stmt| {
-            noteDefinition(defined, stmt.target);
-            if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
-        },
-        .assign_call_erased => |stmt| {
+        inline .assign_call, .assign_call_erased => |stmt| {
             noteDefinition(defined, stmt.target);
             if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
         },

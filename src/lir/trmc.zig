@@ -612,17 +612,13 @@ const Detection = struct {
                 try self.appendSharedSuccessor(work, s.initialized_branch);
                 try self.appendSharedSuccessor(work, s.uninitialized_branch);
             },
-            .str_match => |s| {
+            inline .str_match, .boxy_tag_match => |s| {
                 try self.appendSharedSuccessor(work, s.on_match);
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .str_match_set => |s| {
                 const arms = self.store.getStrMatchArms(s.arms);
                 for (0..arms.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(arms, index).on_match);
-                try self.appendSharedSuccessor(work, s.on_miss);
-            },
-            .boxy_tag_match => |s| {
-                try self.appendSharedSuccessor(work, s.on_match);
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -853,8 +849,7 @@ const Detection = struct {
                 .local => |src| c.chainContains(src),
                 .discriminant => |d| c.chainContains(d.source),
                 .field => |f| c.chainContains(f.source),
-                .tag_payload => |t| c.chainContains(t.source),
-                .tag_payload_struct => |t| c.chainContains(t.source),
+                inline .tag_payload, .tag_payload_struct => |t| c.chainContains(t.source),
                 .list_reinterpret => |l| c.chainContains(l.backing_ref),
                 .nominal => |n| c.chainContains(n.backing_ref),
             },
@@ -863,7 +858,7 @@ const Detection = struct {
                 (s.reuse != null and c.chainContains(s.reuse.?)) or
                 (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
             .init_uninitialized => |s| c.chainContains(s.target),
-            .assign_call => |s| self.spanTouchesChain(s.args, c),
+            inline .assign_call, .assign_low_level => |s| self.spanTouchesChain(s.args, c),
             .assign_call_erased => |s| c.chainContains(s.closure) or
                 (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or
                 self.spanTouchesChain(s.args, c),
@@ -888,7 +883,6 @@ const Detection = struct {
             .assign_boxy_tag_payload => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
             .boxy_tag_match => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
             .assign_call_dict => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.args, c) or self.spanTouchesChain(s.arg_descs, c) or self.spanTouchesChain(s.hidden_args, c),
-            .assign_low_level => |s| self.spanTouchesChain(s.args, c),
             .assign_list => |s| self.spanTouchesChain(s.elems, c),
             .assign_struct => |s| self.spanTouchesChain(s.fields, c),
             .assign_tag => |s| (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)) or
@@ -898,18 +892,13 @@ const Detection = struct {
             // Reading the value is a use; overwriting a tracked local would
             // corrupt the chain, so treat that as disqualifying too.
             .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),
-            .debug => |s| c.chainContains(s.message),
+            inline .debug, .expect_err => |s| c.chainContains(s.message),
             .expect => |s| c.chainContains(s.condition),
-            .incref => |s| c.chainContains(s.value),
-            .decref => |s| c.chainContains(s.value),
+            inline .incref, .decref, .free, .ret => |s| c.chainContains(s.value),
             .decref_if_initialized => |s| c.chainContains(s.cond) or c.chainContains(s.value),
-            .free => |s| c.chainContains(s.value),
             .switch_stmt => |s| c.chainContains(s.cond),
             .switch_initialized_payload => |s| c.chainContains(s.cond) or c.chainContains(s.payload),
-            .str_match => true,
-            .str_match_set => true,
-            .ret => |s| c.chainContains(s.value),
-            .expect_err => |s| c.chainContains(s.message),
+            .str_match, .str_match_set => true,
             .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
             .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
         };
@@ -968,12 +957,11 @@ const Detection = struct {
             .stmt_next => |stmt| self.isSharedPath(stmt),
             .join_body => |stmt| self.isSharedPath(stmt),
             .join_remainder => |stmt| self.isSharedPath(stmt),
-            .switch_branch => |info| self.isSharedPath(info.stmt),
+            inline .switch_branch, .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
             .switch_default => |stmt| self.isSharedPath(stmt),
             .switch_continuation => |stmt| self.isSharedPath(stmt),
             .boxy_tag_on_match => |stmt| self.isSharedPath(stmt),
             .boxy_tag_on_miss => |stmt| self.isSharedPath(stmt),
-            .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
         };
     }
 

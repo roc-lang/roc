@@ -160,11 +160,7 @@ const BranchRewriter = struct {
     /// Claim releases of the matched union and reads of its payload.
     pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, _: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
-            .decref => |release| {
-                if (!self.namesUnion(release.value)) return .none;
-                return body_clone.Intercept.one(release.next);
-            },
-            .decref_if_initialized => |release| {
+            inline .decref, .decref_if_initialized => |release| {
                 if (!self.namesUnion(release.value)) return .none;
                 return body_clone.Intercept.one(release.next);
             },
@@ -664,9 +660,8 @@ fn findCandidate(
                     if ((predecessors.get(current) orelse 0) != 1) shared_edge = true;
                     if (current == build.edge_jump) break;
                     current = switch (store.getCFStmt(current)) {
-                        .decref => |release| release.next,
+                        inline .decref, .decref_if_initialized => |release| release.next,
                         .incref => |retain| retain.next,
-                        .decref_if_initialized => |release| release.next,
                         .init_uninitialized,
                         .assign_ref,
                         .assign_literal,
@@ -844,17 +839,13 @@ fn producerEdgeJump(
     while (true) {
         switch (store.getCFStmt(current)) {
             .jump => |jump| return if (jump.target == join_id) current else null,
-            .decref => |release| {
+            inline .decref, .decref_if_initialized => |release| {
                 if (release.value == param or release.value == payload) return null;
                 current = release.next;
             },
             .incref => |retain| {
                 if (retain.value == param or retain.value == payload) return null;
                 current = retain.next;
-            },
-            .decref_if_initialized => |release| {
-                if (release.value == param or release.value == payload) return null;
-                current = release.next;
             },
             .init_uninitialized,
             .assign_ref,
@@ -974,11 +965,9 @@ const ArmRewrite = struct {
 
     fn changes(self: ArmRewrite, stmt: LIR.CFStmt) bool {
         return switch (stmt) {
-            .decref => |release| namesLocal(self.union_locals, release.value),
-            .decref_if_initialized => |release| namesLocal(self.union_locals, release.value),
+            inline .decref, .decref_if_initialized => |release| namesLocal(self.union_locals, release.value),
             .assign_ref => |assign| switch (assign.op) {
-                .tag_payload => |payload| payload.source == self.matched_value,
-                .tag_payload_struct => |payload| payload.source == self.matched_value,
+                inline .tag_payload, .tag_payload_struct => |payload| payload.source == self.matched_value,
                 .local, .discriminant, .field, .list_reinterpret, .nominal => false,
             },
             .init_uninitialized,
@@ -1368,9 +1357,8 @@ fn redirectProducerEdge(
     while (cursor != edge_jump) {
         try chain.append(store.allocator, cursor);
         cursor = switch (store.getCFStmt(cursor)) {
-            .decref => |release| release.next,
+            inline .decref, .decref_if_initialized => |release| release.next,
             .incref => |retain| retain.next,
-            .decref_if_initialized => |release| release.next,
             .init_uninitialized,
             .assign_ref,
             .assign_literal,

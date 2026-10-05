@@ -2244,8 +2244,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         const def_idx = key.source_def_idx orelse return "?";
         const def = info.env.store.getDef(@enumFromInt(def_idx));
         return switch (info.env.store.getPattern(def.pattern)) {
-            .assign => |assign| info.env.getIdent(assign.ident),
-            .var_assign => |assign| info.env.getIdent(assign.ident),
+            inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
             .as,
             .applied_tag,
             .nominal,

@@ -952,11 +952,7 @@ pub const UseOrder = struct {
                 note(ctx, @intFromEnum(node.initialized_branch));
                 note(ctx, @intFromEnum(node.uninitialized_branch));
             },
-            .str_match => |node| {
-                note(ctx, @intFromEnum(node.on_match));
-                note(ctx, @intFromEnum(node.on_miss));
-            },
-            .boxy_tag_match => |node| {
+            inline .str_match, .boxy_tag_match => |node| {
                 note(ctx, @intFromEnum(node.on_match));
                 note(ctx, @intFromEnum(node.on_miss));
             },

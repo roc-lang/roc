@@ -1191,8 +1191,7 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_tag,
         .set_local,
         => |binding| binding.target,
-        .store_struct => |store_stmt| store_stmt.dest,
-        .store_tag => |store_stmt| store_stmt.dest,
+        inline .store_struct, .store_tag => |store_stmt| store_stmt.dest,
         .debug,
         .expect,
         .expect_err,
@@ -1419,7 +1418,7 @@ fn computeOutcomeRestitution(
                 }.go;
 
                 switch (stmt) {
-                    .assign_ref => |assign| {
+                    inline .assign_ref, .init_uninitialized => |assign| {
                         if (assign.target == active_param) {
                             valid = false;
                             break;
@@ -1427,13 +1426,6 @@ fn computeOutcomeRestitution(
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
                     .assign_literal => |assign| try pushNext(&stack, allocator, next_state, assign.next),
-                    .init_uninitialized => |assign| {
-                        if (assign.target == active_param) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
                     .assign_call => |assign| {
                         const callee_sig = solution.sigOf(assign.proc);
                         const args = store.getLocalSpan(assign.args);
@@ -1491,21 +1483,7 @@ fn computeOutcomeRestitution(
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
-                    .assign_boxy_unbox => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_adapt => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_inspect => |assign| {
+                    inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign| {
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
                             valid = false;
                             break;
@@ -1518,13 +1496,6 @@ fn computeOutcomeRestitution(
                                 valid = false;
                                 break;
                             }
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_tag_payload => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
@@ -1560,7 +1531,7 @@ fn computeOutcomeRestitution(
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
-                    .assign_struct => |assign| {
+                    inline .assign_struct, .store_struct => |assign| {
                         if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.fields)) {
                             valid = false;
                             break;
@@ -1579,13 +1550,6 @@ fn computeOutcomeRestitution(
                             break;
                         }
                         if (assign.target == ret_local) next_state.discriminant = assign.discriminant;
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .store_struct => |assign| {
-                        if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.fields)) {
-                            valid = false;
-                            break;
-                        }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
                     .store_tag => |assign| {
@@ -2687,14 +2651,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .field => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
                 .tag_payload => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
                 .tag_payload_struct => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
-                .list_reinterpret => |op| {
-                    try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
-                    try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
-                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
-                        try solver.binding_facts.append(allocator, .{ .demand = assign.target });
-                    }
-                },
-                .nominal => |op| {
+                inline .list_reinterpret, .nominal => |op| {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
                     if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
@@ -2707,25 +2664,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     try liftVisibilityLink(solver, assign.target, source);
                     try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = source, .stmt = current } });
                 },
-                .list_reinterpret => |op| {
+                inline .list_reinterpret, .nominal => |op| {
                     try liftVisibilityLink(solver, assign.target, op.backing_ref);
                     try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref, .stmt = current } });
                 },
-                .nominal => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.backing_ref);
-                    try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref, .stmt = current } });
-                },
-                .field => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.source);
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                    try solver.unique_facts.append(allocator, .{ .read = op.source });
-                },
-                .tag_payload => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.source);
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                    try solver.unique_facts.append(allocator, .{ .read = op.source });
-                },
-                .tag_payload_struct => |op| {
+                inline .field, .tag_payload, .tag_payload_struct => |op| {
                     try liftVisibilityLink(solver, assign.target, op.source);
                     try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
                     try solver.unique_facts.append(allocator, .{ .read = op.source });
@@ -3519,7 +3462,7 @@ fn computeVisibilityFromLift(
                         try stack.append(allocator, stmt.initialized_branch);
                         try stack.append(allocator, stmt.uninitialized_branch);
                     },
-                    .str_match => |stmt| {
+                    inline .str_match, .boxy_tag_match => |stmt| {
                         try stack.append(allocator, stmt.on_match);
                         try stack.append(allocator, stmt.on_miss);
                     },
@@ -3529,10 +3472,6 @@ fn computeVisibilityFromLift(
                             const arm = GuardedList.at(arms, arm_index);
                             try stack.append(allocator, arm.on_match);
                         }
-                        try stack.append(allocator, stmt.on_miss);
-                    },
-                    .boxy_tag_match => |stmt| {
-                        try stack.append(allocator, stmt.on_match);
                         try stack.append(allocator, stmt.on_miss);
                     },
                     .join => |stmt| {
@@ -3599,8 +3538,7 @@ fn computeVisibilityFromLift(
                 const target = @intFromEnum(assign.target);
                 switch (assign.op) {
                     .local => |source| addEdge(parent, rank, rc_local, target, @intFromEnum(source)),
-                    .list_reinterpret => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.backing_ref)),
-                    .nominal => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.backing_ref)),
+                    inline .list_reinterpret, .nominal => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.backing_ref)),
                     .field => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.source)),
                     .tag_payload => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.source)),
                     .tag_payload_struct => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.source)),
@@ -3647,22 +3585,13 @@ fn computeVisibilityFromLift(
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.base));
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.fields));
             },
-            .assign_boxy_reuse_box => |assign| {
-                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
-            },
-            .assign_boxy_unbox => |assign| {
-                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
-            },
-            .assign_boxy_adapt => |assign| {
+            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign| {
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
             },
             .assign_boxy_tag => |assign| {
                 if (assign.payload) |payload| {
                     addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(payload));
                 }
-            },
-            .assign_boxy_tag_payload => |assign| {
-                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
             },
             .assign_call_dict => |assign| {
                 if (assign.dict.localOrNull()) |local| seedLocal(&visible, rc_local, @intFromEnum(local));
@@ -5773,8 +5702,7 @@ fn computeUniquenessDetailed(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 const alias_of: ?LIR.LocalId = switch (assign.op) {
                     .local => |source| source,
-                    .list_reinterpret => |op| op.backing_ref,
-                    .nominal => |op| op.backing_ref,
+                    inline .list_reinterpret, .nominal => |op| op.backing_ref,
                     .discriminant, .field, .tag_payload, .tag_payload_struct => null,
                 };
                 const is_view = alias_of != null and borrowed != null and
@@ -5933,11 +5861,7 @@ fn computeUniquenessDetailed(
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
                 if (assign.reuse) |reuse| try marks.consumeAt(allocator, &consumes, reuse, @intCast(stmt_index));
             },
-            .assign_boxy_desc_ref => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-            },
-            .assign_boxy_dict_ref => |assign| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
             },
@@ -5957,12 +5881,7 @@ fn computeUniquenessDetailed(
                 marks.destroy(&foreign_def, assign.target);
                 try marks.consumeAt(allocator, &consumes, assign.source, @intCast(stmt_index));
             },
-            .assign_boxy_unbox => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_adapt => |assign| {
+            inline .assign_boxy_unbox, .assign_boxy_adapt => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));

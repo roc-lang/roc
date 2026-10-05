@@ -417,9 +417,7 @@ const Pass = struct {
                 const frame = &work.items[work.items.len - 1];
                 if (frame.current) |current| {
                     switch (self.store.getCFStmt(current)) {
-                        .assign_ref => |a| frame.current = a.next,
-                        .assign_literal => |a| frame.current = a.next,
-                        .assign_low_level => |a| frame.current = a.next,
+                        inline .assign_ref, .assign_literal, .assign_low_level => |a| frame.current = a.next,
                         .assign_call => |a| {
                             frame.current = a.next;
                             if (!self.append_kind.contains(a.proc)) {
@@ -755,12 +753,8 @@ const Pass = struct {
                                 try noteUse(scan, src, false);
                             }
                         },
-                        .discriminant => |op| try noteUse(scan, op.source, false),
-                        .field => |op| try noteUse(scan, op.source, false),
-                        .tag_payload => |op| try noteUse(scan, op.source, false),
-                        .tag_payload_struct => |op| try noteUse(scan, op.source, false),
-                        .list_reinterpret => |op| try noteUse(scan, op.backing_ref, false),
-                        .nominal => |op| try noteUse(scan, op.backing_ref, false),
+                        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |op| try noteUse(scan, op.source, false),
+                        inline .list_reinterpret, .nominal => |op| try noteUse(scan, op.backing_ref, false),
                     }
                     try stack.append(allocator, assign.next);
                 },
@@ -872,7 +866,7 @@ const Pass = struct {
                     try stack.append(allocator, s.initialized_branch);
                     try stack.append(allocator, s.uninitialized_branch);
                 },
-                .str_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     try noteUse(scan, s.source, false);
                     try stack.append(allocator, s.on_match);
                     try stack.append(allocator, s.on_miss);
@@ -883,11 +877,7 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(arms)) |i| try stack.append(allocator, GuardedList.at(arms, i).on_match);
                     try stack.append(allocator, s.on_miss);
                 },
-                .assign_literal => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try stack.append(allocator, s.next);
-                },
-                .init_uninitialized => |s| {
+                inline .assign_literal, .init_uninitialized, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     try stack.append(allocator, s.next);
                 },
@@ -897,10 +887,6 @@ const Pass = struct {
                     const args = self.store.getLocalSpan(s.args);
                     for (0..GuardedList.borrowLen(args)) |i| try noteUse(scan, GuardedList.at(args, i), false);
                     try noteUse(scan, s.closure, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_packed_erased_fn => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
                     try stack.append(allocator, s.next);
                 },
                 .assign_list => |s| {
@@ -915,7 +901,7 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(fields)) |i| try noteUse(scan, GuardedList.at(fields, i), false);
                     try stack.append(allocator, s.next);
                 },
-                .assign_tag => |s| {
+                inline .assign_tag, .assign_boxy_tag => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     if (s.payload) |payload| try noteUse(scan, payload, false);
                     try stack.append(allocator, s.next);
@@ -939,11 +925,7 @@ const Pass = struct {
                     try noteUse(scan, s.condition, false);
                     try stack.append(allocator, s.next);
                 },
-                .incref => |s| {
-                    try noteUse(scan, s.value, false);
-                    try stack.append(allocator, s.next);
-                },
-                .decref => |s| {
+                inline .incref, .decref, .free => |s| {
                     try noteUse(scan, s.value, false);
                     try stack.append(allocator, s.next);
                 },
@@ -952,19 +934,7 @@ const Pass = struct {
                     try noteUse(scan, s.cond, false);
                     try stack.append(allocator, s.next);
                 },
-                .free => |s| {
-                    try noteUse(scan, s.value, false);
-                    try stack.append(allocator, s.next);
-                },
                 .expect_err => |s| try noteUse(scan, s.message, false),
-                .assign_boxy_desc_ref => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_dict_ref => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try stack.append(allocator, s.next);
-                },
                 .assign_boxy_box => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     try noteUse(scan, s.payload, false);
@@ -976,32 +946,12 @@ const Pass = struct {
                     try noteUse(scan, s.fields, false);
                     try stack.append(allocator, s.next);
                 },
-                .assign_boxy_reuse_box => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.source, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_unbox => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.source, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_adapt => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.source, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_inspect => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    try noteUse(scan, s.source, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_tag => |s| {
-                    try bumpUse(&scan.assigned_targets, s.target);
-                    if (s.payload) |payload| try noteUse(scan, payload, false);
-                    try stack.append(allocator, s.next);
-                },
-                .assign_boxy_tag_payload => |s| {
+                inline .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_tag_payload,
+                => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     try noteUse(scan, s.source, false);
                     try stack.append(allocator, s.next);
@@ -1011,11 +961,6 @@ const Pass = struct {
                     const args = self.store.getLocalSpan(s.args);
                     for (0..GuardedList.borrowLen(args)) |i| try noteUse(scan, GuardedList.at(args, i), false);
                     try stack.append(allocator, s.next);
-                },
-                .boxy_tag_match => |s| {
-                    try noteUse(scan, s.source, false);
-                    try stack.append(allocator, s.on_match);
-                    try stack.append(allocator, s.on_miss);
                 },
                 .jump => |jump| {
                     scan.jump_visits += 1;
@@ -1055,17 +1000,13 @@ const Pass = struct {
                     try stack.append(allocator, s.initialized_branch);
                     try stack.append(allocator, s.uninitialized_branch);
                 },
-                .str_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     try stack.append(allocator, s.on_match);
                     try stack.append(allocator, s.on_miss);
                 },
                 .str_match_set => |s| {
                     const arms = self.store.getStrMatchArms(s.arms);
                     for (0..GuardedList.borrowLen(arms)) |i| try stack.append(allocator, GuardedList.at(arms, i).on_match);
-                    try stack.append(allocator, s.on_miss);
-                },
-                .boxy_tag_match => |s| {
-                    try stack.append(allocator, s.on_match);
                     try stack.append(allocator, s.on_miss);
                 },
                 inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
@@ -1300,8 +1241,7 @@ const Pass = struct {
                     rewrite_site_count += 1;
                     has_sets = true;
                 },
-                .param_write => {},
-                .alias, .refresh_op => {},
+                .param_write, .alias, .refresh_op => {},
             }
         }
         if (rewrite_site_count == 0) return false;
@@ -2456,8 +2396,7 @@ const Pass = struct {
         const definition = (defs.get(local) orelse return null) orelse return null;
         switch (self.store.getCFStmt(definition)) {
             .assign_literal => |s| return switch (s.value) {
-                .i64_literal => |lit| lit.value,
-                .i128_literal => |lit| lit.value,
+                inline .i64_literal, .i128_literal => |lit| lit.value,
                 .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref, .static_data => null,
             },
             .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
