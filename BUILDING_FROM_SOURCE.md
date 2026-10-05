@@ -89,6 +89,7 @@ Debug test binary and checks production/test-only edits at unchanged `HEAD`:
 python3 ci/test_build_identity.py /path/to/zig
 python3 ci/test_fixture_isolation.py /path/to/zig
 python3 ci/test_build_cache.py /path/to/zig
+python3 ci/test_compiler_artifact_identity.py /path/to/zig
 ```
 
 The last check builds the Debug builtin compiler in a private source snapshot.
@@ -100,6 +101,10 @@ the compiler and bakes; restoration reuses the original results. The check also
 changes the surrounding build mode and target, including a native ABI, while
 preserving the Debug host bake graph. Pass `--work-dir /new/path` to preserve its
 graph logs and artifact identities for review.
+
+The artifact identity check imports the actual generated compiler options into
+small objects. It verifies mode, target, CPU features and complete OS version
+ranges, including kernel bounds, glibc versions and Android API levels.
 
 See [the Zig 0.17 migration record](docs/zig-0.17-upgrade.md) for validated
 source changes, workaround decisions and remaining platform checks.

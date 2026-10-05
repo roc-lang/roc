@@ -1622,14 +1622,14 @@ pub fn build(b: *std.Build) void {
         \\    const actual = @import("builtin");
         \\    const std = @import("std");
         \\    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        \\    hasher.update("roc-compiler-artifact-compatibility-v1");
+        \\    hasher.update("roc-compiler-artifact-compatibility-v2");
         \\    hasher.update(&@import("compiler_identity").compiler_compatibility_hash);
         \\    hasher.update(std.fmt.comptimePrint(";mode={s};target={s}-{s}-{s};cpu={s};backend={s};", .{
         \\        @tagName(actual.mode), @tagName(actual.cpu.arch), @tagName(actual.os.tag),
         \\        @tagName(actual.abi), actual.cpu.model.name, @tagName(actual.zig_backend),
         \\    }));
-        \\    hasher.update(std.fmt.comptimePrint(";os-range={any};object-format={s};", .{
-        \\        actual.os.versionRange(), @tagName(actual.object_format),
+        \\    hasher.update(std.fmt.comptimePrint(";os-range={s};object-format={s};", .{
+        \\        compilerOsRangeEncoding(actual.os.versionRange()), @tagName(actual.object_format),
         \\    }));
         \\    for (0..std.Target.Cpu.Feature.Set.needed_bit_count) |index| {
         \\        hasher.update(&.{@intFromBool(actual.cpu.features.isEnabled(@intCast(index)))});
@@ -1638,6 +1638,12 @@ pub fn build(b: *std.Build) void {
         \\    hasher.final(&digest);
         \\    break :identity digest;
         \\};
+        \\// Debug formatting limits nested display depth, which would omit Linux
+        \\// kernel bounds. JSON preserves every field and frames optional strings,
+        \\// tags and unknown Windows version integers without native byte order.
+        \\pub fn compilerOsRangeEncoding(comptime range: @import("std").Target.Os.TaggedVersionRange) []const u8 {
+        \\    return comptime @import("std").fmt.comptimePrint("{f}", .{@import("std").json.fmt(range, .{})});
+        \\}
         \\pub const compiler_compatibility_id: []const u8 = &@import("std").fmt.bytesToHex(compiler_compatibility_hash, .lower);
         \\// Checked artifacts are target independent and are baked by a Debug host
         \\// tool for consumers built in other modes. Their compiler input is the
