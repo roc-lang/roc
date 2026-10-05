@@ -326,6 +326,7 @@ fn runEchoView(
     };
     defer interpreter.deinit();
     static_data.install(&interpreter);
+    static_data.ownByInterpreter(&interpreter);
 
     _ = interpreter.runEntrypoint(view, 0, @ptrCast(&cli_args_list), @ptrCast(&result_buf)) catch |err| switch (err) {
         error.RuntimeError, error.DivisionByZero => {

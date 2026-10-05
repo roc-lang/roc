@@ -123,10 +123,6 @@ const InterpreterRocEnv = struct {
     jmp_buf: JmpBuf = undefined,
     active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
-    /// Interpreter currently executing through these RocOps. Erased-callable
-    /// trampolines use this explicit host context for static callable data,
-    /// whose immutable capture bytes cannot embed a mutable interpreter pointer.
-    active_interpreter: ?*anyopaque = null,
 
     fn init(allocator: Allocator, caller_roc_ops: *RocOps) InterpreterRocEnv {
         return .{
@@ -372,10 +368,6 @@ pub const Interpreter = struct {
     /// Explicit compile-time slot readiness callback; ordinary runtime images
     /// are already complete and leave this unset.
     static_data_demand: ?StaticDataDemand = null,
-
-    /// Static erased callables use the ordinary target payload ABI. This table
-    /// supplies the interpreter-only proc identity without rewriting that data.
-    static_erased_callables: []const StaticErasedCallable,
     /// Reusable frame slot arrays, indexed by slot count. Every frame with
     /// the same number of locals can reuse the same array, whichever proc it
     /// belongs to, so this grows only with the frames this interpreter runs.
@@ -461,10 +453,95 @@ pub const Interpreter = struct {
         branch_index: u32,
     };
 
-    pub const StaticErasedCallable = struct {
-        capture_ptr: [*]u8,
-        proc_id: LIR.LirProcSpecId,
+    /// Runs the static erased callables of one interpreter static-data image.
+    /// A caller of the erased-callable ABI supplies only its own RocOps and the
+    /// capture pointer, so each callable reaches its owner through the
+    /// `StaticCallableHeader` stored before its allocation, never through the
+    /// caller's RocOps.
+    pub const StaticCallableOwner = struct {
+        context: ?*anyopaque,
+        call: *const fn (?*anyopaque, InterpretedCallable, *RocOps, ?[*]u8, ?[*]const u8, ?[*]u8, *?*const anyopaque) void,
+
+        /// The owner of an image whose consumer has not yet named one.
+        pub const unbound: StaticCallableOwner = .{ .context = null, .call = callUnbound };
+
+        /// Run callables on `interpreter`, which outlives every holder of a
+        /// value in the image.
+        pub fn forInterpreter(interpreter: *LirInterpreter) StaticCallableOwner {
+            return .{ .context = interpreter, .call = callOnInterpreter };
+        }
+
+        fn callUnbound(_: ?*anyopaque, _: InterpretedCallable, ops: *RocOps, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: *?*const anyopaque) void {
+            ops.crash("static interpreted callable's image has no owner");
+        }
+
+        fn callOnInterpreter(raw: ?*anyopaque, callable: InterpretedCallable, ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) void {
+            const interpreter: *LirInterpreter = @ptrCast(@alignCast(raw.?));
+            interpreter.callInterpreterErasedCallable(callable, ops, ret, args, reuse, out_desc) catch |err| interpreter.crashErasedCallable(null, ops, err, .call);
+        }
     };
+
+    /// Owns static erased callables for a program whose interpreters are
+    /// created per call, such as a platform host's shim: a host may invoke a
+    /// callable after the provided root that returned it has finished. Each
+    /// call runs on a fresh retained interpreter bound to the caller's RocOps.
+    /// Everything this names must live as long as the image it owns.
+    pub const StaticCallableProgram = struct {
+        callable_owner: StaticCallableOwner,
+        parts: Parts,
+
+        pub const Parts = struct {
+            allocator: Allocator,
+            store: *const LirStore,
+            layout_store: *const layout_mod.Store,
+            boxy_tables: BoxyTables,
+            static_strings: backend.StaticStringData.View,
+            static_addresses: []const usize,
+            synchronization_io: std.Io,
+        };
+
+        pub fn bind(self: *StaticCallableProgram, parts: Parts) void {
+            self.* = .{ .callable_owner = .{ .context = self, .call = call }, .parts = parts };
+        }
+
+        fn call(raw: ?*anyopaque, callable: InterpretedCallable, ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) void {
+            const parts = &@as(*const StaticCallableProgram, @ptrCast(@alignCast(raw.?))).parts;
+            const retained = Retained.createWithBoxyTables(
+                parts.allocator,
+                parts.store,
+                parts.layout_store,
+                parts.boxy_tables,
+                parts.static_strings,
+                ops,
+                parts.synchronization_io,
+            ) catch {
+                ops.crash("static interpreted callable could not initialize the LIR interpreter");
+            };
+            retained.enter();
+            const interpreter = &retained.interpreter;
+            interpreter.setStaticData(parts.static_addresses);
+            interpreter.callInterpreterErasedCallable(callable, ops, ret, args, reuse, out_desc) catch |err| interpreter.crashErasedCallable(retained, ops, err, .call);
+            leaveAndReleaseErasedCallableOwner(retained);
+        }
+    };
+
+    /// Interpreter-private header stored immediately before the allocation of
+    /// each static erased callable in an interpreter static-data image.
+    pub const StaticCallableHeader = extern struct {
+        owner: *const StaticCallableOwner,
+        proc_id: u32,
+        padding: u32 = 0,
+    };
+
+    /// Byte offset from a static erased callable's allocation start to its
+    /// payload: the allocation's refcount header at payload alignment.
+    pub const static_callable_payload_offset: usize =
+        std.mem.alignForward(usize, @sizeOf(usize), builtins.erased_callable.payload_alignment);
+
+    pub fn staticCallableHeader(capture_ptr: [*]u8) *const StaticCallableHeader {
+        const payload = @intFromPtr(capture_ptr) - builtins.erased_callable.capture_offset;
+        return @ptrFromInt(payload - static_callable_payload_offset - @sizeOf(StaticCallableHeader));
+    }
 
     const CrashBoundary = struct {
         env: *InterpreterRocEnv,
@@ -845,7 +922,6 @@ pub const Interpreter = struct {
             .expect_observer = null,
             .static_strings = static_strings,
             .static_data = &.{},
-            .static_erased_callables = &.{},
             .boxy_tables = boxy_tables,
             .runtime_boxy_type_descs = .empty,
             .runtime_boxy_desc_ids = .empty,
@@ -907,14 +983,9 @@ pub const Interpreter = struct {
     }
 
     /// Install the explicit immutable data image that backs LIR static-data
-    /// literals. Both slices must outlive every evaluation on this interpreter.
-    pub fn setStaticData(
-        self: *LirInterpreter,
-        addresses: []const usize,
-        erased_callables: []const StaticErasedCallable,
-    ) void {
+    /// literals. The addresses must outlive every evaluation on this interpreter.
+    pub fn setStaticData(self: *LirInterpreter, addresses: []const usize) void {
         self.static_data = addresses;
-        self.static_erased_callables = erased_callables;
     }
 
     /// Install the test runner's per-site observation sink.
@@ -922,8 +993,9 @@ pub const Interpreter = struct {
         self.expect_observer = observer;
     }
 
-    /// Function address stored in static erased-callable payloads interpreted
-    /// in-process. Proc identity is resolved by `static_erased_callables`.
+    /// Function address stored in the static erased-callable payloads of an
+    /// interpreter static-data image. The callable's owner and procedure come
+    /// from its `StaticCallableHeader`.
     pub fn staticErasedCallableTrampolineAddress() usize {
         return @intFromPtr(&staticErasedCallableTrampoline);
     }
@@ -1131,7 +1203,6 @@ pub const Interpreter = struct {
     /// interpreter is pinned, so a single binding at each evaluation entry keeps
     /// the runtime valid for every boxy operation reached from it.
     fn bindBoxyRuntime(self: *LirInterpreter) void {
-        self.roc_env.active_interpreter = self;
         self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
         self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
         self.boxy_runtime.desc_materializations = &self.desc_materializations;
@@ -4272,16 +4343,13 @@ pub const Interpreter = struct {
         result_desc: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
-    /// Decode only the explicit static-registry or interpreter-context ABI.
-    pub fn interpretedCallable(self: *LirInterpreter, data_ptr: [*]u8) error{RuntimeError}!?InterpretedCallable {
+    /// Decode only the explicit static-header or interpreter-context ABI.
+    pub fn interpretedCallable(data_ptr: [*]u8) ?InterpretedCallable {
         const payload = builtins.erased_callable.payloadPtr(data_ptr);
         const code = @intFromPtr(payload.callable_fn_ptr);
         if (code == staticErasedCallableTrampolineAddress()) {
             const capture = builtins.erased_callable.capturePtr(data_ptr);
-            for (self.static_erased_callables) |entry| {
-                if (entry.capture_ptr == capture) return .{ .proc = entry.proc_id, .capture_ptr = capture };
-            }
-            return self.runtimeError("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry");
+            return .{ .proc = @enumFromInt(staticCallableHeader(capture).proc_id), .capture_ptr = capture };
         }
         if (code != @intFromPtr(&interpreterErasedCallableTrampoline)) return null;
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
@@ -4289,19 +4357,11 @@ pub const Interpreter = struct {
     }
 
     fn staticErasedCallableTrampoline(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) callconv(.c) void {
-        const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
-        const self: *LirInterpreter = @ptrCast(@alignCast(env.active_interpreter orelse {
-            ops.crash("static interpreted callable has no active interpreter");
-        }));
         const capture_ptr = capture orelse {
             ops.crash("static interpreted callable omitted its capture address");
         };
-        for (self.static_erased_callables) |entry| {
-            if (entry.capture_ptr != capture_ptr) continue;
-            self.callInterpreterErasedCallable(.{ .proc = entry.proc_id, .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc) catch |err| self.crashErasedCallable(null, ops, err, .call);
-            return;
-        }
-        ops.crash("static interpreted callable omitted its producer registry entry");
+        const header = staticCallableHeader(capture_ptr);
+        header.owner.call(header.owner.context, .{ .proc = @enumFromInt(header.proc_id), .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc);
     }
 
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
@@ -4619,7 +4679,7 @@ pub const Interpreter = struct {
         };
 
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
-        if (try self.interpretedCallable(closure_ptr)) |callable| {
+        if (interpretedCallable(closure_ptr)) |callable| {
             const proc_id = callable.proc;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc_params = self.store.getLocalSpan(proc_spec.args);
@@ -10272,7 +10332,7 @@ test "interpreter evaluates explicit static data by compact id" {
     defer static_strings.deinit();
     var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
     defer interpreter.deinit();
-    interpreter.setStaticData(static_addresses.items, &.{});
+    interpreter.setStaticData(static_addresses.items);
 
     const result = try interpreter.eval(.{ .proc_id = proc, .ret_layout = .u64 });
     try std.testing.expectEqual(static_value, result.value.read(u64));

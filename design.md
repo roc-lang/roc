@@ -1401,11 +1401,19 @@ DLL, LLVM marks the producer-declared symbols as DLL exports so the loader can
 resolve the frozen graph's function relocations. External linkage alone does not
 export a COFF symbol.
 
-Interpreter sessions and runtime test execution retain the relocated image and
-an explicit capture-address-to-procedure registry produced from callable
-relocations. Static erased callables use a distinct trampoline ABI; direct
-interpreter calls and callback re-entry consume that registry. Heap callables
-retain their explicit interpreter context ABI. Re-freezing either form consumes
+Interpreter sessions and runtime test execution retain the relocated image.
+An interpreter image reserves a header immediately before each static erased
+callable's allocation and writes into it the callable's procedure, taken from
+its relocation, and the image's explicit callable owner. Static erased callables
+use a distinct trampoline that reads that header; direct interpreter calls
+decode the same header. The erased-callable ABI gives a callee only its
+caller's `RocOps`, which belong to whoever calls it, so the trampoline never
+derives an interpreter from them. The owner either runs callables on an
+interpreter that outlives every holder of the image's values, or, for a
+platform host's shim, creates a retained interpreter per call from the image's
+program, so a host can call a static callable after the provided root that
+returned it has finished. Heap callables retain their explicit interpreter
+context ABI. Re-freezing either form consumes
 the same procedure/capture view and the LIR erased-entry drop authority; no code
 pointer is decoded to reconstruct a reference-counting operation.
 

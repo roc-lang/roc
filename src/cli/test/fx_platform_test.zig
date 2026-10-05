@@ -455,6 +455,30 @@ test "fx platform host calls boxed callable after provided root returns (speed b
     try expectProvidedBoxedCallablePostRootCall("--opt=speed", "fx_provided_boxed_callable_post_root_call_speed");
 }
 
+/// Repro for https://github.com/roc-lang/roc/issues/12025: a provided root
+/// returns a boxed callable stored in a top-level constant, and the host's later
+/// invocations of it through the erased-callable ABI must return 42 and 43.
+fn expectProvidedConstantBoxedCallableCall(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-constant-boxed-callable-call",
+        "provided constant boxed callable call",
+    );
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (interpreter)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=interpreter", "fx_provided_constant_boxed_callable_call_interpreter");
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (dev backend)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=dev", "fx_provided_constant_boxed_callable_call_dev");
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (speed backend)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=speed", "fx_provided_constant_boxed_callable_call_speed");
+}
+
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
     const allocator = testing.allocator;
 

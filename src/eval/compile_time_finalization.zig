@@ -24,6 +24,7 @@ const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const boxy_abi = @import("boxy_abi.zig");
 const interpreter_mod = @import("interpreter.zig");
+const interpreter_static_data = @import("interpreter_static_data.zig");
 const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
@@ -1934,7 +1935,7 @@ fn evalInterpreterProgramRoots(
             const origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() };
             program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, origin);
             try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = message, .kind = RootFailure.ofPayload(module, payload) }, .{ .resolve = InterpreterProgram.resolveFunction });
-            try program.refreshCallableMetadata();
+            program.refreshCallableMetadata();
         }
 
         if (try reportCompileTimeExpectFailures(
@@ -2320,7 +2321,7 @@ fn evalInterpreterLiteralRoot(
     if (options.publish_shared_slots) {
         program.slotEnvironment().publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
         try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
-        try program.refreshCallableMetadata();
+        program.refreshCallableMetadata();
     }
 }
 
@@ -2782,17 +2783,8 @@ const CompletedNativeRoot = struct {
     }
 };
 
-// Export failures occur outside evalCompileTimeRoot's language-diagnostic
-// handling. Emit their exact interpreter message through the configured error
-// writer before its owner unwinds, while retaining the terminal error result.
-fn resolveInterpreterCallable(interpreter: *Interpreter, stderr: ?Options.StderrWriter, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
-    const callable = (interpreter.interpretedCallable(data_ptr) catch |err| {
-        if (stderr) |writer| {
-            writer.writeAll(interpreter.getRuntimeErrorMessage() orelse finalizationInvariant("interpreter callable error omitted its diagnostic"));
-            writer.writeAll("\n");
-        }
-        return err;
-    }) orelse finalizationInvariant("interpreter result omitted its explicit callable ABI");
+fn resolveInterpreterCallable(data_ptr: [*]u8) NativeRootExport.CallableResolution {
+    const callable = Interpreter.interpretedCallable(data_ptr) orelse finalizationInvariant("interpreter result omitted its explicit callable ABI");
     return .{ .proc = callable.proc, .capture_ptr = callable.capture_ptr };
 }
 
@@ -2811,13 +2803,14 @@ const InterpreterProgram = struct {
     /// so published values may reference them for the whole finalization.
     static_strings: Interpreter.StaticStrings.Table,
     interpreter: Interpreter,
-    static_callables: std.ArrayList(Interpreter.StaticErasedCallable) = .empty,
-    /// Forks borrow one append-only registry. Suspended consumers refresh its
-    /// slice after nested demand, which may have grown its backing allocation.
+    /// Owner named by the callable headers of every image this program's
+    /// slot environment installs: its static callables run on `interpreter`.
+    callable_owner: Interpreter.StaticCallableOwner = .unbound,
+    /// Forks share the root program's slot environment, so the root writes
+    /// every image's callable headers and owns their callables.
     shared_callable_owner: ?*InterpreterProgram = null,
     callable_images: usize = 0,
     base_callables_ready: bool = false,
-    stderr: ?Options.StderrWriter = null,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!*InterpreterProgram {
         const self = try allocator.create(InterpreterProgram);
@@ -2828,14 +2821,12 @@ const InterpreterProgram = struct {
         self.shared_slots = null;
         self.slot_demand = null;
         self.demand_error = null;
-        self.static_callables = .empty;
+        self.callable_owner = .unbound;
         self.shared_callable_owner = null;
         self.callable_images = 0;
         self.base_callables_ready = false;
-        self.stderr = options.stderr;
-        errdefer self.static_callables.deinit(allocator);
         const started = if (options.timing) |timing| timing.start() else 0;
-        self.slots = try StaticSlotEnvironment.init(allocator, modules, lowered, roc_target.RocTarget.detectNative());
+        self.slots = try StaticSlotEnvironment.init(allocator, modules, lowered, roc_target.RocTarget.detectNative(), interpreter_static_data.image_options);
         errdefer self.slots.deinit();
         self.host = CompilerHost.init(allocator);
         errdefer self.host.deinit();
@@ -2844,13 +2835,14 @@ const InterpreterProgram = struct {
         self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.static_strings.view(), self.host.ops());
         errdefer self.interpreter.deinit();
         self.host.bindInterpreter(&self.interpreter);
+        self.callable_owner = .forInterpreter(&self.interpreter);
         self.interpreter.dict_seed_mode = .comptime_zero;
         self.interpreter.failure_origins = self.slots.failure_origins;
         self.slots.image.resolveFunctionRelocations(.{ .resolve = resolveFunction }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => finalizationInvariant("interpreter image omitted a callable procedure"),
         };
-        try self.refreshCallableMetadata();
+        self.refreshCallableMetadata();
         if (options.timing) |timing| timing.finish(started, .static_data);
         return self;
     }
@@ -2870,21 +2862,19 @@ const InterpreterProgram = struct {
             .slots = undefined,
             .shared_slots = self.slotEnvironment(),
             .shared_callable_owner = self.shared_callable_owner orelse self,
-            .stderr = self.stderr,
             .slot_demand = self.slot_demand,
             .host = CompilerHost.init(allocator),
             .static_strings = undefined,
             .interpreter = undefined,
         };
         errdefer child.host.deinit();
-        errdefer child.static_callables.deinit(allocator);
         child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.interpreter.static_strings, child.host.ops());
         errdefer child.interpreter.deinit();
         child.host.bindInterpreter(&child.interpreter);
         child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
         child.interpreter.static_data_demand = .{ .context = child, .ensure = ensureStaticData };
-        try child.refreshCallableMetadata();
+        child.refreshCallableMetadata();
         return child;
     }
 
@@ -2903,17 +2893,16 @@ const InterpreterProgram = struct {
                     return error.RuntimeError;
                 },
             };
-            // Nested evaluation can append frozen callable images. Refresh the
-            // suspended consumer's registry before it reads the published slot.
-            try self.refreshCallableMetadata();
+            // Nested evaluation can install frozen callable images. Write their
+            // callable headers before the suspended consumer reads the slot.
+            self.refreshCallableMetadata();
         }
     }
 
-    const resolveFunction = @import("interpreter_static_data.zig").resolveFunction;
+    const resolveFunction = interpreter_static_data.resolveFunction;
 
-    fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
-        const self: *InterpreterProgram = @ptrCast(@alignCast(raw.?));
-        return try resolveInterpreterCallable(&self.interpreter, self.stderr, data_ptr);
+    fn resolveCallable(_: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
+        return resolveInterpreterCallable(data_ptr);
     }
 
     fn resolveStoredCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!ConstStoreWriter.ErasedCallableResolution {
@@ -2921,31 +2910,30 @@ const InterpreterProgram = struct {
         return .{ .proc = callable.proc, .capture_ptr = callable.capture_ptr };
     }
 
-    fn refreshCallableMetadata(self: *InterpreterProgram) Allocator.Error!void {
+    fn refreshCallableMetadata(self: *InterpreterProgram) void {
         const owner = self.shared_callable_owner orelse self;
         const slots = owner.slotEnvironment();
         if (!owner.base_callables_ready) {
-            try @import("interpreter_static_data.zig").appendCallableMetadata(self.allocator, slots.materialized, &slots.image, &owner.static_callables);
+            interpreter_static_data.writeCallableHeaders(slots.materialized, &slots.image, &owner.callable_owner);
             owner.base_callables_ready = true;
         }
         while (owner.callable_images < slots.completed_roots.items.len) : (owner.callable_images += 1) {
             const root = &slots.completed_roots.items[owner.callable_images];
-            try @import("interpreter_static_data.zig").appendCallableMetadata(self.allocator, root.exports, &root.image, &owner.static_callables);
+            interpreter_static_data.writeCallableHeaders(root.exports, &root.image, &owner.callable_owner);
         }
-        self.interpreter.setStaticData(slots.addresses, owner.static_callables.items);
+        self.interpreter.setStaticData(slots.addresses);
     }
 
     fn publishRoot(self: *InterpreterProgram, lowered: *lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, shape: LirProgram.RootShape, value: @import("value.zig").Value) FinalizeError!void {
         try self.slotEnvironment().publishRoot(lowered, module, producer, shape, value, .{ .context = self, .resolve = resolveCallable }, .{ .resolve = resolveFunction });
         try self.slotEnvironment().publishFailure(lowered, module, producer, null, .{ .resolve = resolveFunction });
-        try self.refreshCallableMetadata();
+        self.refreshCallableMetadata();
     }
 
     fn deinit(self: *InterpreterProgram) void {
         const allocator = self.allocator;
         self.interpreter.deinit();
         self.host.deinit();
-        self.static_callables.deinit(allocator);
         if (self.shared_slots == null) {
             self.slots.deinit();
             self.static_strings.deinit();
@@ -3078,11 +3066,13 @@ const StaticSlotEnvironment = struct {
     image: backend.StaticDataImage,
     addresses: []usize,
     completed_roots: std.ArrayList(CompletedNativeRoot) = .empty,
+    /// Layout of every image this environment builds, chosen by its evaluator.
+    image_options: backend.StaticDataImage.Options = .{},
     publication: PublicationSlots,
     export_positions: []?usize,
     failure_origins: []?lir.LIR.ComptimeFailureOrigin,
 
-    fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, target: roc_target.RocTarget) FinalizeError!StaticSlotEnvironment {
+    fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, target: roc_target.RocTarget, image_options: backend.StaticDataImage.Options) FinalizeError!StaticSlotEnvironment {
         const materialized_static_data = static_data_exports.buildStaticData(
             allocator,
             .{
@@ -3098,7 +3088,7 @@ const StaticSlotEnvironment = struct {
         };
         errdefer static_data_exports.deinitStaticData(allocator, materialized_static_data);
 
-        var static_data_image = backend.StaticDataImage.init(allocator, materialized_static_data) catch |err| switch (err) {
+        var static_data_image = backend.StaticDataImage.initWithOptions(allocator, materialized_static_data, image_options) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.DuplicateStaticDataSymbol,
             error.InvalidStaticDataAlignment,
@@ -3128,7 +3118,7 @@ const StaticSlotEnvironment = struct {
         errdefer allocator.free(export_positions);
         const failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, lowered.lir_result.store.getCFStmts().len);
         @memset(failure_origins, null);
-        return .{ .allocator = allocator, .materialized = materialized_static_data, .image = static_data_image, .addresses = native_static_data, .publication = publication, .export_positions = export_positions, .failure_origins = failure_origins };
+        return .{ .allocator = allocator, .materialized = materialized_static_data, .image = static_data_image, .addresses = native_static_data, .image_options = image_options, .publication = publication, .export_positions = export_positions, .failure_origins = failure_origins };
     }
 
     fn exportPositions(allocator: Allocator, exports: []const static_data_exports.StaticDataExport, count: usize) Allocator.Error![]?usize {
@@ -3184,7 +3174,7 @@ const StaticSlotEnvironment = struct {
         functions: backend.StaticDataImageFunctionResolver,
     ) FinalizeError!void {
         errdefer static_data_exports.deinitStaticData(self.allocator, exports);
-        var image = backend.StaticDataImage.init(self.allocator, exports) catch |err| switch (err) {
+        var image = backend.StaticDataImage.initWithOptions(self.allocator, exports, self.image_options) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => finalizationInvariant("evaluated root export contains an invalid relocation"),
         };
@@ -3352,7 +3342,7 @@ const DevProgram = struct {
         var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         errdefer static_strings.deinit();
 
-        var slots = try StaticSlotEnvironment.init(allocator, modules, lowered, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        var slots = try StaticSlotEnvironment.init(allocator, modules, lowered, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{});
         errdefer slots.deinit();
         if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
@@ -5224,15 +5214,15 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     @memset(failure_origins, null);
     owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .publication = try PublicationSlots.init(allocator, result), .export_positions = try StaticSlotEnvironment.exportPositions(allocator, materialized, addresses.len), .failure_origins = failure_origins };
     owner.host = CompilerHost.init(allocator);
-    owner.static_callables = .empty;
     owner.shared_callable_owner = null;
     owner.callable_images = 0;
     owner.base_callables_ready = false;
     owner.static_strings = try Interpreter.buildStaticStrings(allocator, &result.store);
     owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.static_strings.view(), owner.host.ops());
     owner.host.bindInterpreter(&owner.interpreter);
+    owner.callable_owner = .forInterpreter(&owner.interpreter);
     defer owner.deinit();
-    try owner.refreshCallableMetadata();
+    owner.refreshCallableMetadata();
     if (nested) {
         const Demand = struct {
             owner: *InterpreterProgram,
@@ -5462,38 +5452,25 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), static_strings.view(), host.ops());
     defer interpreter.deinit();
     host.bindInterpreter(&interpreter);
-    interpreter.setStaticData(data.addresses, &.{});
-    try std.testing.expectError(error.RuntimeError, interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool }));
-    try std.testing.expectEqualStrings("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry", interpreter.getRuntimeErrorMessage().?);
     data.install(&interpreter);
+    data.ownByInterpreter(&interpreter);
     const first = try interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool });
     try std.testing.expectEqual(@as(u8, 1), first.value.read(u8));
     const root_value = @import("value.zig").Value{ .ptr = @ptrFromInt(data.addresses[0]) };
     const payload_ptr: [*]u8 = @ptrFromInt(root_value.read(usize));
-    const ErrorMessages = struct {
-        bytes: [256]u8 = undefined,
-        len: usize = 0,
-        fn write(raw: ?*anyopaque, bytes: []const u8) void {
-            const self: *@This() = @ptrCast(@alignCast(raw.?));
-            @memcpy(self.bytes[self.len..][0..bytes.len], bytes);
-            self.len += bytes.len;
-        }
-    };
-    var errors = ErrorMessages{};
-    interpreter.setStaticData(data.addresses, &.{});
-    try std.testing.expectError(error.RuntimeError, resolveInterpreterCallable(&interpreter, .{ .context = &errors, .write = ErrorMessages.write }, payload_ptr));
-    try std.testing.expectEqualStrings("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry\n", errors.bytes[0..errors.len]);
-    try std.testing.expectError(error.RuntimeError, resolveInterpreterCallable(&interpreter, null, payload_ptr));
-    data.install(&interpreter);
+    // A caller of the erased-callable ABI passes its own RocOps, which tell the
+    // callable nothing about the interpreter that owns it.
+    var foreign_host = CompilerHost.init(allocator);
+    defer foreign_host.deinit();
+    foreign_host.bindInterpreter(&interpreter);
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var direct_answer: u8 = 0;
     var out_desc: ?*const anyopaque = null;
-    payload.callable_fn_ptr(&interpreter.roc_ops, @ptrCast(&direct_answer), null, builtins.erased_callable.capturePtr(payload_ptr), null, &out_desc);
+    payload.callable_fn_ptr(foreign_host.ops(), @ptrCast(&direct_answer), null, builtins.erased_callable.capturePtr(payload_ptr), null, &out_desc);
     try std.testing.expectEqual(@as(u8, 1), direct_answer);
     const Resolver = struct {
-        fn resolve(raw: ?*anyopaque, ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
-            const interp: *Interpreter = @ptrCast(@alignCast(raw.?));
-            const value = (try interp.interpretedCallable(ptr)).?;
+        fn resolve(_: ?*anyopaque, ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
+            const value = Interpreter.interpretedCallable(ptr).?;
             return .{ .proc = value.proc, .capture_ptr = value.capture_ptr };
         }
     };
@@ -5510,6 +5487,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     var copied_data = try StaticInterpreterData.init(allocator, copied, 1);
     defer copied_data.deinit();
     copied_data.install(&interpreter);
+    copied_data.ownByInterpreter(&interpreter);
     const second = try interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool });
     try std.testing.expectEqual(@as(u8, 1), second.value.read(u8));
     // Execute only the mapped graph and its image-local procedure identities.
@@ -5530,6 +5508,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer mapped_interpreter.deinit();
     host.bindInterpreter(&mapped_interpreter);
     mapped_data.install(&mapped_interpreter);
+    mapped_data.ownByInterpreter(&mapped_interpreter);
     var mapped_answer: u8 = 0;
     _ = try mapped_interpreter.runEntrypoint(&view, 0, null, @ptrCast(&mapped_answer));
     try std.testing.expectEqual(@as(u8, 1), mapped_answer);
