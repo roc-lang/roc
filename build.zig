@@ -7181,6 +7181,7 @@ const llvm_libs = [_][]const u8{
     "LLVMObjCopy",
     "LLVMMCA",
     "LLVMMCDisassembler",
+    "LLVMDTLTO",
     "LLVMLTO",
     "LLVMPlugins",
     "LLVMPasses",
