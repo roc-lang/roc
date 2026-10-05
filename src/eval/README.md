@@ -29,6 +29,11 @@ checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
   carry no runtime type information; the layout is always tracked separately
   via `layout.Idx`.
 
+- **`finalized_literal_outcomes.zig`** retains producer-owned literal completion
+  facts beyond evaluator teardown. Completion is distinct from portable cache
+  admission: the exact owning specialization, typed frozen payload, source
+  authority, and reporting contract must also be preserved.
+
 ## Evaluation Flow
 
 1. **Published inputs**—Consumers (REPL, tests, CLI) type check source and

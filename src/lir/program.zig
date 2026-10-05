@@ -615,6 +615,12 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
 pub const SpecProc = struct {
     key: [32]u8,
     proc: LIR.LirProcSpecId,
+    literal_early: if (@import("base").CompilerFeatures.finalized_literal_cache) bool else void =
+        if (@import("base").CompilerFeatures.finalized_literal_cache) true else {},
+    /// The finalized runtime consumer explicitly demanded and completed this
+    /// native owner body for publication, independently of caller inlining.
+    literal_publication_root: if (@import("base").CompilerFeatures.finalized_literal_cache) bool else void =
+        if (@import("base").CompilerFeatures.finalized_literal_cache) false else {},
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the
@@ -661,6 +667,9 @@ pub const Result = struct {
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     literal_roots: std.ArrayList(LiteralRootPlan),
+    literal_root_owners: std.ArrayList(LIR.FinalizedLiteralOutcomes.RootOwner) = .empty,
+    literal_root_uses: std.ArrayList(LIR.FinalizedLiteralOutcomes.RuntimeUse) = .empty,
+    literal_external_certificates: std.ArrayList(LIR.FinalizedLiteralOutcomes.ExternalCertificate) = .empty,
     static_data_values: std.ArrayList(StaticDataValue),
     comptime_value_guards: std.ArrayList(ComptimeValueGuard),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
@@ -728,6 +737,9 @@ pub const Result = struct {
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
         self.literal_roots.deinit(allocator);
+        self.literal_root_owners.deinit(allocator);
+        self.literal_root_uses.deinit(allocator);
+        self.literal_external_certificates.deinit(allocator);
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);

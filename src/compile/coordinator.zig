@@ -1769,10 +1769,7 @@ pub const Coordinator = struct {
             .compiler_owned => |platform| {
                 const materialized = compiler_platforms.materialize(self.gpa, self.roc_ctx, null, platform) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.AccessDenied,
-                    error.IoError,
-                    error.NoHomeDirectory,
-                    => return error.UnsupportedPlatformSpec,
+                    else => return error.UnsupportedPlatformSpec,
                 };
                 defer self.gpa.free(materialized.root_file);
                 defer self.gpa.free(materialized.root_dir);

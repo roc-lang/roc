@@ -1089,3 +1089,137 @@ test "copy_import copies a spine deeper than any native-stack budget" {
     const copied = try copyVar(&source_store, &dest_store, current, &mapping, null, &source_env, &dest_env, allocator);
     try std.testing.expect(dest_store.resolveVar(copied).desc.content == .structure);
 }
+
+test "late nominal contextual alias replacements preserve identity children and template freshening" {
+    const gpa = std.testing.allocator;
+    var source_env = try ModuleEnv.init(gpa, "");
+    defer source_env.deinit();
+    var dest_env = try ModuleEnv.init(gpa, "");
+    defer dest_env.deinit();
+    var source = try TypesStore.init(gpa);
+    defer source.deinit();
+    var dest = try TypesStore.init(gpa);
+    defer dest.deinit();
+    const source_module: base.ModuleIdentity.Idx = @enumFromInt(0);
+    const original_name = try source_env.insertIdent(base.Ident.for_text("original_need"));
+    const original = try source.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const original_method = try source.freshFromContentWithRank(try source.mkFuncPure(&.{original}, original), .generalized);
+    const original_constraints = try source.appendStaticDispatchConstraints(&.{.{
+        .fn_name = original_name,
+        .fn_var = original_method,
+        .origin = .method_call,
+    }});
+    try source.setVarContent(original, .{ .flex = Flex.init().withConstraints(original_constraints) });
+    const first_arg = try source.freshFromContentWithRank(.{ .structure = .empty_record }, .generalized);
+    const second_arg = try source.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .generalized);
+    const first_alias = try source.freshFromContentWithRank(try source.mkAliasWithSourceDecl(
+        .{ .ident_idx = try source_env.insertIdent(base.Ident.for_text("First")) },
+        original,
+        &.{first_arg},
+        source_module,
+        1,
+    ), .generalized);
+    const second_alias = try source.freshFromContentWithRank(try source.mkAliasWithSourceDecl(
+        .{ .ident_idx = try source_env.insertIdent(base.Ident.for_text("Second")) },
+        original,
+        &.{second_arg},
+        source_module,
+        2,
+    ), .generalized);
+    const tail = try source.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .generalized);
+    const backing = try source.freshFromContentWithRank(try source.mkTagUnion(&.{
+        .{ .name = try source_env.insertIdent(base.Ident.for_text("One")), .args = try source.appendVars(&.{first_alias}) },
+        .{ .name = try source_env.insertIdent(base.Ident.for_text("Two")), .args = try source.appendVars(&.{second_alias}) },
+    }, tail), .generalized);
+    const replacement_name = try dest_env.insertIdent(base.Ident.for_text("replacement_need"));
+    const hidden_name = try dest_env.insertIdent(base.Ident.for_text("hidden"));
+    const replacement = try dest.freshFromContentWithRank(.{ .rigid = Rigid.init(hidden_name) }, .generalized);
+    const replacement_method = try dest.freshFromContentWithRank(try dest.mkFuncPure(&.{replacement}, replacement), .generalized);
+    const replacement_constraints = try dest.appendStaticDispatchConstraints(&.{.{
+        .fn_name = replacement_name,
+        .fn_var = replacement_method,
+        .origin = .method_call,
+    }});
+    try dest.setVarContent(replacement, .{ .rigid = .{ .name = hidden_name, .constraints = replacement_constraints } });
+    var aliases = AliasSourceMapping.init(gpa);
+    defer aliases.deinit();
+    try aliases.put(.{ .origin_module = source_module, .source_decl = 1 }, replacement);
+    try aliases.put(.{ .origin_module = source_module, .source_decl = 2 }, replacement);
+    var mapping = VarMapping.init(gpa);
+    defer mapping.deinit();
+    const imported = try copyVar(&source, &dest, backing, &mapping, &aliases, &source_env, &dest_env, gpa);
+    try std.testing.expectEqual(replacement, mapping.get(first_alias).?);
+    try std.testing.expectEqual(replacement, mapping.get(second_alias).?);
+    // The real alias-substitution branch copies these even though the wrapper
+    // no longer exposes them. A later consumer cannot reconstruct their map.
+    try std.testing.expect(mapping.get(first_arg) != null);
+    try std.testing.expect(mapping.get(second_arg) != null);
+    try std.testing.expect(mapping.get(original_method) != null);
+    const discarded = dest.resolveVar(mapping.get(original).?).desc.content.flex;
+    try std.testing.expectEqual(@as(usize, 1), dest.sliceStaticDispatchConstraints(discarded.constraints).len);
+    const imported_row = dest.resolveVar(imported).desc.content.structure.tag_union;
+    for (dest.tags.sliceRange(imported_row.tags).items(.args)) |args| {
+        try std.testing.expectEqual(replacement, dest.sliceVars(args)[0]);
+    }
+    const declaration = try dest.registerNominalDecl(.{
+        .ident = .{ .ident_idx = try dest_env.insertIdent(base.Ident.for_text("Choice")) },
+        .origin_module = @enumFromInt(0),
+        .source = NominalType.Source.init(types_mod.SourceDecl.fromStatement(3), false, false),
+        .formals = try dest.appendVars(&.{}),
+        .backing = imported,
+        .flags = .{ .valid = true },
+    });
+    const schema = try dest.registerNominalRowSchema(declaration, imported_row.tags, imported_row.ext);
+    const actuals = try dest.appendVars(&.{});
+    const before = try dest.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+    const after = try dest.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+    const private = try dest.demandNominalTemplate(dest_env.getIdentStoreConst(), before, replacement);
+    const before_backing = try dest.demandNominalTemplate(dest_env.getIdentStoreConst(), before, imported);
+    const after_backing = try dest.demandNominalTemplate(dest_env.getIdentStoreConst(), after, imported);
+    const other_private = try dest.demandNominalTemplate(dest_env.getIdentStoreConst(), after, replacement);
+    try std.testing.expect(private != replacement and private != other_private);
+    for ([_][2]Var{ .{ before_backing, private }, .{ after_backing, other_private } }) |pair| {
+        const row = dest.resolveVar(pair[0]).desc.content.structure.tag_union;
+        for (dest.tags.sliceRange(row.tags).items(.args)) |args| {
+            try std.testing.expectEqual(pair[1], dest.sliceVars(args)[0]);
+        }
+        const constraints = dest.sliceStaticDispatchConstraints(dest.resolveVar(pair[1]).desc.content.rigid.constraints);
+        try std.testing.expectEqual(@as(usize, 1), constraints.len);
+        try std.testing.expectEqual(replacement_name, constraints[0].fn_name);
+        const method = dest.resolveVar(constraints[0].fn_var).desc.content.structure.fn_pure;
+        try std.testing.expectEqual(pair[1], dest.sliceVars(method.args)[0]);
+        try std.testing.expectEqual(pair[1], method.ret);
+    }
+    // Ordinary scheme copies consume effective content: after fresh_flex,
+    // a later fresh_rigid operation must not resurrect the old template rigid.
+    try dest.setNominalReferenceRank(.{ .template = .{ .opening = before, .var_ = replacement } }, .generalized);
+    var first_copy_map = VarMapping.init(gpa);
+    defer first_copy_map.deinit();
+    var first_copy = types_mod.instantiate.Instantiator{
+        .store = &dest,
+        .idents = dest_env.getIdentStoreConst(),
+        .var_map = &first_copy_map,
+        .current_rank = types_mod.Rank.outermost.next(),
+        .rigid_behavior = .fresh_flex,
+    };
+    const flex = try first_copy.instantiateTypeScheme(private);
+    try std.testing.expect(dest.resolveVar(flex).desc.content == .flex);
+    try dest.setDescRank(dest.resolveVar(flex).desc_idx, .generalized);
+    var second_copy_map = VarMapping.init(gpa);
+    defer second_copy_map.deinit();
+    var second_copy = types_mod.instantiate.Instantiator{
+        .store = &dest,
+        .idents = dest_env.getIdentStoreConst(),
+        .var_map = &second_copy_map,
+        .current_rank = types_mod.Rank.outermost.next().next(),
+        .rigid_behavior = .fresh_rigid,
+    };
+    const still_flex = try second_copy.instantiateTypeScheme(flex);
+    try std.testing.expect(still_flex != flex);
+    const flex_content = dest.resolveVar(still_flex).desc.content.flex;
+    const final_constraints = dest.sliceStaticDispatchConstraints(flex_content.constraints);
+    try std.testing.expectEqual(@as(usize, 1), final_constraints.len);
+    const final_method = dest.resolveVar(final_constraints[0].fn_var).desc.content.structure.fn_pure;
+    try std.testing.expectEqual(still_flex, dest.sliceVars(final_method.args)[0]);
+    try std.testing.expectEqual(still_flex, final_method.ret);
+}

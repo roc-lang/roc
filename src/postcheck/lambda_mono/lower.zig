@@ -48,6 +48,9 @@ pub const SpecializationIdentity = struct {
 pub const Options = struct {
     inline_expects: InlineExpectMode = .run,
     debug_specialization_identities: ?*std.ArrayList(SpecializationIdentity) = null,
+    /// Explicit standalone sources demanded by the direct consumer, replayed
+    /// against its ID-preserving verifier clone without changing user roots.
+    additional_sources: []const Lifted.FnId = &.{},
 };
 
 /// Lower Lambda Solved IR into Lambda Mono IR.
@@ -132,6 +135,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .proc_debug_names = lifted.proc_debug_names,
             .roots = lifted.roots,
             .literal_roots = lifted.literal_roots,
+            .literal_root_owners = lifted.literal_root_owners,
             .layout_requests = lifted.layout_requests,
             .comptime_value_reads = lifted.comptime_value_reads,
             .runtime_schema_requests = lifted.runtime_schema_requests,
@@ -257,6 +261,7 @@ const Lowerer = struct {
     unit_ty: ?Type.TypeId = null,
     inline_expects: InlineExpectMode,
     debug_specialization_identities: ?*std.ArrayList(SpecializationIdentity),
+    additional_sources: []const Lifted.FnId,
     /// Replays the match resolutions direct LIR lowering recorded, so the
     /// debug verifier sees the same set of demanded functions. Keyed by the
     /// match's scrutinee expression.
@@ -318,6 +323,7 @@ const Lowerer = struct {
             .symbols = .{ .next = solved.lifted.next_symbol },
             .inline_expects = options.inline_expects,
             .debug_specialization_identities = options.debug_specialization_identities,
+            .additional_sources = options.additional_sources,
         };
     }
 
@@ -358,6 +364,7 @@ const Lowerer = struct {
                 .site = root.site,
             });
         }
+        try self.program.literal_root_owners.appendSlice(self.allocator, self.solved.lifted.literal_root_owners);
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.len);
         for (self.solved.layout_requests) |request| {
@@ -377,6 +384,7 @@ const Lowerer = struct {
             });
         }
 
+        for (self.additional_sources) |source| _ = try self.ensureOwnFnSpec(source, .finite);
         try self.lowerQueuedFns();
     }
 

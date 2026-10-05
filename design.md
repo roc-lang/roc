@@ -513,6 +513,41 @@ relocations retain their existing contracts. A cache-hit counter alone is not
 the performance assertion: a warm test must also demonstrate skipped Monotype
 body work and preserve cold/warm diagnostics.
 
+### Late Higher-Order Object Reuse
+
+With `late_callable_cache` enabled, function-containing template requests retain
+their reservation identity without becoming eligible for early lookup. Direct
+LIR combines that producer-owned identity (including request, dispatch evidence,
+and codec contract) with the completed procedure identity in the versioned
+`roc.object.late-callable.v1` namespace. Lookup and artifact publication use the
+same key. Equal arrows or layouts do not identify callback implementations;
+solved nested callable topology, stable target sources and capture ABI do.
+
+Reservation is not code demand: worker representation preparation also reserves
+procedures whose calls are inlined. An offered specialization becomes an
+explicit pack root, so late keys remain pending until emitted demand has queued
+and completed the canonical procedure owner. A reached alias may queue that
+owner without setting the owner's own reach bit. Publication requires the
+owner's completed body or supplied object-artifact authority; it never promotes
+an unused reservation into a new body request. Existing callable-address,
+erased-table, static-data and frozen relocation roots retain their independent
+required-code edges.
+
+The initial admission is the existing plain finite procedure boundary: no
+procedure captures, SpecConstr clone, erased ABI or return-reuse ABI. Nested
+callable signatures and returned functions may reach this boundary, but an
+entry is offered only when the existing artifact closure proof admits it.
+Runtime capture values are not procedure identity; baked constants remain
+subject to content identity and relocation portability. Descriptor-sidecar and
+uncarried program-local dependencies, function-pointer constants, and literal
+conversion closures remain withheld. App-derived specializations stay in app
+packs, never copied into shared package packs.
+
+The compile-time observation proof is unchanged. A hit skips remaining LIR
+body construction and native emission, not the earlier analysis needed to
+establish identity; inlining remains unchanged. This rule mutates no solver
+state and admits no new representation inference.
+
 ## Checking Effects And Const Roots
 
 Checking owns Roc effect validation, compile-time evaluation eligibility, and
@@ -1045,6 +1080,82 @@ cannot invalidate earlier records. Propagated failures retain their explicit
 producer identities instead of copying messages again. Reporting borrows the
 owned bytes only while consuming them; finalization releases the buffer after
 all embedded and standalone diagnostics have been recorded.
+
+The default-off finalized-literal cache experiment applies only to normal
+specializing runtime code. A literal rejection reports a compiler diagnostic
+but does not prohibit code generation: the completed failed value must retain
+its erroneous runtime crash. Both that code and successful completed values
+may be reused under the same complete source, concrete type, dispatch evidence,
+and converter dependency identity. A conditional literal rejection arm in an
+unevaluated converter is not a finalization certificate.
+
+The finalizer, not a pack scanner, owns this certificate. Normal runtime
+materialization consumes completed frozen values and failure slots; separate
+module-pack lowering does not establish literal completion. Each reusable
+specialization must explicitly own its activated literal outcomes before the
+prepared program is released. Literal roots can be shared by content identity,
+so ordered body publication records an explicit many-to-many root-to-owning-
+function relation for every retained registration. Lifting consumes those
+function identities to publish reservation keys; later stages do not infer an
+owner from a root's position, crash marker, or frozen bytes.
+Owner publication is an explicit cache-context option copied into private
+worker inputs, whose builders do not own cache lookup. Gate-off and no-cache
+compilations publish no owner rows.
+Each literal read's immutable value descriptor also names its own owner row.
+Deduplication shares the evaluated producer, not this read-origin association.
+The reference survives inlining and cloning; consumers never choose an owner
+from the shared root's owner list. Local owner references are provenance only,
+excluded from persistent certificates and procedure identity.
+The finalized runtime LIR producer additionally records each actual literal
+read's emitting procedure identity before completed-value folding. Inlining
+and cloning can move a read out of its logical owning function, so artifact
+publication consumes this use provenance rather than assuming the logical
+owner still has a native procedure. Worker use rows are private and merge in
+ordered commit. Their local root ids resolve through the live program session's
+completion facts and never persist. An external cached procedure supplies its
+validated certificate, not a reconstructed statement body.
+Caller inlining may erase every standalone literal-owning procedure. Under the
+active write-cache context, the completed producer therefore requests native
+publication of direct early owners whose entire activated outcome set qualifies.
+The owning function reference remains scoped to the same immutable lifted
+program; rebuilt programs cannot consume its local IDs. This extra native-body
+demand preserves caller inlining and the user/evaluation root manifest. Only a
+fully completed canonical body or validated external artifact is marked as a
+cache-publication root; preflight reservations do not create roots or offers.
+Unsupported owners of a shared evaluated value do not veto qualified peers.
+Portable cache facts use artifact-qualified
+checked expression identities and owned message bytes, never process pointers,
+program-local root ids, or stale source locations. Current checked authority
+resolves their reporting regions. Existing checked reports remain authoritative
+for failures embedded in the current program's checked roots. A previous
+program's embedding status is not permission to suppress a current report.
+Standalone specialization reports and debug observations replay once through
+current finalization report destinations without reexecuting the converter.
+
+Admission preserves complete specialization keys, frozen-value representation,
+ARC signatures, relocation portability, and existing callable and
+branch-observation restrictions. Callable-containing or host-sensitive values
+remain excluded unless their existing portable representation proves otherwise.
+The initial portable certificate class is successful completed values without
+debug or failed-expect observations and with an explicit noncallable result
+proof from the producer's constant representation graph. An owning procedure
+can consume a callable literal into a noncallable return, so its signature and
+the absence of function relocations are not this proof. Incomplete graphs remain
+ineligible; recursive containers retain the same proof boundary. Gate-off and
+no-cache sessions do not construct this cache-only proof.
+Failed and observed entries require a
+portable failed-read/demand attribution contract before admission: their correct
+runtime code alone does not establish current checked-root reporting or event
+order. Certificates bind the offered specialization and artifact identities to
+every contributing literal root's explicit owner specialization and checked
+source. The native artifact continues to own the typed value's code, readonly
+data, relocations, and ARC signature; no replacement value ABI is introduced.
+The experiment's pack schema is version 6; gate-off remains version 4.
+Version 5 certificates lacked the explicit noncallable-result proof and are
+not accepted under the strengthened contract.
+Gate-off behavior and cache formats remain isolated from the experiment.
+The larger obligation-manifest and per-hit converter-evaluation proposal in
+`docs/custom-literal-replay-contract.md` is an alternative, not this contract.
 
 Every shared compile-time value slot names an explicit failure-record slot with
 separate internal `failed: U8` (zero means success, one means failure) and
@@ -6946,6 +7057,110 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Lazy Closed Nominal Tag Rows
+
+`lazy_nominal_rows` is a mechanism, not a new lifting or subsumption policy.
+Its admitted relation is an ordinary structural tag row against an accessible,
+valid nominal declaration whose backing is a closed tag row. Admission does
+not depend on the syntax or provenance of the structural row. Open backings,
+non-tag backings and invalid declarations retain their existing typing rules;
+an open backing's complement includes its original tail, never an invented
+empty extension.
+
+The first production trial admits only a producer-certified subset of that
+relation: finalized declarations with a statically closed tag backing, captured
+without contextual alias substitution. A declaration copied under a nonempty
+`alias_source_mapping`, or already excluded by its source producer, is explicitly
+unadmitted. This declaration-level fact is retained through reimports before
+any delayed descriptor is created. Ordinary transparent aliases and arbitrary
+late structural rows are not excluded. Unadmitted declarations use the existing
+relation from the outset; this is not recovery after installing an incomplete
+fragment. Canonical nominal identity and the language's accepted/rejected type
+relations remain unchanged. Contextual replacement-template support is separate
+follow-up work; declaration identity alone is not effective-schema identity.
+
+One opening owns the immutable declaration schema, actual root/name
+substitutions, an opening-time rank, per-template effective rank history and
+one template-root-to-owned-cell map.
+Demanding several payloads uses that same map. Independent openings never
+share private unknowns. A fragment denotes exactly the declaration row minus
+the related label occurrences, with its residual extension; duplicate labels
+retain their payload equalities. It cannot be represented as an ordinary
+unconstrained flex or silently closed to `[]`.
+
+Materialization must expose exactly the equalities, labels, obligations and
+checked results of eager declaration instantiation and ordinary row unification,
+regardless of demand order. Occurs checks, rank propagation, generalization,
+scheme copies, effect and dispatch traversals must include latent payload edges.
+Late allocation uses the opening's rank/region history, not the demand site's
+current rank. Speculative rollback restores demands, maps and cells together;
+diagnostic materialization cannot mutate surviving inference state.
+
+Publication retains explicit, Store-owned openings and fragments. The Store
+serializes all stored arrays, including orphaned descriptors; there is no
+live-root collection boundary at which deferred rows disappear. Materializing
+every stored fragment at publication is therefore not the implementation
+contract. Whole compile/cache-construction measurements include publication.
+
+Persistent opening identity is a dense Store-local ID, never a pointer to an
+instantiator or a borrowed reader variable. Its immutable schema, declaration,
+actual root/name substitutions, private-cell ownership map and per-template
+effective rank/quantification history are owned by that Store. Creation-region
+provenance is captured when the opening is created; later demands cannot inherit
+the current caller's region. A fragment identifies its opening, excluded label
+occurrences and residual extension.
+Typed serialization versions and cache identities distinguish this schema.
+Import and scheme copy remap every schema and solver reference, freshen
+independent opening ownership, and preserve within-opening sharing and cycles.
+An escaped, nongeneralized latent node remains shared across scheme uses, just
+as an already allocated monomorphic node would; copying cannot indiscriminately
+freshen every opening-private template root. These operations cannot infer
+missing metadata from a materialized subset.
+
+The declaration-copy producer publishes the complete immutable schema-root
+translation before its ephemeral `VarMapping` is discarded. This translation
+includes formals, backing, payload descendants and the closed tail, qualified
+by source module/schema identity. Declaration lookup may skip a graph copy
+only when that explicit translation is already retained; zipping destination
+backings or reconstructing a discarded mapping is forbidden. Reimports reuse
+the immutable translation, not application-private state. Actual and owned
+solver references use `VarMapping`; a per-copy-scope `OpeningCopyMap` preserves
+one copied opening's sharing independently of the immutable schema mapping.
+
+With the gate enabled, the finalized declaration producer captures schemas only
+for valid closed tag backings, after declaration invalidity/recursion checks and
+before annotations or values consume them. Predeclaration and later entrypoint
+revisits cannot publish duplicate or stale schemas. Gate-off compilation produces
+no optimization-only schema inventories or translations. Ordinary solver cells
+may still evolve; that evolution cannot mutate the captured immutable template.
+
+Canonical schema keys use the declaring module's stable identity, translated
+through the destination module-identity table, and canonical template-root keys.
+One canonical correspondence per Store suffices across intermediary imports.
+Composition retains every canonical key; local references are values, not an
+invertible identity. Aliases and explicit substitutions can make those values
+many-to-one. A consumer cannot pick an arbitrary inverse representative, erase
+distinct logical roots or introduce extra equalities from collapsed wrappers.
+The producer publishes exact sharing and alias transparency, not a consumer's
+heuristic completeness check. Schema capture and translation retention count
+toward cold compilation time, memory and artifact size.
+
+`Store.resolveVar` remains infallible, allocator-free observation. A delayed
+fragment is an explicit type variant, not an ordinary flex. Each semantic
+consumer either traverses opening-scoped logical template/actual edges or
+demands through a fallible API. Rank and quantification changes to latent roots
+are journaled together with cell-map changes under Store savepoints. Complete
+diagnostic shapes use isolated state. Checked hashes and error-free dispatch
+plans must not depend on demand order; downstream representation authority
+remains the public nominal application, not its deferred backing fragment.
+
+Implementation is staged: a resumable opening API may first expose explicit
+demands and full materialization without installing latent solver nodes.
+That foundation alone does not enable the gate or constitute a performance
+implementation. Solver admission requires all semantic traversal and rollback
+contracts above, with accepted late bare helpers and rejected closed-row,
+shared-payload, opacity and occurs cases pinned by tests.
+
 ### Expected Shape Context
 
 An expected aggregate shape guides construction but introduces no new value
@@ -9545,6 +9760,45 @@ site to any family below must classify it here.
 
 Other solved-graph mutations:
 
+- Persistent late-row admission and demand—mechanism, not yet activated:
+  `unifyTagUnionWithNominal` may relate visible payload occurrences through one
+  opening and bind an ordinary extension to the exact remaining fragment of a
+  valid closed declaration. No row is closed by dropping unmentioned labels.
+  Subsequent row relations preserve duplicate payload equalities and residual
+  tails. Opening-scoped rank/quantification updates and demand-map writes belong
+  to the same Store transaction as ordinary descriptor changes. This family
+  requires the persistent serialization/import and latent-edge consumer contract
+  in Lazy Closed Nominal Tag Rows before installing a solver descriptor.
+  The planned `Store.materializeNominalFragment` content replacement realizes
+  exactly that fragment's nonexcluded occurrences and residual, under the same
+  opening map. It preserves the descriptor's current rank and flags; new
+  payload cells use captured creation provenance and per-template history.
+  Publishing concrete row content is the final, nonfallible step after all
+  payload/row allocations succeed. Failure leaves the opening invalid until
+  paired rollback; diagnostics perform this replacement only in isolated state.
+  Empty-row realization is permitted only when the exact logical fragment is
+  empty, never because a caller requested `[]`. This is a representation
+  mechanism, not admission of extra row relations.
+- `NominalOpening.demand` / `materialize`—mechanism: fresh declaration
+  instantiation under one owned substitution map, with opening-time rank and
+  exact per-template rank results supplied by semantic traversals. Rank history
+  applies only to newly minted cells, never resetting an already demanded
+  cell's subsequent solver rank. Session checkpoints restore map/rank history
+  together with the paired type-store savepoint.
+  `Store.demandNominalTemplate` uses the same operation with substitutions and
+  histories reconstructed from persistent Store-owned tables. Its instantiator
+  publishes an explicit insertion/replacement delta, so existing seeded entries
+  are not scanned and republished. Only producer-proven new keys use unchecked
+  release insertion; replacements retain the ordinary map-update rule.
+  Its demand guard
+  journals invalidation before allocations, and publishes a complete map before
+  clearing that invalidation without further allocation. Store savepoints restore
+  opening heads/status and appended metadata together with ordinary cells.
+  `Store.setNominalReferenceRank` directs subsequent rank writes to an owned
+  descriptor when one exists, otherwise to journaled per-template history.
+  This staged API does not install lazy solver descriptors; ordinary eager
+  opening and checked publication remain unchanged until latent-edge consumers
+  and savepoint ownership implement Lazy Closed Nominal Tag Rows (above).
 - `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
   acquire the merged content, so an extension reaching either operand must

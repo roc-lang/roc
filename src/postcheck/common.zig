@@ -79,6 +79,8 @@ pub const LiteralRejectionSite = LIR.LiteralRejectionSite;
 /// The kind of literal a `literal_rejected` expression reports.
 pub const LiteralRejectionKind = LIR.LiteralRejectionKind;
 
+pub const LiteralRootOwner = LIR.FinalizedLiteralOutcomes.RootOwner;
+
 /// Program-local literal root index; see `LIR.LiteralRootId`.
 pub const LiteralRootId = LIR.LiteralRootId;
 
@@ -112,6 +114,9 @@ pub const ComptimeValueRoot = struct {
     module: checked.ModuleId,
     root: ComptimeProducer,
     const_locator: ?checked.ConstLocator,
+    /// Read-origin provenance, never part of storage or procedure identity.
+    literal_owner: if (base.CompilerFeatures.finalized_literal_cache) ?LIR.FinalizedLiteralOutcomes.OwnerId else void =
+        if (base.CompilerFeatures.finalized_literal_cache) null else {},
 };
 
 /// Producer-owned storage requirements; only target lowering applies string ABI size.
@@ -346,11 +351,39 @@ pub const SpecCacheHit = struct {
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
+    /// Borrowed from the loaded pack's arena, alive through this compilation.
+    /// The pointer is never serialized; the certificate's stable facts are.
+    finalized_literals: if (base.CompilerFeatures.finalized_literal_cache) ?*const LIR.FinalizedLiteralOutcomes.Certificate else void =
+        if (base.CompilerFeatures.finalized_literal_cache) null else {},
 };
 
-/// The object cache's answer for a specialization key, asked when Monotype
-/// reserves the specialization and before its body exists. The consumer that
-/// owns the cache supplies the context and the lookup.
+/// Late object namespace: the producer's exact reservation identity carries
+/// source, request, evidence and codec provenance; the completed procedure
+/// identity adds solved nested callable topology and the selected capture ABI.
+/// Neither component alone admits a higher-order specialization.
+pub fn lateCallableCacheKey(reservation: [32]u8, identity: [32]u8) [32]u8 {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.object.late-callable.v1");
+    hasher.update(&reservation);
+    hasher.update(&identity);
+    return hasher.finalResult();
+}
+
+test "late callable cache key isolates completed identities and producer provenance" {
+    const seed: [32]u8 = @splat(1);
+    const identity: [32]u8 = @splat(2);
+    const key = lateCallableCacheKey(seed, identity);
+    try std.testing.expectEqual(key, lateCallableCacheKey(seed, identity));
+    try std.testing.expect(!std.mem.eql(u8, &key, &seed));
+    try std.testing.expect(!std.mem.eql(u8, &key, &identity));
+    try std.testing.expect(!std.mem.eql(u8, &key, &lateCallableCacheKey(@splat(3), identity)));
+    try std.testing.expect(!std.mem.eql(u8, &key, &lateCallableCacheKey(seed, @splat(3))));
+    try std.testing.expect(!std.mem.eql(u8, &key, &lateCallableCacheKey(identity, seed)));
+}
+
+/// The object cache's answer for an explicitly produced specialization key:
+/// an early reservation key or a late key completed from procedure identity.
+/// The consumer that owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
     find: *const fn (context: *anyopaque, key: [32]u8) ?SpecCacheHit,

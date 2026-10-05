@@ -1,12 +1,82 @@
 # Custom literal replay experiment: admission contract
 
-Status: contract investigation only; no implementation or performance claim.
+Status: source implementation includes completion retention, exact read-origin
+ownership, early certificate validation, external propagation, per-closure
+certificate construction, and explicit completed-owner native publication.
+Recovered-source guards and named Debug/ReleaseFast workflows pass for the
+observation-free success class. Fresh same-source RF measurements show no
+convincing SQL wall gain, and observed warm compilation transcripts differ
+between literal-off and literal-on. Full acceptance is therefore rejected;
+the experiment remains default-off. See
+`compiler-performance-finalized-literal-cache.md` for exact measurements,
+identities and the observer-eligibility/replay boundary. The original
+converter/symbol withholding filters remain intact.
 The measured seven-feature configurations are unchanged. This experiment needs
 a separate default-off gate, outside the measured `perf-all` configuration.
 Cache work is limited to the normal specializing pipeline; Boxy cache support
 is out of scope.
 
 ## Correction and narrower alternative under review
+
+The authoritative smaller contract is now in `design.md`, under compile-time
+evaluation and static storage. Normal runtime materialization is the completed
+artifact producer; separately lowered module packs remain unfinalized and
+withheld. Session-owned facts retain artifact-qualified literal sources, exact
+evaluated root identities, successful/rejected outcomes, report authority, and
+owned debug messages alongside the existing typed frozen values.
+
+The neutral data model and gate-isolated pack codec are defined in source.
+Version 6 carries optional success-only certificates bound to specialization
+and artifact identities; gate-off keeps version 4. Version 5 is rejected because
+its success marker did not establish an explicit noncallable-result proof.
+Initial publication requires
+observation-free successful outcomes with explicit owners and the existing
+portable artifact representation. Rejection/debug facts remain session-owned,
+not admitted by this schema. Qualified completed direct owners now have explicit
+native publication demand; existing portability filters are unchanged.
+
+An evaluated root identity is not proof of ownership by a cacheable
+specialization. Ordered publication records every retained root/owner pair,
+including deduplicated roots. Each immutable read descriptor retains its exact
+owner-row reference through lifting, inlining, and cloning; finalized runtime
+reads publish that reference and the actual emitting procedure before folding.
+No source or crash scan reconstructs ownership. Crash/expect observations without portable origin
+facts remain ineligible. The completed frozen payload remains session-owned
+until an existing portable artifact representation owns it.
+
+## Source implementation lifetime and scope
+
+The active read/write cache context is declared before Monotype preparation
+and copied into private worker inputs separately from cache lookup. Gate-off
+and `--no-cache` publish no owner/use rows or retained completion tables.
+The evaluation counter measures actual ordinary evaluation, not offers or
+debug replay. Early closed owner keys are supported; null/late owners,
+rejected outcomes, and debug/failed-expect observations are ineligible.
+
+Decoded certificates belong to the loaded pack's arena through compilation.
+`SpecCacheHit` and `Result` borrow them, never serialize their pointers.
+Validated early Monotype hits supply external certificates; dynamic Direct-LIR
+and HOF certificate offers are declined before external/body-skip annotation.
+The publication index resolves local owner/root references against the live
+session and owns new certificates until encoding copies their stable fields.
+Unsupported reads withhold their actual emitter closures, not unrelated code.
+Existing ARC, frozen-data ownership, function-relocation, and program-symbol
+checks remain authoritative.
+
+Failed-entry attribution still needs validation. A function can contain a
+rejected literal yet return successfully along another runtime branch. A
+checked caller that reads the failed value owns the embedded report; one that
+avoids the failed read leaves the standalone literal report. Thus a producer's
+embedding flag cannot suppress a different program's report. The branch
+fixtures in `test/cli/finalized_literal_cache` distinguish these cases but have
+not been run yet.
+
+Runtime artifacts do not carry the evaluator's failure hooks. Existing native
+CTFE failure hooks use session-local statement/file coordinates. Reusing the
+correct runtime crash does not, by itself, supply portable failed-producer
+attribution to a fresh checked caller. Failed-entry CTFE admission must either
+consume an explicit portable attribution contract or remain excluded. It may
+not guess the failed branch or substitute an unconditional crash for the body.
 
 The language reports a rejected conversion and continues code generation with
 an erroneous runtime path that crashes; rejection is not a requirement to abort
@@ -26,7 +96,7 @@ conversion on every hit is not established as necessary. The plan below remains
 an unimplemented alternative for entries requiring new validation; its necessity
 has not been demonstrated.
 
-## Proposed rule and mutation inventory
+## Larger unimplemented alternative: rule and mutation inventory
 
 Checked artifacts own deferred literal obligations. Reusing an object cannot
 change the obligations activated by a concrete specialization reservation.

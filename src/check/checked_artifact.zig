@@ -140,7 +140,18 @@ pub const CheckedModuleArtifactKey = extern struct {
         checking_context_identity: CheckingContextIdentity,
         direct_import_artifact_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
-        const compiler_artifact_hash = build_options.compiler_artifact_hash;
+        return computeFromSourceHashWithCompilerHash(source_hash, build_options.compiler_artifact_hash, module_identity, checking_context_identity, direct_import_artifact_keys);
+    }
+
+    /// Pure key producer for an explicit compiler contract. Normal checking
+    /// always delegates with this build's declared compiler artifact hash.
+    pub fn computeFromSourceHashWithCompilerHash(
+        source_hash: [32]u8,
+        compiler_artifact_hash: [32]u8,
+        module_identity: ModuleIdentity,
+        checking_context_identity: CheckingContextIdentity,
+        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    ) CheckedModuleArtifactKey {
         const module_identity_hash = hashModuleIdentity(module_identity);
         const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
         const direct_import_artifact_keys_hash = hashDirectImportArtifactKeys(direct_import_artifact_keys);
@@ -164,6 +175,21 @@ pub const CheckedModuleArtifactKey = extern struct {
 
 /// Stable identifier for a checked module.
 pub const ModuleId = CheckedModuleArtifactKey;
+
+test "checked artifact key normal producer delegates its declared compiler identity" {
+    const identity: ModuleIdentity = .{
+        .stable_hash = [_]u8{7} ** 32,
+        .module_idx = 0,
+        .module_name = @enumFromInt(0),
+        .display_module_name = @enumFromInt(0),
+        .qualified_module_name = @enumFromInt(0),
+        .kind = .module,
+    };
+    const source_hash = hashBytes("Fixture :: []");
+    const normal = CheckedModuleArtifactKey.computeFromSourceHash(source_hash, identity, .{}, &.{});
+    const explicit = CheckedModuleArtifactKey.computeFromSourceHashWithCompilerHash(source_hash, build_options.compiler_artifact_hash, identity, .{}, &.{});
+    try std.testing.expectEqualDeep(normal, explicit);
+}
 
 fn computeCheckedArtifactKeyBytes(
     source_hash: [32]u8,
@@ -33744,7 +33770,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 107 keys each context-free checked type subtree by its own key,
     // records which checked type roots are composable, and encodes keys with
     // one-byte tags and varint integers.
-    const serialized_layout_version: u32 = 107;
+    // Version 108 retains Store-owned nominal row schemas, opening substitutions,
+    // per-template rank histories and exact fragments across publication.
+    const serialized_layout_version: u32 = 108;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -40614,8 +40642,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB2, 0xDC, 0x12, 0xE2, 0x5D, 0x24, 0x46, 0x52, 0x6A, 0x83, 0xBA, 0xF7, 0xC8, 0x6D, 0x5A, 0xF4,
-        0xC0, 0xC1, 0x8D, 0x6D, 0xFD, 0x84, 0xE2, 0x08, 0x2F, 0x16, 0x2B, 0x6B, 0x6D, 0x67, 0x9E, 0x84,
+        0x5D, 0x66, 0x13, 0x48, 0x2F, 0xCE, 0x9C, 0x68, 0x5F, 0x67, 0x98, 0x81, 0x2B, 0xBA, 0x69, 0x21,
+        0xD5, 0xC8, 0x7B, 0xCB, 0x03, 0x2F, 0xCE, 0x11, 0x96, 0xFA, 0xAE, 0x97, 0xC4, 0x49, 0x3F, 0x8E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

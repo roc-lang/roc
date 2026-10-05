@@ -3262,13 +3262,13 @@ pub fn build(b: *std.Build) void {
 
     // Create compile time build options
     const build_options = b.addOptions();
-    const perf_all = b.option(bool, "perf-all", "Enable all opt-in compiler performance features (default: off)") orelse false;
-    var compiler_perf_flags: u8 = 0;
+    const perf_all = b.option(bool, "perf-all", "Enable the measured compiler performance bundle; follow-up experiments remain opt-in (default: off)") orelse false;
+    var compiler_perf_flags: compiler_feature_specs.Mask = 0;
     inline for (std.meta.tags(compiler_feature_specs.Feature)) |feature| {
-        if (b.option(bool, feature.optionName(), feature.description()) orelse perf_all)
+        if (feature.resolve(perf_all, b.option(bool, feature.optionName(), feature.description())))
             compiler_perf_flags |= feature.mask();
     }
-    build_options.addOption(u8, "compiler_perf_flags", compiler_perf_flags);
+    build_options.addOption(compiler_feature_specs.Mask, "compiler_perf_flags", compiler_perf_flags);
     build_options.addOption(bool, "enable_tracy", flag_enable_tracy != null);
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption(bool, "trace_refcount", trace_refcount);
@@ -4042,7 +4042,7 @@ pub fn build(b: *std.Build) void {
         build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
         const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
-        run_cli.addArg("zig-out/bin/roc");
+        run_cli.addArg(b.getInstallPath(.bin, "roc"));
         if (cli_test_llvm) {
             run_cli.addArg("--include-llvm");
         }
@@ -9072,13 +9072,7 @@ fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compile
 /// This is intentionally one build-time hash. Checked artifact cache keys must
 /// not separately store compiler version, builtin identity, semantic build
 /// switches, or serialization format identity.
-fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8, compiler_perf_flags: u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc-checked-artifact-v1");
-    hasher.update(compiler_version);
-    hasher.update("compiler-performance-features");
-    hasher.update(&compiler_feature_specs.cacheIdentity(compiler_perf_flags));
-
+fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8, compiler_perf_flags: compiler_feature_specs.Mask) [32]u8 {
     // Resolve against the build root rather than cwd so the hash works both for
     // standalone builds and when roc is consumed as a dependency (cwd is then the
     // consumer's directory, not roc's).
@@ -9089,9 +9083,7 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8, compiler
         std.Io.Limit.limited(32 * 1024 * 1024),
     ) catch @panic("unable to read Builtin.roc while constructing compiler artifact hash");
     defer b.allocator.free(builtin_source);
-    hasher.update(builtin_source);
-
-    return hasher.finalResult();
+    return compiler_feature_specs.compilerArtifactHash(compiler_version, compiler_feature_specs.cacheIdentity(compiler_perf_flags), builtin_source);
 }
 
 /// Generate glibc stubs at build time for cross-compilation

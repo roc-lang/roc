@@ -715,6 +715,29 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     const takes_joined = try types.add(.{ .func = .{ .args = try types.addSpan(&.{beside_lambda}), .ret = scalar, .callable = singleton } });
     const returns_alone = try types.add(.{ .func = .{ .args = args, .ret = alone, .callable = singleton } });
     const returns_joined = try types.add(.{ .func = .{ .args = args, .ret = beside_lambda, .callable = singleton } });
+    const other_singleton = try types.add(.{ .lambda_set = try types.addMembers(&.{
+        .{ .lambda = second, .captures = .empty() },
+    }) });
+    const other_callback = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = other_singleton } });
+    const takes_other = try types.add(.{ .func = .{ .args = try types.addSpan(&.{other_callback}), .ret = scalar, .callable = singleton } });
+    const field = try name_store.internRecordFieldLabel("callback");
+    const record_alone = try types.add(.{ .record = try types.addFields(&.{.{ .name = field, .ty = alone, .default = null }}) });
+    const record_other = try types.add(.{ .record = try types.addFields(&.{.{ .name = field, .ty = other_callback, .default = null }}) });
+    const module_digest: [32]u8 = @splat(3);
+    const nominal = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{ .bytes = module_digest }, .ty = @enumFromInt(0) },
+        .def = .{ .module = try name_store.internModuleIdentity(&module_digest), .type_name = try name_store.internTypeName("Callbacks") },
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = record_alone, .use = .inspectable },
+    } });
+    var other_nominal_content = types.get(nominal);
+    other_nominal_content.named.backing.?.ty = record_other;
+    const nominal_other = try types.add(other_nominal_content);
+    const takes_record = try types.add(.{ .func = .{ .args = try types.addSpan(&.{record_alone}), .ret = scalar, .callable = singleton } });
+    const takes_other_record = try types.add(.{ .func = .{ .args = try types.addSpan(&.{record_other}), .ret = scalar, .callable = singleton } });
+    const takes_nominal = try types.add(.{ .func = .{ .args = try types.addSpan(&.{nominal}), .ret = scalar, .callable = singleton } });
+    const takes_other_nominal = try types.add(.{ .func = .{ .args = try types.addSpan(&.{nominal_other}), .ret = scalar, .callable = singleton } });
     const renderer = Renderer{
         .allocator = allocator,
         .types = types.view(),
@@ -728,7 +751,15 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, beside_lambda, &.{}, "finite", "none"));
     // Function values still distinguish the members their dispatch can select.
     try std.testing.expect(!std.mem.eql(u8, &try renderer.typeDigest(alone), &try renderer.typeDigest(beside_lambda)));
-    for ([_][2]SolvedType.TypeVarId{ .{ takes_alone, takes_joined }, .{ returns_alone, returns_joined } }) |pair| {
+    // Equal arrows and equal-sized target sets do not identify callbacks,
+    // even through a field or a nominal backing with unchanged type arguments.
+    for ([_][2]SolvedType.TypeVarId{
+        .{ takes_alone, takes_joined },
+        .{ takes_alone, takes_other },
+        .{ returns_alone, returns_joined },
+        .{ takes_record, takes_other_record },
+        .{ takes_nominal, takes_other_nominal },
+    }) |pair| {
         const left = try renderer.specIdentity(first_fn, pair[0], &.{}, "finite", "none");
         const right = try renderer.specIdentity(first_fn, pair[1], &.{}, "finite", "none");
         try std.testing.expect(!std.mem.eql(u8, &left, &right));
@@ -741,7 +772,56 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     capture.ty = beside_lambda;
     const captures_joined = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
     try std.testing.expect(!std.mem.eql(u8, &captures_alone, &captures_joined));
+    // Capture values arrive through the runtime environment. Local numbering
+    // and symbols do not change its ABI; callback-bearing capture types do.
+    capture.ty = scalar;
+    const runtime_environment = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
+    capture.local = try mono.addLocal(second, try mono.types.add(.{ .primitive = .i64 }));
+    capture.symbol = second;
+    try std.testing.expectEqual(runtime_environment, try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none"));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
+}
+
+test "procedure identity keeps recursive callable unfolding and query order stable" {
+    const allocator = std.testing.allocator;
+    var types = SolvedType.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator);
+    defer fn_by_symbol.deinit();
+    var symbols = Common.SymbolGen{};
+    const symbol = symbols.fresh();
+    const fn_id: Lifted.FnId = @enumFromInt(0);
+    try fn_by_symbol.put(symbol, fn_id);
+    const member = try types.add(.{ .lambda_set = try types.addMembers(&.{.{ .lambda = symbol, .captures = .empty() }}) });
+    const recursive_fn = try types.add(.unbound);
+    const unfolded_fn = try types.add(.unbound);
+    types.set(recursive_fn, .{ .func = .{ .args = .empty(), .ret = recursive_fn, .callable = member } });
+    types.set(unfolded_fn, .{ .func = .{ .args = .empty(), .ret = recursive_fn, .callable = member } });
+    const first_request = try types.add(.{ .func = .{ .args = try types.addSpan(&.{recursive_fn}), .ret = recursive_fn, .callable = member } });
+    const second_request = try types.add(.{ .func = .{ .args = try types.addSpan(&.{unfolded_fn}), .ret = unfolded_fn, .callable = member } });
+    var results: [2][2]Identity = undefined;
+    for (0..2) |order| {
+        var memo = Memo.init(allocator);
+        defer memo.deinit();
+        const renderer = Renderer{
+            .allocator = allocator,
+            .types = types.view(),
+            .names = &name_store,
+            .fn_tys = &.{recursive_fn},
+            .source_digests = &.{@splat(1)},
+            .fn_by_symbol = &fn_by_symbol,
+            .memo = &memo,
+        };
+        const requests = [_]SolvedType.TypeVarId{ first_request, second_request };
+        for (0..2) |position| {
+            const index = if (order == 0) position else 1 - position;
+            results[order][index] = try renderer.specIdentity(fn_id, requests[index], &.{}, "finite", "none");
+        }
+    }
+    try std.testing.expectEqual(results[0][0], results[0][1]);
+    try std.testing.expectEqual(results[0], results[1]);
 }

@@ -128,6 +128,8 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
+        std.testing.refAllDecls(pack_store);
+        std.testing.refAllDecls(finalized_literal_packs);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -138,6 +140,7 @@ comptime {
 }
 const linker = @import("linker.zig");
 const pack_store = @import("pack_store.zig");
+const finalized_literal_packs = @import("finalized_literal_packs.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
 
@@ -266,7 +269,7 @@ const CompileTimeObjectCache = struct {
 
     fn bind(context: *anyopaque, build_env: *BuildEnv) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
-        self.packs.pending = .{ .store = &self.store, .io = self.io, .build_env = build_env };
+        self.packs.pending = .{ .modules = .{ .store = &self.store, .io = self.io, .build_env = build_env } };
     }
 
     fn deinit(context: *anyopaque) void {
@@ -8905,7 +8908,19 @@ fn writePacksToStore(
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
-                const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
+                var literal_index: ?finalized_literal_packs.Index = null;
+                defer if (literal_index) |*index| index.deinit();
+                if (base.CompilerFeatures.finalized_literal_cache) if (build_env.runtimeProgramSession()) |session| {
+                    if (session.literal_outcomes) |*outcomes| {
+                        literal_index = try finalized_literal_packs.Index.init(
+                            ctx.gpa,
+                            outcomes,
+                            app_lowered.lir_result.literal_root_uses.items,
+                            app_lowered.lir_result.literal_external_certificates.items,
+                        );
+                    }
+                };
+                const bytes = try packFileBytesWithLiterals(ctx.gpa, set, app_lowered, if (literal_index) |*index| index else null);
                 defer ctx.gpa.free(bytes);
                 store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
                     std.log.warn("object cache could not store the program's pack: {}", .{err});
@@ -8942,6 +8957,15 @@ fn packFileBytes(
     set: *const backend.dev.ProcArtifact.Set,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]u8 {
+    return packFileBytesWithLiterals(allocator, set, lowered, null);
+}
+
+fn packFileBytesWithLiterals(
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    literal_index: ?*finalized_literal_packs.Index,
+) Allocator.Error![]u8 {
     var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer artifact_by_identity.deinit();
     for (set.artifacts, 0..) |artifact, index| {
@@ -8975,12 +8999,24 @@ fn packFileBytes(
             withheld += 1;
             continue;
         }
+        var certificate: ?*const lir.LIR.FinalizedLiteralOutcomes.Certificate = null;
+        if (base.CompilerFeatures.finalized_literal_cache) if (literal_index) |index| {
+            switch (try index.forClosure(spec_proc.key, proc.identity, set, placed, spec_proc.literal_early)) {
+                .no_literals => {},
+                .withhold => {
+                    withheld += 1;
+                    continue;
+                },
+                .certified => |proof| certificate = proof,
+            }
+        };
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
+            .finalized_literals = certificate,
         });
     }
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
@@ -11114,7 +11150,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             };
             object_store = &own_store.?;
             own_packs = pack_store.LoadedPacks.init(ctx.gpa);
-            own_packs.?.pending = .{ .store = object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
+            own_packs.?.pending = .{ .modules = .{ .store = object_store.?, .io = ctx.io.std_io, .build_env = &build_env } };
             loaded_packs = &own_packs.?;
         }
     }
@@ -11128,6 +11164,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
+    runtime_lowering.target.finalized_literal_cache_context = !args.no_cache and
+        (object_cache_enabled or loaded_packs != null);
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
@@ -12952,7 +12990,10 @@ fn lowerCheckedSourceToLir(
             .platform_entrypoints, .linked_output => &.{},
         },
     };
-    if (session) |program| return program.takeRuntime(lir_allocator, requests, config.target);
+    if (session) |program| {
+        config.target.finalized_literal_cache_context = program.runtime_target.?.finalized_literal_cache_context;
+        return program.takeRuntime(lir_allocator, requests, config.target);
+    }
     return lir.CheckedPipeline.lowerCheckedModulesToLir(
         lir_allocator,
         .{
@@ -17728,7 +17769,8 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     const compile_time = timing.compile_time_evaluation;
     if (compile_time.total_ns == 0 and
         std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{}) and
-        std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) return;
+        std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{}) and
+        (!base.CompilerFeatures.finalized_literal_cache or compile_time.literal_root_evaluations == 0)) return;
     reporter.recordCompletedWithBreakdown(
         "Shared Lowering and Compile-Time Evaluation",
         compile_time.total_ns,
@@ -17740,6 +17782,11 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     }
     if (!std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
         reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(compile_time.native_emission));
+    }
+    if (base.CompilerFeatures.finalized_literal_cache) {
+        reporter.recordCounters("Finalized literal work", &.{
+            .{ .name = "Literal roots evaluated", .count = compile_time.literal_root_evaluations },
+        });
     }
 }
 

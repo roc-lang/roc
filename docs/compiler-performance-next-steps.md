@@ -160,14 +160,17 @@ addition to the existing constructor fast path.
 
 ## 2. Reusing code without skipping custom literal validation
 
-This section is an unimplemented proposal, now subject to a narrower alternative:
-reuse already-finalized specialization code and preserve/replay its validation
-outcome and diagnostics where checked artifacts do not already retain them.
+The smaller finalized-code contract in `design.md` is authoritative: reuse
+already-finalized specialization code and preserve/replay its validation outcome
+and diagnostics where checked artifacts do not already retain them. Producer
+completion-fact retention is implemented but unvalidated; ownership association,
+object admission, replay, and performance remain incomplete. The larger
+manifest below remains an unimplemented alternative, not an implementation rule.
 Rejected literals report errors but compilation proceeds with a runtime crash
 path. They do not inherently require converter re-execution on a cache hit.
 The current excluded pack shape can be an unevaluated conditional conversion,
 not a previously established failed result. See `custom-literal-replay-contract.md`
-for that distinction before treating the larger manifest below as necessary.
+for the producer-stage status and that distinction.
 
 ### Current omission
 

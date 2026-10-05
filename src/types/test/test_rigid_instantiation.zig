@@ -10,6 +10,7 @@ const base = @import("base");
 const types_mod = @import("../types.zig");
 const Store = @import("../store.zig").Store;
 const Instantiator = @import("../instantiate.zig").Instantiator;
+const NominalOpening = @import("../instantiate.zig").NominalOpening;
 
 const Ident = base.Ident;
 
@@ -22,6 +23,662 @@ const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
+
+fn nominalOpeningFixture(env: *TestEnv) !struct {
+    decl: types_mod.NominalDecl,
+    actual: Var,
+    formal: Var,
+    associated_formal: Var,
+    private: Var,
+} {
+    const formal = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+    // Associated references can name the formal through a different root.
+    const associated_formal = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+    const private = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const actual = try env.types.freshFromContentWithRank(.{ .structure = .empty_record }, .outermost);
+    const tail = try env.types.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .generalized);
+    const row = try env.mkTagUnion(&.{
+        try env.mkTag("Some", &.{ formal, private }),
+        try env.mkTag("Other", &.{ associated_formal, private }),
+    }, tail);
+    return .{
+        .decl = .{
+            .ident = try env.mkTypeIdent("Choice"),
+            .origin_module = @enumFromInt(0),
+            .source = types_mod.NominalType.Source.init(types_mod.SourceDecl.fromStatement(0), false, false),
+            .formals = try env.types.appendVars(&.{formal}),
+            .backing = try env.types.freshFromContentWithRank(row.content, .generalized),
+            .flags = .{ .valid = true },
+        },
+        .actual = actual,
+        .formal = formal,
+        .associated_formal = associated_formal,
+        .private = private,
+    };
+}
+
+test "nominal opening - delayed demands preserve substitutions sharing and rank" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const baseline = env.types.len();
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer opening.deinit();
+    try std.testing.expectEqual(baseline, env.types.len());
+    try std.testing.expectEqual(fixture.actual, try opening.demand(fixture.formal));
+    try std.testing.expectEqual(fixture.actual, try opening.demand(fixture.associated_formal));
+    const private = try opening.demand(fixture.private);
+    try std.testing.expect(private != fixture.private);
+    try std.testing.expectEqual(types_mod.Rank.outermost, env.types.resolveVar(private).desc.rank);
+    const backing = try opening.materialize();
+    try std.testing.expectEqual(backing, try opening.materialize());
+    const row = env.types.resolveVar(backing).desc.content.structure.tag_union;
+    const tags = env.types.tags.sliceRange(row.tags);
+    for (tags.items(.args)) |args_range| {
+        const args = env.types.sliceVars(args_range);
+        try std.testing.expectEqual(fixture.actual, args[0]);
+        try std.testing.expectEqual(private, args[1]);
+    }
+    const tail = env.types.resolveVar(row.ext);
+    try std.testing.expect(tail.desc.content.structure == .empty_tag_union);
+    try std.testing.expectEqual(types_mod.Rank.outermost, tail.desc.rank);
+    // No template variable was changed by any demand.
+    try std.testing.expect(env.types.resolveVar(fixture.private).desc.content == .flex);
+    try std.testing.expectEqual(types_mod.Rank.generalized, env.types.resolveVar(fixture.private).desc.rank);
+}
+
+test "nominal opening - demand delta publishes only newly produced bindings" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    var changes: std.ArrayListUnmanaged(NominalOpening.BindingChange) = .empty;
+    defer changes.deinit(env.gpa);
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer opening.deinit();
+    opening.binding_changes = &changes;
+    const seeded = opening.var_map.count();
+    const private = try opening.demand(fixture.private);
+    try std.testing.expectEqual(@as(usize, 1), changes.items.len);
+    try std.testing.expectEqual(fixture.private, changes.items[0].template);
+    try std.testing.expectEqual(private, changes.items[0].owned);
+    try std.testing.expectEqual(fixture.actual, try opening.demand(fixture.formal));
+    try std.testing.expectEqual(@as(usize, 1), changes.items.len);
+    _ = try opening.materialize();
+    try std.testing.expectEqual(opening.var_map.count() - seeded, changes.items.len);
+    for (changes.items) |change| {
+        try std.testing.expect(change.inserted);
+        try std.testing.expectEqual(change.owned, opening.var_map.get(change.template).?);
+    }
+    const published = changes.items.len;
+    _ = try opening.materialize();
+    try std.testing.expectEqual(private, try opening.demand(fixture.private));
+    try std.testing.expectEqual(published, changes.items.len);
+}
+
+test "nominal opening - independent applications do not share private cells" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    var first = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer first.deinit();
+    var second = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, types_mod.Rank.outermost.next());
+    defer second.deinit();
+    const first_private = try first.demand(fixture.private);
+    _ = try first.materialize();
+    // Reversed demand order has the same within-opening equalities.
+    const second_backing = try second.materialize();
+    const second_private = try second.demand(fixture.private);
+    try std.testing.expect(first_private != second_private);
+    try std.testing.expectEqual(types_mod.Rank.outermost.next(), env.types.resolveVar(second_private).desc.rank);
+    const row = env.types.resolveVar(second_backing).desc.content.structure.tag_union;
+    for (env.types.tags.sliceRange(row.tags).items(.args)) |args_range| {
+        const args = env.types.sliceVars(args_range);
+        try std.testing.expectEqual(fixture.actual, args[0]);
+        try std.testing.expectEqual(second_private, args[1]);
+    }
+}
+
+test "nominal opening - latent reads distinguish schema and owned children" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer opening.deinit();
+    const baseline = env.types.len();
+    const associated = opening.read(.{ .template = fixture.associated_formal });
+    try std.testing.expectEqual(fixture.actual, associated.reference.owned);
+    const private = opening.read(.{ .template = fixture.private });
+    try std.testing.expectEqual(fixture.private, private.reference.template);
+    const schema = opening.read(.{ .template = fixture.decl.backing });
+    try std.testing.expectEqual(fixture.decl.backing, schema.reference.template);
+    const schema_args = env.types.tags.sliceRange(schema.content.structure.tag_union.tags).items(.args);
+    for (schema_args) |args_range| {
+        const args = env.types.sliceVars(args_range);
+        const formal = opening.read(opening.child(schema.reference, args[0]));
+        try std.testing.expectEqual(fixture.actual, formal.reference.owned);
+        const unknown = opening.read(opening.child(schema.reference, args[1]));
+        try std.testing.expectEqual(fixture.private, unknown.reference.template);
+    }
+    try std.testing.expectEqual(baseline, env.types.len());
+    const backing = try opening.materialize();
+    const owned = opening.read(.{ .template = fixture.decl.backing });
+    try std.testing.expectEqual(backing, owned.reference.owned);
+    const owned_args = env.types.tags.sliceRange(owned.content.structure.tag_union.tags).items(.args);
+    for (owned_args) |args_range| {
+        const args = env.types.sliceVars(args_range);
+        // These are instance cells, not template IDs needing substitution again.
+        try std.testing.expectEqual(args[1], opening.read(opening.child(owned.reference, args[1])).reference.owned);
+    }
+}
+
+test "nominal opening - speculative materialization restores demand map and cells" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer opening.deinit();
+    const baseline = env.types.len();
+    const mapped = opening.var_map.count();
+    var checkpoint = try opening.checkpoint();
+    defer checkpoint.deinit();
+    var savepoint = try env.types.createSavepoint();
+    _ = try opening.materialize();
+    try std.testing.expect(env.types.len() > baseline);
+    env.types.rollbackToSavepoint(&savepoint);
+    opening.restore(&checkpoint);
+    try std.testing.expectEqual(baseline, env.types.len());
+    try std.testing.expectEqual(mapped, opening.var_map.count());
+    try std.testing.expectEqual(fixture.private, opening.read(.{ .template = fixture.private }).reference.template);
+    // A subsequent successful demand creates a complete fresh map.
+    const private = try opening.demand(fixture.private);
+    const backing = try opening.materialize();
+    const tags = env.types.tags.sliceRange(env.types.resolveVar(backing).desc.content.structure.tag_union.tags);
+    for (tags.items(.args)) |range| try std.testing.expectEqual(private, env.types.sliceVars(range)[1]);
+}
+
+test "nominal opening - complete demand has eager allocation and sharing equivalence" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const eager_baseline = env.types.len();
+    _ = try @import("../instantiate.zig").instantiateNominalBacking(
+        &env.types,
+        &env.idents,
+        &env.var_map,
+        fixture.decl,
+        &.{fixture.actual},
+        .outermost,
+        .instantiation,
+    );
+    const eager_cells = env.types.len() - eager_baseline;
+    const lazy_baseline = env.types.len();
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer opening.deinit();
+    _ = try opening.demand(fixture.private);
+    _ = try opening.materialize();
+    try std.testing.expectEqual(eager_cells, env.types.len() - lazy_baseline);
+    try std.testing.expectEqual(env.var_map.count(), opening.var_map.count());
+    var iterator = env.var_map.iterator();
+    while (iterator.next()) |entry| {
+        const eager = env.types.resolveVar(entry.value_ptr.*);
+        const demanded = env.types.resolveVar(opening.var_map.get(entry.key_ptr.*).?);
+        try std.testing.expectEqual(eager.desc.rank, demanded.desc.rank);
+        try std.testing.expectEqual(std.meta.activeTag(eager.desc.content), std.meta.activeTag(demanded.desc.content));
+        if (entry.value_ptr.* == fixture.actual) try std.testing.expectEqual(fixture.actual, demanded.var_);
+    }
+}
+
+test "nominal opening - late cells retain per-root rank history without resetting owned ranks" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const opening_rank = types_mod.Rank.outermost.next().next();
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, opening_rank);
+    defer opening.deinit();
+    try opening.recordRankHistory(fixture.private, .outermost);
+    try std.testing.expectEqual(types_mod.Rank.outermost, opening.effectiveRank(.{ .template = fixture.private }));
+    try std.testing.expectEqual(opening_rank, opening.effectiveRank(.{ .template = fixture.decl.backing }));
+    var checkpoint = try opening.checkpoint();
+    defer checkpoint.deinit();
+    try opening.recordRankHistory(fixture.decl.backing, types_mod.Rank.outermost.next());
+    opening.restore(&checkpoint);
+    try std.testing.expectEqual(opening_rank, opening.effectiveRank(.{ .template = fixture.decl.backing }));
+    const private = try opening.demand(fixture.private);
+    try std.testing.expectEqual(types_mod.Rank.outermost, env.types.resolveVar(private).desc.rank);
+    // Once demanded, ordinary solver rank changes are authoritative.
+    try env.types.setDescRank(env.types.resolveVar(private).desc_idx, .generalized);
+    const backing = try opening.materialize();
+    try std.testing.expectEqual(opening_rank, env.types.resolveVar(backing).desc.rank);
+    try std.testing.expectEqual(types_mod.Rank.generalized, env.types.resolveVar(private).desc.rank);
+}
+
+test "nominal opening - materialization retains latent recursive constraints and effects" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const effect = try env.types.freshFromContentWithRank(.{ .structure = .{ .fn_effectful = .{
+        .args = try env.types.appendVars(&.{}),
+        .ret = fixture.formal,
+    } } }, .generalized);
+    const method = try env.types.freshFromContentWithRank(.{ .structure = .{ .fn_unbound = .{
+        .args = try env.types.appendVars(&.{fixture.private}),
+        .ret = fixture.private,
+        .effect_deps = try env.types.appendVars(&.{effect}),
+    } } }, .generalized);
+    const constraints = try env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = try env.idents.insert(env.gpa, Ident.for_text("method")),
+        .fn_var = method,
+        .origin = .method_call,
+    }});
+    try env.types.setVarContent(fixture.private, .{ .flex = Flex.init().withConstraints(constraints) });
+    var opening = try NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost);
+    defer opening.deinit();
+    // Demanding the visible formal must not force an unrelated private graph.
+    const baseline = env.types.len();
+    try std.testing.expectEqual(fixture.actual, try opening.demand(fixture.formal));
+    try std.testing.expectEqual(baseline, env.types.len());
+    _ = try opening.materialize();
+    const private = try opening.demand(fixture.private);
+    const copied_constraints = env.types.sliceStaticDispatchConstraints(env.types.resolveVar(private).desc.content.flex.constraints);
+    try std.testing.expectEqual(@as(usize, 1), copied_constraints.len);
+    const copied_method = env.types.resolveVar(copied_constraints[0].fn_var).desc.content.structure.fn_unbound;
+    try std.testing.expectEqual(private, env.types.sliceVars(copied_method.args)[0]);
+    try std.testing.expectEqual(private, copied_method.ret);
+    const copied_effects = env.types.sliceVars(copied_method.effect_deps);
+    try std.testing.expectEqual(@as(usize, 1), copied_effects.len);
+    const copied_effect = env.types.resolveVar(copied_effects[0]).desc.content.structure.fn_effectful;
+    try std.testing.expectEqual(fixture.actual, copied_effect.ret);
+    try std.testing.expect(copied_constraints[0].fn_var != method);
+    try std.testing.expect(copied_effects[0] != effect);
+}
+
+test "nominal opening - allocation failures release owned session state" {
+    var fail_offset: usize = 0;
+    while (true) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var env = try TestEnv.init(failing.allocator());
+        defer env.deinit();
+        const fixture = try nominalOpeningFixture(&env);
+        // Only fail the new opening/demand operation, not fixture setup.
+        failing.fail_index = failing.alloc_index + fail_offset;
+        var opening = NominalOpening.init(&env.types, &env.idents, fixture.decl, &.{fixture.actual}, .outermost) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(failing.has_induced_failure);
+            continue;
+        };
+        defer opening.deinit();
+        opening.recordRankHistory(fixture.private, .outermost) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        var checkpoint = opening.checkpoint() catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        defer checkpoint.deinit();
+        var savepoint = try env.types.createSavepoint();
+        _ = opening.demand(fixture.private) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectError(error.OutOfMemory, opening.materialize());
+            env.types.rollbackToSavepoint(&savepoint);
+            opening.restore(&checkpoint);
+            failing.fail_index = std.math.maxInt(usize);
+            _ = try opening.materialize();
+            continue;
+        };
+        _ = opening.materialize() catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectError(error.OutOfMemory, opening.materialize());
+            env.types.rollbackToSavepoint(&savepoint);
+            opening.restore(&checkpoint);
+            failing.fail_index = std.math.maxInt(usize);
+            _ = try opening.materialize();
+            continue;
+        };
+        env.types.commitSavepoint(&savepoint);
+        try std.testing.expect(!failing.has_induced_failure);
+        break;
+    }
+}
+
+test "persistent nominal opening - existing maps and latent ranks roll back with the Store" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const declaration = try env.types.registerNominalDecl(fixture.decl);
+    const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+    const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+    const actuals = try env.types.appendVars(&.{fixture.actual});
+    const region = base.Region.from_raw_offsets(12, 34);
+    const owner = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), region);
+    try std.testing.expect(region.eq(env.types.nominal_rows.getOpening(owner).creationRegion()));
+    const associated = env.types.readNominalReference(.{ .template = .{
+        .opening = owner,
+        .var_ = fixture.associated_formal,
+    } });
+    try std.testing.expectEqual(fixture.actual, associated.reference.owned);
+    try env.types.nominal_rows.recordRank(env.gpa, owner, fixture.private, .outermost);
+    var before = try env.types.nominal_rows.clone(env.gpa);
+    defer before.deinit(env.gpa);
+    const baseline = env.types.len();
+    var saved = try env.types.createSavepoint();
+    try env.types.nominal_rows.recordRank(env.gpa, owner, fixture.private, .generalized);
+    _ = try env.types.demandNominalTemplate(&env.idents, owner, fixture.private);
+    const backing = try env.types.demandNominalTemplate(&env.idents, owner, fixture.decl.backing);
+    const residual = env.types.resolveVar(backing).desc.content.structure.tag_union.ext;
+    const fragment = try env.types.nominal_rows.appendFragment(env.gpa, owner, &.{0}, residual);
+    try std.testing.expect(env.types.nominal_rows.excludes(fragment, 0));
+    try std.testing.expect(!env.types.nominal_rows.excludes(fragment, 1));
+    env.types.rollbackToSavepoint(&saved);
+    try std.testing.expectEqual(baseline, env.types.len());
+    try std.testing.expect(env.types.nominal_rows.eql(&before));
+    const latent = env.types.readNominalReference(.{ .template = .{ .opening = owner, .var_ = fixture.private } });
+    try std.testing.expect(latent.reference == .template);
+    try std.testing.expectEqual(types_mod.Rank.outermost, latent.desc.rank);
+    const private = try env.types.demandNominalTemplate(&env.idents, owner, fixture.private);
+    const second = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), region);
+    try std.testing.expect(private != try env.types.demandNominalTemplate(&env.idents, second, fixture.private));
+    try env.types.setNominalReferenceRank(.{ .template = .{ .opening = owner, .var_ = fixture.private } }, .generalized);
+    _ = try env.types.demandNominalTemplate(&env.idents, owner, fixture.decl.backing);
+    try std.testing.expectEqual(types_mod.Rank.generalized, env.types.resolveVar(private).desc.rank);
+}
+
+test "persistent nominal opening - failed capture leaves no partial ownership metadata" {
+    var fail_offset: usize = 0;
+    while (true) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var env = try TestEnv.init(failing.allocator());
+        defer env.deinit();
+        const fixture = try nominalOpeningFixture(&env);
+        const declaration = try env.types.registerNominalDecl(fixture.decl);
+        const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+        const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+        const actuals = try env.types.appendVars(&.{fixture.actual});
+        var before = try env.types.nominal_rows.clone(std.testing.allocator);
+        defer before.deinit(std.testing.allocator);
+        const baseline = env.types.len();
+        failing.fail_index = failing.alloc_index + fail_offset;
+        _ = env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero()) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(failing.has_induced_failure);
+            try std.testing.expectEqual(baseline, env.types.len());
+            try std.testing.expect(env.types.nominal_rows.eql(&before));
+            failing.fail_index = std.math.maxInt(usize);
+            _ = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+            continue;
+        };
+        try std.testing.expect(!failing.has_induced_failure);
+        break;
+    }
+}
+
+test "persistent nominal opening - serialized copies retain sparse sharing and later rank history" {
+    const collections = @import("collections");
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const declaration = try env.types.registerNominalDecl(fixture.decl);
+    const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+    const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+    const actuals = try env.types.appendVars(&.{fixture.actual});
+    const owner = try env.types.createNominalOpening(schema, actuals, types_mod.Rank.outermost.next().next(), @enumFromInt(0), base.Region.zero());
+    const foreign_schema: @import("../nominal_rows.zig").Schema.Idx = @enumFromInt(7);
+    const foreign_private: Var = @enumFromInt(@intFromEnum(fixture.private) + 1000);
+    _ = try env.types.nominal_rows.publishSchemaImport(env.gpa, @enumFromInt(0), foreign_schema, schema, &.{
+        .{ .source = @enumFromInt(@intFromEnum(fixture.formal) + 1000), .local = fixture.formal },
+        .{ .source = @enumFromInt(@intFromEnum(fixture.associated_formal) + 1000), .local = fixture.associated_formal },
+        .{ .source = foreign_private, .local = fixture.private },
+        .{ .source = @enumFromInt(@intFromEnum(fixture.decl.backing) + 1000), .local = fixture.decl.backing },
+        .{ .source = @enumFromInt(@intFromEnum(row.ext) + 1000), .local = row.ext },
+    });
+    try env.types.nominal_rows.recordRank(env.gpa, owner, fixture.decl.backing, types_mod.Rank.outermost.next());
+    const private = try env.types.demandNominalTemplate(&env.idents, owner, fixture.private);
+    try env.types.setDescRank(env.types.resolveVar(private).desc_idx, .generalized);
+    const residual = try env.types.demandNominalTemplate(&env.idents, owner, row.ext);
+    const fragment = try env.types.nominal_rows.appendFragment(env.gpa, owner, &.{0}, residual);
+    const baseline = env.types.len();
+    var writer = collections.CompactWriter.init();
+    defer writer.deinit(env.gpa);
+    const header = try writer.appendAlloc(env.gpa, Store.Serialized);
+    try header.serialize(&env.types, env.gpa, &writer);
+    // Freezing sparse state must not demand the undemanded backing.
+    try std.testing.expectEqual(baseline, env.types.len());
+    const buffer = try env.gpa.alignedAlloc(u8, .@"16", writer.total_bytes);
+    defer env.gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const frozen: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const CopyChecks = struct {
+        fn clone(gpa: std.mem.Allocator, source: *const Store) !void {
+            var result = try source.clone(gpa);
+            defer result.deinit();
+            try std.testing.expect(result.nominal_rows.eql(&source.nominal_rows));
+        }
+
+        fn thaw(gpa: std.mem.Allocator, source: *const Store, serialized: *const Store.Serialized, base_addr: usize) !void {
+            var result = try serialized.deserializeWithCopy(base_addr, gpa);
+            defer result.deinit();
+            try std.testing.expect(result.nominal_rows.eql(&source.nominal_rows));
+        }
+    };
+    try std.testing.checkAllAllocationFailures(env.gpa, CopyChecks.clone, .{&env.types});
+    try std.testing.checkAllAllocationFailures(env.gpa, CopyChecks.thaw, .{ &env.types, frozen, @intFromPtr(buffer.ptr) });
+    const view = frozen.deserializeInto(@intFromPtr(buffer.ptr), env.gpa);
+    try std.testing.expect(view.nominal_rows.eql(&env.types.nominal_rows));
+    var copied = try frozen.deserializeWithCopy(@intFromPtr(buffer.ptr), env.gpa);
+    defer copied.deinit();
+    try std.testing.expect(copied.nominal_rows.eql(&env.types.nominal_rows));
+    try std.testing.expect(copied.nominal_rows.excludes(fragment, 0));
+    const imported = copied.nominal_rows.schemaImport(@enumFromInt(0), foreign_schema).?;
+    try std.testing.expectEqual(fixture.private, copied.nominal_rows.translateTemplate(imported, foreign_private));
+    try std.testing.expectEqual(row.ext, copied.nominal_rows.translateTemplate(imported, @enumFromInt(@intFromEnum(row.ext) + 1000)));
+    // The legacy relocated representation retains the same sparse tables.
+    var relocated_writer = collections.CompactWriter.init();
+    defer relocated_writer.deinit(env.gpa);
+    _ = try env.types.serialize(env.gpa, &relocated_writer);
+    const relocated_buffer = try env.gpa.alignedAlloc(u8, .@"16", relocated_writer.total_bytes);
+    defer env.gpa.free(relocated_buffer);
+    _ = try relocated_writer.writeToBuffer(relocated_buffer);
+    const relocated: *Store = @ptrCast(@alignCast(relocated_buffer.ptr));
+    relocated.relocate(@intCast(@intFromPtr(relocated_buffer.ptr)));
+    try std.testing.expect(relocated.nominal_rows.eql(&env.types.nominal_rows));
+    try std.testing.expectEqual(baseline, env.types.len());
+    // The copy must remain usable after the original Store has disappeared.
+    const replacement = try Store.init(env.gpa);
+    env.types.deinit();
+    env.types = replacement;
+    const backing = try copied.demandNominalTemplate(&env.idents, owner, fixture.decl.backing);
+    try std.testing.expectEqual(types_mod.Rank.outermost.next(), copied.resolveVar(backing).desc.rank);
+    const copied_row = copied.resolveVar(backing).desc.content.structure.tag_union;
+    for (copied.tags.sliceRange(copied_row.tags).items(.args)) |args_range| {
+        const args = copied.sliceVars(args_range);
+        try std.testing.expectEqual(fixture.actual, args[0]);
+        try std.testing.expectEqual(private, args[1]);
+    }
+    try std.testing.expectEqual(types_mod.Rank.generalized, copied.resolveVar(private).desc.rank);
+}
+
+test "persistent nominal opening - failed demands invalidate and paired rollback restores stored state" {
+    var fail_offset: usize = 0;
+    while (true) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var env = try TestEnv.init(failing.allocator());
+        defer env.deinit();
+        const fixture = try nominalOpeningFixture(&env);
+        const declaration = try env.types.registerNominalDecl(fixture.decl);
+        const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+        const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+        const actuals = try env.types.appendVars(&.{fixture.actual});
+        const owner = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+        var before = try env.types.nominal_rows.clone(std.testing.allocator);
+        defer before.deinit(std.testing.allocator);
+        const baseline = env.types.len();
+        var saved = try env.types.createSavepoint();
+        failing.fail_index = failing.alloc_index + fail_offset;
+        _ = env.types.demandNominalTemplate(&env.idents, owner, fixture.decl.backing) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(failing.has_induced_failure);
+            if (env.types.nominal_rows.getOpening(owner).status == .failed) {
+                try std.testing.expectError(error.OutOfMemory, env.types.demandNominalTemplate(&env.idents, owner, fixture.private));
+            }
+            env.types.rollbackToSavepoint(&saved);
+            try std.testing.expectEqual(baseline, env.types.len());
+            try std.testing.expect(env.types.nominal_rows.eql(&before));
+            failing.fail_index = std.math.maxInt(usize);
+            _ = try env.types.demandNominalTemplate(&env.idents, owner, fixture.decl.backing);
+            continue;
+        };
+        env.types.commitSavepoint(&saved);
+        try std.testing.expect(!failing.has_induced_failure);
+        break;
+    }
+}
+
+test "persistent nominal opening - frozen tables ignore spare capacity and destination poison" {
+    const collections = @import("collections");
+    const Rows = @import("../nominal_rows.zig");
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const declaration = try env.types.registerNominalDecl(fixture.decl);
+    const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+    const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+    const actuals = try env.types.appendVars(&.{fixture.actual});
+    const owner = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+    _ = try env.types.demandNominalTemplate(&env.idents, owner, fixture.private);
+    try env.types.nominal_rows.recordRank(env.gpa, owner, fixture.decl.backing, .generalized);
+    _ = try env.types.nominal_rows.appendFragment(env.gpa, owner, &.{0}, row.ext);
+    _ = try env.types.nominal_rows.publishSchemaImport(env.gpa, @enumFromInt(1), @enumFromInt(2), schema, &.{
+        .{ .source = @enumFromInt(1000), .local = fixture.private },
+    });
+    var oversized = try env.types.nominal_rows.clone(env.gpa);
+    defer oversized.deinit(env.gpa);
+    inline for (.{ "schemas", "openings", "fragments", "bindings", "names", "ranks", "exclusions", "schema_imports", "template_translations" }) |field| {
+        const list = &@field(oversized, field).items;
+        try list.ensureTotalCapacity(env.gpa, list.items.len + 67);
+        @memset(std.mem.sliceAsBytes(list.items.ptr[list.items.len..list.capacity]), 0xA7);
+    }
+    const Freeze = struct {
+        fn bytes(gpa: std.mem.Allocator, tables: *const Rows.Tables, poison: u8) ![]align(16) u8 {
+            var writer = collections.CompactWriter.init();
+            defer writer.deinit(gpa);
+            const header = try writer.appendAlloc(gpa, Rows.Tables.Serialized);
+            @memset(std.mem.asBytes(header), poison);
+            try header.serialize(tables, gpa, &writer);
+            const buffer = try gpa.alignedAlloc(u8, .@"16", writer.total_bytes);
+            errdefer gpa.free(buffer);
+            @memset(buffer, poison);
+            _ = try writer.writeToBuffer(buffer);
+            return buffer;
+        }
+    };
+    const first = try Freeze.bytes(env.gpa, &env.types.nominal_rows, 0xB3);
+    defer env.gpa.free(first);
+    const second = try Freeze.bytes(env.gpa, &oversized, 0xA7);
+    defer env.gpa.free(second);
+    try std.testing.expectEqualSlices(u8, first, second);
+}
+
+test "persistent nominal opening - restored sparse map retains recursive constraints and effects" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const fixture = try nominalOpeningFixture(&env);
+    const effect = try env.types.freshFromContentWithRank(.{ .structure = .{ .fn_effectful = .{
+        .args = try env.types.appendVars(&.{}),
+        .ret = fixture.formal,
+    } } }, .generalized);
+    const method = try env.types.freshFromContentWithRank(.{ .structure = .{ .fn_unbound = .{
+        .args = try env.types.appendVars(&.{fixture.private}),
+        .ret = fixture.private,
+        .effect_deps = try env.types.appendVars(&.{effect}),
+    } } }, .generalized);
+    const constraints = try env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = try env.idents.insert(env.gpa, Ident.for_text("method")),
+        .fn_var = method,
+        .origin = .method_call,
+    }});
+    try env.types.setVarContent(fixture.private, .{ .flex = Flex.init().withConstraints(constraints) });
+    const declaration = try env.types.registerNominalDecl(fixture.decl);
+    const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+    const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+    const actuals = try env.types.appendVars(&.{fixture.actual});
+    const owner = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+    const baseline = env.types.len();
+    try std.testing.expectEqual(fixture.actual, try env.types.demandNominalTemplate(&env.idents, owner, fixture.formal));
+    try std.testing.expectEqual(baseline, env.types.len());
+    const private = try env.types.demandNominalTemplate(&env.idents, owner, fixture.private);
+    var copied = try env.types.clone(env.gpa);
+    defer copied.deinit();
+    // The next session is reconstructed from persisted map entries, not the
+    // instantiator that allocated the recursive constraint graph.
+    const backing = try copied.demandNominalTemplate(&env.idents, owner, fixture.decl.backing);
+    const copied_row = copied.resolveVar(backing).desc.content.structure.tag_union;
+    for (copied.tags.sliceRange(copied_row.tags).items(.args)) |args| {
+        try std.testing.expectEqual(private, copied.sliceVars(args)[1]);
+    }
+    const copied_constraints = copied.sliceStaticDispatchConstraints(copied.resolveVar(private).desc.content.flex.constraints);
+    try std.testing.expectEqual(@as(usize, 1), copied_constraints.len);
+    const copied_method = copied.resolveVar(copied_constraints[0].fn_var).desc.content.structure.fn_unbound;
+    try std.testing.expectEqual(private, copied.sliceVars(copied_method.args)[0]);
+    try std.testing.expectEqual(private, copied_method.ret);
+    const copied_effects = copied.sliceVars(copied_method.effect_deps);
+    try std.testing.expectEqual(@as(usize, 1), copied_effects.len);
+    try std.testing.expectEqual(fixture.actual, copied.resolveVar(copied_effects[0]).desc.content.structure.fn_effectful.ret);
+    const second = try copied.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+    try std.testing.expect(private != try copied.demandNominalTemplate(&env.idents, second, fixture.private));
+}
+
+test "persistent nominal opening - table publication and rank writes are failure atomic" {
+    const Mutation = enum { schema_import, fragment, rank };
+    inline for (std.meta.tags(Mutation)) |mutation| {
+        var fail_offset: usize = 0;
+        while (true) : (fail_offset += 1) {
+            var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+            var env = try TestEnv.init(failing.allocator());
+            defer env.deinit();
+            const fixture = try nominalOpeningFixture(&env);
+            const declaration = try env.types.registerNominalDecl(fixture.decl);
+            const row = env.types.resolveVar(fixture.decl.backing).desc.content.structure.tag_union;
+            const schema = try env.types.registerNominalRowSchema(declaration, row.tags, row.ext);
+            const actuals = try env.types.appendVars(&.{fixture.actual});
+            const owner = try env.types.createNominalOpening(schema, actuals, .outermost, @enumFromInt(0), base.Region.zero());
+            var before = try env.types.nominal_rows.clone(std.testing.allocator);
+            defer before.deinit(std.testing.allocator);
+            var saved = try env.types.createSavepoint();
+            failing.fail_index = failing.alloc_index + fail_offset;
+            const result: std.mem.Allocator.Error!void = switch (mutation) {
+                .schema_import => blk: {
+                    _ = env.types.nominal_rows.publishSchemaImport(env.gpa, @enumFromInt(1), @enumFromInt(9), schema, &.{
+                        .{ .source = @enumFromInt(1000), .local = fixture.formal },
+                        .{ .source = @enumFromInt(1001), .local = fixture.associated_formal },
+                        .{ .source = @enumFromInt(1002), .local = fixture.private },
+                        .{ .source = @enumFromInt(1003), .local = fixture.decl.backing },
+                        .{ .source = @enumFromInt(1004), .local = row.ext },
+                    }) catch |err| break :blk err;
+                    break :blk;
+                },
+                .fragment => blk: {
+                    _ = env.types.nominal_rows.appendFragment(env.gpa, owner, &.{ 0, 1 }, fixture.actual) catch |err| break :blk err;
+                    break :blk;
+                },
+                .rank => env.types.nominal_rows.recordRank(env.gpa, owner, fixture.private, .generalized),
+            };
+            result catch |err| {
+                try std.testing.expectEqual(error.OutOfMemory, err);
+                try std.testing.expect(failing.has_induced_failure);
+                // A failed publication has not exposed any partial table entry
+                // or changed an existing opening's visible history.
+                try std.testing.expect(env.types.nominal_rows.eql(&before));
+                env.types.rollbackToSavepoint(&saved);
+                try std.testing.expect(env.types.nominal_rows.eql(&before));
+                continue;
+            };
+            env.types.rollbackToSavepoint(&saved);
+            try std.testing.expect(env.types.nominal_rows.eql(&before));
+            try std.testing.expect(!failing.has_induced_failure);
+            break;
+        }
+    }
+}
 
 test "instantiate - generalized flex var creates new flex var" {
     const gpa = std.testing.allocator;

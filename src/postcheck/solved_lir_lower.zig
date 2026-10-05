@@ -197,6 +197,9 @@ pub const Options = struct {
     /// slot reads so the LIR passes see the constants. Only a continuation
     /// lowered after the host program completed can supply them.
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues = null,
+    /// Explicit finalized runtime cache context; no evaluation/lookup occurs here.
+    publish_literal_uses: bool = false,
+    literal_publications: []const LIR.FinalizedLiteralOutcomes.PublicationRequest = &.{},
     /// Debug-only destination for the materialized Lambda Mono verifier input.
     debug_materialized_out: ?*?LambdaMono.Program = null,
     /// Optional deterministic task counts for parallel solved-LIR lowering.
@@ -271,12 +274,19 @@ pub fn runBorrowed(
     try lowerer.prepareExpectSites();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
+    if (options.literal_publications.len != 0) {
+        if (!base.CompilerFeatures.finalized_literal_cache or !options.publish_literal_uses)
+            Common.invariant("literal publication demand reached a non-finalized consumer");
+        try lowerer.requestLiteralPublications(options.literal_publications);
+    }
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
     try lowerer.writeRuntimeSchemas();
+    if (base.CompilerFeatures.late_callable_cache) try lowerer.publishLateSpecializations();
+    if (base.CompilerFeatures.finalized_literal_cache) try lowerer.publishLiteralSpecializations(options.literal_publications);
     lowerer.result.finishExpectSites();
     if (builtin.mode == .Debug) {
-        try lowerer.verifyMaterializedDecisions();
+        try lowerer.verifyMaterializedDecisions(options.literal_publications);
     }
 
     return lowerer.finish();
@@ -428,6 +438,9 @@ const FnEntry = struct {
     /// Specializations that render to one procedure identity share one proc,
     /// and exactly one of them owns its lowering.
     proc_owner: ?Type.FnId = null,
+    /// Complete late identity reserved during preparation. An offer is
+    /// published only after an emitted demand queued and completed its owner.
+    late_key: ?[32]u8 = null,
     /// The shared procedure body is queued independently of which exact
     /// specializations are referenced by emitted calls or constant metadata.
     body_queued: bool = false,
@@ -466,9 +479,11 @@ const CompletedFnBodyShard = struct {
     discovered_fns: []Type.FnId,
     folded_map_matches: []Lifted.Program.FoldedMatch,
     erased_arg_layouts: std.ArrayList(layout.Idx),
+    literal_root_uses: std.ArrayList(LIR.FinalizedLiteralOutcomes.RuntimeUse) = .empty,
 
     fn deinit(self: *CompletedFnBodyShard) void {
         self.erased_arg_layouts.deinit(self.allocator);
+        self.literal_root_uses.deinit(self.allocator);
         self.allocator.free(self.folded_map_matches);
         self.allocator.free(self.discovered_fns);
         self.store.deinit();
@@ -726,6 +741,7 @@ const Lowerer = struct {
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
+    publish_literal_uses: bool,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     comptime_closure_hits: bool,
@@ -996,6 +1012,7 @@ const Lowerer = struct {
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
+            .publish_literal_uses = base.CompilerFeatures.finalized_literal_cache and options.publish_literal_uses,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .comptime_closure_hits = options.comptime_closure_hits,
@@ -1180,6 +1197,84 @@ const Lowerer = struct {
         self.types.deinit();
         self.runtime_schemas.deinit();
         self.result.deinit();
+    }
+
+    fn literalPublicationSource(self: *Lowerer, request: LIR.FinalizedLiteralOutcomes.PublicationRequest) ?Lifted.FnId {
+        const scope = self.solved.lifted.immutableFunctionScope();
+        if (request.owner_scope != scope) Common.invariant("literal owner demand crossed immutable program scopes");
+        const raw = @intFromEnum(request.owner_fn);
+        if (raw >= self.solved.lifted.fnCount()) Common.invariant("literal owner demand named a missing function");
+        const id: Lifted.FnId = @enumFromInt(raw);
+        const function = self.solved.lifted.getFn(id);
+        const source = function.source orelse Common.invariant("literal owner demand lost its specialization source");
+        const key = source.spec_key orelse Common.invariant("literal owner demand has no early specialization key");
+        if (!std.mem.eql(u8, &key.bytes, &request.specialization_key))
+            Common.invariant("literal owner demand changed its complete specialization identity");
+        if (function.spec_constr_pattern != null or function.captures.len != 0) return null;
+        return id;
+    }
+
+    fn requestLiteralPublications(self: *Lowerer, requests: []const LIR.FinalizedLiteralOutcomes.PublicationRequest) Common.LowerError!void {
+        for (requests) |request| {
+            const source = self.literalPublicationSource(request) orelse continue;
+            const function = try self.ensureOwnFnSpec(source, .finite);
+            _ = try self.markReachableFn(function);
+        }
+    }
+
+    fn publishLiteralSpecializations(self: *Lowerer, requests: []const LIR.FinalizedLiteralOutcomes.PublicationRequest) Common.LowerError!void {
+        for (requests) |request| {
+            const source = self.literalPublicationSource(request) orelse continue;
+            const function = try self.ensureOwnFnSpec(source, .finite);
+            const entry = self.fn_entries.items[@intFromEnum(function)];
+            const owner = entry.proc_owner orelse Common.invariant("literal publication demand has no canonical owner");
+            if (!self.fn_entries.items[@intFromEnum(owner)].body_queued or !self.fn_written.items[@intFromEnum(owner)])
+                Common.invariant("literal publication demand did not complete its native body");
+            const proc = entry.proc orelse Common.invariant("literal publication demand has no native procedure");
+            const implementation = self.result.store.getProcSpec(proc);
+            if (!implementation.external and implementation.body == null)
+                Common.invariant("literal publication demand has no completed implementation");
+            var found = false;
+            for (self.result.spec_procs.items) |*spec| {
+                if (spec.proc == proc and std.mem.eql(u8, &spec.key, &request.specialization_key)) {
+                    if (!spec.literal_early) Common.invariant("literal publication demand selected a late offer");
+                    spec.literal_publication_root = true;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) try self.result.spec_procs.append(self.allocator, .{
+                .key = request.specialization_key,
+                .proc = proc,
+                .literal_publication_root = true,
+            });
+        }
+    }
+
+    fn publishLateSpecializations(self: *Lowerer) Common.LowerError!void {
+        for (self.fn_entries.items) |entry| {
+            const key = entry.late_key orelse continue;
+            const owner = entry.proc_owner orelse
+                Common.invariant("late specialization reservation has no canonical procedure owner");
+            // Representation preflight also reserves procedures for inlined
+            // callees. A cache offer would turn that reservation into a pack
+            // root, despite no standalone body ever being requested.
+            if (!self.fn_entries.items[@intFromEnum(owner)].body_queued) continue;
+            if (!self.fn_written.items[@intFromEnum(owner)]) {
+                Common.invariant("late specialization demand was not completed before publication");
+            }
+            const proc = entry.proc orelse
+                Common.invariant("late specialization demand has no procedure");
+            const implementation = self.result.store.getProcSpec(proc);
+            if (!implementation.external and implementation.body == null) {
+                Common.invariant("late specialization demand has no completed implementation");
+            }
+            try self.result.spec_procs.append(self.allocator, .{
+                .key = key,
+                .proc = proc,
+                .literal_early = if (base.CompilerFeatures.finalized_literal_cache) false else {},
+            });
+        }
     }
 
     fn finish(self: *Lowerer) Output {
@@ -1529,6 +1624,7 @@ const Lowerer = struct {
         worker.post_check_executor = null;
         worker.result.store = store;
         worker.result.boxy_erased_arg_layouts = .empty;
+        worker.result.literal_root_uses = .empty;
         worker.inline_scope_rebases = workspace.inline_scope_rebases;
         worker.folded_map_matches = .empty;
         worker.captures = workspace.captures;
@@ -1570,6 +1666,7 @@ const Lowerer = struct {
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.deinitPackedPlans();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
+        self.result.literal_root_uses.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
         self.inline_scope_rebases.clearRetainingCapacity();
@@ -1670,8 +1767,10 @@ const Lowerer = struct {
             .discovered_fns = discovered_fns,
             .folded_map_matches = folded_map_matches,
             .erased_arg_layouts = worker.result.boxy_erased_arg_layouts,
+            .literal_root_uses = worker.result.literal_root_uses,
         };
         worker.result.boxy_erased_arg_layouts = .empty;
+        worker.result.literal_root_uses = .empty;
         return context;
     }
 
@@ -2294,6 +2393,8 @@ const Lowerer = struct {
         }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
         try self.result.boxy_erased_arg_layouts.ensureUnusedCapacity(self.allocator, shard.erased_arg_layouts.items.len);
+        if (base.CompilerFeatures.finalized_literal_cache and self.publish_literal_uses)
+            try self.result.literal_root_uses.ensureUnusedCapacity(self.allocator, shard.literal_root_uses.items.len);
         const appended = self.result.store.appendBodyShard(
             .{
                 .store = &shard.store,
@@ -2309,6 +2410,8 @@ const Lowerer = struct {
             error.InvalidBodyPrefix => Common.invariant("validated Solved-LIR body shard lost its frozen prefix"),
         };
         self.result.boxy_erased_arg_layouts.appendSliceAssumeCapacity(shard.erased_arg_layouts.items);
+        if (base.CompilerFeatures.finalized_literal_cache and self.publish_literal_uses)
+            self.result.literal_root_uses.appendSliceAssumeCapacity(shard.literal_root_uses.items);
         for (0..body_local_count) |_| {
             self.erased_owner_states.appendAssumeCapacity(.pending);
         }
@@ -2399,6 +2502,13 @@ const Lowerer = struct {
         if (self.result.store.getProcSpec(proc_id).external) {
             // The object cache provides this procedure's code; its body is
             // never lowered, and nothing it would reach is reached through it.
+            if (base.CompilerFeatures.late_callable_cache and pack_trace_available and packTraceEnabled()) {
+                const source = self.solved.lifted.getFn(spec.source);
+                if (source.source) |template| if (template.late_spec_seed != null) {
+                    const proc = self.result.store.getProcSpec(proc_id);
+                    std.debug.print("skip late-callable lir-body identity={x}\n", .{proc.identity.bytes[0..8]});
+                };
+            }
             if (!self.worker_callback) self.fn_written.items[@intFromEnum(fn_id)] = true;
             return null;
         }
@@ -2803,6 +2913,25 @@ const Lowerer = struct {
 
         const identity = try self.specIdentity(spec);
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
+        const late_key: ?[32]u8 = if (base.CompilerFeatures.late_callable_cache and plain_spec and source_fn.body == .roc)
+            if (source_fn.source) |template|
+                if (template.late_spec_seed) |seed| Common.lateCallableCacheKey(seed.bytes, identity.bytes) else null
+            else
+                null
+        else
+            null;
+        entry.late_key = late_key;
+        if (base.CompilerFeatures.late_callable_cache and pack_trace_available and packTraceEnabled()) {
+            if (source_fn.source) |template| if (template.late_spec_seed != null and late_key == null) {
+                std.debug.print("ineligible late-callable identity={x} abi={s} captures={d} clone={} return-reuse={s}\n", .{
+                    identity.bytes[0..8],
+                    @tagName(spec.abi),
+                    self.captureSpan(spec.captures).len,
+                    source_fn.spec_constr_pattern != null,
+                    @tagName(spec.return_reuse),
+                });
+            };
+        }
         var cached: ?Common.SpecCacheHit = null;
         // Monotype completed a cached template's record without a body. That
         // record is the cached procedure only for its own lifted function:
@@ -2833,15 +2962,31 @@ const Lowerer = struct {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
                         if (cache.lookup(key.bytes)) |hit| {
-                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                            if (std.mem.eql(u8, &hit.identity, &identity.bytes) and
+                                (!base.CompilerFeatures.finalized_literal_cache or hit.finalized_literals == null)) cached = hit;
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
+                if (cached == null) if (late_key) |key| {
+                    if (cache.lookup(key)) |hit| {
+                        if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
+                            Common.invariant("late object cache entry disagrees with its completed procedure identity");
+                        }
+                        if (!base.CompilerFeatures.finalized_literal_cache or hit.finalized_literals == null) cached = hit;
+                    }
+                    if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup late-callable key={x} identity={x} {s}\n", .{ key[0..8], identity.bytes[0..8], if (cached != null) "hit" else "miss" });
+                };
             }
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
+        if (base.CompilerFeatures.finalized_literal_cache) if (cached) |hit| if (hit.finalized_literals) |certificate| {
+            try self.result.literal_external_certificates.append(self.allocator, .{
+                .emitter = identity,
+                .certificate = certificate,
+            });
+        };
         if (self.procs_by_identity.get(identity)) |owner| {
             // Another specialization interned this procedure. Share its proc;
             // the owner's reach-queue entry lowers the body once, whether the
@@ -3939,6 +4084,15 @@ const Lowerer = struct {
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
             });
         }
+        if (base.CompilerFeatures.finalized_literal_cache and self.lowersLiteralRoots()) {
+            for (self.solved.lifted.literalRootOwnersView()) |owner| {
+                if (@intFromEnum(owner.root) >= self.result.literal_roots.items.len)
+                    Common.invariant("lowered literal owner named an unpublished root");
+                var scoped = owner;
+                scoped.owner_scope = self.solved.lifted.immutableFunctionScope();
+                try self.result.literal_root_owners.append(self.allocator, scoped);
+            }
+        }
 
         for (self.layout_requests.items) |request| {
             const initializer = if (request.initializer) |initializer_fn| blk: {
@@ -4670,8 +4824,13 @@ const Lowerer = struct {
         });
     }
 
-    fn verifyMaterializedDecisions(self: *Lowerer) Common.LowerError!void {
+    fn verifyMaterializedDecisions(self: *Lowerer, publications: []const LIR.FinalizedLiteralOutcomes.PublicationRequest) Common.LowerError!void {
         if (builtin.mode != .Debug) return;
+        var additional_sources = std.ArrayList(Lifted.FnId).empty;
+        defer additional_sources.deinit(self.allocator);
+        for (publications) |request| {
+            if (self.literalPublicationSource(request)) |source| try additional_sources.append(self.allocator, source);
+        }
         const solved_clone = try cloneSolvedProgram(self.allocator, self.solved);
 
         var materialized_identities = std.ArrayList(LambdaMonoLower.SpecializationIdentity).empty;
@@ -4684,6 +4843,7 @@ const Lowerer = struct {
                 .omit => .omit,
             },
             .debug_specialization_identities = &materialized_identities,
+            .additional_sources = additional_sources.items,
         });
         var materialized_owned = true;
         defer if (materialized_owned) materialized.deinit();
@@ -4970,6 +5130,25 @@ const Lowerer = struct {
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
+        if (base.CompilerFeatures.finalized_literal_cache and self.publish_literal_uses) {
+            if (self.completed_scalar_values == null)
+                Common.invariant("runtime literal use publication preceded completed values");
+            switch (root.root) {
+                .literal => |id| {
+                    if (root.literal_owner) |owner| {
+                        const owners = self.solved.lifted.literalRootOwnersView();
+                        if (@intFromEnum(owner) >= owners.len or owners[@intFromEnum(owner)].root != id)
+                            Common.invariant("literal read-origin owner did not name its declared root");
+                    }
+                    try self.result.literal_root_uses.append(self.allocator, .{
+                        .root = id,
+                        .emitter = self.result.store.getProcSpec(proc_id).identity,
+                        .owner = root.literal_owner,
+                    });
+                },
+                .checked => {},
+            }
+        }
         const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
         if (runtime_values) |values| {
             if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
@@ -12828,6 +13007,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer roots.deinit(allocator);
     var literal_roots = try clonedLiftedProgramList(Lifted.LiteralRoot, "literal_roots", allocator, view.literal_roots);
     errdefer literal_roots.deinit(allocator);
+    var literal_root_owners = try clonedLiftedProgramList(Common.LiteralRootOwner, "literal_root_owners", allocator, view.literal_root_owners);
+    errdefer literal_root_owners.deinit(allocator);
     var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
     errdefer layout_requests.deinit(allocator);
     var comptime_value_reads = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_reads", allocator, view.comptime_value_reads);
@@ -12891,6 +13072,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .proc_debug_names = proc_debug_names,
         .roots = roots,
         .literal_roots = literal_roots,
+        .literal_root_owners = literal_root_owners,
         .layout_requests = layout_requests,
         .comptime_value_reads = comptime_value_reads,
         .runtime_schema_requests = runtime_schema_requests,
@@ -13273,6 +13455,74 @@ test "shared procedure scheduling preserves exact specialization demand" {
     }
 }
 
+test "late specialization publication excludes reservations and preserves demanded aliases" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    for ([_]bool{ false, true }) |external| {
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+        const ty = try lowerer.types.add(.zst);
+        const proc = try lowerer.result.store.addProcSpec(.{
+            .name = lowerer.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
+            .args = .empty(),
+            .body = null,
+            .ret_layout = .zst,
+            .external = external,
+        }, .none);
+        const owner: Type.FnId = @enumFromInt(0);
+        const alias: Type.FnId = @enumFromInt(1);
+        for (0..2) |index| {
+            try lowerer.fn_entries.append(allocator, .{
+                .spec = .{
+                    .source = @enumFromInt(0),
+                    .solved_fn_ty = @enumFromInt(index),
+                    .abi = .finite,
+                    .captures = CaptureSpanId.fromOwn(0, 0),
+                    .capture_ty = null,
+                    .return_reuse = .none,
+                },
+                .symbol = lowerer.symbols.fresh(),
+                .source = null,
+                .args = .empty(),
+                .ret = ty,
+                .capture_arg_ty = null,
+                .proc = proc,
+                .proc_owner = owner,
+                .late_key = @splat(@as(u8, @intCast(index + 1))),
+            });
+            try lowerer.fn_reachable.append(allocator, false);
+            try lowerer.fn_written.append(allocator, false);
+        }
+        // Worker preparation of an inline-only List.map reserves an owner
+        // without requesting standalone code. Publishing it here would root
+        // its missing body in a pack and demand invalid native emission.
+        try lowerer.publishLateSpecializations();
+        try std.testing.expectEqual(@as(usize, 0), lowerer.result.spec_procs.items.len);
+
+        // A second, non-inlined use really requests that same procedure via
+        // an alias. The owner reach bit stays false; its queue owns completion.
+        try std.testing.expectEqual(proc, try lowerer.markReachableFn(alias));
+        try std.testing.expect(!lowerer.fn_reachable.items[@intFromEnum(owner)]);
+        try std.testing.expect(lowerer.fn_entries.items[@intFromEnum(owner)].body_queued);
+        if (!external) {
+            const value = try lowerer.result.store.addLocal(.{ .layout_idx = .zst });
+            const body = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+            lowerer.result.store.getProcSpecPtr(proc).body = body;
+        }
+        lowerer.fn_written.items[@intFromEnum(owner)] = true;
+        try lowerer.publishLateSpecializations();
+        try std.testing.expectEqual(@as(usize, 2), lowerer.result.spec_procs.items.len);
+        for (lowerer.result.spec_procs.items, 0..) |offer, index| {
+            try std.testing.expectEqual(proc, offer.proc);
+            try std.testing.expectEqual(@as([32]u8, @splat(@as(u8, @intCast(index + 1)))), offer.key);
+            if (base.CompilerFeatures.finalized_literal_cache) try std.testing.expect(!offer.literal_early);
+        }
+    }
+}
+
 test "frozen solved clone preserves producer IDs and releases partial allocations" {
     const allocator = std.testing.allocator;
     var source = emptySolvedProgramForTest(allocator);
@@ -13298,11 +13548,16 @@ test "frozen solved clone preserves producer IDs and releases partial allocation
     try source.expr_tys.append(allocator, ty);
     try source.pat_tys.append(allocator, ty);
     try source.fn_tys.append(allocator, ty);
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
+    var root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .literal = @enumFromInt(91) }, .const_locator = null };
+    if (base.CompilerFeatures.finalized_literal_cache) root.literal_owner = @enumFromInt(0);
+    const owner: Common.LiteralRootOwner = .{ .root = @enumFromInt(91), .owner_spec_key = [_]u8{19} ** 32 };
+    try source.lifted.literal_root_owners.append(allocator, owner);
     const root_id = try source.lifted.addComptimeValueRoot(root);
     var cloned = try cloneSolvedProgram(allocator, &source);
     defer cloned.deinit();
     try std.testing.expectEqualDeep(root, cloned.lifted.getComptimeValueRoot(root_id));
+    try std.testing.expectEqualDeep(&[_]Common.LiteralRootOwner{owner}, cloned.lifted.literalRootOwnersView());
+    try std.testing.expect(source.lifted.literalRootOwnersView().ptr != cloned.lifted.literalRootOwnersView().ptr);
     try std.testing.expect(source.lifted.view().comptime_value_roots.ptr != cloned.lifted.view().comptime_value_roots.ptr);
     try std.testing.expectEqual(source.types.memberItem(members, 0).captures, cloned.types.memberItem(members, 0).captures);
     try std.testing.expectEqual(source.types.captureItem(captures, 0).local, cloned.types.captureItem(captures, 0).local);
@@ -13399,7 +13654,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
             defer lowerer.deinit();
-            try lowerer.verifyMaterializedDecisions();
+            try lowerer.verifyMaterializedDecisions(&.{});
         }
     };
     try std.testing.checkAllAllocationFailures(allocator, Verify.run, .{&solved});

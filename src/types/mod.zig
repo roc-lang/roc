@@ -12,6 +12,7 @@ pub const numeral = @import("numeral.zig");
 pub const literal_defaulting = @import("literal_defaulting.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
+pub const nominal_rows = @import("nominal_rows.zig");
 pub const generalize = @import("generalize.zig");
 pub const import_mapping = @import("import_mapping.zig");
 pub const debug = @import("debug.zig");

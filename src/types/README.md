@@ -15,3 +15,11 @@ This module serves as the backbone for:
 - **Built-in Types**: Implementing the core Roc type system (numbers, strings, lists, etc.)
 
 The types module is used extensively by the canonicalize, check, and eval stages of the compiler to ensure type safety and provide the necessary type information for compilation and execution.
+
+`instantiate.NominalOpening` supports explicitly demanded schema roots with
+one opening-owned substitution map. It is not a persisted type or an implicit
+flex-row promise. `nominal_rows` holds Store-owned persistent schema, opening
+and exact-fragment data so publication can retain undemanded payloads without
+borrowing an instantiator. Logical template edges and owned solver references
+are distinct. Semantic consumers must include latent edges before the solver
+installs delayed descriptors; the storage API alone does not activate admission.

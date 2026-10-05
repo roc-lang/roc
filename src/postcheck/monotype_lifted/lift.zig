@@ -192,6 +192,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .proc_debug_names = moved.proc_debug_names.view(),
         .roots = source_view.roots,
         .literal_roots = source_view.literal_roots,
+        .literal_root_owners = source_view.literal_root_owners,
         .layout_requests = source_view.layout_requests,
         .comptime_value_reads = source_view.comptime_value_reads,
         .runtime_schema_requests = moved_view.runtime_schema_requests,
@@ -495,6 +496,24 @@ const Lifter = struct {
                 .fn_id = fn_id,
                 .module = root.module,
                 .site = root.site,
+            });
+        }
+
+        for (self.source.literal_root_owners) |owner| {
+            if (@intFromEnum(owner.root) >= self.source.literal_roots.len)
+                Common.invariant("literal root owner named a missing root");
+            const owner_key = if (owner.owner_fn) |fn_id| key: {
+                if (@intFromEnum(fn_id) >= self.source.fns.len)
+                    Common.invariant("literal root owner named a missing function");
+                break :key self.source.fns[@intFromEnum(fn_id)].source.spec_key;
+            } else null;
+            try self.output.literal_root_owners.append(self.allocator, .{
+                .root = owner.root,
+                .owner_spec_key = if (owner_key) |key| key.bytes else null,
+                .owner_fn = if (owner.owner_fn) |id|
+                    if (self.fn_map[@intFromEnum(id)]) |lifted| @enumFromInt(@intFromEnum(lifted)) else null
+                else
+                    null,
             });
         }
 

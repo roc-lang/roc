@@ -152,6 +152,9 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Declared read/write cache policy, independent of lookup suppression.
+    /// Only the normal finalized runtime producer uses this context.
+    finalized_literal_cache_context: bool = false,
     /// Whether Monotype and Direct LIR may serve cache entries to the compile-time
     /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
     /// modules: a match whose exhaustiveness only the evaluation can decide
@@ -928,6 +931,7 @@ pub const LirPolicy = struct {
     list_in_place_map: bool,
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    finalized_literal_cache_context: bool = false,
     comptime_closure_hits: bool,
     keep_specialization_procs: bool,
     promote_loop_appends: bool,
@@ -964,6 +968,8 @@ pub const Consumer = struct {
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
     completed_scalar_values: ?*const CompletedScalarValues = null,
+    /// Completed-owner code demands; caller inlining and user roots are unchanged.
+    literal_publications: []const LIR.FinalizedLiteralOutcomes.PublicationRequest = &.{},
     /// Completed values produced by an earlier consumer, materialized in this
     /// consumer's representation after LIR generation and before reachability.
     /// The materializer receives the un-compacted target program so callable
@@ -1307,6 +1313,7 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .literal_roots = target.literal_roots,
+                .publish_literal_owners = base.CompilerFeatures.finalized_literal_cache and target.finalized_literal_cache_context,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,
@@ -1612,6 +1619,10 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
+        .publish_literal_uses = base.CompilerFeatures.finalized_literal_cache and
+            target.finalized_literal_cache_context and !consumer.roots.literal_roots and
+            target.completed_scalar_values != null,
+        .literal_publications = consumer.literal_publications,
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
