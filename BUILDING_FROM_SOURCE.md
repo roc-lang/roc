@@ -45,6 +45,9 @@ options, and each compiler executable's actual mode, target, and CPU features.
 Dirty production edits invalidate cached applications without changing `HEAD`.
 Ordinary compiler builds preserve other compiler builds' application caches.
 Generated compiler embedding assets live in Zig's cache.
+The complete Zig library and mutable dependency contents have independent
+cached digest stages. Production edits reuse those unchanged large input trees;
+the final compatibility identity includes their declared content digests.
 
 Integration tests prepare their fixture trees and generated host libraries in
 Zig's cache, then run in private temporary copies. Concurrent build modes and
@@ -82,8 +85,13 @@ python3 ci/test_build_cache.py /path/to/zig
 The last check builds the Debug builtin compiler in a private source snapshot.
 It compares three independently executed bakes, verifies reuse after version,
 documentation and dedicated test changes, and verifies invalidation after a
-production edit. Pass `--work-dir /new/path` to preserve its graph logs and
+production edit while reusing the Zig library and dependency digests. It also
+checks that changing the surrounding build mode or target preserves the Debug
+host bake graph. Pass `--work-dir /new/path` to preserve its graph logs and
 artifact identities for review.
+
+See [the Zig 0.17 migration record](docs/zig-0.17-upgrade.md) for validated
+source changes, workaround decisions and remaining platform checks.
 
 ## CPU requirements
 

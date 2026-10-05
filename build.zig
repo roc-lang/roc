@@ -7474,39 +7474,52 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
     _ = inputs.addCopyDirectory(b.path("vendor"), "vendor", .{
         .include_extensions = &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".zon" },
     });
-    if (tracy_path) |path| {
-        if (!isImmutableNixStorePath(path)) {
-            _ = inputs.addCopyDirectory(b.graph.cwdRelativePath(path).path(b, "public"), "dependencies/tracy/public", .{});
-        }
-    }
     // Zig's executable and version do not identify a locally modified standard
-    // library. Staging the complete library also tracks added and removed files,
-    // including an explicit --zig-lib, without resolving LazyPaths early.
-    _ = inputs.addCopyDirectory(std.Build.LazyPath.zig_lib, "toolchain/lib", .{});
+    // library. Its independent cached stage tracks all contents, including an
+    // explicit --zig-lib, and is reused when production sources change.
+    const toolchain_inputs = b.addWriteFiles();
+    _ = toolchain_inputs.addCopyDirectory(std.Build.LazyPath.zig_lib, "lib", .{});
+    const toolchain_digest = compilerInputDigest(b, tool, toolchain_inputs.getDirectory(), "toolchain_identity.zig");
     // Source dependency archives are pinned by this manifest; content of
     // repository-local dependencies above participates directly as well.
     _ = inputs.addCopyFile(b.path("build.zig"), "build.zig");
     _ = inputs.addCopyFile(b.path("build.zig.zon"), "build.zig.zon");
+    // A production edit must not recopy or rehash an unchanged, potentially
+    // multi-gigabyte dependency bundle. Only intrinsic dependency contents feed
+    // this stage; modes, targets and semantic options feed the final identity.
+    const dependency_inputs = b.addWriteFiles();
+    var has_dependency_inputs = false;
+    if (tracy_path) |path| {
+        if (!isImmutableNixStorePath(path)) {
+            _ = dependency_inputs.addCopyDirectory(b.graph.cwdRelativePath(path).path(b, "public"), "tracy/public", .{});
+            has_dependency_inputs = true;
+        }
+    }
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
             if (!isImmutableNixStorePath(path)) {
                 const root = b.graph.cwdRelativePath(path);
-                _ = inputs.addCopyDirectory(root.path(b, "include"), "dependencies/include", .{});
-                _ = inputs.addCopyDirectory(root.path(b, "lib"), "dependencies/lib", .{});
+                _ = dependency_inputs.addCopyDirectory(root.path(b, "include"), "include", .{});
+                _ = dependency_inputs.addCopyDirectory(root.path(b, "lib"), "lib", .{});
+                has_dependency_inputs = true;
             }
         },
         .system_llvm => {
             const paths = llvmPaths(b, b.graph.host, source) orelse return null;
-            _ = inputs.addCopyDirectory(paths.include, "dependencies/include", .{});
-            _ = inputs.addCopyDirectory(paths.lib, "dependencies/lib", .{});
+            _ = dependency_inputs.addCopyDirectory(paths.include, "include", .{});
+            _ = dependency_inputs.addCopyDirectory(paths.lib, "lib", .{});
+            has_dependency_inputs = true;
         },
         .downloaded_bundle => {},
     }
-    const run = b.addRunArtifact(tool);
-    run.addArg("--source-root");
-    run.addDirectoryArg(inputs.getDirectory());
-    run.addArg("--zig-exe");
-    run.addFileArg(std.Build.LazyPath.zig_exe);
+    const run = compilerIdentityRun(b, tool, inputs.getDirectory());
+    run.addArgs(&.{ "--file", "toolchain-contents" });
+    run.addFileArg(toolchain_digest);
+    if (has_dependency_inputs) {
+        const dependency_digest = compilerInputDigest(b, tool, dependency_inputs.getDirectory(), "dependency_identity.zig");
+        run.addArgs(&.{ "--file", "dependency-contents" });
+        run.addFileArg(dependency_digest);
+    }
     for (semantic_options) |option| run.addArgs(&.{ "--option", option });
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
@@ -7520,6 +7533,21 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
     run.addArg("--output");
     const output = run.addOutputFileArg("compiler_identity.zig");
     return b.createModule(.{ .root_source_file = output });
+}
+
+fn compilerIdentityRun(b: *std.Build, tool: *Step.Compile, sources: std.Build.LazyPath) *Step.Run {
+    const run = b.addRunArtifact(tool);
+    run.addArg("--source-root");
+    run.addDirectoryArg(sources);
+    run.addArg("--zig-exe");
+    run.addFileArg(std.Build.LazyPath.zig_exe);
+    return run;
+}
+
+fn compilerInputDigest(b: *std.Build, tool: *Step.Compile, sources: std.Build.LazyPath, name: []const u8) std.Build.LazyPath {
+    const run = compilerIdentityRun(b, tool, sources);
+    run.addArgs(&.{ "--option", b.fmt("input-stage={s}", .{name}), "--output" });
+    return run.addOutputFileArg(name);
 }
 
 // These directories contain dedicated test sources. Imports from production

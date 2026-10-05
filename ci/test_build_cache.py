@@ -34,9 +34,12 @@ def snapshot(root):
 
 
 def graph(root, work, zig, label, options, expected_cached, baseline=None):
-    command = [zig, "build", "run-test-builtin-bake-reproducible", "--verbose",
+    zig_lib = [option for option in options if option.startswith("--zig-lib=")]
+    remaining_options = [option for option in options if option not in zig_lib]
+    # Zig 0.17 requires its special library override before steps/other options.
+    command = [zig, "build", *zig_lib, "run-test-builtin-bake-reproducible", "--verbose",
                "--summary", "all", "--cache-poison=disallowed", "--cache-dir",
-               str(work / "cache"), "--prefix", str(work / "out"), *options]
+               str(work / "cache"), "--prefix", str(work / "out"), *remaining_options]
     result = subprocess.run(command, cwd=root, capture_output=True, text=True)
     output = result.stdout + result.stderr
     (work / f"{label}.log").write_text(output)
@@ -45,6 +48,7 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
 
     compile_args = None
     bakes = {}
+    stages = {}
     for line in result.stderr.splitlines():
         args = shlex.split(line.removeprefix("info(verbose): "))
         if "--name" in args and args[args.index("--name") + 1] == "builtin_compiler":
@@ -57,6 +61,10 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
                 assert tuple(path.name for path in outputs) == tuple(
                     f"bake-{index}-{name}" for name in OUTPUT_NAMES)
                 bakes[index] = (Path(args[0]), outputs)
+        if args and Path(args[0]).name == "compiler_identity":
+            for index, arg in enumerate(args):
+                if arg == "--file" and args[index + 1] in ("toolchain-contents", "dependency-contents"):
+                    stages[args[index + 1]] = str(Path(args[index + 2]))
     assert compile_args, "builtin compiler command missing from verbose graph"
     assert not any(arg.startswith("-Mcompiler_version=") for arg in compile_args), \
         "human version metadata leaked into the host compiler"
@@ -79,6 +87,16 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
     hashes = tuple(tuple(hashlib.sha256(path.read_bytes()).hexdigest()
                          for path in bakes[index][1]) for index in range(3))
     assert hashes[0] == hashes[1] == hashes[2], "independent builtin bakes differ"
+    if not stages and expected_cached:
+        stages = {name: data["path"] for name, data in baseline["stages"].items()}
+    assert "toolchain-contents" in stages, "independent toolchain digest input missing"
+    stage_state = {name: {"path": path, "hash": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+                   for name, path in stages.items()}
+    if baseline:
+        assert stage_state == baseline["stages"], "unchanged large input stage was replaced"
+        for name, data in stage_state.items():
+            assert any(f"run exe compiler_identity ({Path(data['path']).name}) cached" in line
+                       for line in result.stderr.splitlines()), f"{name} digest was not reused"
 
     summaries = [line for line in result.stderr.splitlines()
                  if "compile exe builtin_compiler " in line or "run exe builtin_compiler " in line]
@@ -97,6 +115,7 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
 
     state = {"identity": identity, "compiler": str(bakes[0][0]),
              "compiler_args": tuple(compile_args),
+             "stages": stage_state,
              "outputs": tuple(tuple(str(path) for path in bakes[index][1]) for index in range(3)),
              "hashes": hashes}
     print(f"{label}: Debug builtin compiler and three bakes {'cached' if expected_cached else 'executed'}",
@@ -107,6 +126,15 @@ def graph(root, work, zig, label, options, expected_cached, baseline=None):
 def check(work, zig, options):
     root = work / "source"
     snapshot(root)
+    if not any(option.startswith(("-Droc-deps-path", "-Dllvm-path", "-Dsystem-llvm")) for option in options):
+        # The Debug bake graph does not link LLVM. A small controlled mutable
+        # bundle exercises its real dependency identity stage without requiring
+        # a released bootstrap bundle or introducing a large native link.
+        bundle = work / "dependencies"
+        (bundle / "include").mkdir(parents=True)
+        (bundle / "lib").mkdir()
+        (bundle / "include/cache_probe.h").write_text("// declared dependency header\n")
+        options = [*options, f"-Droc-deps-path={bundle}"]
     states = {}
     states["baseline"] = graph(root, work, zig, "baseline", options, False)
     baseline = states["baseline"]
@@ -127,11 +155,18 @@ def check(work, zig, options):
     test_source.write_text("// dedicated test-only change\n")
     states["test-only"] = graph(root, work, zig, "test-only", options, True, baseline)
     assert states["test-only"] == baseline
+    if not any(option.startswith(("-Doptimize=", "-Dtarget=")) for option in options):
+        states["outer-mode"] = graph(root, work, zig, "outer-mode",
+                                     [*options, "-Doptimize=ReleaseFast"], True, baseline)
+        assert states["outer-mode"] == baseline
+        states["outer-target"] = graph(root, work, zig, "outer-target",
+                                       [*options, "-Dtarget=x86_64-windows-gnu"], True, baseline)
+        assert states["outer-target"] == baseline
     production = root / "src/build/builtin_compiler/main.zig"
     original = production.read_bytes()
     try:
         production.write_bytes(original + b"\n// declared production input cache probe\n")
-        states["production-edit"] = graph(root, work, zig, "production-edit", options, False)
+        states["production-edit"] = graph(root, work, zig, "production-edit", options, False, baseline)
         edited = states["production-edit"]
         assert edited["identity"] != baseline["identity"]
         assert edited["compiler"] != baseline["compiler"]
