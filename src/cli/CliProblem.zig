@@ -537,8 +537,7 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Please check that the path is correct and the file exists.");
 
     return report;
@@ -637,8 +636,7 @@ fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.E
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Please check that the platform path is correct and the file exists.");
 
     return report;
@@ -649,8 +647,7 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Alloc
 
     try report.document.addText("Platform path: ");
     try report.document.addAnnotated(info.platform_path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Searched in:");
     for (info.searched_paths) |path| {
         try report.document.addLineBreak();
@@ -708,8 +705,7 @@ fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocat
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_spec, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Tip: Use a relative path like ");
     try report.document.addAnnotated("../path/to/platform", .emphasized);
     try report.document.addText(" or a URL.");
@@ -723,11 +719,9 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.E
     var report = try Report.init(allocator, "Invalid App Header", headline, .runtime_error);
 
     try report.document.addText("Expected an app header like:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("    app [main] { pf: platform \"...\" }");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("The platform package name (e.g., ");
     try report.document.addAnnotated("pf", .emphasized);
     try report.document.addText(") is used to qualify imports from the package like ");
@@ -743,8 +737,7 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     var report = try Report.init(allocator, "Build Not Supported", headline, .fatal);
 
     try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("To run this file, use:");
     try report.document.addLineBreak();
     try report.document.addCodeBlock(
@@ -829,8 +822,7 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
         try report.document.addText("    ");
         try report.document.addAnnotated(symbol, .emphasized);
     }
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Every linker symbol named in the platform header's ");
     try report.document.addAnnotated("hosted", .emphasized);
     try report.document.addText(" section, plus the fixed runtime set (roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed), must be defined by the host inputs listed in the platform's ");
@@ -1264,16 +1256,13 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
 
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("An app header looks like:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addCodeBlock(
         \\app [main!] { pf: platform "..." }
     );
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Tip: Maybe you wanted to run ");
     try report.document.addAnnotated("roc test", .emphasized);
     try report.document.addText(" or ");

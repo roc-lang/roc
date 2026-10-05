@@ -137,8 +137,7 @@ fn renderFileReadError(
 
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Check that the file exists and you have read permissions.");
     try report.document.addLineBreak();
 
@@ -162,8 +161,7 @@ fn renderParseError(
 
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Check that the file contains valid Roc syntax.");
     try report.document.addLineBreak();
 
@@ -188,8 +186,7 @@ fn renderMissingTargetsError(
     defer report.deinit();
 
     try report.document.addText("Platform headers must declare supported targets. Example:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addCodeBlock(
         \\    targets: {
         \\        inputs_dir: "targets/",

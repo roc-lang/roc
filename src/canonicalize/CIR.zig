@@ -571,8 +571,7 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -669,8 +668,7 @@ pub const ExposedItem = struct {
 
         try tree.pushBoolPair("wildcard", self.is_wildcard);
 
-        const attrs = tree.beginNode();
-        try tree.endNode(begin, attrs);
+        try tree.endNodeWithoutChildren(begin);
     }
 };
 
@@ -1154,8 +1152,7 @@ pub const UnsetField = struct {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("unset-field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
-        const attrs = tree.beginNode();
-        try tree.endNode(begin, attrs);
+        try tree.endNodeWithoutChildren(begin);
     }
 };
 
@@ -1193,8 +1190,7 @@ pub const ExternalDecl = struct {
             .type => try tree.pushStringPair("kind", "type"),
         }
 
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
+        try tree.endNodeWithoutChildren(node);
     }
 };
 

@@ -233,6 +233,19 @@ fn parseSpecializeFlag(arg: []const u8) SpecializeParse {
     return .{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = flag } } };
 }
 
+/// Parses `--jobs=<N>` or `-j<N>` into `max_threads`. Returns the problem when
+/// the value is missing or is not a number.
+fn parseJobsProblem(arg: []const u8, max_threads: *?usize) ?ArgProblem {
+    const is_long = mem.startsWith(u8, arg, "--jobs");
+    const flag: []const u8 = if (is_long) "--jobs" else "-j";
+    const maybe_value: ?[]const u8 = if (is_long) getFlagValue(arg) else if (arg.len > 2) arg[2..] else null;
+    const value = maybe_value orelse return ArgProblem{ .missing_flag_value = .{ .flag = flag } };
+    max_threads.* = std.fmt.parseInt(usize, value, 10) catch {
+        return ArgProblem{ .invalid_flag_value = .{ .flag = flag, .value = value, .valid_options = "positive integer" } };
+    };
+    return null;
+}
+
 fn parseResolveLimitProblem(arg: []const u8, limits: *ResolveLimitArgs) ?ArgProblem {
     const result = parseResolveLimitFlag(arg, limits);
     if (std.meta.activeTag(result) == .problem) return result.problem;
@@ -669,23 +682,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
             }
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -jN format (e.g., -j4)
-            const value = arg[2..];
-            if (value.len == 0) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
+        } else if (mem.startsWith(u8, arg, "--jobs") or mem.startsWith(u8, arg, "-j")) {
+            if (parseJobsProblem(arg, &max_threads)) |problem| return CliArgs{ .problem = problem };
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
@@ -810,24 +808,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
             }
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -j<N> (no space) or -j <N> (with space handled by next iteration)
-            const value = arg[2..];
-            if (value.len > 0) {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
+        } else if (mem.startsWith(u8, arg, "--jobs") or mem.startsWith(u8, arg, "-j")) {
+            if (parseJobsProblem(arg, &max_threads)) |problem| return CliArgs{ .problem = problem };
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -1093,23 +1075,8 @@ fn parseTest(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
             }
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -jN format (e.g., -j4)
-            const value = arg[2..];
-            if (value.len == 0) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
+        } else if (mem.startsWith(u8, arg, "--jobs") or mem.startsWith(u8, arg, "-j")) {
+            if (parseJobsProblem(arg, &max_threads)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "-")) {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
         } else {
@@ -1645,27 +1612,11 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
             watch = true;
         } else if (mem.eql(u8, arg, "--timings")) {
             timings = true;
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    app_args.deinit();
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
+        } else if (mem.startsWith(u8, arg, "--jobs") or mem.startsWith(u8, arg, "-j")) {
+            if (parseJobsProblem(arg, &max_threads)) |problem| {
                 app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+                return CliArgs{ .problem = problem };
             }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            // Handle -jN format (e.g., -j4)
-            const value = arg[2..];
-            if (value.len == 0) {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                app_args.deinit();
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
         } else {
             if (path != null) {
                 try app_args.append(arg);
@@ -1697,22 +1648,8 @@ fn parseInstall(args: []const []const u8) CliArgs {
             return CliArgs{ .help = install_help_with_limits };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
-        } else if (mem.startsWith(u8, arg, "--jobs")) {
-            if (getFlagValue(arg)) |value| {
-                max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
-                };
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "-j")) {
-            const value = arg[2..];
-            if (value.len == 0) {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
-            }
-            max_threads = std.fmt.parseInt(usize, value, 10) catch {
-                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
-            };
+        } else if (mem.startsWith(u8, arg, "--jobs") or mem.startsWith(u8, arg, "-j")) {
+            if (parseJobsProblem(arg, &max_threads)) |problem| return CliArgs{ .problem = problem };
         } else if (shorthand == null) {
             shorthand = arg;
         } else if (url == null) {

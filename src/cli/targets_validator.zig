@@ -246,8 +246,7 @@ pub fn createValidationReport(
             try report.document.addText("In ");
             try report.document.addAnnotated(info.platform_path, .emphasized);
             try report.document.addText(", add a targets section like:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addCodeBlock(
                 \\    targets: {
@@ -258,8 +257,7 @@ pub fn createValidationReport(
                 \\        arm64mac: { inputs: ["host.o", app] },
                 \\    }
             );
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("The targets section declares:");
             try report.document.addLineBreak();
@@ -300,8 +298,7 @@ pub fn createValidationReport(
 
             try report.document.addText("Expected file at: ");
             try report.document.addAnnotated(info.expected_full_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Either add the missing file or remove it from the targets section.");
             try report.document.addLineBreak();
@@ -351,8 +348,7 @@ pub fn createValidationReport(
                 try report.document.addLineBreak();
             } else {
                 try report.document.addText("This platform has no targets configured.");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
             }
 
             // A baseline target and its default twin are separate entries on
@@ -375,8 +371,7 @@ pub fn createValidationReport(
                     try report.document.addText("so compiling for this machine means compiling for ");
                     try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
                     try report.document.addText(".");
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
+                    try report.document.addLineBreaks(2);
                 }
 
                 for (info.supported_targets) |spec| {
@@ -393,8 +388,7 @@ pub fn createValidationReport(
                     try report.document.addAnnotated(@tagName(default_target), .emphasized);
                     try report.document.addLineBreak();
                     try report.document.addText("would reintroduce the instructions this target avoids.");
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
+                    try report.document.addLineBreaks(2);
                     break;
                 }
             }
@@ -414,8 +408,7 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("  ");
             try report.document.addAnnotated(info.expected_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Platform authors: build your host for this target and place it at:");
             try report.document.addLineBreak();
@@ -439,8 +432,7 @@ pub fn createValidationReport(
             try report.document.addText("glibc targets require dynamic linking with libc symbols that");
             try report.document.addLineBreak();
             try report.document.addText("are only available on Linux.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Use a statically-linked musl target instead:");
             try report.document.addLineBreak();
@@ -459,8 +451,7 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "No Platform Found", headline, .runtime_error);
 
             try report.document.addText("Every Roc application needs a platform. Add a platform declaration:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addCodeBlock(
                 \\app [main!] { pf: platform "../path/to/platform/main.roc" }
@@ -488,8 +479,7 @@ pub fn createValidationReport(
             try report.document.addText("  x64mingw, arm64mingw  - Windows (MinGW)");
             try report.document.addLineBreak();
             try report.document.addText("  wasm32                - WebAssembly");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addText("Adding v1 after the architecture (");
             try report.document.addAnnotated("x64v1musl", .emphasized);
             try report.document.addText(", ");
@@ -527,8 +517,7 @@ pub fn createValidationReport(
             try report.document.addText("This typically occurs when running a test executable");
             try report.document.addLineBreak();
             try report.document.addText("that was built without LLVM support.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("To fix this, rebuild with LLVM enabled.");
             try report.document.addLineBreak();
@@ -545,15 +534,13 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Process Crashed", headline, .runtime_error);
 
             try report.document.addText("This is likely a bug in the Roc compiler.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Please report this issue at:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
             try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Include a small reproduction of the code that causes this crash.");
             try report.document.addLineBreak();
@@ -577,15 +564,13 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Process Killed By Signal", headline, .runtime_error);
 
             try report.document.addText("This is likely a bug in the Roc compiler.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Please report this issue at:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
             try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Include a small reproduction of the code that causes this crash.");
             try report.document.addLineBreak();

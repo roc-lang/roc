@@ -1833,8 +1833,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
         const debug_begin = tree.beginNode();
         try tree.pushStaticAtom("empty-cir-debug");
         try tree.pushStaticAtom("no-defs-or-statements");
-        const debug_attrs = tree.beginNode();
-        try tree.endNode(debug_begin, debug_attrs);
+        try tree.endNodeWithoutChildren(debug_begin);
     }
 
     const mutable_cir = @constCast(cir);

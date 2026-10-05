@@ -347,8 +347,7 @@ fn finishParseReport(ctx: ParseReportContext, report: *reporting.Report) Allocat
             return report.*;
         };
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const owned_filename = try report.addOwnedString(ctx.filename);
         try report.addSourceContext(region_info, owned_filename, ctx.env.source, ctx.env.line_starts.items.items);
@@ -360,8 +359,7 @@ fn finishParseReport(ctx: ParseReportContext, report: *reporting.Report) Allocat
 fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Allocator.Error!void {
     const token_text = ctx.tokenText();
 
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
 
     if (token_text.len == 0 or ctx.tokenTag() == .EndOfFile) {
         try report.document.addReflowingText("I reached the end of the file before this construct was complete.");
@@ -435,8 +433,7 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
     }
 
     if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("Tip: ");
         try report.document.addReflowingTextWithBackticks(tip);
     }
@@ -453,8 +450,7 @@ fn reportParseProblem(
     try report.document.addReflowingTextWithBackticks(body);
 
     if (options.example) |example| {
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("For example:");
         try report.document.addLineBreak();
         try report.document.addCodeBlock(example);
@@ -1210,8 +1206,7 @@ pub const Statement = union(enum) {
                         const attrs2 = tree.beginNode();
                         const args_begin = tree.beginNode();
                         try tree.pushStaticAtom("args");
-                        const args_attrs = tree.beginNode();
-                        try tree.endNode(args_begin, args_attrs);
+                        try tree.endNodeWithoutChildren(args_begin);
                         try tree.endNode(header, attrs2);
                     } else {
                         const ty_header = ast.store.getTypeHeader(a.header) catch unreachable; // Malformed handled above
@@ -1329,8 +1324,7 @@ pub const Statement = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-break");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .@"return" => |a| {
                 const begin = tree.beginNode();
@@ -1368,8 +1362,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -1566,8 +1559,7 @@ pub const Pattern = union(enum) {
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
                 try tree.pushString(ast.resolve(ident.ident_tok));
-                const attrs2 = tree.beginNode();
-                try tree.endNode(raw_begin, attrs2);
+                try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -1581,8 +1573,7 @@ pub const Pattern = union(enum) {
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
                 try tree.pushString(ast.resolve(ident.ident_tok));
-                const attrs2 = tree.beginNode();
-                try tree.endNode(raw_begin, attrs2);
+                try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -1606,16 +1597,14 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-int");
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .frac => |num| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .typed_int => |num| {
                 const begin = tree.beginNode();
@@ -1623,8 +1612,7 @@ pub const Pattern = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .typed_frac => |num| {
                 const begin = tree.beginNode();
@@ -1632,8 +1620,7 @@ pub const Pattern = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .string => |str| {
                 const begin = tree.beginNode();
@@ -1654,8 +1641,7 @@ pub const Pattern = union(enum) {
                 if (sq.type_suffix) |type_suffix| {
                     try ast.pushLiteralTypeSuffix(env, tree, type_suffix);
                 }
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .record => |rec| {
                 const begin = tree.beginNode();
@@ -1722,8 +1708,7 @@ pub const Pattern = union(enum) {
             .underscore => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-underscore");
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .alternatives => |a| {
                 const begin = tree.beginNode();
@@ -1752,8 +1737,7 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -1781,8 +1765,7 @@ pub const PatternStringPart = union(enum) {
                 try tree.pushStaticAtom("p-string-text");
                 try ast.appendRegionInfoToSexprTree(env, tree, text.region);
                 try tree.pushStringPair("raw", ast.resolve(text.token));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .capture => |capture| {
                 const begin = tree.beginNode();
@@ -1793,8 +1776,7 @@ pub const PatternStringPart = union(enum) {
                 } else {
                     try tree.pushBoolPair("discard", true);
                 }
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -1819,8 +1801,7 @@ pub const BinOp = struct {
         const op_begin = tree.beginNode();
         try tree.pushStaticAtom("op");
         try tree.pushString(ast.resolve(self.operator));
-        const attrs2 = tree.beginNode();
-        try tree.endNode(op_begin, attrs2);
+        try tree.endNodeWithoutChildren(op_begin);
         const attrs = tree.beginNode();
 
         // Push left operand
@@ -2151,8 +2132,7 @@ pub const Header = union(enum) {
                         try tree.pushStaticAtom("alias");
                         try tree.pushStringPair("name", ast.resolve(alias.alias_name));
                         try tree.pushStringPair("rigid", ast.resolve(alias.rigid_name));
-                        const alias_attrs = tree.beginNode();
-                        try tree.endNode(alias_begin, alias_attrs);
+                        try tree.endNodeWithoutChildren(alias_begin);
                     }
                     try tree.endNode(aliases_begin, aliases_attrs);
 
@@ -2205,8 +2185,7 @@ pub const Header = union(enum) {
                         try tree.pushStringPair("module", ast.resolve(module_tok));
                     }
                     try tree.pushStringPair("func", ast.resolve(entry.func));
-                    const entry_attrs = tree.beginNode();
-                    try tree.endNode(entry_begin, entry_attrs);
+                    try tree.endNodeWithoutChildren(entry_begin);
                 }
                 try tree.endNode(provides_begin, attrs6);
 
@@ -2234,8 +2213,7 @@ pub const Header = union(enum) {
                             break :blk ast.env.source[first.start.offset + 1 .. last.end.offset];
                         };
                         try tree.pushStringPair("func", func_text);
-                        const entry_attrs = tree.beginNode();
-                        try tree.endNode(entry_begin, entry_attrs);
+                        try tree.endNodeWithoutChildren(entry_begin);
                     }
                     try tree.endNode(hosted_begin, attrs7);
                 }
@@ -2265,8 +2243,7 @@ pub const Header = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("type-mod");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .default_app => |a| {
                 const begin = tree.beginNode();
@@ -2281,8 +2258,7 @@ pub const Header = union(enum) {
                 try tree.pushStaticAtom("malformed-header");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -2343,15 +2319,13 @@ pub const ExposedItem = union(enum) {
                 const ident_idx = ast.tokens.resolveIdentifier(i.ident) orelse {
                     // Fallback for malformed tokens
                     try tree.pushString("MALFORMED");
-                    const attrs2 = tree.beginNode();
-                    try tree.endNode(text_begin, attrs2);
+                    try tree.endNodeWithoutChildren(text_begin);
                     try tree.endNode(begin, attrs);
                     return;
                 };
                 const text = env.getIdent(ident_idx);
                 try tree.pushString(text);
-                const attrs2 = tree.beginNode();
-                try tree.endNode(text_begin, attrs2);
+                try tree.endNodeWithoutChildren(text_begin);
 
                 // as attribute if present
                 if (i.as) |a| {
@@ -2394,8 +2368,7 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 try ast.pushQualifiedName(env, tree, "text", i.qualifiers, i.ident);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .malformed => |m| {
                 const begin = tree.beginNode();
@@ -2406,14 +2379,12 @@ pub const ExposedItem = union(enum) {
                 const reason_begin = tree.beginNode();
                 try tree.pushStaticAtom("reason");
                 try tree.pushString(@tagName(m.reason));
-                const attrs2 = tree.beginNode();
-                try tree.endNode(reason_begin, attrs2);
+                try tree.endNodeWithoutChildren(reason_begin);
 
                 // region info
                 try ast.appendRegionInfoToSexprTree(env, tree, m.region);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -2667,22 +2638,19 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-var");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.tok));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .underscore_type_var => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("underscore-ty-var");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.tok));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .underscore => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("_");
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .ty => |a| {
                 const begin = tree.beginNode();
@@ -2746,8 +2714,7 @@ pub const TypeAnno = union(enum) {
                             // Create a malformed-field node for debugging
                             const malformed_begin = tree.beginNode();
                             try tree.pushStaticAtom("malformed-field");
-                            const attrs2 = tree.beginNode();
-                            try tree.endNode(malformed_begin, attrs2);
+                            try tree.endNodeWithoutChildren(malformed_begin);
                             continue;
                         },
                     };
@@ -2800,8 +2767,7 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -2931,8 +2897,7 @@ pub const WhereClause = union(enum) {
                 try tree.pushStaticAtom("malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, m.region);
                 try tree.pushStringPair("reason", @tagName(m.reason));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -3182,8 +3147,7 @@ pub const Expr = union(enum) {
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
                 try tree.pushString(ast.resolve(int.token));
-                const attrs2 = tree.beginNode();
-                try tree.endNode(raw_begin, attrs2);
+                try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -3193,8 +3157,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .typed_int => |a| {
                 const begin = tree.beginNode();
@@ -3202,8 +3165,7 @@ pub const Expr = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .typed_frac => |a| {
                 const begin = tree.beginNode();
@@ -3211,8 +3173,7 @@ pub const Expr = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .single_quote => |a| {
                 const begin = tree.beginNode();
@@ -3222,8 +3183,7 @@ pub const Expr = union(enum) {
                 if (a.type_suffix) |type_suffix| {
                     try ast.pushLiteralTypeSuffix(env, tree, type_suffix);
                 }
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .string_part => |sp| {
                 const begin = tree.beginNode();
@@ -3232,10 +3192,8 @@ pub const Expr = union(enum) {
                 const raw = tree.beginNode();
                 try tree.pushStaticAtom("raw");
                 try tree.pushString(ast.resolve(sp.token));
-                const attrs2 = tree.beginNode();
-                try tree.endNode(raw, attrs2);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(raw);
+                try tree.endNodeWithoutChildren(begin);
             },
             .string => |str| {
                 const begin = tree.beginNode();
@@ -3352,8 +3310,7 @@ pub const Expr = union(enum) {
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
                 try ast.pushQualifiedName(env, tree, null, tag.qualifiers, tag.token);
-                const raw_attrs = tree.beginNode();
-                try tree.endNode(raw_begin, raw_attrs);
+                try tree.endNodeWithoutChildren(raw_begin);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -3398,8 +3355,7 @@ pub const Expr = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-record-updater");
                 try tree.pushString(ast.resolve(a.token));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .if_then_else => |stmt| {
                 const begin = tree.beginNode();
@@ -3452,8 +3408,7 @@ pub const Expr = union(enum) {
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
                 try ast.pushQualifiedName(env, tree, null, ident.qualifiers, ident.token);
-                const attrs2 = tree.beginNode();
-                try tree.endNode(raw_begin, attrs2);
+                try tree.endNodeWithoutChildren(raw_begin);
 
                 const attrs = tree.beginNode();
 
@@ -3488,8 +3443,7 @@ pub const Expr = union(enum) {
                 const mapper_wrapper = tree.beginNode();
                 try tree.pushStaticAtom("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
-                const mapper_attrs = tree.beginNode();
-                try tree.endNode(mapper_wrapper, mapper_attrs);
+                try tree.endNodeWithoutChildren(mapper_wrapper);
 
                 // Push fields
                 for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
@@ -3516,14 +3470,12 @@ pub const Expr = union(enum) {
                 const mapper_wrapper = tree.beginNode();
                 try tree.pushStaticAtom("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
-                const mapper_attrs = tree.beginNode();
-                try tree.endNode(mapper_wrapper, mapper_attrs);
+                try tree.endNodeWithoutChildren(mapper_wrapper);
 
                 const backing_wrapper = tree.beginNode();
                 try tree.pushStaticAtom("backing");
                 try ast.store.getExpr(a.backing).pushToSExprTree(gpa, env, ast, tree);
-                const backing_attrs = tree.beginNode();
-                try tree.endNode(backing_wrapper, backing_attrs);
+                try tree.endNodeWithoutChildren(backing_wrapper);
 
                 try tree.endNode(begin, attrs);
             },
@@ -3536,8 +3488,7 @@ pub const Expr = union(enum) {
                 const mapper_wrapper = tree.beginNode();
                 try tree.pushStaticAtom("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
-                const mapper_attrs = tree.beginNode();
-                try tree.endNode(mapper_wrapper, mapper_attrs);
+                try tree.endNodeWithoutChildren(mapper_wrapper);
 
                 for (ast.store.exprSlice(a.args)) |arg_idx| {
                     try ast.store.getExpr(arg_idx).pushToSExprTree(gpa, env, ast, tree);
@@ -3548,15 +3499,13 @@ pub const Expr = union(enum) {
             .ellipsis => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-ellipsis");
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .@"break" => |b| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-break");
                 try ast.appendRegionInfoToSexprTree(env, tree, b.region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .@"return" => |ret| {
                 const begin = tree.beginNode();
@@ -3591,8 +3540,7 @@ pub const Expr = union(enum) {
                     try tree.pushStringPair("mode", @tagName(segment.mode));
                     const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
                     try tree.pushStringPair("field", env.getIdent(field_ident));
-                    const segment_attrs = tree.beginNode();
-                    try tree.endNode(segment_node, segment_attrs);
+                    try tree.endNodeWithoutChildren(segment_node);
                 }
 
                 try tree.endNode(begin, attrs);
@@ -3656,8 +3604,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("reason", @tagName(a.reason));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .suffix_single_question => |a| {
                 const begin = tree.beginNode();
@@ -3738,8 +3685,7 @@ pub const RecordField = struct {
         const name = tree.beginNode();
         try tree.pushStaticAtom("name");
         try tree.pushString(ast.resolve(self.name));
-        const attrs2 = tree.beginNode();
-        try tree.endNode(name, attrs2);
+        try tree.endNodeWithoutChildren(name);
         // No unset rendering here: only header paths (an app header's
         // platform entry and package lists) call this method, and header
         // record fields are always `name: value`—never unset. Expression

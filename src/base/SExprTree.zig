@@ -281,6 +281,11 @@ pub fn beginNode(self: *SExprTree) NodeBegin {
     return NodeBegin{ .stack_idx = @intCast(self.stack.items.len) };
 }
 
+/// End a node whose items since the begin marker are all attributes.
+pub fn endNodeWithoutChildren(self: *SExprTree, begin: NodeBegin) std.mem.Allocator.Error!void {
+    try self.endNode(begin, self.beginNode());
+}
+
 /// End a node by popping all items since the begin marker and creating a List node
 pub fn endNode(self: *SExprTree, begin: NodeBegin, attrsMarker: NodeBegin) std.mem.Allocator.Error!void {
     const total = self.stack.items.len;

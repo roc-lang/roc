@@ -716,8 +716,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addUnqualifiedSymbol(owned_type_name);
         try report.headline.addText(" conflicts with another declaration.");
         try report.document.addReflowingText("Type parameters must have unique names within their scope.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -869,8 +868,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("File imports must use a relative path, but this import uses ");
         try report.document.addModuleName(owned_path);
         try report.document.addReflowingText(".");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("Use a path relative to the source file instead.");
         try report.document.addLineBreak();
 

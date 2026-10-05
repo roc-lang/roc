@@ -1884,8 +1884,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" in this scope.");
             try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -1913,8 +1912,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
             try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -1929,8 +1927,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is part of a recursive non-function definition cycle.");
             try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -1947,8 +1944,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Local definitions are evaluated in order: a definition can refer to itself or to definitions written before it, but not to definitions written later in the same block. Move ");
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" above this use, or move both to the top level.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -1967,8 +1963,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident2);
             try report.headline.addReflowingText(" are mutually recursive, which isn't supported for local definitions.");
             try report.document.addReflowingText("Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -1983,8 +1978,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" was rewritten to crash because the referenced top-level value failed type checking earlier.");
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -1994,8 +1988,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Syntax Error", "This expression was replaced by a crash because it could not be parsed.", .runtime_error);
             try report.document.addReflowingText("Fix the syntax error reported for this expression instead of trying to execute it.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -2005,8 +1998,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Erroneous Value", "This expression was rewritten to crash because it failed type checking.", .runtime_error);
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this expression.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -2074,8 +2066,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(", then reference that entrypoint from ");
             try report.document.addInlineCode("provides");
             try report.document.addReflowingText(". For example:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const owned_example = try report.addOwnedString(example);
             try report.document.addInlineCode(owned_example);
 
@@ -2144,8 +2135,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" like a nominal type, but it is an alias.");
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" You can declare this type with ");
             try report.document.addInlineCode(":=");
@@ -2238,8 +2228,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_stmt);
             try report.headline.addReflowingText(" is not allowed at the top level.");
             try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -2254,8 +2243,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_stmt);
             try report.headline.addReflowingText(" is not allowed in an associated block.");
             try report.document.addReflowingText("Only associated values, type declarations, and type annotations are allowed in an associated block.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -2279,8 +2267,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_suggested = try report.addOwnedString(suggested_name);
             try report.document.addUnqualifiedSymbol(owned_suggested);
             try report.document.addReflowingText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
@@ -2360,8 +2347,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Each name in a pattern must be different. To check whether two values are equal, give them different names and compare them in a guard:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock("(a, b) if a == b => ...");
 
             break :blk report;
@@ -2406,8 +2392,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_var_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
             try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
@@ -2453,8 +2438,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is used as an expression that evaluates to a value, ");
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" is required because otherwise there wouldn't always be a value available.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addReflowingText("Either add an ");
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" branch, or use this ");
@@ -2475,8 +2459,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Unreachable Pattern Capture", "This string pattern capture is directly after another capture, so it is unreachable.", .warning);
             try report.document.addReflowingText("String pattern captures need literal text between them. Add a delimiter between the captures, or remove this capture.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
@@ -2556,8 +2539,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 },
             }
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
             break :blk report;
         },
@@ -2608,8 +2590,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addInlineCode("Dec");
             try report.document.addReflowingText(" type and would require F64 representation. ");
             try report.document.addReflowingText("Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Consider one of these alternatives:");
             try report.document.addLineBreak();
@@ -2618,8 +2599,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addText("• Use a smaller number that fits in Dec's precision");
             try report.document.addLineBreak();
             try report.document.addText("• Restructure your code to avoid pattern matching on this value");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("For example, instead of:");
             try report.document.addLineBreak();
@@ -2670,13 +2650,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Other modules can see ");
             try report.document.addType(exposed_type);
             try report.document.addReflowingText("'s public shape, but they cannot name this private type.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Expose the referenced type, make ");
             try report.document.addType(exposed_type);
@@ -2712,13 +2690,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Other modules can see this field because ");
             try report.document.addType(exposed_type);
             try report.document.addReflowingText(" is exposed and not opaque, but they cannot name this private type.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Expose the referenced type, make ");
             try report.document.addType(exposed_type);
@@ -2919,8 +2895,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is in scope, but it has no associated ");
             try report.document.addInlineCode(nested_name);
             try report.document.addReflowingText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
@@ -3011,8 +2986,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" You need a named variable, like ");
             try report.document.addInlineCode("..others");
@@ -3083,8 +3057,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" A default belongs to one named type, so declare a nominal type (with ");
             try report.document.addInlineCode(":=");
@@ -3102,8 +3075,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" A default is materialized at every construction site that omits the field, so it cannot depend on the locals of one function. Move the type declaration to the module top level, or remove the default.");
 
@@ -3121,8 +3093,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Unnamed fields reserve layout padding for a nominal type (declared with ");
             try report.document.addInlineCode(":=");
@@ -3143,8 +3114,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(".roc, but no top-level nominal type named ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(" was found.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Add a nominal type like:");
             try report.document.addLineBreak();
@@ -3186,12 +3156,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("), not type aliases (");
             try report.document.addInlineCode(":");
             try report.document.addReflowingText(").");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Nominal types must be records or tag unions:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("# Record example:");
             try report.document.addLineBreak();
@@ -3199,8 +3167,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             defer allocator.free(record_example);
             const owned_record = try report.addOwnedString(record_example);
             try report.document.addInlineCode(owned_record);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("# Tag union example:");
             try report.document.addLineBreak();
@@ -3208,8 +3175,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             defer allocator.free(tag_example);
             const owned_tag = try report.addOwnedString(tag_example);
             try report.document.addInlineCode(owned_tag);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Tip: Nominal types have their own identity and can have associated functions. Type aliases (");
             try report.document.addInlineCode(":");
@@ -3231,8 +3197,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addText("No ");
             try report.document.addInlineCode("main!");
             try report.document.addReflowingText(" function was found.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Add a main! function like:");
             try report.document.addLineBreak();
@@ -3258,8 +3223,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addText("Found ");
             try report.document.addInlineCode(owned_arity);
             try report.document.addReflowingText(" arguments.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Change it to:");
             try report.document.addLineBreak();
@@ -3309,8 +3273,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(".roc, but the type is named ");
             try report.document.addInlineCode(type_name);
             try report.document.addReflowingText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Make sure the type name matches the filename exactly (case-sensitive).");
             try report.document.addLineBreak();
@@ -3328,8 +3291,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" header is deprecated.");
 
             try report.document.addReflowingText("Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Remove the ");
             try report.document.addInlineCode("module");
@@ -3382,8 +3344,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("The type ");
             try report.document.addInlineCode(type_name);
             try report.document.addReflowingText(" is automatically exposed when importing a type module.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Remove ");
             try report.document.addInlineCode(type_name);
@@ -3434,8 +3395,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is already defined in this scope.");
             try report.document.addReflowingText("Choose a different name for this identifier.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
@@ -3492,8 +3452,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" on a ");
             try report.document.addAnnotated("Try", .inline_code);
             try report.document.addReflowingText(" value like this:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.startAnnotation(.code_block);
             try report.document.addIndent(1);
             try report.document.addKeyword("match");
@@ -3527,8 +3486,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addIndent(1);
             try report.document.addText("}");
             try report.document.endAnnotation();
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("When you use ");
             try report.document.addAnnotated("?", .inline_code);
@@ -3547,8 +3505,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(", which is so unusual that using ");
             try report.document.addAnnotated("?", .inline_code);
             try report.document.addReflowingText(" here is almost always a mistake in practice.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Usually removing the ");
             try report.document.addAnnotated("?", .inline_code);
@@ -3687,8 +3644,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("If you need recursive types, use nominal types (");
             try report.document.addAnnotated(":=", .inline_code);
             try report.document.addReflowingText(") instead.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             const owned_filename = try report.addOwnedString(filename);
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);

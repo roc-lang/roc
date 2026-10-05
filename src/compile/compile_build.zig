@@ -762,8 +762,7 @@ pub const BuildEnv = struct {
         try report.document.addLineBreak();
         try report.document.addText("Source directory: ");
         try report.document.addAnnotated(source_root, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("The checked module must be inside the selected package's source directory.");
 
         try self.sink.emitReport("workspace", "root", report);
@@ -1929,8 +1928,7 @@ pub const BuildEnv = struct {
         errdefer report.deinit();
         try report.document.addText("    ");
         try report.document.addAnnotated(platform_spec, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("Tip: Use a relative path like ");
         try report.document.addAnnotated("../path/to/platform", .emphasized);
         try report.document.addText(" or a URL.");
@@ -1990,8 +1988,7 @@ pub const BuildEnv = struct {
         try report.document.addLineBreak();
         try report.document.addText("Expected directory: ");
         try report.document.addAnnotated(info.expected_path, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("Create this directory or update the platform `targets` section. Builds cannot proceed until declared target inputs exist.");
 
         try self.sink.emitReport("workspace", "root", report);
@@ -2018,8 +2015,7 @@ pub const BuildEnv = struct {
         try report.document.addLineBreak();
         try report.document.addText("Expected file: ");
         try report.document.addAnnotated(info.expected_full_path, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("The selected target's platform entry lists this file. Add the file or remove it from that target config before building.");
 
         try self.sink.emitReport("workspace", "root", report);

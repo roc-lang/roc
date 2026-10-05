@@ -364,8 +364,7 @@ pub const Pattern = union(enum) {
                 const ident = ir.getIdentText(p.ident);
                 try tree.pushStringPair("ident", ident);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .var_assign => |p| {
                 const begin = tree.beginNode();
@@ -375,8 +374,7 @@ pub const Pattern = union(enum) {
                 const ident = ir.getIdentText(p.ident);
                 try tree.pushStringPair("ident", ident);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .as => |p| {
                 const begin = tree.beginNode();
@@ -393,8 +391,7 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-applied-tag");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .nominal => |n| {
                 const begin = tree.beginNode();
@@ -431,8 +428,7 @@ pub const Pattern = union(enum) {
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("builtin");
-                    const field_attrs = tree.beginNode();
-                    try tree.endNode(field_begin, field_attrs);
+                    try tree.endNodeWithoutChildren(field_begin);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
                 }
@@ -513,22 +509,19 @@ pub const Pattern = union(enum) {
 
                 try p.value.pushStringPair(tree, "value");
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .small_dec_literal => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-small-dec");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .dec_literal => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-dec");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .frac_f32_literal => |p| {
                 const begin = tree.beginNode();
@@ -540,8 +533,7 @@ pub const Pattern = union(enum) {
                 const value_str = builtins.compiler_rt_128.f32_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .frac_f64_literal => |p| {
                 const begin = tree.beginNode();
@@ -553,15 +545,13 @@ pub const Pattern = union(enum) {
                 const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .num_from_numeral_literal => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-num-from-numeral");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .str_literal => |p| {
                 const begin = tree.beginNode();
@@ -571,8 +561,7 @@ pub const Pattern = union(enum) {
                 const text = ir.getString(p.literal);
                 try tree.pushStringPair("text", text);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .str_interpolation => |p| {
                 const begin = tree.beginNode();
@@ -604,8 +593,7 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-underscore");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .runtime_error => |e| {
                 const begin = tree.beginNode();
@@ -615,8 +603,7 @@ pub const Pattern = union(enum) {
                 const diagnostic = ir.store.getDiagnostic(e.diagnostic);
                 try tree.pushStringPair("tag", @tagName(diagnostic));
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }

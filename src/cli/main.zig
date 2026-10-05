@@ -9139,8 +9139,7 @@ fn requireLinkedWasmExports(
     try report.document.addLineBreak();
     try report.document.addText("Target: ");
     try report.document.addAnnotated(@tagName(selected.target), .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Add an `exports:` field to this target. Use `exports: []` when the module intentionally exports no functions.");
 
     try reporting.renderReportToTerminal(

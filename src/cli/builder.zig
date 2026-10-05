@@ -841,8 +841,7 @@ fn renderFileNotAccessibleError(
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Error: ");
     try report.document.addAnnotated(@errorName(err), .error_highlight);
     try report.document.addLineBreak();
@@ -890,8 +889,7 @@ fn renderTargetError(
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(triple, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("LLVM error: ");
     try report.document.addAnnotated(llvm_message, .error_highlight);
     try report.document.addLineBreak();
@@ -931,8 +929,7 @@ fn renderTargetMachineError(
     } else {
         try report.document.addText("(default)");
     }
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("This may indicate an unsupported target configuration.");
     try report.document.addLineBreak();
 
@@ -956,8 +953,7 @@ fn renderEmitError(
     try report.document.addLineBreak();
     try report.document.addText("    Output: ");
     try report.document.addAnnotated(output_path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("LLVM error: ");
     try report.document.addAnnotated(llvm_message, .error_highlight);
     try report.document.addLineBreak();

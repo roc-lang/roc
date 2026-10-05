@@ -619,13 +619,11 @@ pub const ReportBuilder = struct {
 
         if (actual_display == expected_display) {
             try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const type_str = try report.addOwnedString(actual_formatted);
             try report.document.addCodeBlock(type_str);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(
                 &.{D.bytes("The difference is inside this type, but it is not visible in this display.")},
                 self,
@@ -634,18 +632,15 @@ pub const ReportBuilder = struct {
         } else {
             // Print the actual
             try D.renderSlice(actual_label, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const actual_type_str = try report.addOwnedString(actual_formatted);
             try report.document.addCodeBlock(actual_type_str);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             // Print the expected
             try D.renderSlice(expected_label, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const expected_type_str = try report.addOwnedString(expected_formatted);
             try report.document.addCodeBlock(expected_type_str);
         }
@@ -704,8 +699,7 @@ pub const ReportBuilder = struct {
 
         // Print the actual
         try D.renderSlice(actual_label, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const actual_type_str = try report.addOwnedString(self.getFormattedString(actual_snapshot));
         try report.document.addCodeBlock(actual_type_str);
 
@@ -1799,16 +1793,13 @@ pub const ReportBuilder = struct {
             }, self, &report);
         }
         if (!has_error_payload_type) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const body_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(body_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         if (ctx.body_tail_try) |tail_try| {
             try D.renderSlice(&.{
@@ -1817,8 +1808,7 @@ pub const ReportBuilder = struct {
                 D.bytes("?").withAnnotation(.inline_code),
                 D.bytes(":").withNoPrecedingSpace(),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addSourceHighlightRegion(&report, self.trySuffixOperatorRegion(tail_try));
             try report.document.addLineBreak();
             try D.renderSlice(&.{
@@ -1883,12 +1873,10 @@ pub const ReportBuilder = struct {
             D.bytes("Err").withAnnotation(.inline_code),
             D.bytes("whose payload has this type:"),
         }, self, report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const err_type_str = try report.addOwnedString(err_type);
         try report.document.addCodeBlock(err_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         return true;
     }
 
@@ -1924,8 +1912,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("It has the type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
@@ -1988,14 +1975,12 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes(" function has the type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
         if (ctx.actual_args < ctx.expected_args) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try D.renderSlice(&.{
                 D.bytes("Are there any missing commas?"),
@@ -2091,11 +2076,9 @@ pub const ReportBuilder = struct {
 
         // Show the invalid tag
         try report.document.addText("The tag is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(actual_tag_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         // Show the expected tags when the nominal wraps a non-empty tag union.
         // Otherwise, explain the backing shape mismatch directly.
@@ -2105,8 +2088,7 @@ pub const ReportBuilder = struct {
                 const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
                 try report.document.addText("But the nominal type needs it to be:");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
                 try report.document.addCodeBlock(expected_tag_str);
                 return report;
             }
@@ -2114,8 +2096,7 @@ pub const ReportBuilder = struct {
             const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock(expected_type);
 
             // Check if there's a tag with the same name in the list of possible tags
@@ -2127,8 +2108,7 @@ pub const ReportBuilder = struct {
                 if (actual_tag.name.eql(cur_expected_tag.name)) {
                     const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
 
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
+                    try report.document.addLineBreaks(2);
                     try report.document.addAnnotated("Hint:", .emphasized);
                     try report.document.addReflowingText(" The nominal type has a tag with the same name, but different args:");
                     try report.document.addLineBreak();
@@ -2143,8 +2123,7 @@ pub const ReportBuilder = struct {
 
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addText("But the nominal type wraps:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
 
         return report;
@@ -2171,15 +2150,12 @@ pub const ReportBuilder = struct {
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         try report.document.addText(found_intro);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
 
         return report;
@@ -2410,8 +2386,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceWarningRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Tag unions in output positions, like the return type of a function, are automatically open. Remove the"),
             D.bytes("..").withAnnotation(.inline_code),
@@ -2509,8 +2484,7 @@ pub const ReportBuilder = struct {
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
         return report;
@@ -2590,12 +2564,10 @@ pub const ReportBuilder = struct {
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         if (data.defaulted_from_numeric_literal) {
             try D.renderSlice(&.{
@@ -2777,11 +2749,9 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("The method is being selected for this type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         if (data.grown_from_snapshot) |grown_from_snapshot| {
             const grown_from_str = try report.addOwnedString(self.getFormattedString(grown_from_snapshot));
@@ -2790,31 +2760,26 @@ pub const ReportBuilder = struct {
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("with a dispatch state that has grown—in its dispatcher or in the method type it requires—since an earlier step on the same chain, whose dispatcher was:"),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock(grown_from_str);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{
                 D.bytes("The dispatch state grows on every such step, so the chain can never terminate."),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
         } else {
             try D.renderSlice(&.{
                 D.bytes("Using"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("for this type requires the same method again, before all of its type requirements have been determined."),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
         }
 
         try D.renderSlice(&.{
             D.bytes("Recursive function calls are allowed. This error is about a cycle in the type requirements, before the function can run."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -2846,8 +2811,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("The type was determined to be:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
         return report;
@@ -2892,8 +2856,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Other code expects this to have the type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
         return report;
@@ -2914,8 +2877,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("The inferred type is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
 
         return report;
@@ -3040,11 +3002,9 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("The type is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         // Get the content and explain which parts don't support equality
         const content = self.snapshots.?.getContentUnwrapAlias(data.dispatcher_snapshot);
@@ -3087,19 +3047,16 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("The compiler can derive"),
             D.ident(data.method_name).withAnnotation(.inline_code),
             D.bytes("when exactly one direct tag payload is non-zero-sized and every other direct payload is zero-sized."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("If every payload is zero-sized, one tag must have exactly one payload and every other tag must have no payloads. Opaque payload types always count as non-zero-sized, and nested values are not searched for a different payload to transform."),
         }, self, &report);
@@ -3123,11 +3080,9 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("A type annotation that names the full type would let the compiler derive it."),
         }, self, &report);
@@ -3245,8 +3200,7 @@ pub const ReportBuilder = struct {
             try report.document.addText("    - ");
             try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("So maybe ");
         try report.document.addAnnotated(self.can_ir.getIdentText(field_name), .inline_code);
         try report.document.addReflowingText(" should be ");
@@ -3255,8 +3209,7 @@ pub const ReportBuilder = struct {
 
         // Add note about record update syntax limitations
         if (is_record_update) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{
                 D.bytes("Note:").withAnnotation(.underline),
                 D.bytes("You cannot add new fields to a record with the record update syntax."),
@@ -3342,15 +3295,12 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{D.bytes("One type is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const actual_type_str = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("The other is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
         try report.document.addLineBreak();
@@ -3488,8 +3438,7 @@ pub const ReportBuilder = struct {
             D.bytes("is part of a recursive non-function definition cycle."),
         }, self, &report, &report.headline);
         try self.addSourceHighlightRegion(&report, data.region);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
 
         return report;
@@ -3555,8 +3504,7 @@ pub const ReportBuilder = struct {
         switch (data.reason) {
             .required_field => {
                 try report.document.addReflowingText("The parser is derived for the record type:");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
                 const record_str = try report.addOwnedString(self.getFormattedString(data.record_snapshot.?));
                 try report.document.addCodeBlock(record_str);
                 try report.document.addLineBreak();
@@ -3573,18 +3521,15 @@ pub const ReportBuilder = struct {
             },
             .nested_row => {
                 try report.document.addReflowingText("The nested parser can produce the tags:");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
                 const tags_str = try report.addOwnedString(self.getFormattedString(data.tags_snapshot.?));
                 try report.document.addCodeBlock(tags_str);
             },
         }
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("But the error row is closed at:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const row_str = try report.addOwnedString(self.getFormattedString(data.row_snapshot));
         try report.document.addCodeBlock(row_str);
         try report.document.addLineBreak();
@@ -4016,8 +3961,7 @@ pub const ReportBuilder = struct {
             try report.document.addReflowingText("This record does not support equality because these fields have types that don't support ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             const field_names = fields.items(.name);
             const field_contents = fields.items(.content);
@@ -4068,8 +4012,7 @@ pub const ReportBuilder = struct {
             try report.document.addReflowingText("This tuple does not support equality because these elements have types that don't support ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             for (elems, 0..) |elem_content_idx, i| {
                 if (!self.snapshotSupportsEquality(elem_content_idx)) {
@@ -4120,8 +4063,7 @@ pub const ReportBuilder = struct {
             try report.document.addReflowingText("This tag union does not support equality because these tags have payload types that don't support ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             const tag_names = tags.items(.name);
             const tag_args_list = tags.items(.args);
@@ -4379,13 +4321,11 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Its definition is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         switch (data.kind) {
             .infinite, .anonymous => try D.renderSlice(&.{
@@ -4425,8 +4365,7 @@ pub const ReportBuilder = struct {
             D.bytes("<RecursiveType>").withAnnotation(.inline_code),
             D.bytes("for parts of the type that repeat infinitely."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
@@ -4470,20 +4409,16 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
         try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.outer_snapshot)));
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{D.bytes("It also comes from here:")}, self, &report);
         try report.document.addLineBreak();
         try self.addSourceHighlightRegion(&report, data.inner_region);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("where it is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.inner_snapshot)));
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{D.bytes(rule)}, self, &report);
         return report;
@@ -4514,13 +4449,11 @@ pub const ReportBuilder = struct {
             D.bytes("<RecursiveType>").withAnnotation(.inline_code),
             D.bytes("for parts of the type that repeat."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -4716,8 +4649,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceHighlightRegion(&report, region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(details, self, &report);
         return report;
     }
@@ -4786,8 +4718,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceWarningRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Add a trailing"),
             D.bytes("!").withAnnotation(.inline_code),
@@ -4820,8 +4751,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceHighlightRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Its"),
             D.ident(data.method_name).withAnnotation(.inline_code),
@@ -4844,8 +4774,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceHighlightRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Call it here with its arguments instead."),
         }, self, &report);
@@ -4863,8 +4792,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
         try self.addSourceHighlightRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Using"),
             D.bytes("_").withAnnotation(.inline_code),
@@ -4954,8 +4882,7 @@ pub const ReportBuilder = struct {
                 D.bytes("It returned this error message:"),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -4987,8 +4914,7 @@ pub const ReportBuilder = struct {
                 D.bytes("It returned this error message:"),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -5019,8 +4945,7 @@ pub const ReportBuilder = struct {
                 D.bytes(owned_origin_location).withAnnotation(.emphasized),
                 D.bytes("with this message:"),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock(owned_message);
 
             return report;
@@ -5031,8 +4956,7 @@ pub const ReportBuilder = struct {
             D.bytes("crash").withAnnotation(.keyword),
             D.bytes("happened with this message:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -5048,8 +4972,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting - shows the expect expression with syntax highlighting
         try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         if (data.origin) |origin| {
             // The expect was in source inlined from another module (e.g. a
             // `??` field default materialized per specialization), so the
@@ -5070,8 +4993,7 @@ pub const ReportBuilder = struct {
                 D.bytes("failed with this message:"),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -5093,8 +5015,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("The evaluation failed with error:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_error_name);
 
         return report;
@@ -5117,8 +5038,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("        ");
         try report.document.addAnnotated(condition_type, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Missing patterns:"),
@@ -5141,8 +5061,7 @@ pub const ReportBuilder = struct {
             D.bytes("to match anything."),
         }, self, &report);
         if (data.empirical) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{
                 D.bytes("Note: This non-exhaustive match was discovered empirically during compile-time evaluation."),
             }, self, &report);
@@ -5165,8 +5084,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("        ");
         try report.document.addAnnotated(value_type, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Missing patterns:"),
