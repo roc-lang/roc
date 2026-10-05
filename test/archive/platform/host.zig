@@ -20,7 +20,7 @@ pub const std_options = shim_io.std_options_static_archive;
 /// delivery, here via a process-global arena.
 var host_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
 
-fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_alloc.alloc(host_arena.allocator(), length, alignment) orelse {
         @panic("Host allocation failed");
     };
@@ -30,7 +30,7 @@ fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     host_alloc.dealloc(host_arena.allocator(), ptr, alignment);
 }
 
-fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_alloc.realloc(host_arena.allocator(), ptr, new_length, alignment) orelse {
         @panic("Host reallocation failed");
     };

@@ -157,7 +157,6 @@ fn classifyTestHelperError(err: helpers.TestHelperError) TestHelperErrorKind {
         error.LlvmObjectEmitFailed,
         error.BitcodeParseError,
         error.ModuleLinkFailed,
-        error.TempFileError,
         error.LinkFailed,
         error.UnsupportedLowLevel,
         error.UnsupportedHostedFunction,
@@ -704,7 +703,7 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
         const template = root.request.procedure_template orelse @panic("oracle compile-time request omitted its declaring module");
         try producers.append(gpa, .{ .root = .{ .module = .{ .bytes = template.artifact.bytes }, .root = .{ .checked = root_id }, .const_locator = null }, .root_index = index });
     }
-    var evaluator = try LambdaMonoEval.Evaluator.init(gpa, program, .{ .inline_expects_enabled = true, .comptime_producers = producers.items });
+    var evaluator = try LambdaMonoEval.Evaluator.init(gpa, program, .{ .comptime_producers = producers.items });
     defer evaluator.deinit();
 
     // Root 0 matches the interpreter's `mainProc()` (`root_procs.items[0]`):

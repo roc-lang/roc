@@ -10,6 +10,10 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+/// Name of the per-version subdirectory that holds per-invocation scratch
+/// directories (see `CacheConfig.getScratchDir`).
+pub const scratch_dir_name = "tmp";
+
 const CacheOs = enum { windows, macos, other };
 
 fn cacheOs(os: std.Target.Os.Tag) CacheOs {
@@ -253,11 +257,34 @@ pub const Constants = struct {
     ///      their owner type declaration, and a type-rooted dispatch call can
     ///      dispatch on an explicit type var. Version 113 is reserved for the
     ///      separate Stream builtin change.
-    /// 115: Reserved for wide-representation-capacity.
+    /// 115: Combine derived-method and Stream dispatch metadata with 32-bit
+    ///      representation counts, offsets, and discriminants.
     /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
-    /// 117: Raw alias types record the source argument boundary before their
+    /// 117: A type variable's rank is a full word, since valid source can nest
+    ///      generalization scopes past any narrower bound.
+    /// 118: Combine full-word type variable ranks with 32-bit representation
+    ///      counts, offsets, and discriminants.
+    /// 119: Checked type keys are computed by the shared key engine: equal
+    ///      recursive types share one key however they are unrolled, type
+    ///      variables are written as relative references, and a child is
+    ///      referred to by its key plus the variables it shares.
+    /// 120: Checking records each `to_inspect` method's use at result `Str`,
+    ///      and a method registry entry carries that use's instance type and
+    ///      evidence.
+    /// 121: Raw alias types record the source argument boundary before their
     ///      hidden polarity parameters.
-    pub const CACHE_VERSION = 118;
+    /// 122: Builtin indices include the Encoding and Json declarations.
+    /// 123: Exposed-item import checks carry local binding identities and exact
+    ///      source regions; main-type exposures are errors.
+    /// 125: Checked modules drop checked-error reachability templates, and
+    ///      compile-time values and test results record checked-error crashes.
+    /// 126: Evidence paths store shared prefixes instead of complete paths.
+    /// 127: Type descriptors mark declared nominal backing structure.
+    /// 128: Module environments carry no package-qualified module name, and
+    ///      checked procedure names use the module's own name.
+    /// 129: Literal dispatch plans store an optional conversion function, absent
+    ///      for a proved concrete builtin numeral.
+    pub const CACHE_VERSION = 129;
 };
 
 /// Configuration for the Roc cache system.
@@ -385,6 +412,20 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
+    }
+
+    /// Get the scratch directory for per-invocation build outputs and runtime
+    /// executables. Each invocation creates its own unique subdirectory here.
+    ///
+    /// This lives under the user's own cache root rather than the system temp
+    /// directory, so no other user can create or rename entries along the path,
+    /// and executables built here are on the same filesystem as the exe cache
+    /// they get hardlinked into.
+    pub fn getScratchDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, scratch_dir_name });
     }
 
     /// Get the test cache directory (for cached test results).
@@ -558,32 +599,6 @@ pub fn getCacheDirName() []const u8 {
         .windows => "Roc",
         .macos, .other => "roc",
     };
-}
-
-/// Get the temporary directory for runtime executables.
-/// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = switch (cacheOs(builtin.target.os.tag)) {
-        .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
-            roc_ctx.getEnvVar("TMP", allocator) catch
-            try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        .macos, .other => roc_ctx.getEnvVar("TMPDIR", allocator) catch
-            try allocator.dupe(u8, "/tmp"),
-    };
-    defer allocator.free(temp_base);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });
-}
-
-/// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = try getTempDir(roc_ctx, allocator);
-    defer allocator.free(temp_base);
-
-    const version_dir = try getCompilerVersionDir(allocator);
-    defer allocator.free(version_dir);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, version_dir });
 }
 
 /// Get a compiler version-specific directory name.

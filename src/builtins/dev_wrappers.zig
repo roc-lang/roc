@@ -127,7 +127,7 @@ pub fn roc_builtins_simd_store_16(out: *RocList, vector_low: u64, vector_high: u
 pub fn roc_builtins_simd_append_16(out: *RocList, vector_low: u64, vector_high: u64, bytes: ?[*]u8, length: usize, capacity_or_alloc_ptr: usize, update_mode: utils.UpdateMode) callconv(.c) void {
     const roc_ops = in_process_host.ops();
     var result = RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = capacity_or_alloc_ptr };
-    result = list.listReserve(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
+    result = list.listReserveForAppend(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
     const vector = @as(u128, vector_low) | (@as(u128, vector_high) << 64);
     for (std.mem.asBytes(&vector)) |*byte| {
         result = list.listAppendUnsafe(result, @ptrCast(@constCast(byte)), 1, &list.copy_fallback);
@@ -252,6 +252,7 @@ const listReplace = list.listReplace;
 const listSet = list.listSet;
 const listSwap = list.listSwap;
 const listReserve = list.listReserve;
+const listReserveForAppend = list.listReserveForAppend;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
@@ -652,6 +653,39 @@ pub fn roc_builtins_expect_err_str(str_ptr: *const RocStr, region_start: u32, re
     roc_ops.crash(str_ptr.asSlice());
 }
 
+const CheckedErrorRecorder = in_process_host.CheckedErrorRecorder;
+
+/// The recorder for a crash at code checking rejected, resolved exactly like
+/// `expectErrRegionRecorder`.
+inline fn checkedErrorRecorder() ?CheckedErrorRecorder {
+    if (in_process_host.checkedErrorRecorder()) |recorder| return recorder;
+    if (comptime builtin.target.cpu.arch != .wasm64) return null;
+    const recorder = @extern(CheckedErrorRecorder, .{ .name = in_process_host.roc_checked_error_reached, .linkage = .weak });
+    var address: usize = if (recorder) |pointer| @intFromPtr(pointer) else 0;
+    asm volatile (""
+        : [address] "+r" (address),
+    );
+    if (address == 0) return null;
+    return @ptrFromInt(address);
+}
+
+/// Crash at code checking rejected and already reported, using static message
+/// bytes owned by generated code. Records the fact first, so a test harness
+/// counts the evaluation as blocked by that problem rather than as a crash.
+pub fn roc_builtins_checked_error_crashed(msg_bytes: [*]const u8, msg_len: usize) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    if (checkedErrorRecorder()) |record| record();
+    roc_ops.crash(msg_bytes[0..msg_len]);
+}
+
+/// Crash at code checking rejected and already reported, with a runtime
+/// RocStr message. Records the fact first, like `roc_builtins_checked_error_crashed`.
+pub fn roc_builtins_checked_error_crash_str(str_ptr: *const RocStr) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    if (checkedErrorRecorder()) |record| record();
+    roc_ops.crash(str_ptr.asSlice());
+}
+
 /// Report a failed `expect` using static message bytes owned by generated code.
 pub fn roc_builtins_roc_expect_failed(msg_bytes: [*]const u8, msg_len: usize) callconv(.c) void {
     const roc_ops = in_process_host.ops();
@@ -693,24 +727,30 @@ pub const InvalidLocalReason = enum(u8) {
 
 /// Render the message for a failed invariant check into `buffer`. The
 /// values arrive as integers from generated code; one outside its enum
-/// is reported as such rather than trusted.
-pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) []const u8 {
+/// is reported as such rather than trusted. The procedure is named by the
+/// two halves of the 128 bits its `roc__p` symbol spells, and the local by
+/// its position in that procedure's frame, so the message means the same
+/// thing in every program that links the procedure's code.
+pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, frame_index: u32, proc_high: u64, proc_low: u64) []const u8 {
     const kind_name: []const u8 = if (std.enums.fromInt(InvalidLocalKind, kind)) |k| @tagName(k) else "unknown";
     const received: []const u8 = if (std.enums.fromInt(InvalidLocalReason, reason)) |r| r.describe() else "an invalid value (unknown reason)";
-    var local_buffer: [10]u8 = undefined;
-    var proc_buffer: [20]u8 = undefined;
-    var stmt_buffer: [10]u8 = undefined;
+    var index_buffer: [10]u8 = undefined;
+    var proc_buffer: [32]u8 = undefined;
+    for ([_]u64{ proc_high, proc_low }, 0..) |half, half_index| {
+        for (0..16) |digit| {
+            const shift: u6 = @intCast(60 - 4 * digit);
+            proc_buffer[half_index * 16 + digit] = "0123456789abcdef"[@as(usize, @intCast((half >> shift) & 0xf))];
+        }
+    }
     const parts = [_][]const u8{
         "LIR/codegen invariant violated: ",
         kind_name,
         " local ",
-        unsignedIntToStr(u32, &local_buffer, local),
+        if (frame_index == std.math.maxInt(u32)) "outside the frame" else unsignedIntToStr(u32, &index_buffer, frame_index),
+        " of roc__p",
+        &proc_buffer,
         " received ",
         received,
-        " at proc ",
-        unsignedIntToStr(u64, &proc_buffer, proc),
-        " stmt ",
-        unsignedIntToStr(u32, &stmt_buffer, stmt),
     };
     var len: usize = 0;
     for (parts) |part| {
@@ -723,24 +763,24 @@ pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, local: u32, pr
 /// Report a failed dev-backend Debug invariant check on a local. Generated
 /// code passes the check's identity as integers and this formats the
 /// message, so a check site carries no message bytes of its own.
-pub fn roc_builtins_debug_invalid_local(kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) callconv(.c) void {
+pub fn roc_builtins_debug_invalid_local(kind: u8, reason: u8, frame_index: u32, proc_high: u64, proc_low: u64) callconv(.c) void {
     const roc_ops = in_process_host.ops();
     var buffer: [192]u8 = undefined;
-    roc_ops.crash(formatInvalidLocal(&buffer, kind, reason, local, proc, stmt));
+    roc_ops.crash(formatInvalidLocal(&buffer, kind, reason, frame_index, proc_high, proc_low));
 }
 
 test "formatInvalidLocal renders the check identity and reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: str local 7004 received an invalid RocStr (null bytes pointer) at proc 4066 stmt 1357",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7004, 4066, 1357),
+        "LIR/codegen invariant violated: str local 7 of roc__p0dd5e7903b5a4e63af0a004f1598b1ae received an invalid RocStr (null bytes pointer)",
+        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7, 0x0dd5e7903b5a4e63, 0xaf0a004f1598b1ae),
     );
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: box local 3 received a non-aligned pointer at proc 9 stmt 2",
+        "LIR/codegen invariant violated: box local 3 of roc__p00000000000000090000000000000002 received a non-aligned pointer",
         formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.box), @intFromEnum(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
     );
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: unknown local 1 received an invalid value (unknown reason) at proc 2 stmt 3",
+        "LIR/codegen invariant violated: unknown local 1 of roc__p00000000000000020000000000000003 received an invalid value (unknown reason)",
         formatInvalidLocal(&buffer, 200, 200, 1, 2, 3),
     );
 }
@@ -748,11 +788,11 @@ test "formatInvalidLocal renders the check identity and reason" {
 test "formatInvalidLocal fits maximum identifiers and the longest reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: unknown local 4294967295 received an invalid RocStr (misaligned allocation pointer) at proc 18446744073709551615 stmt 4294967295",
-        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u32)),
+        "LIR/codegen invariant violated: unknown local outside the frame of roc__pffffffffffffffffffffffffffffffff received an invalid RocStr (misaligned allocation pointer)",
+        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u64)),
     );
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: str local 0 received an invalid RocStr (null bytes pointer) at proc 0 stmt 0",
+        "LIR/codegen invariant violated: str local 0 of roc__p00000000000000000000000000000000 received an invalid RocStr (null bytes pointer)",
         formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
     );
 }
@@ -1114,6 +1154,24 @@ pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: us
         out.* = listReserve(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listReserve(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
+    }
+}
+
+/// Wrapper: listReserveForAppend. The update mode is forwarded to the
+/// builtin's uniqueness check; `.InPlace` skips it.
+pub fn roc_builtins_list_reserve_for_append(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+        };
+        out.* = listReserveForAppend(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+    } else {
+        out.* = listReserveForAppend(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
 }
 

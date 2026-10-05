@@ -29,12 +29,19 @@ static void record_failure(const char *fmt, ...) {
     failure_count += 1;
 }
 
+/* roc_alloc and roc_realloc must not return to Roc without an allocation,
+   so an allocation failure ends the program with its report. */
+static _Noreturn void abort_allocation(void) {
+    fprintf(stderr, "%s\n", report[0] == '\0' ? "allocation failed" : report);
+    exit(1);
+}
+
 void *roc_alloc(size_t length, size_t alignment) {
     const size_t total = length + alignment - 1u + sizeof(void *);
     uint8_t *raw = (uint8_t *)malloc(total == 0 ? 1 : total);
     if (raw == NULL) {
         record_failure("malloc failed");
-        return NULL;
+        abort_allocation();
     }
     uintptr_t aligned = align_forward((uintptr_t)(raw + sizeof(void *)), alignment);
     ((void **)aligned)[-1] = raw;

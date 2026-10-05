@@ -43,6 +43,11 @@ pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
 pub const ScopedBitSet = @import("ScopedBitSet.zig");
 pub const RekeyingHashMap = @import("RekeyingHashMap.zig").RekeyingHashMap;
+/// Loop-nesting forest of a reducible directed graph.
+pub const LoopForest = @import("LoopForest.zig");
+
+/// Any/all evaluation over nested groups of leaves on explicit stacks.
+pub const AnyAll = @import("any_all.zig");
 
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
@@ -153,8 +158,10 @@ test "collections tests" {
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
+    std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));
     std.testing.refAllDecls(@import("IndexedStack.zig"));
     std.testing.refAllDecls(@import("ScopedBitSet.zig"));
     std.testing.refAllDecls(@import("RekeyingHashMap.zig"));
+    std.testing.refAllDecls(@import("LoopForest.zig"));
 }

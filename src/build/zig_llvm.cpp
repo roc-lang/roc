@@ -305,50 +305,34 @@ ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref) {
     module_pm.run(llvm_module, module_am);
 }
 
-ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
-    char **error_message, const ZigLLVMEmitOptions *options)
+static bool openEmitFile(const char *filename, std::unique_ptr<raw_fd_ostream> &dest, char **error_message) {
+    if (!filename) return false;
+    std::error_code EC;
+    dest.reset(new(std::nothrow) raw_fd_ostream(filename, EC, sys::fs::OF_None));
+    if (EC) {
+        *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
+        return true;
+    }
+    return false;
+}
+
+// Runs the optimization and code generation pipeline, writing the object (or
+// LTO bitcode) to `dest_bin` when it is non-null. The assembly and bitcode
+// outputs named in `options` are written to their files.
+static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
+    char **error_message, const ZigLLVMEmitOptions *options, raw_pwrite_stream *dest_bin,
+    const char *time_trace_name)
 {
     TimePassesIsEnabled = options->time_report_out != nullptr;
 
-    raw_fd_ostream *dest_asm_ptr = nullptr;
-    raw_fd_ostream *dest_bin_ptr = nullptr;
-    raw_fd_ostream *dest_bitcode_ptr = nullptr;
-
-    if (options->asm_filename) {
-        std::error_code EC;
-        dest_asm_ptr = new(std::nothrow) raw_fd_ostream(options->asm_filename, EC, sys::fs::OF_None);
-        if (EC) {
-            *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
-            return true;
-        }
-    }
-    if (options->bin_filename) {
-        std::error_code EC;
-        dest_bin_ptr = new(std::nothrow) raw_fd_ostream(options->bin_filename, EC, sys::fs::OF_None);
-        if (EC) {
-            *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
-            return true;
-        }
-    }
-    if (options->bitcode_filename) {
-        std::error_code EC;
-        dest_bitcode_ptr = new(std::nothrow) raw_fd_ostream(options->bitcode_filename, EC, sys::fs::OF_None);
-        if (EC) {
-            *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
-            return true;
-        }
-    }
-
-    std::unique_ptr<raw_fd_ostream> dest_asm(dest_asm_ptr),
-                                    dest_bin(dest_bin_ptr),
-                                    dest_bitcode(dest_bitcode_ptr);
-
+    std::unique_ptr<raw_fd_ostream> dest_asm, dest_bitcode;
+    if (openEmitFile(options->asm_filename, dest_asm, error_message)) return true;
+    if (openEmitFile(options->bitcode_filename, dest_bitcode, error_message)) return true;
 
     auto PID = sys::Process::getProcessId();
     std::string ProcName = "zig-";
     ProcName += std::to_string(PID);
-    TimeTracerRAII TimeTracer(ProcName,
-                              options->bin_filename? options->bin_filename : options->asm_filename);
+    TimeTracerRAII TimeTracer(ProcName, time_trace_name);
 
     TargetMachine &target_machine = *reinterpret_cast<TargetMachine*>(targ_machine_ref);
 
@@ -552,6 +536,39 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
         *options->time_report_out = c_str;
     }
     return false;
+}
+
+ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
+    char **error_message, const ZigLLVMEmitOptions *options)
+{
+    std::unique_ptr<raw_fd_ostream> dest_bin;
+    if (openEmitFile(options->bin_filename, dest_bin, error_message)) return true;
+    return emitWithBinStream(targ_machine_ref, module_ref, error_message, options, dest_bin.get(),
+        options->bin_filename ? options->bin_filename : options->asm_filename);
+}
+
+ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitObjectToMemory(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
+    char **error_message, const ZigLLVMEmitOptions *options, char **out_bytes, size_t *out_len)
+{
+    SmallVector<char, 0> object_buf;
+    raw_svector_ostream dest_bin(object_buf);
+    if (emitWithBinStream(targ_machine_ref, module_ref, error_message, options, &dest_bin, "<memory>")) {
+        return true;
+    }
+
+    char *bytes = (char *)malloc(object_buf.size() > 0 ? object_buf.size() : 1);
+    if (bytes == nullptr) {
+        *error_message = strdup("out of memory copying the emitted object");
+        return true;
+    }
+    memcpy(bytes, object_buf.data(), object_buf.size());
+    *out_bytes = bytes;
+    *out_len = object_buf.size();
+    return false;
+}
+
+ZIG_EXTERN_C void ZigLLVMFreeEmittedObject(char *bytes) {
+    free(bytes);
 }
 
 void ZigLLVMSetOptBisectLimit(LLVMContextRef context_ref, int limit) {

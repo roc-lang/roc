@@ -102,11 +102,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 248)
-			(e-lookup-local
-				(p-assign (ident "print_msg!")))
-			(e-string
-				(e-literal (string "Hello, world!")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~

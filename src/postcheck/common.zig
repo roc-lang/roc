@@ -72,6 +72,16 @@ pub const CheckedModules = struct {
 /// the same `lowering_modules` table and the same ids into it.
 pub const LoweringModuleId = LIR.LoweringModuleId;
 
+/// How the program's app fills its platform's requirements: the app module
+/// whose values fill them, and the relation key naming that filling. Which
+/// app procedure a platform requirement resolves to is not determined by the
+/// platform's source or types, so a procedure whose code reaches one digests
+/// the relation into its identity (`Lifted.Program.fnSourceDigest`).
+pub const PlatformRequirementFilling = struct {
+    app_module: [32]u8,
+    relation: [32]u8,
+};
+
 /// The source literal a `literal_rejected` expression reports; see
 /// `LIR.LiteralRejectionSite`.
 pub const LiteralRejectionSite = LIR.LiteralRejectionSite;
@@ -340,12 +350,18 @@ test "test metadata uses explicit union request positions across equal root orde
 
 /// What the object cache knows about a specialization it can serve: the
 /// content identity of its compiled procedure and the ownership signature
-/// ARC solved for it, which the program that links the entry adopts as fixed.
+/// and uniqueness facts ARC solved for it, which the program that links the
+/// entry adopts as fixed.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
+    rc_read_only_params: u64,
+    rc_ret_unique: bool,
+    rc_ret_unique_fields: u64,
+    /// Each entry a `LIR.RcRetCondition`, borrowed from the cache.
+    rc_ret_conditions: []const u32,
 };
 
 /// The object cache's answer for a specialization key, asked when Monotype

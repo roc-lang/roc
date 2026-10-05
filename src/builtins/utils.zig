@@ -149,7 +149,7 @@ pub const TestEnv = struct {
         return self.allocation_map.count();
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Allocate memory using the testing allocator with comptime alignment
@@ -206,7 +206,7 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) *anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Look up the old allocation
@@ -256,7 +256,7 @@ pub const TestEnv = struct {
     fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
         const message = bytes[0..len];
         debugPrint("Roc crashed: {s}\n", .{message});
-        unreachable;
+        @trap();
     }
 };
 
@@ -348,11 +348,9 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                 DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
             }
             roc_ops.crash("Use-after-free: incref on already-freed memory");
-            return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
             roc_ops.crash("Invalid incref: incrementing non-positive refcount");
-            return;
         }
     }
 
@@ -372,7 +370,6 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                             DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
                         }
                         roc_ops.crash("Use-after-free: incref on already-freed memory");
-                        return;
                     }
                     unreachable;
                 }
@@ -509,7 +506,6 @@ pub fn decrefDataPtr(
     if (comptime builtin.mode == .Debug) {
         if (unmasked_ptr % @alignOf(isize) != 0) {
             roc_ops.crash("decrefDataPtr: unmasked pointer is not aligned");
-            return;
         }
     }
 
@@ -566,7 +562,6 @@ pub fn increfDataPtr(
     if (comptime builtin.mode == .Debug) {
         if (rc_addr % @alignOf(isize) != 0) {
             roc_ops.crash("increfDataPtr: refcount pointer is not aligned");
-            return;
         }
     }
 
@@ -708,14 +703,12 @@ inline fn decref_ptr_to_refcount(
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
             }
             roc_ops.crash("Use-after-free: decref on already-freed memory");
-            return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
             }
             roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
-            return;
         }
     }
 
@@ -807,56 +800,16 @@ pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
         const rc = rc_ptr[0];
         if (rc == POISON_VALUE) {
             roc_ops.crash("assertValidRefcount: Use-after-free detected");
-            return;
         }
         if (rc <= 0 and !rcConstant(rc)) {
             roc_ops.crash("assertValidRefcount: Invalid refcount (underflow or corruption)");
-            return;
         }
     }
 }
 
-// We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
-// Here is [their growth strategy](https://github.com/facebook/folly/blob/3e0525988fd444201b19b76b390a5927c15cb697/folly/FBVector.h#L1128) for push_back:
-//
-// (1) initial size
-//     Instead of growing to size 1 from empty, fbvector allocates at least
-//     64 bytes. You may still use reserve to reserve a lesser amount of
-//     memory.
-// (2) 1.5x
-//     For medium-sized vectors, the growth strategy is 1.5x. See the docs
-//     for details.
-//     This does not apply to very small or very large fbvectors. This is a
-//     heuristic.
-//
-// In our case, we exposed allocate and reallocate, which will use a smart growth strategy.
-// We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
-
-/// Calculates the new capacity for a growing list, based on the old capacity, requested length, and element width.
-///
-/// Should only be called when growing a collection.
-///
-/// `requested_length` should always be greater than old_capacity.
-pub inline fn calculateCapacity(
-    old_capacity: usize,
-    requested_length: usize,
-    element_width: usize,
-) usize {
-    // TODO: Deal with the fact we allocate an extra u64 for refcount.
-    // This may lead to allocating page size + 8 bytes.
-    // That could mean allocating an entire page for 8 bytes of data which isn't great.
-
-    if (requested_length != old_capacity + 1) {
-        // The user is explicitly requesting n elements.
-        // Trust the user and just reserve that amount.
-        return requested_length;
-    }
-
-    if (element_width == 0) {
-        return requested_length;
-    }
-    return @max(geometricGrowth(old_capacity, element_width), requested_length);
-}
+// Growth roughly follows [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md):
+// an empty collection grows to at least 64 bytes, medium-sized ones grow by
+// 1.5x, and very small or very large ones double.
 
 /// The next capacity step in the geometric growth progression. Appends that
 /// outgrow the current capacity reserve at least this much so a run of them
@@ -903,7 +856,7 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
-    const new_bytes = @as([*]u8, @ptrCast(roc_ops.tryAlloc(length, alignment)));
+    const new_bytes = @as([*]u8, @ptrCast(roc_ops.allocRaw(length, alignment)));
 
     const data_ptr = new_bytes + extra_bytes;
 
@@ -951,7 +904,7 @@ pub fn unsafeReallocate(
     // Use the same alignment calculation as allocateWithRefcount
     const allocation_alignment = @max(ptr_width, element_alignment);
 
-    const reallocated = roc_ops.tryRealloc(old_allocation, new_width, allocation_alignment);
+    const reallocated = roc_ops.realloc(old_allocation, new_width, allocation_alignment);
 
     const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
     if (comptime builtin.os.tag != .freestanding) {
@@ -1362,25 +1315,8 @@ test "TestEnv allocation tracking" {
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
 
     // Test deallocation
-    ops.roc_dealloc(ops, allocated.?, 8);
+    ops.roc_dealloc(ops, allocated, 8);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "calculateCapacity with various inputs" {
-    // Test zero capacity
-    try std.testing.expectEqual(@as(usize, 0), calculateCapacity(0, 0, 1));
-
-    // Test basic growth
-    try std.testing.expectEqual(@as(usize, 6), calculateCapacity(4, 6, 1));
-
-    // Test with larger element sizes
-    try std.testing.expectEqual(@as(usize, 20), calculateCapacity(16, 20, 1));
-
-    // Test that it rounds up appropriately
-    try std.testing.expectEqual(@as(usize, 10), calculateCapacity(8, 10, 1));
-
-    // Test growth logic when requesting exactly old_capacity + 1
-    try std.testing.expectEqual(@as(usize, 8), calculateCapacity(4, 5, 1));
 }
 
 test "allocateWithRefcount basic functionality" {

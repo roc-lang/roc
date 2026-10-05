@@ -1309,3 +1309,31 @@ test "bidi source rejection and omitted diagnostics survive the parser boundary"
     var report = try ast.tokenizeDiagnosticToReport(ast.tokenize_diagnostics.items[0], gpa, "Probe.roc");
     defer report.deinit();
 }
+
+test "issue 4140: assignment recovery belongs only to record syntax" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, mistakes: usize, is_record: bool }{
+        .{ .source = "r = { x = 1, y: 2 }", .mistakes = 1, .is_record = true },
+        .{ .source = "r = { ..old, x = 1 }", .mistakes = 1, .is_record = true },
+        .{ .source = "r = { x: 1, y = 2 }", .mistakes = 1, .is_record = true },
+        .{ .source = "r = { x = 1, y = 2 }", .mistakes = 2, .is_record = true },
+        .{ .source = "r = { x = call(1, 2) }", .mistakes = 0, .is_record = false },
+        .{ .source = "r = { x = |a, b| a + b }", .mistakes = 0, .is_record = false },
+        .{ .source = "r = { x = 1\nx }", .mistakes = 0, .is_record = false },
+    };
+    for (cases) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+        const ast = try file(gpa, &env);
+        defer ast.deinit();
+        try std.testing.expectEqual(case.mistakes, ast.parse_diagnostics.items.len);
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            try std.testing.expectEqual(AST.Diagnostic.Tag.record_field_assignment, diagnostic.tag);
+            const region = ast.tokenizedRegionToRegion(diagnostic.region);
+            try std.testing.expectEqualStrings("=", case.source[region.start.offset..region.end.offset]);
+        }
+        const stmt = ast.store.getStatement(ast.store.statementSlice(ast.store.getFile().statements)[0]);
+        const body = ast.store.getExpr(stmt.decl.body);
+        try std.testing.expectEqual(case.is_record, body == .record);
+    }
+}

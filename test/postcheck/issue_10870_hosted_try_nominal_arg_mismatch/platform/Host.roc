@@ -1,4 +1,4 @@
-import OsStr exposing [OsStr]
+import OsStr
 
 # Hosted declarations. `var!` hands the app a nominal type, and both functions
 # return `Try` at a closed error row, so `?` on either one widens through a

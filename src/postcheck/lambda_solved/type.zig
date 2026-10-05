@@ -106,6 +106,11 @@ pub const Content = union(enum) {
     erased: struct {
         source_fn_ty: names.TypeDigest,
         members: Span = .empty(),
+        /// The function type this callable was erased from. Its argument and
+        /// result types are the erased ABI: every member entry is specialized
+        /// at it, and every erased call converts to and from it. Null for an
+        /// erased requirement Monotype imported as a bare digest.
+        abi_fn: ?TypeVarId = null,
     },
     zst,
     /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet
@@ -156,6 +161,9 @@ pub const Store = struct {
     captures: std.ArrayList(Capture),
     fn_members: std.ArrayList(FnMember),
     declared_fields: std.ArrayList(DeclaredField),
+    /// Advances on every write that can change a variable's meaning, so a
+    /// result derived from the store can tell whether it is still current.
+    mutation_epoch: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -191,6 +199,7 @@ pub const Store = struct {
     }
 
     pub fn set(self: *Store, id: TypeVarId, content: Content) void {
+        self.mutation_epoch +%= 1;
         if (content == .link and self.owned_named_backings.items[@intFromEnum(id)]) {
             const target = self.root(content.link);
             self.owned_named_backings.items[@intFromEnum(target)] = true;
@@ -234,6 +243,10 @@ pub const Store = struct {
         }
 
         const root_id = current;
+        // Path compression preserves every variable's meaning, so it is not a
+        // mutation observers must see.
+        const epoch = self.mutation_epoch;
+        defer self.mutation_epoch = epoch;
         current = id;
         while (current != root_id) {
             const content = self.get(current);

@@ -481,22 +481,46 @@ test "import validation - exposed nested type associated function resolves via s
     }
 }
 
-test "import validation - exposing a type module's main type by name is not a redeclaration" {
-    // A type module's main type is auto-exposed, so naming it explicitly in
-    // `exposing` (as platform code does with `import NodeB exposing [NodeB]`)
-    // binds the same external type to the same name twice. That is idempotent,
-    // not a DUPLICATE DEFINITION.
+test "issue 11270: exposed names are members and cannot replace the imported type" {
+    const shape_source = "Shape :: {}.{ area : U64 -> U64\narea = |x| x\n}";
+    for ([_][]const u8{ "Shape", "pf.Shape" }) |import_name| {
+        const cases = [_]struct { clause: []const u8, expected: ?std.meta.Tag(@import("../Diagnostic.zig").Diagnostic) }{
+            .{ .clause = " exposing [Shape]", .expected = .redundant_expose_main_type },
+            .{ .clause = " exposing [Shape, area]", .expected = .redundant_expose_main_type },
+            .{ .clause = " exposing [area]", .expected = null },
+            .{ .clause = " exposing [Shape.*]", .expected = null },
+            .{ .clause = " exposing [Shape as Inner]", .expected = .type_not_exposed },
+            .{ .clause = " as S exposing [area]", .expected = null },
+        };
+        for (cases) |case| {
+            const source = try std.fmt.allocPrint(testing.allocator, "import {s}{s}\nmain = 1\n", .{ import_name, case.clause });
+            defer testing.allocator.free(source);
+            try checkMainNameExposure(shape_source, source, import_name, case.expected);
+        }
+    }
+    const nested_source = "Shape :: {}.{ Shape : {}\narea : U64 -> U64\narea = |x| x\n}";
+    try checkMainNameExposure(nested_source, "import Shape exposing [Shape]\nmain = 1", "Shape", .type_redeclared);
+    try checkMainNameExposure(nested_source, "import Shape exposing [Shape as Inner]\nmain : Inner\nmain = {}", "Shape", null);
+    try checkMainNameExposure("module [Shape]\nShape : {}", "import Shape exposing [Shape]\nmain : Shape\nmain = {}", "Shape", null);
+}
+
+const MainNameExposureTestError = std.mem.Allocator.Error || error{
+    UnexpectedDiagnostic,
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
+fn checkMainNameExposure(
+    shape_source: []const u8,
+    importer_source: []const u8,
+    import_name: []const u8,
+    expected: ?std.meta.Tag(@import("../Diagnostic.zig").Diagnostic),
+) MainNameExposureTestError!void {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
     const Ident = base.Ident;
 
-    const shape_source =
-        \\Shape :: {}.{
-        \\    area : U64 -> U64
-        \\    area = |x| x
-        \\}
-    ;
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const shape_env = try allocator.create(ModuleEnv);
@@ -516,11 +540,6 @@ test "import validation - exposing a type module's main type by name is not a re
     defer shape_can.deinit();
     try shape_can.canonicalizeFile();
 
-    const importer_source =
-        \\import Shape exposing [Shape]
-        \\
-        \\main = Shape.area(5)
-    ;
     const importer_env = try allocator.create(ModuleEnv);
     importer_env.* = try ModuleEnv.init(allocator, importer_source);
     defer {
@@ -533,7 +552,7 @@ test "import validation - exposing a type module's main type by name is not a re
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
-    const shape_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("Shape"));
+    const shape_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text(import_name));
     const shape_qualified_ident = try shape_env.common.insertIdent(shape_env.gpa, Ident.for_text("Shape"));
     try module_envs.put(shape_module_ident, .{ .env = shape_env, .qualified_type_ident = shape_qualified_ident, .import_identity = .{ .module = shape_module_ident } });
 
@@ -553,17 +572,26 @@ test "import validation - exposing a type module's main type by name is not a re
 
     const diagnostics = try importer_env.getDiagnostics();
     defer allocator.free(diagnostics);
+    var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        if (diagnostic == .shadowing_warning) {
-            const d = diagnostic.shadowing_warning;
-            std.debug.print("unexpected redeclaration of {s}\n", .{importer_env.getIdent(d.ident)});
-            return error.UnexpectedRedeclaration;
-        } else if (diagnostic == .qualified_ident_does_not_exist) {
-            const d = diagnostic.qualified_ident_does_not_exist;
-            std.debug.print("unexpected unresolved qualified ident: {s}\n", .{importer_env.getIdent(d.ident)});
-            return error.UnexpectedUnresolvedIdent;
+        if (expected) |tag| {
+            if (std.meta.activeTag(diagnostic) == tag) {
+                count += 1;
+                if (tag == .redundant_expose_main_type or tag == .type_redeclared) {
+                    var report = try importer_env.diagnosticToReport(diagnostic, allocator, "Importer.roc");
+                    defer report.deinit();
+                    try testing.expect(report.severity == .runtime_error);
+                }
+                const region = diagnostic.toRegion();
+                try testing.expectEqualStrings(if (tag == .type_not_exposed) "Shape as Inner" else "Shape", importer_source[region.start.offset..region.end.offset]);
+                continue;
+            }
         }
+        if (diagnostic == .module_header_deprecated) continue;
+        std.debug.print("unexpected diagnostic: {s}\n", .{@tagName(diagnostic)});
+        return error.UnexpectedDiagnostic;
     }
+    try testing.expectEqual(@as(usize, if (expected != null) 1 else 0), count);
 }
 
 test "aliased package-qualified import resolves before the import statement" {
@@ -881,7 +909,7 @@ test "imported type-module tag rejects alias target" {
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const imported_source =
-        \\Other : [Tag]
+        \\Other := {}.{ Alias : [Tag] }
     ;
 
     var imported_env = try ModuleEnv.init(allocator, imported_source);
@@ -896,9 +924,9 @@ test "imported type-module tag rejects alias target" {
     try imported_can.canonicalizeFile();
 
     const source =
-        \\import Other exposing [Other]
+        \\import Other exposing [Alias]
         \\
-        \\bad = Other.Tag
+        \\bad = Alias.Tag
     ;
 
     var env = try ModuleEnv.init(allocator, source);
@@ -938,7 +966,7 @@ test "imported type-module tag rejects alias target" {
         if (diagnostic == .type_alias_but_needed_nominal) {
             const d = diagnostic.type_alias_but_needed_nominal;
             const name = env.getIdent(d.name);
-            if (std.mem.eql(u8, name, "Other")) {
+            if (std.mem.eql(u8, name, "Alias")) {
                 found_alias_error = true;
             }
         }

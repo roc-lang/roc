@@ -714,6 +714,7 @@ pub const Diagnostic = struct {
         SingleQuoteUnclosed,
         BidiControlInSource,
         TooManyTokenizationErrors,
+        Utf8ByteOrderMark,
     };
 };
 
@@ -1413,6 +1414,12 @@ pub const Tokenizer = struct {
     pub fn tokenize(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        // Diagnose the file encoding marker separately from ordinary syntax.
+        if (std.mem.startsWith(u8, self.cursor.buf, "\xEF\xBB\xBF")) {
+            self.cursor.pushMessage(.Utf8ByteOrderMark, 0, 3);
+            self.cursor.pos = 3;
+        }
 
         // Scan the complete source before recovery or a bounded diagnostic buffer
         // can hide a control. Escaped literal values are not source characters.
@@ -3479,4 +3486,27 @@ test "carriage return classification survives zero diagnostic capacity" {
         try std.testing.expectEqual(i == 2, output.source_rejected);
         try std.testing.expectEqual(@as(usize, 0), output.messages.len);
     }
+}
+
+test "leading UTF-8 BOM has a specific diagnostic" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ "\xEF\xBB\xBF", "\xEF\xBB\xBF\nmain! = |_args| {\n    echo!(\"ok\")\n    Ok({})\n}\n" }) |source| {
+        var diagnostics: [10]Diagnostic = undefined;
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        try std.testing.expectEqual(@as(usize, 1), tokenizer.cursor.message_count);
+        try std.testing.expectEqual(Diagnostic.Tag.Utf8ByteOrderMark, diagnostics[0].tag);
+        try std.testing.expectEqual(base.Region.from_raw_offsets(0, 3), diagnostics[0].region);
+        for (tokenizer.output.tokens.items(.tag)) |tag| {
+            try std.testing.expect(tag != .MalformedUnicodeIdent);
+        }
+    }
+}
+
+test "UTF-8 BOM codepoint in a string is literal content" {
+    try testTokenization(std.testing.allocator, "\"\xEF\xBB\xBF\"", &.{ .StringStart, .StringPart, .StringEnd });
 }

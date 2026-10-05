@@ -1,6 +1,6 @@
-import CallableSignature exposing [CallableSignature]
-import RecordRepr exposing [RecordRepr]
-import TagUnionRepr exposing [TagUnionRepr]
+import CallableSignature
+import RecordRepr
+import TagUnionRepr
 
 ## Structured, language-agnostic representation of a Roc type for glue code generation.
 ## All naming uses Roc conventions with "Roc" prefix to avoid conflicts with builtin type names.

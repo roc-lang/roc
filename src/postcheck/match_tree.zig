@@ -96,12 +96,12 @@ pub const Step = union(enum) {
     /// The scrutinee itself.
     root,
     /// Record field or tuple item by committed index.
-    field: u16,
+    field: u32,
     /// Tag payload `index` of `variant`; `single` payloads extract through
     /// `tag_payload_struct` rather than `tag_payload`.
-    tag_payload: struct { variant: u16, index: u16, single: bool },
+    tag_payload: struct { variant: u32, index: u32, single: bool },
     /// Callable payload of `variant` (Lambda Mono only).
-    callable_payload: struct { variant: u16 },
+    callable_payload: struct { variant: u32 },
     /// List element at a fixed index from the front.
     list_elem_front: u32,
     /// List element at `n` from the back (index `len - n` at runtime).
@@ -112,7 +112,7 @@ pub const Step = union(enum) {
     /// The backing value of a nominal pattern (PR 9849 boundary rules).
     nominal_backing,
     /// Capture `index` of a string-set arm with the given shape key.
-    str_capture: struct { shape: u32, index: u16 },
+    str_capture: struct { shape: u32, index: u32 },
 };
 
 /// Interned occurrence id; `root` is always index 0.
@@ -134,16 +134,16 @@ pub const OccId = enum(u32) {
 /// patKind(pat) PatKind
 /// bindLocal(pat) LocalId                                  // .bind
 /// asInfo(pat) struct { pattern: PatId, local: LocalId }   // .as_pattern
-/// recordDestructCount(pat) u16
+/// recordDestructCount(pat) u32
 /// recordDestruct(pat, ty, i) LowerError!SubPat            // committed field index
-/// tupleItemCount(pat) u16
+/// tupleItemCount(pat) u32
 /// tupleItem(pat, ty, i) LowerError!SubPat
 /// nominalInner(pat, ty) LowerError!SubPat                 // backing pattern + type
-/// tagVariant(pat, ty) u16
-/// tagPayloadCount(pat) u16
+/// tagVariant(pat, ty) u32
+/// tagPayloadCount(pat) u32
 /// tagPayload(pat, ty, i) LowerError!SubPat
 /// tagVariantCount(ty) ?u32                                // null: unknown, never exhaustive
-/// callableVariant(pat, ty) u16                            // Lambda Mono only
+/// callableVariant(pat, ty) u32                            // Lambda Mono only
 /// callablePayload(pat, ty) LowerError!?SubPat
 /// callableVariantCount(ty) ?u32
 /// listView(pat) ListPatView
@@ -154,11 +154,11 @@ pub const OccId = enum(u32) {
 /// const LowerError               // error set including OutOfMemory
 /// intSwitchValue(pat, ty) ?u64 // null: integer literal must use eq_chain
 /// strLitIsSetArm() bool        // whether str_lit unifies with str_pattern arms
-/// strCaptureCount(pat) u16     // .str_pattern capture steps
+/// strCaptureCount(pat) u32     // .str_pattern capture steps
 /// strCapturePat(pat, i) ?PatId
 /// ```
 ///
-/// where `SubPat = struct { index: u16, ty: TypeId, pat: PatId }` (field
+/// where `SubPat = struct { index: u32, ty: TypeId, pat: PatId }` (field
 /// names, not the concrete type, are what matters).
 pub fn Compiler(comptime Ctx: type) type {
     return struct {
@@ -353,7 +353,8 @@ pub fn Compiler(comptime Ctx: type) type {
             /// Irrefutable structure (binds, wildcards, as-patterns, records,
             /// tuples, nominal wrappers, and rest-only list patterns)
             /// disappears here; only patterns that require a test remain as
-            /// columns.
+            /// columns. Patterns expand in preorder on an explicit stack, so
+            /// pattern nesting never becomes native call depth.
             fn normalize(
                 self: *Builder,
                 occ: OccId,
@@ -362,55 +363,66 @@ pub fn Compiler(comptime Ctx: type) type {
                 cols: *std.ArrayList(Col),
                 binds: *std.ArrayList(Bind),
             ) Ctx.LowerError!void {
-                self.stats.pattern_nodes += 1;
-                switch (self.ctx.patKind(pat)) {
-                    .bind => try binds.append(self.arena, .{ .occ = occ, .ty = ty, .local = self.ctx.bindLocal(pat) }),
-                    .wildcard => {},
-                    .as_pattern => {
-                        const info = self.ctx.asInfo(pat);
-                        try binds.append(self.arena, .{ .occ = occ, .ty = ty, .local = info.local });
-                        try self.normalize(occ, ty, info.pattern, cols, binds);
-                    },
-                    .record => {
-                        const count = self.ctx.recordDestructCount(pat);
-                        var i: u16 = 0;
-                        while (i < count) : (i += 1) {
-                            const sub = try self.ctx.recordDestruct(pat, ty, i);
-                            const child = try self.intern(occ, .{ .field = sub.index }, sub.ty);
-                            try self.normalize(child, sub.ty, sub.pat, cols, binds);
-                        }
-                    },
-                    .tuple => {
-                        const count = self.ctx.tupleItemCount(pat);
-                        var i: u16 = 0;
-                        while (i < count) : (i += 1) {
-                            const sub = try self.ctx.tupleItem(pat, ty, i);
-                            const child = try self.intern(occ, .{ .field = sub.index }, sub.ty);
-                            try self.normalize(child, sub.ty, sub.pat, cols, binds);
-                        }
-                    },
-                    .nominal => {
-                        const sub = try self.ctx.nominalInner(pat, ty);
-                        const child = try self.intern(occ, .nominal_backing, sub.ty);
-                        try self.normalize(child, sub.ty, sub.pat, cols, binds);
-                    },
-                    .list => {
-                        const view = self.ctx.listView(pat);
-                        if (view.fixed_count == 0) {
-                            if (view.rest) |rest| {
-                                // `[..]` / `[.. as r]`: irrefutable; the rest
-                                // IS the whole scrutinee list.
-                                if (rest.pattern) |rest_pat| {
-                                    try self.normalize(occ, ty, rest_pat, cols, binds);
+                const Pending = union(enum) {
+                    pattern: struct { occ: OccId, ty: TypeId, pat: PatId },
+                    /// The next field of a record or tuple pattern, whose
+                    /// occurrence is interned when it is reached.
+                    field: struct { occ: OccId, ty: TypeId, pat: PatId, index: u32 },
+                };
+                var pending: std.ArrayList(Pending) = .empty;
+                try pending.append(self.arena, .{ .pattern = .{ .occ = occ, .ty = ty, .pat = pat } });
+                while (pending.pop()) |item| {
+                    const current = switch (item) {
+                        .pattern => |current| current,
+                        .field => |field| {
+                            const is_record = self.ctx.patKind(field.pat) == .record;
+                            const count = if (is_record) self.ctx.recordDestructCount(field.pat) else self.ctx.tupleItemCount(field.pat);
+                            if (field.index == count) continue;
+                            const sub = if (is_record)
+                                try self.ctx.recordDestruct(field.pat, field.ty, field.index)
+                            else
+                                try self.ctx.tupleItem(field.pat, field.ty, field.index);
+                            const child = try self.intern(field.occ, .{ .field = sub.index }, sub.ty);
+                            var next = field;
+                            next.index += 1;
+                            try pending.append(self.arena, .{ .field = next });
+                            try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = sub.ty, .pat = sub.pat } });
+                            continue;
+                        },
+                    };
+                    self.stats.pattern_nodes += 1;
+                    switch (self.ctx.patKind(current.pat)) {
+                        .bind => try binds.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .local = self.ctx.bindLocal(current.pat) }),
+                        .wildcard => {},
+                        .as_pattern => {
+                            const info = self.ctx.asInfo(current.pat);
+                            try binds.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .local = info.local });
+                            try pending.append(self.arena, .{ .pattern = .{ .occ = current.occ, .ty = current.ty, .pat = info.pattern } });
+                        },
+                        .record, .tuple => try pending.append(self.arena, .{ .field = .{ .occ = current.occ, .ty = current.ty, .pat = current.pat, .index = 0 } }),
+                        .nominal => {
+                            const sub = try self.ctx.nominalInner(current.pat, current.ty);
+                            const child = try self.intern(current.occ, .nominal_backing, sub.ty);
+                            try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = sub.ty, .pat = sub.pat } });
+                        },
+                        .list => {
+                            const view = self.ctx.listView(current.pat);
+                            if (view.fixed_count == 0) {
+                                if (view.rest) |rest| {
+                                    // `[..]` / `[.. as r]`: irrefutable; the rest
+                                    // IS the whole scrutinee list.
+                                    if (rest.pattern) |rest_pat| {
+                                        try pending.append(self.arena, .{ .pattern = .{ .occ = current.occ, .ty = current.ty, .pat = rest_pat } });
+                                    }
+                                    continue;
                                 }
-                                return;
                             }
-                        }
-                        try cols.append(self.arena, .{ .occ = occ, .ty = ty, .pat = pat });
-                    },
-                    .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => {
-                        try cols.append(self.arena, .{ .occ = occ, .ty = ty, .pat = pat });
-                    },
+                            try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
+                        },
+                        .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => {
+                            try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
+                        },
+                    }
                 }
             }
 
@@ -518,7 +530,7 @@ pub fn Compiler(comptime Ctx: type) type {
                         const variant = self.ctx.tagVariant(col.pat, col.ty);
                         const count = self.ctx.tagPayloadCount(col.pat);
                         const single = count == 1;
-                        var i: u16 = 0;
+                        var i: u32 = 0;
                         while (i < count) : (i += 1) {
                             const sub = try self.ctx.tagPayload(col.pat, col.ty, i);
                             const child = try self.intern(col.occ, .{ .tag_payload = .{
@@ -562,7 +574,7 @@ pub fn Compiler(comptime Ctx: type) type {
 
                 if (self.ctx.patKind(col.pat) == .str_pattern) {
                     const count = self.ctx.strCaptureCount(col.pat);
-                    var i: u16 = 0;
+                    var i: u32 = 0;
                     while (i < count) : (i += 1) {
                         if (self.ctx.strCapturePat(col.pat, i)) |capture| {
                             const child = try self.intern(col.occ, .{ .str_capture = .{ .shape = shape, .index = i } }, col.ty);
@@ -685,18 +697,140 @@ pub fn Compiler(comptime Ctx: type) type {
 
             /// Compile `rows` against `miss`. Rows are consumed front-to-back
             /// as segments (leaf/guard runs, test groups, single rest-row
-            /// length checks); segments compose bottom-up so the recursion
-            /// depth tracks pattern nesting, not branch count.
+            /// length checks); segments compose bottom-up. A test's arms and a
+            /// rest row's remainder compile as nested row sets; every
+            /// unfinished row set, test, and rest row waits in a
+            /// `CompileFrame` on an explicit stack, so pattern nesting never
+            /// becomes native call depth.
             fn compile(self: *Builder, rows: []const Row, miss: Miss) Ctx.LowerError!*Tree {
-                const segments = try self.partition(rows);
-                var acc: ?*Tree = null;
-                var i = segments.len;
-                while (i > 0) {
-                    i -= 1;
-                    const seg = segments[i];
-                    acc = try self.buildSegment(seg.kind, rows[seg.start..seg.end], acc, miss);
+                var frames: std.ArrayList(CompileFrame) = .empty;
+                try frames.append(self.arena, try self.rowsFrame(rows, miss));
+                var input: ?*Tree = null;
+                while (true) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    const step = try self.stepCompile(frame, input);
+                    input = null;
+                    switch (step) {
+                        .push => |child| try frames.append(self.arena, child),
+                        .ret => |tree| {
+                            _ = frames.pop();
+                            if (frames.items.len == 0) return tree;
+                            input = tree;
+                        },
+                    }
                 }
-                return acc orelse try self.missTree(miss);
+            }
+
+            const CompileFrame = union(enum) {
+                /// Segments of one row set, built last to first.
+                rows: struct {
+                    rows: []const Row,
+                    miss: Miss,
+                    segments: []const Segment,
+                    /// Segments not yet built, counting down.
+                    remaining: usize,
+                    acc: ?*Tree = null,
+                },
+                /// A rest-pattern list row whose remainder compiles as a
+                /// nested row set.
+                rest_row: struct {
+                    col: Col,
+                    min_len: u32,
+                    /// The specialized row, compiled against `then_miss`.
+                    spec: []const Row,
+                    then_miss: Miss,
+                    /// The exit the remainder continues at when rows follow.
+                    exit_id: ?u32,
+                    miss: Miss,
+                },
+                /// A test group whose arms compile as nested row sets.
+                group: struct {
+                    occ: OccId,
+                    occ_ty: TypeId,
+                    kind: TestKind,
+                    arms: []Arm,
+                    arm_rows: []std.ArrayList(Row),
+                    exit_id: u32,
+                    below: ?*Tree,
+                    miss: Miss,
+                    index: usize = 0,
+                },
+            };
+
+            const CompileStep = union(enum) {
+                push: CompileFrame,
+                ret: *Tree,
+            };
+
+            fn rowsFrame(self: *Builder, rows: []const Row, miss: Miss) Ctx.LowerError!CompileFrame {
+                const segments = try self.partition(rows);
+                return .{ .rows = .{ .rows = rows, .miss = miss, .segments = segments, .remaining = segments.len } };
+            }
+
+            fn stepCompile(self: *Builder, frame: *CompileFrame, input: ?*Tree) Ctx.LowerError!CompileStep {
+                switch (frame.*) {
+                    .rows => |*task| {
+                        if (input) |built| task.acc = built;
+                        while (task.remaining > 0) {
+                            task.remaining -= 1;
+                            const seg = task.segments[task.remaining];
+                            const seg_rows = task.rows[seg.start..seg.end];
+                            switch (seg.kind) {
+                                .leaves => task.acc = try self.buildLeaves(seg_rows, task.acc, task.miss),
+                                .rest_row => |info| return .{ .push = try self.restRowFrame(info.occ, seg_rows[0], task.acc, task.miss) },
+                                .group => |info| return .{ .push = try self.groupFrame(info.occ, info.ty, info.kind, seg_rows, task.acc, task.miss) },
+                            }
+                        }
+                        return .{ .ret = task.acc orelse try self.missTree(task.miss) };
+                    },
+                    .rest_row => |task| {
+                        const then = input orelse return .{ .push = try self.rowsFrame(task.spec, task.then_miss) };
+                        const otherwise = try self.missTree(if (task.exit_id) |exit_id| .{ .exit_ = exit_id } else task.miss);
+                        const node = try self.mk(.{ .len_check = .{
+                            .occ = task.col.occ,
+                            .ty = task.col.ty,
+                            .min_len = task.min_len,
+                            .then = then,
+                            .otherwise = otherwise,
+                        } });
+                        const exit_id = task.exit_id orelse return .{ .ret = node };
+                        return .{ .ret = try self.wrapExit(exit_id, node) };
+                    },
+                    .group => |*task| {
+                        if (input) |subtree| {
+                            task.arms[task.index].subtree = subtree;
+                            task.index += 1;
+                        }
+                        const have_below = task.below != null;
+                        if (task.index < task.arms.len) {
+                            return .{ .push = try self.rowsFrame(task.arm_rows[task.index].items, if (have_below) .{ .exit_ = task.exit_id } else task.miss) };
+                        }
+                        const arms = task.arms;
+                        const exhaustive = switch (task.kind) {
+                            .tag => if (self.ctx.tagVariantCount(task.occ_ty)) |count| arms.len == count else false,
+                            .callable => if (self.ctx.callableVariantCount(task.occ_ty)) |count| arms.len == count else false,
+                            .int_switch, .eq_chain, .str_set, .list_len => false,
+                        };
+
+                        const default: ?*Tree = if (exhaustive) null else if (have_below)
+                            try self.missTree(.{ .exit_ = task.exit_id })
+                        else
+                            try self.missTree(task.miss);
+
+                        const node = try self.mk(.{ .test_ = .{
+                            .occ = task.occ,
+                            .ty = task.occ_ty,
+                            .kind = task.kind,
+                            .arms = arms,
+                            .default = default,
+                            .exhaustive = exhaustive,
+                        } });
+
+                        if (!have_below) return .{ .ret = node };
+                        self.exits.items[task.exit_id].cont = task.below.?;
+                        return .{ .ret = try self.wrapExit(task.exit_id, node) };
+                    },
+                }
             }
 
             const Segment = struct {
@@ -752,75 +886,58 @@ pub fn Compiler(comptime Ctx: type) type {
                 return segments.items;
             }
 
-            /// Build one segment. `below` is the already-compiled tree for
-            /// the rows after this segment (null when this segment is last),
-            /// and `miss` is where matching continues when the whole
+            /// Build a run of leaf and guard rows in front of `below`, the
+            /// already-compiled tree for the rows after them (null when they
+            /// are last); `miss` is where matching continues when the whole
             /// remainder is exhausted.
-            fn buildSegment(self: *Builder, seg_kind: SegmentKind, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
-                switch (seg_kind) {
-                    .leaves => {
-                        var acc = below;
-                        var i = rows.len;
-                        while (i > 0) {
-                            i -= 1;
-                            const row = rows[i];
-                            if (row.guard) |guard| {
-                                const otherwise = acc orelse try self.missTree(miss);
-                                acc = try self.mk(.{ .guard = .{
-                                    .binds = row.binds,
-                                    .bindings = row.bindings,
-                                    .guard = guard,
-                                    .body = row.body,
-                                    .branch_index = row.branch_index,
-                                    .otherwise = otherwise,
-                                } });
-                            } else {
-                                acc = try self.mk(.{ .leaf = .{
-                                    .binds = row.binds,
-                                    .bindings = row.bindings,
-                                    .body = row.body,
-                                    .branch_index = row.branch_index,
-                                } });
-                            }
-                        }
-                        return acc.?;
-                    },
-                    .rest_row => |info| return try self.buildRestRow(info.occ, rows[0], below, miss),
-                    .group => |info| return try self.buildGroup(info.occ, info.ty, info.kind, rows, below, miss),
+            fn buildLeaves(self: *Builder, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
+                var acc = below;
+                var i = rows.len;
+                while (i > 0) {
+                    i -= 1;
+                    const row = rows[i];
+                    if (row.guard) |guard| {
+                        const otherwise = acc orelse try self.missTree(miss);
+                        acc = try self.mk(.{ .guard = .{
+                            .binds = row.binds,
+                            .bindings = row.bindings,
+                            .guard = guard,
+                            .body = row.body,
+                            .branch_index = row.branch_index,
+                            .otherwise = otherwise,
+                        } });
+                    } else {
+                        acc = try self.mk(.{ .leaf = .{
+                            .binds = row.binds,
+                            .bindings = row.bindings,
+                            .body = row.body,
+                            .branch_index = row.branch_index,
+                        } });
+                    }
                 }
+                return acc.?;
             }
 
-            fn buildRestRow(self: *Builder, occ: OccId, row: Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
+            fn restRowFrame(self: *Builder, occ: OccId, row: Row, below: ?*Tree, miss: Miss) Ctx.LowerError!CompileFrame {
                 const col = colAt(row, occ).?;
                 const view = self.ctx.listView(col.pat);
                 std.debug.assert(view.rest != null);
 
+                var exit_id: ?u32 = null;
                 if (below) |cont| {
-                    const exit_id: u32 = @intCast(self.exits.items.len);
+                    exit_id = @intCast(self.exits.items.len);
                     try self.exits.append(self.arena, .{ .cont = cont, .refs = 0 });
-                    const spec = try self.specListRestRow(row, col);
-                    const then = try self.compile(&.{spec}, .{ .exit_ = exit_id });
-                    const otherwise = try self.missTree(.{ .exit_ = exit_id });
-                    const node = try self.mk(.{ .len_check = .{
-                        .occ = col.occ,
-                        .ty = col.ty,
-                        .min_len = view.fixed_count,
-                        .then = then,
-                        .otherwise = otherwise,
-                    } });
-                    return try self.wrapExit(exit_id, node);
                 }
-
-                const spec = try self.specListRestRow(row, col);
-                const then = try self.compile(&.{spec}, miss);
-                const otherwise = try self.missTree(miss);
-                return try self.mk(.{ .len_check = .{
-                    .occ = col.occ,
-                    .ty = col.ty,
+                const spec = try self.arena.alloc(Row, 1);
+                spec[0] = try self.specListRestRow(row, col);
+                return .{ .rest_row = .{
+                    .col = col,
                     .min_len = view.fixed_count,
-                    .then = then,
-                    .otherwise = otherwise,
-                } });
+                    .spec = spec,
+                    .then_miss = if (exit_id) |id| .{ .exit_ = id } else miss,
+                    .exit_id = exit_id,
+                    .miss = miss,
+                } };
             }
 
             /// Wrap `inner` in an exit join when its continuation is
@@ -851,7 +968,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return try self.mk(.{ .exit_join = .{ .id = exit_id, .cont = state.cont, .inner = inner } });
             }
 
-            fn buildGroup(self: *Builder, occ: OccId, occ_ty: TypeId, kind: TestKind, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
+            fn groupFrame(self: *Builder, occ: OccId, occ_ty: TypeId, kind: TestKind, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!CompileFrame {
                 // Arm collection preserves first-appearance order; rows with
                 // the same constructor identity merge into one arm in source
                 // order, which is what makes guard fallthrough inside an arm
@@ -883,42 +1000,27 @@ pub fn Compiler(comptime Ctx: type) type {
 
                 const exit_id: u32 = @intCast(self.exits.items.len);
                 try self.exits.append(self.arena, .{ .cont = undefined, .refs = 0 });
-                const have_below = below != null;
-                const arm_miss: Miss = if (have_below) .{ .exit_ = exit_id } else miss;
 
+                // Arm subtrees fill in as each arm's rows compile.
                 const arms = try self.arena.alloc(Arm, arm_keys.items.len);
-                for (arms, arm_keys.items, arm_examples.items, arm_rows.items) |*arm, key, example, rows_list| {
+                for (arms, arm_keys.items, arm_examples.items) |*arm, key, example| {
                     arm.* = .{
                         .key = key,
                         .example = example.pat,
                         .example_ty = example.ty,
-                        .subtree = try self.compile(rows_list.items, arm_miss),
+                        .subtree = undefined,
                     };
                 }
-
-                const exhaustive = switch (kind) {
-                    .tag => if (self.ctx.tagVariantCount(occ_ty)) |count| arms.len == count else false,
-                    .callable => if (self.ctx.callableVariantCount(occ_ty)) |count| arms.len == count else false,
-                    .int_switch, .eq_chain, .str_set, .list_len => false,
-                };
-
-                const default: ?*Tree = if (exhaustive) null else if (have_below)
-                    try self.missTree(.{ .exit_ = exit_id })
-                else
-                    try self.missTree(miss);
-
-                const node = try self.mk(.{ .test_ = .{
+                return .{ .group = .{
                     .occ = occ,
-                    .ty = occ_ty,
+                    .occ_ty = occ_ty,
                     .kind = kind,
                     .arms = arms,
-                    .default = default,
-                    .exhaustive = exhaustive,
-                } });
-
-                if (!have_below) return node;
-                self.exits.items[exit_id].cont = below.?;
-                return try self.wrapExit(exit_id, node);
+                    .arm_rows = arm_rows.items,
+                    .exit_id = exit_id,
+                    .below = below,
+                    .miss = miss,
+                } };
             }
         };
 
@@ -974,7 +1076,7 @@ pub fn Compiler(comptime Ctx: type) type {
         /// addExitJoin(id, body, remainder) CFStmtId      // empty params
         /// failTerminal() CFStmtId                        // per checker verdict
         /// lirLocalForOcc(step: Step, ty, parent: ?LirLocal) LirLocal
-        /// lirLocalU16/lirLocalU64() LirLocal
+        /// lirLocalDiscriminant/lirLocalU64() LirLocal
         /// isZstLirLocal(LirLocal) bool
         /// readDiscriminant(target, source, next) CFStmtId
         /// readField(target, ty, source, index, next) CFStmtId
@@ -992,12 +1094,13 @@ pub fn Compiler(comptime Ctx: type) type {
         /// buildStrArm(pat, capture_locals, on_match) StrArm
         /// strMatchSet(source, arms, on_miss) CFStmtId
         /// bindPatternLocal(local, ty, source, next) CFStmtId
-        /// lowerBindings(bindings, next) CFStmtId          // before guard/body
-        /// lowerBody(body, next) CFStmtId                 // into the result local
         /// guardTemp(guard) LirLocal
-        /// lowerGuard(cond, guard, next) CFStmtId
         /// boolSwitch(cond, then, els) CFStmtId
         /// ```
+        ///
+        /// Branch bodies, binding statements, and guards are lowered by the
+        /// host: emission suspends with an `EmitRequest` for each, and the
+        /// host resumes it with the lowered statement.
         const CtxStmt = Ctx.CFStmtId;
         const CtxLocal = Ctx.LirLocal;
 
@@ -1023,7 +1126,9 @@ pub fn Compiler(comptime Ctx: type) type {
 
         const Extraction = struct {
             occ: OccId,
-            what: enum { value, disc, len },
+            what: What,
+
+            const What = enum { value, disc, len };
         };
 
         /// The scope that must be entered before an occurrence's value can be
@@ -1033,14 +1138,31 @@ pub fn Compiler(comptime Ctx: type) type {
             /// derived reads).
             top,
             /// Inside the arm for `variant` of the tag test on `occ`.
-            tag_arm: struct { occ: OccId, variant: u16 },
-            callable_arm: struct { occ: OccId, variant: u16 },
+            tag_arm: struct { occ: OccId, variant: u32 },
+            callable_arm: struct { occ: OccId, variant: u32 },
             /// Inside a list-length scope on `occ` that guarantees at least
             /// `min_len` elements.
             list_len: struct { occ: OccId, min_len: u64 },
             /// Inside the string-set arm with `shape` on `occ`. Capture
             /// locals come from the arm itself, not from extraction.
             str_arm: struct { occ: OccId, shape: u32 },
+        };
+
+        /// Work the emitter hands back to the host lowerer. Each request is
+        /// answered by passing the lowered statement to `Emitter.advance`.
+        pub const EmitRequest = union(enum) {
+            /// Lower a branch body into the host's result local, then `next`.
+            body: struct { body: ExprId, next: CtxStmt },
+            /// Lower a branch's binding statements, then `next`.
+            bindings: struct { bindings: BindingSpan, next: CtxStmt },
+            /// Lower a guard expression into `cond`, then `next`.
+            guard: struct { cond: CtxLocal, guard: ExprId, next: CtxStmt },
+        };
+
+        pub const EmitProgress = union(enum) {
+            request: EmitRequest,
+            /// The match's entry statement.
+            done: CtxStmt,
         };
 
         pub const Emitter = struct {
@@ -1050,31 +1172,129 @@ pub fn Compiler(comptime Ctx: type) type {
             tree_stats: Stats,
             done: Ctx.JoinPointId,
             uses: collections.DenseMap(OccId, OccUse),
+            /// Every used occurrence in interning order, grouped by the test
+            /// whose scope establishes it.
+            scoped_uses: std.AutoHashMapUnmanaged(ScopeOwner, std.ArrayList(ScopedUse)) = .empty,
             exit_joins: std.AutoHashMap(u32, Ctx.JoinPointId),
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.
             delegated_stmts: usize,
+            /// Statement count when the outstanding request was issued.
+            request_start: ?usize = null,
+            /// Statement count when emission began.
+            machinery_start: usize = 0,
+            /// Suspended emission steps. Tree depth never becomes native
+            /// call depth, and a request suspends the whole emission until
+            /// the host answers it.
+            frames: std.ArrayList(EmitFrame) = .empty,
 
+            /// The locals of the scope being emitted. Emission is depth-first,
+            /// so a nested scope records each local it adds or changes and
+            /// restores them all before its enclosing scope continues.
             const Env = struct {
                 locals: std.AutoHashMapUnmanaged(OccId, EmitLocals),
+                undo: std.ArrayList(EnvUndo) = .empty,
 
-                fn clone(self: *const Env, arena: std.mem.Allocator) error{OutOfMemory}!Env {
-                    return .{ .locals = try self.locals.clone(arena) };
+                const EnvUndo = struct { occ: OccId, previous: ?EmitLocals };
+
+                /// The locals of `occ` for writing, recording what to restore.
+                fn localsFor(self: *Env, arena: std.mem.Allocator, occ: OccId) error{OutOfMemory}!*EmitLocals {
+                    const gop = try self.locals.getOrPut(arena, occ);
+                    try self.undo.append(arena, .{ .occ = occ, .previous = if (gop.found_existing) gop.value_ptr.* else null });
+                    if (!gop.found_existing) gop.value_ptr.* = .{};
+                    return gop.value_ptr;
+                }
+
+                fn enterNested(self: *const Env) usize {
+                    return self.undo.items.len;
+                }
+
+                fn leaveNested(self: *Env, mark: usize) void {
+                    while (self.undo.items.len > mark) {
+                        const entry = self.undo.pop().?;
+                        if (entry.previous) |previous| {
+                            self.locals.putAssumeCapacity(entry.occ, previous);
+                        } else {
+                            _ = self.locals.remove(entry.occ);
+                        }
+                    }
                 }
             };
 
-            /// Emit `tree` and return the entry statement. `scrutinee` is the
-            /// already-allocated local the caller evaluates the scrutinee
-            /// into; bodies are lowered into the caller's result local and
-            /// jump to `done`.
-            pub fn emitMatch(
+            const EmitFrame = struct {
+                cursor: u8 = 0,
+                index: usize = 0,
+                task: EmitTask,
+            };
+
+            const EmitTask = union(enum) {
+                root: struct { env: *Env, extractions: []const Extraction },
+                tree: TreeTask,
+                arm: ArmTask,
+                /// A discriminant, integer, or length switch.
+                switch_: SwitchTask,
+                eq_chain: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
+                str_set: StrSetTask,
+            };
+
+            const TreeTask = struct {
+                tree: *const Tree,
+                env: *Env,
+                body: CtxStmt = undefined,
+                cond: CtxLocal = undefined,
+                then_mark: usize = undefined,
+                extractions: []const Extraction = &.{},
+                jp: Ctx.JoinPointId = undefined,
+            };
+
+            const ArmTask = struct {
+                t: TestNode,
+                arm: Arm,
+                env: *Env,
+                arm_mark: usize = undefined,
+                extractions: []const Extraction = &.{},
+            };
+
+            const SwitchTask = struct {
+                t: TestNode,
+                env: *Env,
+                selector: enum { disc, value, len },
+                values: []u64 = &.{},
+                bodies: []CtxStmt = &.{},
+            };
+
+            const StrSetTask = struct {
+                t: TestNode,
+                env: *Env,
+                arms: []Ctx.StrArm = &.{},
+                arm_mark: usize = undefined,
+                capture_locals: []const ?CtxLocal = &.{},
+                extractions: []const Extraction = &.{},
+            };
+
+            const EmitStep = union(enum) {
+                /// Suspend this frame until `task` returns.
+                call: EmitTask,
+                /// Replace this frame by `task`.
+                tail: EmitTask,
+                /// Suspend emission until the host answers.
+                request: EmitRequest,
+                ret: CtxStmt,
+            };
+
+            /// Begin emitting `result`. `scrutinee` is the already-allocated
+            /// local the caller evaluates the scrutinee into; bodies are
+            /// lowered into the caller's result local and jump to `done`.
+            /// Drive the emission with `advance`.
+            pub fn begin(
                 arena: std.mem.Allocator,
                 ctx: Ctx,
                 result: BuildResult,
                 scrutinee: CtxLocal,
                 done: Ctx.JoinPointId,
-            ) Ctx.LowerError!CtxStmt {
-                var self = Emitter{
+            ) Ctx.LowerError!*Emitter {
+                const self = try arena.create(Emitter);
+                self.* = .{
                     .arena = arena,
                     .ctx = ctx,
                     .occs = result.occs,
@@ -1085,64 +1305,125 @@ pub fn Compiler(comptime Ctx: type) type {
                     .delegated_stmts = 0,
                 };
                 try self.collectUses(result.tree);
+                try self.indexScopedUses();
 
-                var env = Env{ .locals = .empty };
+                const env = try arena.create(Env);
+                env.* = .{ .locals = .empty };
                 try env.locals.put(arena, .root, .{ .value = scrutinee });
 
-                const before = self.ctx.stmtCount();
+                self.machinery_start = self.ctx.stmtCount();
                 var entry_extractions: std.ArrayList(Extraction) = .empty;
-                try self.enterScope(&env, .top, &entry_extractions);
-                var body = try self.emitTree(result.tree, &env);
-                body = try self.emitExtractions(entry_extractions.items, &env, body);
+                try self.enterScope(env, .top, &entry_extractions);
+                try self.frames.append(arena, .{ .task = .{ .root = .{ .env = env, .extractions = entry_extractions.items } } });
+                try self.frames.append(arena, .{ .task = .{ .tree = .{ .tree = result.tree, .env = env } } });
+                return self;
+            }
 
-                if (std.debug.runtime_safety) {
-                    const machinery = (self.ctx.stmtCount() - before) - self.delegated_stmts;
-                    const bound = @as(usize, LINT_MULT) * @as(usize, result.stats.pattern_nodes) + LINT_BASE;
-                    if (machinery > bound) {
-                        std.debug.panic(
-                            "match_tree emitted {d} machinery statements for {d} pattern nodes (bound {d}); the linear-size guarantee regressed",
-                            .{ machinery, result.stats.pattern_nodes, bound },
-                        );
+            /// Continue emission. `input` answers the outstanding request,
+            /// and is null on the first call.
+            pub fn advance(self: *Emitter, input: ?CtxStmt) Ctx.LowerError!EmitProgress {
+                if (self.request_start) |start| {
+                    self.delegated_stmts += self.ctx.stmtCount() - start;
+                    self.request_start = null;
+                }
+                var carried = input;
+                while (true) {
+                    const frame = &self.frames.items[self.frames.items.len - 1];
+                    switch (try self.stepFrame(frame, carried)) {
+                        .call => |task| {
+                            try self.frames.append(self.arena, .{ .task = task });
+                            carried = null;
+                        },
+                        .tail => |task| {
+                            frame.* = .{ .task = task };
+                            carried = null;
+                        },
+                        .request => |request| {
+                            self.request_start = self.ctx.stmtCount();
+                            return .{ .request = request };
+                        },
+                        .ret => |stmt| {
+                            _ = self.frames.pop();
+                            if (self.frames.items.len == 0) return .{ .done = stmt };
+                            carried = stmt;
+                        },
                     }
                 }
-                return body;
+            }
+
+            fn stepFrame(self: *Emitter, frame: *EmitFrame, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                return switch (frame.task) {
+                    .root => |*task| {
+                        var body = input.?;
+                        body = try self.emitExtractions(task.extractions, task.env, body);
+                        if (std.debug.runtime_safety) {
+                            const machinery = (self.ctx.stmtCount() - self.machinery_start) - self.delegated_stmts;
+                            const bound = @as(usize, LINT_MULT) * @as(usize, self.tree_stats.pattern_nodes) + LINT_BASE;
+                            if (machinery > bound) {
+                                std.debug.panic(
+                                    "match_tree emitted {d} machinery statements for {d} pattern nodes (bound {d}); the linear-size guarantee regressed",
+                                    .{ machinery, self.tree_stats.pattern_nodes, bound },
+                                );
+                            }
+                        }
+                        return .{ .ret = body };
+                    },
+                    .tree => |*task| self.stepTree(frame, task, input),
+                    .arm => |*task| self.stepArm(frame, task, input),
+                    .switch_ => |*task| self.stepSwitch(frame, task, input),
+                    .eq_chain => |*task| self.stepEqChain(frame, task, input),
+                    .str_set => |*task| self.stepStrSet(frame, task, input),
+                };
             }
 
             fn occEntry(self: *const Emitter, occ: OccId) OccEntry {
                 return self.occs[occ.idx()];
             }
 
-            fn markUse(self: *Emitter, occ: OccId, comptime what: enum { value, disc, len }) error{OutOfMemory}!void {
-                // A derived or extracted read needs its parent's value.
-                const gop = try self.uses.getOrPut(occ);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                switch (what) {
-                    .value => gop.value_ptr.value = true,
-                    .disc => gop.value_ptr.disc = true,
-                    .len => gop.value_ptr.len = true,
-                }
-                const entry = self.occEntry(occ);
-                if (occ != .root) try self.markUse(entry.parent, .value);
-                // Back-relative and rest reads need the parent list's length.
-                switch (entry.step) {
-                    .list_elem_back, .list_rest => try self.markUse(entry.parent, .len),
-                    .root,
-                    .field,
-                    .tag_payload,
-                    .callable_payload,
-                    .list_elem_front,
-                    .nominal_backing,
-                    .str_capture,
-                    => {},
+            /// A derived or extracted read needs its parent's value, and
+            /// back-relative and rest reads need the parent list's length.
+            /// Every mark is a monotone flag, so the marks are propagated
+            /// from a worklist in any order.
+            fn markUse(self: *Emitter, occ: OccId, what: Extraction.What) error{OutOfMemory}!void {
+                const Mark = struct { occ: OccId, what: Extraction.What };
+                var marks: std.ArrayList(Mark) = .empty;
+                try marks.append(self.arena, .{ .occ = occ, .what = what });
+                while (marks.pop()) |mark| {
+                    const gop = try self.uses.getOrPut(mark.occ);
+                    const already_marked = gop.found_existing;
+                    if (!gop.found_existing) gop.value_ptr.* = .{};
+                    switch (mark.what) {
+                        .value => gop.value_ptr.value = true,
+                        .disc => gop.value_ptr.disc = true,
+                        .len => gop.value_ptr.len = true,
+                    }
+                    // An occurrence's marks propagate the same way whichever
+                    // flag is set, so its first mark already propagated them.
+                    if (already_marked or mark.occ == .root) continue;
+                    const entry = self.occEntry(mark.occ);
+                    try marks.append(self.arena, .{ .occ = entry.parent, .what = .value });
+                    switch (entry.step) {
+                        .list_elem_back, .list_rest => try marks.append(self.arena, .{ .occ = entry.parent, .what = .len }),
+                        .root,
+                        .field,
+                        .tag_payload,
+                        .callable_payload,
+                        .list_elem_front,
+                        .nominal_backing,
+                        .str_capture,
+                        => {},
+                    }
                 }
             }
 
-            fn collectUses(self: *Emitter, tree: *const Tree) error{OutOfMemory}!void {
-                switch (tree.*) {
+            fn collectUses(self: *Emitter, root: *const Tree) error{OutOfMemory}!void {
+                var trees: std.ArrayList(*const Tree) = .empty;
+                try trees.append(self.arena, root);
+                while (trees.pop()) |tree| switch (tree.*) {
                     .leaf => |leaf| for (leaf.binds) |bind| try self.markUse(bind.occ, .value),
                     .guard => |g| {
                         for (g.binds) |bind| try self.markUse(bind.occ, .value);
-                        try self.collectUses(g.otherwise);
+                        try trees.append(self.arena, g.otherwise);
                     },
                     .test_ => |t| {
                         switch (t.kind) {
@@ -1154,20 +1435,20 @@ pub fn Compiler(comptime Ctx: type) type {
                             .int_switch, .eq_chain, .str_set => try self.markUse(t.occ, .value),
                             .list_len => try self.markUse(t.occ, .len),
                         }
-                        for (t.arms) |arm| try self.collectUses(arm.subtree);
-                        if (t.default) |d| try self.collectUses(d);
+                        for (t.arms) |arm| try trees.append(self.arena, arm.subtree);
+                        if (t.default) |d| try trees.append(self.arena, d);
                     },
                     .len_check => |lc| {
                         try self.markUse(lc.occ, .len);
-                        try self.collectUses(lc.then);
-                        try self.collectUses(lc.otherwise);
+                        try trees.append(self.arena, lc.then);
+                        try trees.append(self.arena, lc.otherwise);
                     },
                     .exit_join => |j| {
-                        try self.collectUses(j.cont);
-                        try self.collectUses(j.inner);
+                        try trees.append(self.arena, j.cont);
+                        try trees.append(self.arena, j.inner);
                     },
                     .exit_, .fail => {},
-                }
+                };
             }
 
             /// The scope in which `occ`'s value becomes extractable.
@@ -1209,12 +1490,43 @@ pub fn Compiler(comptime Ctx: type) type {
                 scope: Scope,
                 extractions: *std.ArrayList(Extraction),
             ) Ctx.LowerError!void {
-                // Deterministic iteration: walk occs in interning order.
+                // Deterministic iteration: occs in interning order.
+                const scoped = self.scoped_uses.get(scopeOwner(scope)) orelse return;
+                for (scoped.items) |entry| {
+                    if (!scopeSatisfies(scope, entry.needed)) continue;
+                    try self.materialize(env, entry.occ, self.uses.get(entry.occ).?, extractions);
+                }
+            }
+
+            /// The test a scope belongs to: only a scope of the same test can
+            /// satisfy another.
+            const ScopeOwner = struct {
+                kind: std.meta.Tag(Scope),
+                occ: OccId,
+            };
+
+            const ScopedUse = struct { occ: OccId, needed: Scope };
+
+            fn scopeOwner(scope: Scope) ScopeOwner {
+                return switch (scope) {
+                    .top => .{ .kind = .top, .occ = .root },
+                    .tag_arm => |s| .{ .kind = .tag_arm, .occ = s.occ },
+                    .callable_arm => |s| .{ .kind = .callable_arm, .occ = s.occ },
+                    .list_len => |s| .{ .kind = .list_len, .occ = s.occ },
+                    .str_arm => |s| .{ .kind = .str_arm, .occ = s.occ },
+                };
+            }
+
+            /// Group the used occurrences by the test establishing them, once
+            /// every use is marked.
+            fn indexScopedUses(self: *Emitter) error{OutOfMemory}!void {
                 for (0..self.occs.len) |i| {
                     const occ: OccId = @enumFromInt(i);
-                    const use = self.uses.get(occ) orelse continue;
-                    if (!scopeSatisfies(scope, self.establishingScope(occ))) continue;
-                    try self.materialize(env, occ, use, extractions);
+                    if (!self.uses.contains(occ)) continue;
+                    const needed = self.establishingScope(occ);
+                    const gop = try self.scoped_uses.getOrPut(self.arena, scopeOwner(needed));
+                    if (!gop.found_existing) gop.value_ptr.* = .empty;
+                    try gop.value_ptr.append(self.arena, .{ .occ = occ, .needed = needed });
                 }
             }
 
@@ -1225,11 +1537,10 @@ pub fn Compiler(comptime Ctx: type) type {
                 use: OccUse,
                 extractions: *std.ArrayList(Extraction),
             ) Ctx.LowerError!void {
-                const gop = try env.locals.getOrPut(self.arena, occ);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
+                const locals = try env.localsFor(self.arena, occ);
                 const entry = self.occEntry(occ);
 
-                if ((use.value or use.disc or use.len) and gop.value_ptr.value == null) {
+                if ((use.value or use.disc or use.len) and locals.value == null) {
                     // String captures get their locals from the enclosing
                     // string arm, which registers them before entering the
                     // subtree; reaching here for one is a compiler bug.
@@ -1238,15 +1549,15 @@ pub fn Compiler(comptime Ctx: type) type {
                     // so the parent's value local is already available for
                     // layout-derived allocations (callable payloads).
                     const parent = if (occ == .root) null else env.locals.get(entry.parent).?.value;
-                    gop.value_ptr.value = try self.ctx.lirLocalForOcc(entry.step, entry.ty, parent);
+                    locals.value = try self.ctx.lirLocalForOcc(entry.step, entry.ty, parent);
                     try extractions.append(self.arena, .{ .occ = occ, .what = .value });
                 }
-                if (use.disc and gop.value_ptr.disc == null) {
-                    gop.value_ptr.disc = try self.ctx.lirLocalU16();
+                if (use.disc and locals.disc == null) {
+                    locals.disc = try self.ctx.lirLocalDiscriminant();
                     try extractions.append(self.arena, .{ .occ = occ, .what = .disc });
                 }
-                if (use.len and gop.value_ptr.len == null) {
-                    gop.value_ptr.len = try self.ctx.lirLocalU64();
+                if (use.len and locals.len == null) {
+                    locals.len = try self.ctx.lirLocalU64();
                     try extractions.append(self.arena, .{ .occ = occ, .what = .len });
                 }
             }
@@ -1319,176 +1630,226 @@ pub fn Compiler(comptime Ctx: type) type {
                 return current;
             }
 
-            fn lowerBodyCounted(self: *Emitter, body: ExprId, next: CtxStmt) Ctx.LowerError!CtxStmt {
-                const before = self.ctx.stmtCount();
-                const result = try self.ctx.lowerBody(body, next);
-                self.delegated_stmts += self.ctx.stmtCount() - before;
-                return result;
-            }
-
-            fn lowerBindingsCounted(self: *Emitter, bindings: BindingSpan, next: CtxStmt) Ctx.LowerError!CtxStmt {
-                const before = self.ctx.stmtCount();
-                const result = try self.ctx.lowerBindings(bindings, next);
-                self.delegated_stmts += self.ctx.stmtCount() - before;
-                return result;
-            }
-
-            fn emitTree(self: *Emitter, tree: *const Tree, env: *Env) Ctx.LowerError!CtxStmt {
-                switch (tree.*) {
-                    .leaf => |leaf| {
-                        var body = try self.lowerBodyCounted(leaf.body, try self.ctx.joinJump(self.done));
-                        body = try self.lowerBindingsCounted(leaf.bindings, body);
-                        return try self.emitBinds(leaf.binds, env, body);
+            fn stepTree(self: *Emitter, frame: *EmitFrame, task: *TreeTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const env = task.env;
+                switch (task.tree.*) {
+                    .leaf => |leaf| switch (frame.cursor) {
+                        0 => {
+                            frame.cursor = 1;
+                            return .{ .request = .{ .body = .{ .body = leaf.body, .next = try self.ctx.joinJump(self.done) } } };
+                        },
+                        1 => {
+                            frame.cursor = 2;
+                            return .{ .request = .{ .bindings = .{ .bindings = leaf.bindings, .next = input.? } } };
+                        },
+                        else => return .{ .ret = try self.emitBinds(leaf.binds, env, input.?) },
                     },
-                    .guard => |g| {
-                        const body = try self.lowerBodyCounted(g.body, try self.ctx.joinJump(self.done));
-                        const otherwise = try self.emitTree(g.otherwise, env);
-                        const cond = try self.ctx.guardTemp(g.guard);
-                        const guard_switch = try self.ctx.boolSwitch(cond, body, otherwise);
-                        const before = self.ctx.stmtCount();
-                        var guarded = try self.ctx.lowerGuard(cond, g.guard, guard_switch);
-                        self.delegated_stmts += self.ctx.stmtCount() - before;
-                        guarded = try self.lowerBindingsCounted(g.bindings, guarded);
-                        return try self.emitBinds(g.binds, env, guarded);
+                    .guard => |g| switch (frame.cursor) {
+                        0 => {
+                            frame.cursor = 1;
+                            return .{ .request = .{ .body = .{ .body = g.body, .next = try self.ctx.joinJump(self.done) } } };
+                        },
+                        1 => {
+                            task.body = input.?;
+                            frame.cursor = 2;
+                            return .{ .call = .{ .tree = .{ .tree = g.otherwise, .env = env } } };
+                        },
+                        2 => {
+                            const otherwise = input.?;
+                            const cond = try self.ctx.guardTemp(g.guard);
+                            const guard_switch = try self.ctx.boolSwitch(cond, task.body, otherwise);
+                            frame.cursor = 3;
+                            return .{ .request = .{ .guard = .{ .cond = cond, .guard = g.guard, .next = guard_switch } } };
+                        },
+                        3 => {
+                            frame.cursor = 4;
+                            return .{ .request = .{ .bindings = .{ .bindings = g.bindings, .next = input.? } } };
+                        },
+                        else => return .{ .ret = try self.emitBinds(g.binds, env, input.?) },
                     },
-                    .test_ => |t| return try self.emitTest(t, env),
-                    .len_check => |lc| {
-                        var then_env = try env.clone(self.arena);
-                        var extractions: std.ArrayList(Extraction) = .empty;
-                        try self.enterScope(&then_env, .{ .list_len = .{ .occ = lc.occ, .min_len = lc.min_len } }, &extractions);
-                        var then = try self.emitTree(lc.then, &then_env);
-                        then = try self.emitExtractions(extractions.items, &then_env, then);
-                        const otherwise = try self.emitTree(lc.otherwise, env);
-                        return try self.ctx.lenGteTest(self.lenLocal(env, lc.occ), lc.min_len, then, otherwise);
+                    .test_ => |t| return .{ .tail = switch (t.kind) {
+                        .tag, .callable => .{ .switch_ = .{ .t = t, .env = env, .selector = .disc } },
+                        .int_switch => .{ .switch_ = .{ .t = t, .env = env, .selector = .value } },
+                        .list_len => .{ .switch_ = .{ .t = t, .env = env, .selector = .len } },
+                        .eq_chain => .{ .eq_chain = .{ .t = t, .env = env } },
+                        .str_set => .{ .str_set = .{ .t = t, .env = env } },
+                    } },
+                    .len_check => |lc| switch (frame.cursor) {
+                        0 => {
+                            task.then_mark = env.enterNested();
+                            var extractions: std.ArrayList(Extraction) = .empty;
+                            try self.enterScope(env, .{ .list_len = .{ .occ = lc.occ, .min_len = lc.min_len } }, &extractions);
+                            task.extractions = extractions.items;
+                            frame.cursor = 1;
+                            return .{ .call = .{ .tree = .{ .tree = lc.then, .env = env } } };
+                        },
+                        1 => {
+                            task.body = try self.emitExtractions(task.extractions, env, input.?);
+                            env.leaveNested(task.then_mark);
+                            frame.cursor = 2;
+                            return .{ .call = .{ .tree = .{ .tree = lc.otherwise, .env = env } } };
+                        },
+                        else => return .{ .ret = try self.ctx.lenGteTest(self.lenLocal(env, lc.occ), lc.min_len, task.body, input.?) },
                     },
-                    .exit_join => |j| {
-                        const jp = self.ctx.freshJoinPointId();
-                        try self.exit_joins.put(j.id, jp);
-                        const cont = try self.emitTree(j.cont, env);
-                        const inner = try self.emitTree(j.inner, env);
-                        return try self.ctx.addExitJoin(jp, cont, inner);
+                    .exit_join => |j| switch (frame.cursor) {
+                        0 => {
+                            task.jp = self.ctx.freshJoinPointId();
+                            try self.exit_joins.put(j.id, task.jp);
+                            frame.cursor = 1;
+                            return .{ .call = .{ .tree = .{ .tree = j.cont, .env = env } } };
+                        },
+                        1 => {
+                            task.body = input.?;
+                            frame.cursor = 2;
+                            return .{ .call = .{ .tree = .{ .tree = j.inner, .env = env } } };
+                        },
+                        else => return .{ .ret = try self.ctx.addExitJoin(task.jp, task.body, input.?) },
                     },
-                    .exit_ => |id| return try self.ctx.joinJump(self.exit_joins.get(id).?),
-                    .fail => return try self.ctx.failTerminal(),
+                    .exit_ => |id| return .{ .ret = try self.ctx.joinJump(self.exit_joins.get(id).?) },
+                    .fail => return .{ .ret = try self.ctx.failTerminal() },
                 }
             }
 
-            fn emitTest(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                switch (t.kind) {
-                    .tag, .callable => return try self.emitDiscTest(t, env),
-                    .int_switch => return try self.emitIntSwitch(t, env),
-                    .eq_chain => return try self.emitEqChain(t, env),
-                    .str_set => return try self.emitStrSet(t, env),
-                    .list_len => return try self.emitLenSwitch(t, env),
+            fn stepArm(self: *Emitter, frame: *EmitFrame, task: *ArmTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                if (frame.cursor == 1) {
+                    const body = try self.emitExtractions(task.extractions, task.env, input.?);
+                    task.env.leaveNested(task.arm_mark);
+                    return .{ .ret = body };
                 }
-            }
-
-            fn emitArm(self: *Emitter, t: TestNode, arm: Arm, env: *Env) Ctx.LowerError!CtxStmt {
-                var arm_env = try env.clone(self.arena);
-                var extractions: std.ArrayList(Extraction) = .empty;
+                const t = task.t;
                 const scope: Scope = switch (t.kind) {
-                    .tag => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(arm.key) } },
-                    .callable => .{ .callable_arm = .{ .occ = t.occ, .variant = @intCast(arm.key) } },
-                    .list_len => .{ .list_len = .{ .occ = t.occ, .min_len = @truncate(arm.key) } },
+                    .tag => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
+                    .callable => .{ .callable_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
+                    .list_len => .{ .list_len = .{ .occ = t.occ, .min_len = @truncate(task.arm.key) } },
                     .int_switch, .eq_chain => {
                         // Literal arms impose no sub-structure; no new scope.
-                        return try self.emitTree(arm.subtree, env);
+                        return .{ .tail = .{ .tree = .{ .tree = task.arm.subtree, .env = task.env } } };
                     },
-                    .str_set => unreachable, // handled by emitStrSet
+                    .str_set => unreachable, // handled by the string-set step
                 };
-                try self.enterScope(&arm_env, scope, &extractions);
-                var body = try self.emitTree(arm.subtree, &arm_env);
-                body = try self.emitExtractions(extractions.items, &arm_env, body);
-                return body;
+                task.arm_mark = task.env.enterNested();
+                var extractions: std.ArrayList(Extraction) = .empty;
+                try self.enterScope(task.env, scope, &extractions);
+                task.extractions = extractions.items;
+                frame.cursor = 1;
+                return .{ .call = .{ .tree = .{ .tree = task.arm.subtree, .env = task.env } } };
             }
 
-            fn emitDiscTest(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                if (t.exhaustive and t.arms.len == 1) {
-                    // The union has exactly one variant and the sole arm
-                    // covers it: no dispatch, no discriminant read (a
-                    // zero-branch switch is also rejected by the dev
-                    // backend).
-                    return try self.emitArm(t, t.arms[0], env);
+            /// A discriminant, integer, or length switch: one body per arm,
+            /// then the default. An exhaustive discriminant test turns its
+            /// last arm into the default.
+            fn stepSwitch(self: *Emitter, frame: *EmitFrame, task: *SwitchTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                const exhaustive_disc = task.selector == .disc and t.exhaustive;
+                switch (frame.cursor) {
+                    0 => {
+                        if (task.selector == .disc) {
+                            if (t.exhaustive and t.arms.len == 1) {
+                                // The union has exactly one variant and the sole arm
+                                // covers it: no dispatch, no discriminant read (a
+                                // zero-branch switch is also rejected by the dev
+                                // backend).
+                                return .{ .tail = .{ .arm = .{ .t = t, .arm = t.arms[0], .env = task.env } } };
+                            }
+                            if (self.ctx.isZstLirLocal(self.valueLocal(task.env, t.occ))) {
+                                // A ZST scrutinee has exactly one possible variant; no
+                                // dispatch is needed (mirrors the chain's ZST fast path).
+                                std.debug.assert(t.arms.len == 1);
+                                return .{ .tail = .{ .arm = .{ .t = t, .arm = t.arms[0], .env = task.env } } };
+                            }
+                        }
+                        const arm_count = if (exhaustive_disc) t.arms.len - 1 else t.arms.len;
+                        task.values = try self.arena.alloc(u64, arm_count);
+                        task.bodies = try self.arena.alloc(CtxStmt, arm_count);
+                        frame.cursor = 1;
+                    },
+                    1 => {
+                        task.bodies[frame.index] = input.?;
+                        frame.index += 1;
+                    },
+                    else => {
+                        const selector = switch (task.selector) {
+                            .disc => self.discLocal(task.env, t.occ),
+                            .value => self.valueLocal(task.env, t.occ),
+                            .len => self.lenLocal(task.env, t.occ),
+                        };
+                        return .{ .ret = try self.ctx.switchStmt(selector, task.values, task.bodies, input.?) };
+                    },
                 }
-                const source = self.valueLocal(env, t.occ);
-                if (self.ctx.isZstLirLocal(source)) {
-                    // A ZST scrutinee has exactly one possible variant; no
-                    // dispatch is needed (mirrors the chain's ZST fast path).
-                    std.debug.assert(t.arms.len == 1);
-                    return try self.emitArm(t, t.arms[0], env);
+                if (frame.index < task.values.len) {
+                    const arm = t.arms[frame.index];
+                    task.values[frame.index] = switch (task.selector) {
+                        .disc => @intCast(arm.key),
+                        .value => self.ctx.intSwitchValue(arm.example, arm.example_ty).?,
+                        .len => @truncate(arm.key),
+                    };
+                    return .{ .call = .{ .arm = .{ .t = t, .arm = arm, .env = task.env } } };
                 }
-                const arm_count = if (t.exhaustive) t.arms.len - 1 else t.arms.len;
-                const values = try self.arena.alloc(u64, arm_count);
-                const bodies = try self.arena.alloc(CtxStmt, arm_count);
-                for (t.arms[0..arm_count], values, bodies) |arm, *value, *body| {
-                    value.* = @intCast(arm.key);
-                    body.* = try self.emitArm(t, arm, env);
-                }
-                const default = if (t.exhaustive)
-                    try self.emitArm(t, t.arms[t.arms.len - 1], env)
+                frame.cursor = 2;
+                return .{ .call = if (exhaustive_disc)
+                    .{ .arm = .{ .t = t, .arm = t.arms[t.arms.len - 1], .env = task.env } }
                 else
-                    try self.emitTree(t.default.?, env);
-                return try self.ctx.switchStmt(self.discLocal(env, t.occ), values, bodies, default);
+                    .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
             }
 
-            fn emitIntSwitch(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const values = try self.arena.alloc(u64, t.arms.len);
-                const bodies = try self.arena.alloc(CtxStmt, t.arms.len);
-                for (t.arms, values, bodies) |arm, *value, *body| {
-                    value.* = self.ctx.intSwitchValue(arm.example, arm.example_ty).?;
-                    body.* = try self.emitArm(t, arm, env);
+            fn stepEqChain(self: *Emitter, frame: *EmitFrame, task: anytype, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        task.source = self.valueLocal(task.env, t.occ);
+                        frame.index = t.arms.len;
+                        frame.cursor = 1;
+                        return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
+                    },
+                    1 => task.current = input.?,
+                    else => {
+                        const arm = t.arms[frame.index];
+                        task.current = try self.ctx.literalEqTest(task.source, arm.example_ty, arm.example, input.?, task.current);
+                    },
                 }
-                const default = try self.emitTree(t.default.?, env);
-                return try self.ctx.switchStmt(self.valueLocal(env, t.occ), values, bodies, default);
+                if (frame.index == 0) return .{ .ret = task.current };
+                frame.index -= 1;
+                frame.cursor = 2;
+                return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
             }
 
-            fn emitEqChain(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const source = self.valueLocal(env, t.occ);
-                var current = try self.emitTree(t.default.?, env);
-                var i = t.arms.len;
-                while (i > 0) {
-                    i -= 1;
-                    const arm = t.arms[i];
-                    const body = try self.emitArm(t, arm, env);
-                    current = try self.ctx.literalEqTest(source, arm.example_ty, arm.example, body, current);
+            fn stepStrSet(self: *Emitter, frame: *EmitFrame, task: *StrSetTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        task.arms = try self.arena.alloc(Ctx.StrArm, t.arms.len);
+                        frame.cursor = 1;
+                    },
+                    1 => {
+                        const arm = t.arms[frame.index];
+                        const body = try self.emitExtractions(task.extractions, task.env, input.?);
+                        task.env.leaveNested(task.arm_mark);
+                        task.arms[frame.index] = try self.ctx.buildStrArm(arm.example, task.capture_locals, body);
+                        frame.index += 1;
+                    },
+                    else => return .{ .ret = try self.ctx.strMatchSet(self.valueLocal(task.env, t.occ), task.arms, input.?) },
                 }
-                return current;
-            }
-
-            fn emitStrSet(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const arms = try self.arena.alloc(Ctx.StrArm, t.arms.len);
-                for (t.arms, arms) |arm, *out| {
-                    var arm_env = try env.clone(self.arena);
-                    const capture_locals = try self.ctx.strArmCaptureLocals(arm.example);
+                if (frame.index < t.arms.len) {
+                    const arm = t.arms[frame.index];
+                    task.arm_mark = task.env.enterNested();
+                    task.capture_locals = try self.ctx.strArmCaptureLocals(arm.example);
                     // Register capture locals under their occurrences before
                     // entering the subtree; only interned (used) captures
                     // matter.
                     const shape: u32 = @truncate(arm.key);
-                    for (capture_locals, 0..) |maybe_local, step_index| {
+                    for (task.capture_locals, 0..) |maybe_local, step_index| {
                         const local = maybe_local orelse continue;
                         if (self.lookupOcc(t.occ, .{ .str_capture = .{ .shape = shape, .index = @intCast(step_index) } })) |occ| {
-                            try arm_env.locals.put(self.arena, occ, .{ .value = local });
+                            (try task.env.localsFor(self.arena, occ)).* = .{ .value = local };
                         }
                     }
                     var extractions: std.ArrayList(Extraction) = .empty;
-                    try self.enterScope(&arm_env, .{ .str_arm = .{ .occ = t.occ, .shape = shape } }, &extractions);
-                    var body = try self.emitTree(arm.subtree, &arm_env);
-                    body = try self.emitExtractions(extractions.items, &arm_env, body);
-                    out.* = try self.ctx.buildStrArm(arm.example, capture_locals, body);
+                    try self.enterScope(task.env, .{ .str_arm = .{ .occ = t.occ, .shape = shape } }, &extractions);
+                    task.extractions = extractions.items;
+                    return .{ .call = .{ .tree = .{ .tree = arm.subtree, .env = task.env } } };
                 }
-                const on_miss = try self.emitTree(t.default.?, env);
-                return try self.ctx.strMatchSet(self.valueLocal(env, t.occ), arms, on_miss);
-            }
-
-            fn emitLenSwitch(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const values = try self.arena.alloc(u64, t.arms.len);
-                const bodies = try self.arena.alloc(CtxStmt, t.arms.len);
-                for (t.arms, values, bodies) |arm, *value, *body| {
-                    value.* = @truncate(arm.key);
-                    body.* = try self.emitArm(t, arm, env);
-                }
-                const default = try self.emitTree(t.default.?, env);
-                return try self.ctx.switchStmt(self.lenLocal(env, t.occ), values, bodies, default);
+                frame.cursor = 2;
+                return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
             }
 
             /// Look up an interned occurrence without creating it. Returns
@@ -1513,7 +1874,7 @@ const MockPat = union(enum) {
     record: []const MockSub,
     tuple: []const MockSub,
     nominal: MockSub,
-    tag: struct { variant: u16, payloads: []const MockSub },
+    tag: struct { variant: u32, payloads: []const MockSub },
     int_lit: struct { value: i64, switchable: bool = true },
     dec_lit: i128,
     str_lit: u32,
@@ -1521,7 +1882,7 @@ const MockPat = union(enum) {
     list: struct { elems: []const u32, rest: ?struct { index: u32, pattern: ?u32 } },
 };
 
-const MockSub = struct { index: u16, ty: u32, pat: u32 };
+const MockSub = struct { index: u32, ty: u32, pat: u32 };
 
 const MockCtx = struct {
     pats: []const MockPat,
@@ -1571,19 +1932,19 @@ const MockCtx = struct {
         return .{ .pattern = info.pattern, .local = info.local };
     }
 
-    pub fn recordDestructCount(self: MockCtx, pat: u32) u16 {
+    pub fn recordDestructCount(self: MockCtx, pat: u32) u32 {
         return @intCast(self.get(pat).record.len);
     }
 
-    pub fn recordDestruct(self: MockCtx, pat: u32, _: u32, i: u16) LowerError!MockSub {
+    pub fn recordDestruct(self: MockCtx, pat: u32, _: u32, i: u32) LowerError!MockSub {
         return self.get(pat).record[i];
     }
 
-    pub fn tupleItemCount(self: MockCtx, pat: u32) u16 {
+    pub fn tupleItemCount(self: MockCtx, pat: u32) u32 {
         return @intCast(self.get(pat).tuple.len);
     }
 
-    pub fn tupleItem(self: MockCtx, pat: u32, _: u32, i: u16) LowerError!MockSub {
+    pub fn tupleItem(self: MockCtx, pat: u32, _: u32, i: u32) LowerError!MockSub {
         return self.get(pat).tuple[i];
     }
 
@@ -1591,15 +1952,15 @@ const MockCtx = struct {
         return self.get(pat).nominal;
     }
 
-    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u16 {
+    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u32 {
         return self.get(pat).tag.variant;
     }
 
-    pub fn tagPayloadCount(self: MockCtx, pat: u32) u16 {
+    pub fn tagPayloadCount(self: MockCtx, pat: u32) u32 {
         return @intCast(self.get(pat).tag.payloads.len);
     }
 
-    pub fn tagPayload(self: MockCtx, pat: u32, _: u32, i: u16) LowerError!MockSub {
+    pub fn tagPayload(self: MockCtx, pat: u32, _: u32, i: u32) LowerError!MockSub {
         return self.get(pat).tag.payloads[i];
     }
 
@@ -1608,7 +1969,7 @@ const MockCtx = struct {
         return null;
     }
 
-    pub fn callableVariant(_: MockCtx, _: u32, _: u32) u16 {
+    pub fn callableVariant(_: MockCtx, _: u32, _: u32) u32 {
         unreachable;
     }
 
@@ -1660,13 +2021,13 @@ const MockCtx = struct {
         return true;
     }
 
-    pub fn strCaptureCount(self: MockCtx, pat: u32) u16 {
+    pub fn strCaptureCount(self: MockCtx, pat: u32) u32 {
         const pattern = self.get(pat);
         if (std.meta.activeTag(pattern) != .str_pattern) return 0;
         return @intCast(pattern.str_pattern.captures.len);
     }
 
-    pub fn strCapturePat(self: MockCtx, pat: u32, i: u16) ?u32 {
+    pub fn strCapturePat(self: MockCtx, pat: u32, i: u32) ?u32 {
         return self.get(pat).str_pattern.captures[i];
     }
 };
@@ -1860,7 +2221,7 @@ test "tag payloads specialize into payload occurrence columns" {
     // The payload occurrence was interned under the scrutinee root.
     const payload_occ = result.occs[fallback.binds[0].occ.idx()];
     try std.testing.expectEqual(OccId.root, payload_occ.parent);
-    try std.testing.expectEqual(@as(u16, 0), payload_occ.step.tag_payload.variant);
+    try std.testing.expectEqual(@as(u32, 0), payload_occ.step.tag_payload.variant);
     try std.testing.expect(payload_occ.step.tag_payload.single);
 }
 
@@ -2056,12 +2417,12 @@ test "records and tuples destructure without tests" {
     const x_test = result.tree.test_;
     try std.testing.expectEqual(TestKind.int_switch, x_test.kind);
     const x_occ = result.occs[x_test.occ.idx()];
-    try std.testing.expectEqual(@as(u16, 0), x_occ.step.field);
+    try std.testing.expectEqual(@as(u32, 0), x_occ.step.field);
     try std.testing.expectEqual(@as(u32, 0), x_test.arms[0].subtree.leaf.branch_index);
 
     const y_test = x_test.default.?.test_;
     const y_occ = result.occs[y_test.occ.idx()];
-    try std.testing.expectEqual(@as(u16, 1), y_occ.step.field);
+    try std.testing.expectEqual(@as(u32, 1), y_occ.step.field);
     try std.testing.expectEqual(@as(u32, 1), y_test.arms[0].subtree.leaf.branch_index);
     try std.testing.expectEqual(@as(u32, 2), y_test.default.?.leaf.branch_index);
     try std.testing.expectEqual(@as(u32, 0), result.stats.fail_refs);
@@ -2096,7 +2457,7 @@ test "column selection prefers the longer run" {
     const node = result.tree.test_;
     try std.testing.expectEqual(TestKind.tag, node.kind);
     const occ = result.occs[node.occ.idx()];
-    try std.testing.expectEqual(@as(u16, 0), occ.step.field);
+    try std.testing.expectEqual(@as(u32, 0), occ.step.field);
     // Arm B contains rows 1 and 2, distinguished by the int column inside.
     const arm_b = node.arms[1].subtree.test_;
     try std.testing.expectEqual(TestKind.int_switch, arm_b.kind);
