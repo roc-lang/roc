@@ -8548,7 +8548,9 @@ fn emitZeroValue(self: *Self, val_type: ValType) Allocator.Error!void {
 }
 
 fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
-    const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    // The runtime's dictionary callee signature: argument pointers, result
+    // storage, result descriptor storage.
+    const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32 }, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_boxy_dict_thunk", @intFromEnum(proc_id));
     const table_idx = self.module.addTableElement(defined.function.raw()) catch return error.OutOfMemory;
@@ -8564,9 +8566,6 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
     self.in_proc = false;
     self.current_proc_id = null;
 
-    // The erased-callable ABI's leading ops slot is unused by generated code.
-    _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const args_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const ret_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const ret_desc_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8639,7 +8638,7 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
         try self.emitStoreToMemSized(ret_desc_local, 0, .i32, 4);
     }
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    try self.encodeLocalsDecl(&self.currentBody().preamble, 5);
+    try self.encodeLocalsDecl(&self.currentBody().preamble, 3);
     self.endFunction();
     self.restoreState(saved);
 }
@@ -9463,7 +9462,6 @@ fn generateBoxyCallDict(self: *Self, assign: anytype) Allocator.Error!void {
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGet(out_ptr);
     try self.emitLocalGet(out_desc_ptr);
-    try self.emitNullPtr();
     try self.resolveBoxyDict(assign.dict);
     try self.emitI32Const(@intCast(assign.method_slot));
     try self.emitI32Const(@intCast(@intFromEnum(assign.method)));

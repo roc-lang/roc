@@ -15,8 +15,7 @@
 //! (`initGlobalFromSidecarView`)—and register a native callee per worker
 //! proc for dictionary dispatch (`roc_boxy_register_proc`).
 //!
-//! Dictionary callee ABI: a registered `BoxyProcFn` receives the active
-//! `RocOps`, the explicit in-process invocation context, then the fully
+//! Dictionary callee ABI: a registered `BoxyProcFn` receives the fully
 //! adapted argument list as an array of value pointers (explicit args first,
 //! then hidden descriptor pointers, then nested dictionary pointers, each
 //! passed as a pointer to a pointer-sized slot; zero-sized arguments pass
