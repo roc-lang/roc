@@ -48,46 +48,15 @@ pub fn Emit(comptime target: RocTarget) type {
             pub const RETURN_REGS = [_]Registers.GeneralReg{ .X0, .X1 };
 
             pub const SHADOW_SPACE: u8 = 0; // AAPCS64 has no shadow space
-            pub const RETURN_BY_PTR_THRESHOLD: usize = 16;
-            pub const PASS_BY_PTR_THRESHOLD: usize = std.math.maxInt(usize); // AAPCS64: no pass-by-pointer
 
             pub const SCRATCH_REG = Registers.GeneralReg.X9;
             pub const BASE_PTR = Registers.GeneralReg.FP;
             pub const STACK_PTR = Registers.GeneralReg.ZRSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
-            /// Check if a struct of the given size can be passed by value.
-            /// AAPCS64: structs up to 16 bytes can be passed in registers.
-            pub fn canPassStructByValue(size: usize) bool {
-                return size <= 16;
-            }
-
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {
                 return (size + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1);
-            }
-
-            /// Check if return type needs to use pointer (implicit first arg)
-            pub fn needsReturnByPointer(return_size: usize) bool {
-                return return_size > RETURN_BY_PTR_THRESHOLD;
-            }
-
-            /// Check if a struct argument needs to be passed by pointer.
-            /// AAPCS64: never uses pass-by-pointer.
-            pub fn needsPassByPointer(arg_size: usize) bool {
-                return arg_size > PASS_BY_PTR_THRESHOLD;
-            }
-
-            /// Returns true if i128 values must be passed by pointer
-            /// AAPCS64: i128 passed in register pair, not by pointer
-            pub fn passI128ByPointer() bool {
-                return false;
-            }
-
-            /// Returns true if i128 return values use hidden pointer arg
-            /// AAPCS64: i128 returned in register pair
-            pub fn returnI128ByPointer() bool {
-                return false;
             }
         };
 
@@ -741,21 +710,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// ADR Xd, #imm—compute PC-relative address
-        /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
-        pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) Allocator.Error!void {
-            // ADR: 0 immlo[1:0] 10000 immhi[18:0] Rd[4:0]
-            const imm: u21 = @bitCast(offset_bytes);
-            const immlo: u2 = @truncate(imm);
-            const immhi: u19 = @truncate(imm >> 2);
-            const inst: u32 = (0 << 31) |
-                (@as(u32, immlo) << 29) |
-                (0b10000 << 24) |
-                (@as(u32, immhi) << 5) |
-                @as(u32, rd.enc());
-            try self.emit32(inst);
-        }
-
         pub fn adrp(self: *Self, rd: GeneralReg) Allocator.Error!void {
             const inst: u32 = 0x90000000 | @as(u32, rd.enc());
             try self.emit32(inst);
@@ -901,20 +855,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 (@as(u32, imm19) << 5) |
                 (0 << 4) |
                 @intFromEnum(cond);
-            try self.emit32(inst);
-        }
-
-        /// CBZ (compare and branch if zero)
-        pub fn cbz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) Allocator.Error!void {
-            // CBZ <Xt>, <label>
-            // sf 011010 0 imm19 Rt
-            const sf = width.sf();
-            const offset_words = @divExact(offset_bytes, 4);
-            const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0110100 << 24) |
-                (@as(u32, imm19) << 5) |
-                reg.enc();
             try self.emit32(inst);
         }
 
@@ -2130,38 +2070,6 @@ test "CC constants identical across all aarch64 targets" {
     try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
     try std.testing.expectEqual(@as(u8, 0), WinEmit.CC.SHADOW_SPACE);
     try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
-
-    // Return by pointer threshold is 16 bytes for all
-    try std.testing.expectEqual(@as(usize, 16), LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(@as(usize, 16), WinEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(@as(usize, 16), MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
-}
-
-test "CC.canPassStructByValue identical across aarch64 targets" {
-    // AAPCS64: structs up to 16 bytes can be passed by value
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
-
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(17));
-
-    try std.testing.expect(MacEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!MacEmit.CC.canPassStructByValue(17));
-}
-
-test "CC.passI128ByPointer is false for all aarch64 targets" {
-    // AAPCS64: i128 passed in register pair, not by pointer
-    try std.testing.expect(!LinuxEmit.CC.passI128ByPointer());
-    try std.testing.expect(!WinEmit.CC.passI128ByPointer());
-    try std.testing.expect(!MacEmit.CC.passI128ByPointer());
-}
-
-test "CC.returnI128ByPointer is false for all aarch64 targets" {
-    // AAPCS64: i128 returned in register pair
-    try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
-    try std.testing.expect(!WinEmit.CC.returnI128ByPointer());
-    try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
 }
 
 /// What the PC-relative address sequence actually computes at run time, given

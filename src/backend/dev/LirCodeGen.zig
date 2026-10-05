@@ -38,7 +38,6 @@ const GuardedList = lir.LirStore.GuardedList;
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 const CallingConventionMod = @import("CallingConvention.zig");
-const CallingConvention = CallingConventionMod.CallingConvention;
 const roc_target_mod = @import("roc_target");
 const RocTarget = roc_target_mod.RocTarget;
 const CpuLevel = roc_target_mod.CpuLevel;
@@ -954,9 +953,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         allocator: Allocator,
 
-        /// Calling convention for the target platform (derived from comptime target)
-        cc: CallingConvention,
-
         /// How old a CPU the emitted instructions must run on.
         ///
         /// This is a runtime field rather than part of the comptime `target`
@@ -1577,7 +1573,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             errdefer scratch_param_num_regs.deinit();
             return .{
                 .allocator = allocator,
-                .cc = CallingConvention.forTarget(target),
                 .cpu_level = cpu_level,
                 .codegen = CodeGen.init(allocator),
                 .store = store,

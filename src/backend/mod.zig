@@ -12,27 +12,13 @@ pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
 
 // Re-export dev backend types at top level.
-pub const x86_64 = dev.x86_64;
-pub const aarch64 = dev.aarch64;
-pub const object = dev.object;
 pub const Relocation = dev.Relocation;
-pub const applyRelocations = dev.applyRelocations;
 pub const applyRelocationsWithContext = dev.applyRelocationsWithContext;
-pub const SymbolResolver = dev.SymbolResolver;
-pub const SymbolResolverContext = dev.SymbolResolverContext;
-pub const CodeGen = dev.CodeGen;
-pub const Backend = dev.Backend;
 pub const ExecutableMemory = dev.ExecutableMemory;
 pub const HostLirCodeGen = dev.HostLirCodeGen;
 pub const host_lir_codegen_available = dev.host_lir_codegen_available;
 pub const LirCodeGenMod = dev.LirCodeGenMod;
 pub const NativeProcCompiler = dev.NativeProcCompiler;
-pub const DevBackend = dev.DevBackend;
-pub const Storage = dev.Storage;
-pub const X86_64LinuxBackend = dev.X86_64LinuxBackend;
-pub const X86_64MacBackend = dev.X86_64MacBackend;
-pub const X86_64WinBackend = dev.X86_64WinBackend;
-pub const AArch64Backend = dev.AArch64Backend;
 pub const Entrypoint = dev.Entrypoint;
 pub const StaticDataExport = dev.StaticDataExport;
 pub const StaticDataRelocation = dev.StaticDataRelocation;
@@ -45,10 +31,8 @@ pub const atomicRcHelperSymbolName = dev.atomicRcHelperSymbolName;
 pub const collectRequiredRcHelpers = dev.collectRequiredRcHelpers;
 pub const collectReferencedProcs = dev.collectReferencedProcs;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
-pub const CompilationResult = dev.CompilationResult;
 pub const CompilationError = dev.CompilationError;
 pub const writeFileWindowsAvSafe = dev.writeFileWindowsAvSafe;
-pub const resolveBuiltinFunction = dev.resolveBuiltinFunction;
 
 test "backend tests" {
     const std = @import("std");

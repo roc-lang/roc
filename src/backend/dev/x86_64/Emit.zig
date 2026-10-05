@@ -50,49 +50,14 @@ pub fn Emit(comptime target: RocTarget) type {
                 [_]Registers.GeneralReg{ .RAX, .RDX };
 
             pub const SHADOW_SPACE: u8 = if (target.isWindows()) 32 else 0;
-            pub const RETURN_BY_PTR_THRESHOLD: usize = if (target.isWindows()) 8 else 16;
-            pub const PASS_BY_PTR_THRESHOLD: usize = if (target.isWindows()) 8 else std.math.maxInt(usize);
-
             pub const SCRATCH_REG = Registers.GeneralReg.R11;
             pub const BASE_PTR = Registers.GeneralReg.RBP;
             pub const STACK_PTR = Registers.GeneralReg.RSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
-            /// Check if a struct of the given size can be passed by value in a register.
-            /// Windows x64 ABI: Only structs of size 1, 2, 4, or 8 bytes can be passed by value.
-            pub fn canPassStructByValue(size: usize) bool {
-                if (target.isWindows()) {
-                    return size == 1 or size == 2 or size == 4 or size == 8;
-                }
-                return size <= 16;
-            }
-
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {
                 return (size + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1);
-            }
-
-            /// Check if return type needs to use pointer (implicit first arg)
-            pub fn needsReturnByPointer(return_size: usize) bool {
-                return return_size > RETURN_BY_PTR_THRESHOLD;
-            }
-
-            /// Check if a struct argument needs to be passed by pointer.
-            pub fn needsPassByPointer(arg_size: usize) bool {
-                if (target.isWindows()) {
-                    return !(arg_size == 1 or arg_size == 2 or arg_size == 4 or arg_size == 8);
-                }
-                return arg_size > PASS_BY_PTR_THRESHOLD;
-            }
-
-            /// Returns true if i128 values must be passed by pointer (Windows x64)
-            pub fn passI128ByPointer() bool {
-                return target.isWindows();
-            }
-
-            /// Returns true if i128 return values use hidden pointer arg (Windows x64)
-            pub fn returnI128ByPointer() bool {
-                return target.isWindows();
             }
         };
 
@@ -1512,8 +1477,6 @@ pub fn Emit(comptime target: RocTarget) type {
 
 // Target-specific Emit types for cross-platform testing
 const LinuxEmit = Emit(.x64linux);
-const WinEmit = Emit(.x64win);
-const MacEmit = Emit(.x64mac);
 
 // Tests
 
@@ -2228,22 +2191,6 @@ test "callRel32 encoding" {
 }
 
 // Multi-target calling convention tests
-
-test "CC.passI128ByPointer differs between Windows and System V" {
-    // Windows requires i128 pass-by-pointer
-    try std.testing.expect(WinEmit.CC.passI128ByPointer());
-    // System V passes i128 in registers (RAX+RDX)
-    try std.testing.expect(!LinuxEmit.CC.passI128ByPointer());
-    try std.testing.expect(!MacEmit.CC.passI128ByPointer());
-}
-
-test "CC.returnI128ByPointer differs between Windows and System V" {
-    // Windows uses hidden pointer for i128 returns
-    try std.testing.expect(WinEmit.CC.returnI128ByPointer());
-    // System V returns i128 in RAX+RDX
-    try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
-    try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
-}
 
 test "movzxBRegMem - zero-extend byte from [rbp-8]" {
     var emit = LinuxEmit.init(std.testing.allocator);

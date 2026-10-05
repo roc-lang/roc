@@ -18,8 +18,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const target_mod = @import("roc_target");
-const RocTarget = target_mod.RocTarget;
 
 const layout = @import("layout");
 
@@ -28,139 +26,6 @@ const aarch64 = @import("aarch64/mod.zig");
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("SymbolTable.zig");
-
-/// Calling convention configuration for a specific target
-pub const CallingConvention = struct {
-    /// Argument registers for integer/pointer arguments, tagged by architecture
-    param_regs: ParamRegs,
-    /// Number of argument registers available
-    num_param_regs: usize,
-    /// Shadow space required before calls (Windows: 32 bytes)
-    shadow_space: u8,
-    /// Threshold for return-by-pointer (struct return uses hidden first arg)
-    return_by_ptr_threshold: usize,
-    /// Threshold for pass-by-pointer (large structs passed as pointer)
-    pass_by_ptr_threshold: usize,
-    /// Whether x64 Windows ABI special rules apply.
-    /// Note: Windows aarch64 follows AAPCS64 in this backend.
-    is_windows: bool,
-    /// Whether overflow arguments pack on the stack at their natural size and
-    /// alignment instead of each taking a full eightbyte slot. Apple's arm64
-    /// ABI packs; AAPCS64 everywhere else and both x86_64 conventions do not.
-    packs_stack_args: bool,
-
-    const ParamRegs = union(enum) {
-        x86_64: []const x86_64.GeneralReg,
-        aarch64: []const aarch64.GeneralReg,
-    };
-
-    /// x86_64 System V argument registers
-    const SYSV_PARAM_REGS = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
-    /// x86_64 Windows argument registers
-    const WIN64_PARAM_REGS = [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 };
-    /// aarch64 AAPCS64 argument registers
-    const AAPCS64_PARAM_REGS = [_]aarch64.GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
-
-    /// Create calling convention for a given target
-    pub fn forTarget(target: RocTarget) CallingConvention {
-        return switch (target_mod.classifyCpuArch(target.toCpuArch())) {
-            .x86_64 => if (target.isWindows())
-                CallingConvention{
-                    .param_regs = .{ .x86_64 = &WIN64_PARAM_REGS },
-                    .num_param_regs = WIN64_PARAM_REGS.len,
-                    .shadow_space = 32,
-                    .return_by_ptr_threshold = 8,
-                    .pass_by_ptr_threshold = 8, // Only 1,2,4,8 byte structs by value
-                    .is_windows = true,
-                    .packs_stack_args = false,
-                }
-            else
-                CallingConvention{
-                    .param_regs = .{ .x86_64 = &SYSV_PARAM_REGS },
-                    .num_param_regs = SYSV_PARAM_REGS.len,
-                    .shadow_space = 0,
-                    .return_by_ptr_threshold = 16,
-                    .pass_by_ptr_threshold = std.math.maxInt(usize),
-                    .is_windows = false,
-                    .packs_stack_args = false,
-                },
-            .aarch64, .aarch64_be => CallingConvention{
-                .param_regs = .{ .aarch64 = &AAPCS64_PARAM_REGS },
-                .num_param_regs = AAPCS64_PARAM_REGS.len,
-                .shadow_space = 0,
-                .return_by_ptr_threshold = 16,
-                .pass_by_ptr_threshold = std.math.maxInt(usize),
-                .is_windows = false,
-                .packs_stack_args = target.isMacOS(),
-            },
-            .arm, .wasm32, .other => unsupportedArchCallingConvention(target),
-        };
-    }
-
-    fn unsupportedArchCallingConvention(target: RocTarget) CallingConvention {
-        if (std.debug.runtime_safety) {
-            std.debug.panic("CallingConvention.forTarget called for unsupported arch: {s}", .{@tagName(target.toCpuArch())});
-        }
-        unreachable;
-    }
-
-    /// Get argument register at index for x86_64 targets.
-    pub fn getX86ParamReg(self: CallingConvention, index: usize) x86_64.GeneralReg {
-        return switch (self.param_regs) {
-            .x86_64 => |regs| regs[index],
-            .aarch64 => {
-                if (std.debug.runtime_safety) {
-                    @panic("getX86ParamReg called for aarch64 calling convention");
-                }
-                unreachable;
-            },
-        };
-    }
-
-    /// Get argument register at index for aarch64 targets.
-    pub fn getAarch64ParamReg(self: CallingConvention, index: usize) aarch64.GeneralReg {
-        return switch (self.param_regs) {
-            .aarch64 => |regs| regs[index],
-            .x86_64 => {
-                if (std.debug.runtime_safety) {
-                    @panic("getAarch64ParamReg called for x86_64 calling convention");
-                }
-                unreachable;
-            },
-        };
-    }
-
-    /// Check if return type needs to use pointer (implicit first arg)
-    pub fn needsReturnByPointer(self: CallingConvention, return_size: usize) bool {
-        return return_size > self.return_by_ptr_threshold;
-    }
-
-    /// Check if a struct argument needs to be passed by pointer.
-    /// Windows x64: only structs of size 1, 2, 4, 8 bytes can be passed by value.
-    /// aarch64 and System V: no pass-by-pointer rule in this layer.
-    pub fn needsPassByPointer(self: CallingConvention, arg_size: usize) bool {
-        if (self.is_windows) {
-            // Windows: only power-of-2 sizes up to 8 can pass by value
-            return !(arg_size == 1 or arg_size == 2 or arg_size == 4 or arg_size == 8);
-        }
-        return arg_size > self.pass_by_ptr_threshold;
-    }
-
-    /// Check if a struct of the given size can be passed by value in a register.
-    pub fn canPassStructByValue(self: CallingConvention, size: usize) bool {
-        return !self.needsPassByPointer(size);
-    }
-
-    /// Returns true if i128 values must be passed by pointer (Windows x64)
-    pub fn passI128ByPointer(self: CallingConvention) bool {
-        return self.is_windows;
-    }
-
-    /// Returns true if i128 return values use hidden pointer arg (Windows x64)
-    pub fn returnI128ByPointer(self: CallingConvention) bool {
-        return self.is_windows;
-    }
-};
 
 /// The C promotion a narrow integer scalar owes the argument slot that carries
 /// it. A host compiled from the generated C signature reads the promoted width,
@@ -314,20 +179,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         pub fn deinit(self: *Self) void {
             self.stack_args.deinit(self.emit.allocator);
-        }
-
-        /// Check if return type needs to use pointer (implicit first arg)
-        pub fn needsReturnByPointer(return_size: usize) bool {
-            return return_size > CC_EMIT.RETURN_BY_PTR_THRESHOLD;
-        }
-
-        /// Check if a struct argument needs to be passed by pointer.
-        /// Windows x64: Only structs of size 1, 2, 4, 8 bytes can be passed by value.
-        /// All other sizes must be passed by pointer.
-        /// aarch64 (all OSes): Zig uses AAPCS64 for callconv(.c), no pass-by-pointer.
-        /// System V: Never uses pass-by-pointer (large structs are copied to stack).
-        pub fn needsPassByPointer(arg_size: usize) bool {
-            return CC_EMIT.needsPassByPointer(arg_size);
         }
 
         /// Set up return by pointer (for large return types)
@@ -1229,126 +1080,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             }
         }
-
-        /// Get the number of argument registers available
-        pub fn getNumArgRegs() usize {
-            return CC_EMIT.PARAM_REGS.len;
-        }
-
-        /// Get argument register at index (for manual setup)
-        pub fn getArgReg(index: usize) GeneralReg {
-            return CC_EMIT.PARAM_REGS[index];
-        }
     };
 }
 
 // Tests
-test "CallingConvention.forTarget Windows" {
-    const cc = CallingConvention.forTarget(.x64win);
-    try std.testing.expectEqual(@as(usize, 4), cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 32), cc.shadow_space);
-    try std.testing.expectEqual(@as(usize, 8), cc.return_by_ptr_threshold);
-    try std.testing.expectEqual(@as(usize, 8), cc.pass_by_ptr_threshold); // Only 1,2,4,8 by value
-    try std.testing.expect(cc.is_windows);
-
-    // Check register order: RCX, RDX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getX86ParamReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getX86ParamReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getX86ParamReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getX86ParamReg(3));
-}
-
-test "CallingConvention.forTarget Linux" {
-    const cc = CallingConvention.forTarget(.x64glibc);
-    try std.testing.expectEqual(@as(usize, 6), cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 0), cc.shadow_space);
-    try std.testing.expectEqual(@as(usize, 16), cc.return_by_ptr_threshold);
-    try std.testing.expectEqual(std.math.maxInt(usize), cc.pass_by_ptr_threshold);
-    try std.testing.expect(!cc.is_windows);
-
-    // Check register order: RDI, RSI, RDX, RCX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RDI, cc.getX86ParamReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RSI, cc.getX86ParamReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getX86ParamReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getX86ParamReg(3));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getX86ParamReg(4));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getX86ParamReg(5));
-}
-
-test "CallingConvention.forTarget macOS" {
-    const cc = CallingConvention.forTarget(.x64mac);
-    // macOS uses System V ABI, same as Linux
-    try std.testing.expectEqual(@as(usize, 6), cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 0), cc.shadow_space);
-    try std.testing.expect(!cc.is_windows);
-}
-
-test "CallingConvention.needsReturnByPointer" {
-    const win_cc = CallingConvention.forTarget(.x64win);
-    const sysv_cc = CallingConvention.forTarget(.x64glibc);
-
-    // Windows: threshold is 8 bytes
-    try std.testing.expect(!win_cc.needsReturnByPointer(8));
-    try std.testing.expect(win_cc.needsReturnByPointer(9));
-
-    // System V: threshold is 16 bytes
-    try std.testing.expect(!sysv_cc.needsReturnByPointer(16));
-    try std.testing.expect(sysv_cc.needsReturnByPointer(17));
-}
-
-test "CallingConvention.needsPassByPointer" {
-    const win_cc = CallingConvention.forTarget(.x64win);
-    const sysv_cc = CallingConvention.forTarget(.x64glibc);
-
-    // Windows: only 1, 2, 4, 8 byte structs can be passed by value
-    try std.testing.expect(!win_cc.needsPassByPointer(1));
-    try std.testing.expect(!win_cc.needsPassByPointer(2));
-    try std.testing.expect(!win_cc.needsPassByPointer(4));
-    try std.testing.expect(!win_cc.needsPassByPointer(8));
-    // Non-power-of-2 sizes need pointer on Windows
-    try std.testing.expect(win_cc.needsPassByPointer(3));
-    try std.testing.expect(win_cc.needsPassByPointer(5));
-    try std.testing.expect(win_cc.needsPassByPointer(6));
-    try std.testing.expect(win_cc.needsPassByPointer(7));
-    // >8 bytes needs pointer
-    try std.testing.expect(win_cc.needsPassByPointer(9));
-    try std.testing.expect(win_cc.needsPassByPointer(16));
-
-    // System V: never passes by pointer (uses stack for large structs)
-    try std.testing.expect(!sysv_cc.needsPassByPointer(1000));
-}
-
-test "CC.canPassStructByValue for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
-    // Windows: only power-of-2 sizes 1, 2, 4, 8 can pass by value
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(2));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(4));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(8));
-    // Non-power-of-2 sizes must use pointer
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(3));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(5));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(6));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(7));
-    // >8 bytes must use pointer
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(9));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(16));
-}
-
-test "CC.canPassStructByValue for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    // System V: up to 16 bytes can pass by value
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
-}
-
 test "CC constants for Windows x64" {
     const WinEmit = x86_64.Emit(.x64win);
     try std.testing.expect(WinEmit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(WinEmit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.PASS_BY_PTR_THRESHOLD);
 }
 
 test "CC constants for Linux x64" {
@@ -1356,8 +1096,6 @@ test "CC constants for Linux x64" {
     try std.testing.expect(LinuxEmit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(LinuxEmit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(usize, 16), LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(std.math.maxInt(usize), LinuxEmit.CC.PASS_BY_PTR_THRESHOLD);
 }
 
 test "CC constants for aarch64" {
@@ -1365,88 +1103,6 @@ test "CC constants for aarch64" {
     try std.testing.expect(Arm64Emit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(Arm64Emit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 0), Arm64Emit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(usize, 16), Arm64Emit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(std.math.maxInt(usize), Arm64Emit.CC.PASS_BY_PTR_THRESHOLD);
-}
-
-test "needsReturnByPointer for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
-    const Builder = CallBuilder(WinEmit);
-
-    // Small values don't need pointer
-    try std.testing.expect(!Builder.needsReturnByPointer(1));
-    try std.testing.expect(!Builder.needsReturnByPointer(8));
-    // Windows: threshold is 8 bytes
-    try std.testing.expect(Builder.needsReturnByPointer(9));
-    try std.testing.expect(Builder.needsReturnByPointer(16));
-}
-
-test "needsReturnByPointer for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const Builder = CallBuilder(LinuxEmit);
-
-    // Small values don't need pointer
-    try std.testing.expect(!Builder.needsReturnByPointer(1));
-    try std.testing.expect(!Builder.needsReturnByPointer(8));
-    // System V: threshold is 16 bytes
-    try std.testing.expect(!Builder.needsReturnByPointer(16));
-    try std.testing.expect(Builder.needsReturnByPointer(17));
-}
-
-test "needsPassByPointer for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
-    const Builder = CallBuilder(WinEmit);
-
-    // Windows x64: only 1, 2, 4, 8 byte structs pass by value
-    try std.testing.expect(!Builder.needsPassByPointer(1));
-    try std.testing.expect(!Builder.needsPassByPointer(2));
-    try std.testing.expect(!Builder.needsPassByPointer(4));
-    try std.testing.expect(!Builder.needsPassByPointer(8));
-    // Non-power-of-2 sizes need pointer
-    try std.testing.expect(Builder.needsPassByPointer(3));
-    try std.testing.expect(Builder.needsPassByPointer(5));
-    try std.testing.expect(Builder.needsPassByPointer(6));
-    try std.testing.expect(Builder.needsPassByPointer(7));
-    // >8 bytes need pointer
-    try std.testing.expect(Builder.needsPassByPointer(9));
-    try std.testing.expect(Builder.needsPassByPointer(16));
-    try std.testing.expect(Builder.needsPassByPointer(24));
-}
-
-test "needsPassByPointer for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const Builder = CallBuilder(LinuxEmit);
-
-    // System V: never uses pointer
-    try std.testing.expect(!Builder.needsPassByPointer(16));
-    try std.testing.expect(!Builder.needsPassByPointer(17));
-    try std.testing.expect(!Builder.needsPassByPointer(1000));
-}
-
-test "Windows x64 argument registers" {
-    const WinEmit = x86_64.Emit(.x64win);
-    const Builder = CallBuilder(WinEmit);
-
-    // Windows uses RCX, RDX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(3));
-    try std.testing.expectEqual(@as(usize, 4), Builder.getNumArgRegs());
-}
-
-test "Linux x64 argument registers" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const Builder = CallBuilder(LinuxEmit);
-
-    // System V uses RDI, RSI, RDX, RCX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RDI, Builder.getArgReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RSI, Builder.getArgReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(3));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(4));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(5));
-    try std.testing.expectEqual(@as(usize, 6), Builder.getNumArgRegs());
 }
 
 test "CallBuilder with automatic R12 save/restore on Windows x64" {
@@ -2234,26 +1890,6 @@ test "CallBuilder stack args at correct offsets on Windows" {
     try std.testing.expect(emit.buf.items.len > 50);
 }
 
-test "CallingConvention.forTarget for aarch64 targets" {
-    const linux_cc = CallingConvention.forTarget(.arm64linux);
-    const win_cc = CallingConvention.forTarget(.arm64win);
-    const mac_cc = CallingConvention.forTarget(.arm64mac);
-
-    // All should use AAPCS64 with same parameters
-    try std.testing.expectEqual(linux_cc.num_param_regs, win_cc.num_param_regs);
-    try std.testing.expectEqual(linux_cc.num_param_regs, mac_cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 8), linux_cc.num_param_regs);
-
-    try std.testing.expectEqual(linux_cc.shadow_space, win_cc.shadow_space);
-    try std.testing.expectEqual(@as(u8, 0), linux_cc.shadow_space);
-
-    // Verify aarch64 register ordering (X0..X7), with no x86 placeholder.
-    try std.testing.expectEqual(aarch64.GeneralReg.X0, linux_cc.getAarch64ParamReg(0));
-    try std.testing.expectEqual(aarch64.GeneralReg.X1, linux_cc.getAarch64ParamReg(1));
-    try std.testing.expectEqual(aarch64.GeneralReg.X6, linux_cc.getAarch64ParamReg(6));
-    try std.testing.expectEqual(aarch64.GeneralReg.X7, linux_cc.getAarch64ParamReg(7));
-}
-
 test "macOS x64 CC matches Linux x64 (both System V)" {
     const LinuxEmit = x86_64.Emit(.x64glibc);
     const MacEmit = x86_64.Emit(.x64mac);
@@ -2263,14 +1899,6 @@ test "macOS x64 CC matches Linux x64 (both System V)" {
     try std.testing.expectEqual(LinuxEmit.CC.RETURN_REGS.len, MacEmit.CC.RETURN_REGS.len);
     try std.testing.expectEqual(LinuxEmit.CC.FLOAT_PARAM_REGS.len, MacEmit.CC.FLOAT_PARAM_REGS.len);
     try std.testing.expectEqual(LinuxEmit.CC.SHADOW_SPACE, MacEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD, MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(LinuxEmit.CC.PASS_BY_PTR_THRESHOLD, MacEmit.CC.PASS_BY_PTR_THRESHOLD);
-
-    // Both should NOT be Windows
-    const linux_cc = CallingConvention.forTarget(.x64glibc);
-    const mac_cc = CallingConvention.forTarget(.x64mac);
-    try std.testing.expect(!linux_cc.is_windows);
-    try std.testing.expect(!mac_cc.is_windows);
 }
 
 test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
