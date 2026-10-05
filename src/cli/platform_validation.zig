@@ -109,11 +109,24 @@ pub fn validatePlatformHeader(
     }
 
     // Extract TargetsConfig
-    const config = TargetsConfig.fromAST(allocator, ast) catch {
-        // fromAST only fails on allocation failure, and nothing has been
-        // rendered at this point, so don't report it as a parse error: that
-        // path assumes diagnostics are already on screen and exits silently.
-        return error.OutOfMemory;
+    var path_diagnostic: target_mod.InvalidTargetPathDiagnostic = undefined;
+    const config = TargetsConfig.fromAST(allocator, ast, &path_diagnostic) catch |err| switch (err) {
+        // Nothing has been rendered for an allocation failure, so don't
+        // report it as a parse error: that path assumes diagnostics are
+        // already on screen and exits silently.
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidTargetPath => {
+            try env.calcLineStarts(allocator);
+            var report = try path_diagnostic.toReport(allocator, &env, platform_source_path);
+            defer report.deinit();
+            reporting.renderReportToTerminal(
+                &report,
+                stderr,
+                reporting.ColorUtils.getPaletteForConfig(report_config),
+                report_config,
+            ) catch {};
+            return error.ParseError;
+        },
     } orelse {
         try renderMissingTargetsError(allocator, platform_source_path, stderr, report_config);
         return error.MissingTargetsSection;
