@@ -16769,16 +16769,9 @@ const PatternKernelWork = struct {
 
     fn deinit(self: *PatternKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.tag_next.deinit(allocator);
-        self.tag_after_arg.deinit(allocator);
-        self.record_next.deinit(allocator);
-        self.record_after_field.deinit(allocator);
-        self.tuple_next.deinit(allocator);
-        self.tuple_after_elem.deinit(allocator);
-        self.list_next.deinit(allocator);
-        self.list_after_elem.deinit(allocator);
-        self.as_after_inner.deinit(allocator);
+        inline for (@typeInfo(PatternKernelLabel).@"enum".fields) |label| {
+            if (@hasField(PatternKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushParse(self: *PatternKernelWork, allocator: std.mem.Allocator, item: PatternKernelParseWork) std.mem.Allocator.Error!void {
@@ -17576,122 +17569,18 @@ const ExprKernelWork = struct {
     fn deinit(self: *ExprKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
         self.targets.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.associated_enter.deinit(allocator);
-        self.associated_next.deinit(allocator);
-        self.associated_exit.deinit(allocator);
-        self.finish_associated_decl_body.deinit(allocator);
-        self.finish_associated_expect.deinit(allocator);
-        self.block_next.deinit(allocator);
-        self.finish_block.deinit(allocator);
-        self.finish_block_expr_stmt.deinit(allocator);
-        self.finish_block_final_expr.deinit(allocator);
-        self.finish_block_dbg_stmt.deinit(allocator);
-        self.finish_block_crash_stmt.deinit(allocator);
-        self.finish_block_expect_stmt.deinit(allocator);
-        self.finish_block_return_stmt.deinit(allocator);
-        self.finish_block_var_stmt.deinit(allocator);
-        self.finish_block_reassign_stmt.deinit(allocator);
-        self.finish_block_decl_stmt.deinit(allocator);
-        self.block_while_after_cond.deinit(allocator);
-        self.finish_block_while_stmt.deinit(allocator);
-        self.block_for_after_list.deinit(allocator);
-        self.finish_block_for_stmt.deinit(allocator);
-        self.finish_string.deinit(allocator);
-        self.finish_list.deinit(allocator);
-        self.finish_tuple.deinit(allocator);
-        self.finish_dbg.deinit(allocator);
-        self.finish_crash.deinit(allocator);
-        self.finish_return.deinit(allocator);
-        self.finish_tuple_access.deinit(allocator);
-        self.finish_unary.deinit(allocator);
-        self.finish_suffix_single_question.deinit(allocator);
-        self.finish_bin_op.deinit(allocator);
-        self.finish_single_question_binop.deinit(allocator);
-        self.finish_method_call.deinit(allocator);
-        self.arrow_ident_callee.deinit(allocator);
-        self.finish_arrow_apply.deinit(allocator);
-        self.finish_arrow_tag_apply.deinit(allocator);
-        self.finish_arrow_call.deinit(allocator);
-        self.finish_arrow_tag_single.deinit(allocator);
-        self.finish_field_access.deinit(allocator);
-        self.finish_apply.deinit(allocator);
-        self.finish_tag.deinit(allocator);
-        self.finish_type_dispatch_apply.deinit(allocator);
-        self.finish_record.deinit(allocator);
-        self.finish_lambda.deinit(allocator);
-        self.finish_if_then_else.deinit(allocator);
-        self.finish_if_without_else.deinit(allocator);
-        self.finish_nominal_record.deinit(allocator);
-        self.finish_nominal_apply.deinit(allocator);
-        self.finish_record_builder.deinit(allocator);
-        self.for_after_list.deinit(allocator);
-        self.finish_for_expr.deinit(allocator);
-        self.match_after_cond.deinit(allocator);
-        self.match_next.deinit(allocator);
-        self.match_after_guard.deinit(allocator);
-        self.match_after_body.deinit(allocator);
+        inline for (@typeInfo(ExprKernelLabel).@"enum".fields) |label| {
+            if (@hasField(ExprKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     fn clearRetainingCapacity(self: *ExprKernelWork) void {
         self.labels.clearRetainingCapacity();
         self.targets.clearRetainingCapacity();
         self.current_target = .return_value;
-        self.parse.clearRetainingCapacity();
-        self.associated_enter.clearRetainingCapacity();
-        self.associated_next.clearRetainingCapacity();
-        self.associated_exit.clearRetainingCapacity();
-        self.finish_associated_decl_body.clearRetainingCapacity();
-        self.finish_associated_expect.clearRetainingCapacity();
-        self.block_next.clearRetainingCapacity();
-        self.finish_block.clearRetainingCapacity();
-        self.finish_block_expr_stmt.clearRetainingCapacity();
-        self.finish_block_final_expr.clearRetainingCapacity();
-        self.finish_block_dbg_stmt.clearRetainingCapacity();
-        self.finish_block_crash_stmt.clearRetainingCapacity();
-        self.finish_block_expect_stmt.clearRetainingCapacity();
-        self.finish_block_return_stmt.clearRetainingCapacity();
-        self.finish_block_var_stmt.clearRetainingCapacity();
-        self.finish_block_reassign_stmt.clearRetainingCapacity();
-        self.finish_block_decl_stmt.clearRetainingCapacity();
-        self.block_while_after_cond.clearRetainingCapacity();
-        self.finish_block_while_stmt.clearRetainingCapacity();
-        self.block_for_after_list.clearRetainingCapacity();
-        self.finish_block_for_stmt.clearRetainingCapacity();
-        self.finish_string.clearRetainingCapacity();
-        self.finish_list.clearRetainingCapacity();
-        self.finish_tuple.clearRetainingCapacity();
-        self.finish_dbg.clearRetainingCapacity();
-        self.finish_crash.clearRetainingCapacity();
-        self.finish_return.clearRetainingCapacity();
-        self.finish_tuple_access.clearRetainingCapacity();
-        self.finish_unary.clearRetainingCapacity();
-        self.finish_suffix_single_question.clearRetainingCapacity();
-        self.finish_bin_op.clearRetainingCapacity();
-        self.finish_single_question_binop.clearRetainingCapacity();
-        self.finish_method_call.clearRetainingCapacity();
-        self.arrow_ident_callee.clearRetainingCapacity();
-        self.finish_arrow_apply.clearRetainingCapacity();
-        self.finish_arrow_tag_apply.clearRetainingCapacity();
-        self.finish_arrow_call.clearRetainingCapacity();
-        self.finish_arrow_tag_single.clearRetainingCapacity();
-        self.finish_field_access.clearRetainingCapacity();
-        self.finish_apply.clearRetainingCapacity();
-        self.finish_tag.clearRetainingCapacity();
-        self.finish_type_dispatch_apply.clearRetainingCapacity();
-        self.finish_record.clearRetainingCapacity();
-        self.finish_lambda.clearRetainingCapacity();
-        self.finish_if_then_else.clearRetainingCapacity();
-        self.finish_if_without_else.clearRetainingCapacity();
-        self.finish_nominal_record.clearRetainingCapacity();
-        self.finish_nominal_apply.clearRetainingCapacity();
-        self.finish_record_builder.clearRetainingCapacity();
-        self.for_after_list.clearRetainingCapacity();
-        self.finish_for_expr.clearRetainingCapacity();
-        self.match_after_cond.clearRetainingCapacity();
-        self.match_next.clearRetainingCapacity();
-        self.match_after_guard.clearRetainingCapacity();
-        self.match_after_body.clearRetainingCapacity();
+        inline for (@typeInfo(ExprKernelLabel).@"enum".fields) |label| {
+            if (@hasField(ExprKernelWork, label.name)) @field(self, label.name).clearRetainingCapacity();
+        }
     }
 
     inline fn pushLabel(self: *ExprKernelWork, allocator: std.mem.Allocator, label: ExprKernelLabel, target: ExprResultTarget) std.mem.Allocator.Error!void {
@@ -19451,24 +19340,9 @@ const TypeAnnoKernelWork = struct {
 
     fn deinit(self: *TypeAnnoKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.parens_after_inner.deinit(allocator);
-        self.apply_args_next.deinit(allocator);
-        self.apply_args_after.deinit(allocator);
-        self.tuple_next.deinit(allocator);
-        self.tuple_after_elem.deinit(allocator);
-        self.record_next.deinit(allocator);
-        self.record_after_field.deinit(allocator);
-        self.record_after_named_ext.deinit(allocator);
-        self.tag_union_tags_next.deinit(allocator);
-        self.tag_union_tag_after.deinit(allocator);
-        self.tag_union_after_named_ext.deinit(allocator);
-        self.tag_parse.deinit(allocator);
-        self.tag_args_next.deinit(allocator);
-        self.tag_args_after.deinit(allocator);
-        self.func_args_next.deinit(allocator);
-        self.func_args_after.deinit(allocator);
-        self.func_after_ret.deinit(allocator);
+        inline for (@typeInfo(TypeAnnoKernelLabel).@"enum".fields) |label| {
+            if (@hasField(TypeAnnoKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushParse(self: *TypeAnnoKernelWork, allocator: std.mem.Allocator, item: TypeAnnoKernelParseWork) std.mem.Allocator.Error!void {
