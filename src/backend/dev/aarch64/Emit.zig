@@ -1463,16 +1463,7 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn fmovRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FMOV <Sd>, <Sn> or FMOV <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 00 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b00 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b00, dst, src);
         }
 
         /// MOV Vd.16B, Vn.16B (alias of ORR Vd.16B, Vn.16B, Vn.16B).
@@ -1603,116 +1594,83 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// FADD (floating-point add)
-        pub fn faddRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
-            // FADD <Sd>, <Sn>, <Sm> or FADD <Dd>, <Dn>, <Dm>
-            // 0 0 0 11110 ftype 1 Rm 0010 10 Rn Rd
+        /// Emit a scalar floating-point data-processing instruction with two sources:
+        /// 0 0 0 11110 ftype 1 Rm opcode 10 Rn Rd
+        fn emitFloatBinary(self: *Self, ftype: FloatType, opcode: u4, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             const inst: u32 = (0b000 << 29) |
                 (0b11110 << 24) |
                 (@as(u32, @intFromEnum(ftype)) << 22) |
                 (0b1 << 21) |
                 (@as(u32, src2.enc()) << 16) |
-                (0b0010 << 12) |
+                (@as(u32, opcode) << 12) |
                 (0b10 << 10) |
                 (@as(u32, src1.enc()) << 5) |
                 dst.enc();
             try self.emit32(inst);
+        }
+
+        /// Emit a scalar floating-point data-processing instruction with one source:
+        /// 0 0 0 11110 ftype 1 0000 opcode 10000 Rn Rd
+        fn emitFloatUnary(self: *Self, ftype: FloatType, opcode: u2, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            const inst: u32 = (0b000 << 29) |
+                (0b11110 << 24) |
+                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (0b1 << 21) |
+                (0b0000 << 17) |
+                (@as(u32, opcode) << 15) |
+                (0b10000 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// FADD (floating-point add)
+        pub fn faddRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
+            // FADD <Sd>, <Sn>, <Sm> or FADD <Dd>, <Dn>, <Dm>
+            // 0 0 0 11110 ftype 1 Rm 0010 10 Rn Rd
+            try self.emitFloatBinary(ftype, 0b0010, dst, src1, src2);
         }
 
         /// FSUB (floating-point subtract)
         pub fn fsubRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FSUB <Sd>, <Sn>, <Sm> or FSUB <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0011 10 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b0011 << 12) |
-                (0b10 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatBinary(ftype, 0b0011, dst, src1, src2);
         }
 
         /// FMUL (floating-point multiply)
         pub fn fmulRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FMUL <Sd>, <Sn>, <Sm> or FMUL <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0000 10 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b0000 << 12) |
-                (0b10 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatBinary(ftype, 0b0000, dst, src1, src2);
         }
 
         /// FDIV (floating-point divide)
         pub fn fdivRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FDIV <Sd>, <Sn>, <Sm> or FDIV <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0001 10 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b0001 << 12) |
-                (0b10 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatBinary(ftype, 0b0001, dst, src1, src2);
         }
 
         /// FSQRT (floating-point square root)
         pub fn fsqrtRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FSQRT <Sd>, <Sn> or FSQRT <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 11 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b11 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b11, dst, src);
         }
 
         /// FNEG (floating-point negate)
         pub fn fnegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FNEG <Sd>, <Sn> or FNEG <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 10 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b10 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b10, dst, src);
         }
 
         /// FABS (floating-point absolute value)
         pub fn fabsRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FABS <Sd>, <Sn> or FABS <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 01 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b01 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b01, dst, src);
         }
 
         /// FCMP (floating-point compare)

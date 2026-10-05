@@ -229,6 +229,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
             try self.addMemArg(base_reg, offset + 16);
         }
 
+        /// Add the RocStr stored at `offset` as three consecutive integer-class
+        /// memory arguments in bytes, length, capacity order.
+        pub inline fn addStrBytesLenCapMemArgs(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.addMemArg(base_reg, offset);
+            try self.addMemArg(base_reg, offset + 16);
+            try self.addMemArg(base_reg, offset + 8);
+        }
+
         /// Add an integer-class memory argument at its ABI-assigned register.
         pub fn addMemArgAt(
             self: *Self,

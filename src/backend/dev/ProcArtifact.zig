@@ -1170,8 +1170,7 @@ pub fn splice(
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc => |identity| try codegen.registerSplicedProc(identity, start),
-            .boxy_thunk => {},
-            .entrypoint, .message_pool_run, .branch_island => {},
+            .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
         }
         try placed.putNoClobber(index, start);
         for (artifact.data) |item| try data_out.append(allocator, item);

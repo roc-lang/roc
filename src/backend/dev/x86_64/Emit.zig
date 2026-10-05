@@ -665,15 +665,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
 
             // Handle special cases for RSP/R12 (need SIB byte) and RBP/R13 (need disp)
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                // RSP/R12 - needs SIB byte
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24); // SIB: base=RSP, index=none, scale=1
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOV [base + disp32], reg (store to memory)
@@ -688,16 +680,7 @@ pub fn Emit(comptime target: RocTarget) type {
                 try self.emitRex(width, src, base);
                 try self.buf.append(self.allocator, 0x89); // MOV r/m, r
             }
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                // RSP/R12 - needs SIB byte
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24); // SIB
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(src.enc(), base, disp);
         }
 
         /// MOVZX r32, BYTE [base + disp32] (zero-extend byte to 64 bits)
@@ -711,16 +694,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xB6); // MOVZX r32, r/m8
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                // RSP/R12 - needs SIB byte
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOVZX r32, WORD [base + disp32] (zero-extend word to 64 bits)
@@ -734,16 +708,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xB7); // MOVZX r32, r/m16
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                // RSP/R12 - needs SIB byte
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOVSX r32, BYTE [base + disp32] (sign-extend byte to 32 bits)
@@ -757,16 +722,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xBE); // MOVSX r32, r/m8
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                // RSP/R12 - needs SIB byte
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOVSX r32, WORD [base + disp32] (sign-extend word to 32 bits)
@@ -780,16 +736,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xBF); // MOVSX r32, r/m16
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                // RSP/R12 - needs SIB byte
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// LEA reg, [base + disp32] (load effective address)
@@ -806,15 +753,7 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn leaRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             try self.emitRex(.w64, dst, base);
             try self.buf.append(self.allocator, 0x8D); // LEA
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         // Stack instructions
@@ -835,6 +774,18 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc()));
         }
 
+        /// Emit ModRM (and the SIB byte RSP/R12 bases require) for `[base + disp32]`, then the displacement.
+        fn emitModRmDisp32(self: *Self, reg: u3, base: GeneralReg, disp: i32) Allocator.Error!void {
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                try self.buf.append(self.allocator, modRM(0b10, reg, 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, reg, base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         // Floating-point instructions (SSE/SSE2)
 
         /// Emit REX prefix for floating-point operations
@@ -844,6 +795,15 @@ pub fn Emit(comptime target: RocTarget) type {
             if (r == 1 or b == 1) {
                 try self.buf.append(self.allocator, rex(0, r, 0, b));
             }
+        }
+
+        /// Emit `prefix [REX] 0F opcode /r` with both operands in XMM registers.
+        fn emitPrefixedSseRegReg(self: *Self, prefix: u8, opcode: u8, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, prefix);
+            try self.emitFloatRex(dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
         pub const VexMap = enum(u5) {
@@ -1097,29 +1057,17 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// MOVSD xmm, xmm (move scalar double)
         pub fn movsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2); // REPNE prefix for MOVSD
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x10); // MOVSD xmm, xmm/m64
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x10, dst, src);
         }
 
         /// MOVSS xmm, xmm (move scalar single)
         pub fn movssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3); // REPE prefix for MOVSS
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x10);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x10, dst, src);
         }
 
         /// MOVDQA xmm, xmm (move an entire 128-bit register)
         pub fn movdqaRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x66);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x6F);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0x66, 0x6F, dst, src);
         }
 
         /// MOVSD xmm, [base + disp32] (load scalar double from memory)
@@ -1132,15 +1080,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x10);
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOVSS xmm, [base + disp32] (load scalar single from memory)
@@ -1153,15 +1093,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x10);
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOVDQU xmm, [base + disp32] (load 128-bit unaligned from memory)
@@ -1174,15 +1106,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x6F); // MOVDQU xmm, m128
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(dst.enc(), base, disp);
         }
 
         /// MOVSD [base + disp32], xmm (store scalar double to memory)
@@ -1195,15 +1119,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x11); // MOVSD m64, xmm
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(src.enc(), base, disp);
         }
 
         /// MOVSS [base + disp32], xmm (store scalar single to memory)
@@ -1216,15 +1132,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x11); // MOVSS m32, xmm
-
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(src.enc(), base, disp);
         }
 
         /// MOVDQU [base + disp32], xmm (store 128-bit unaligned from XMM to memory)
@@ -1239,104 +1147,57 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x7F); // MOVDQU m128, xmm
-            const base_enc = base.enc();
-            if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), 0b100));
-                try self.buf.append(self.allocator, 0x24);
-            } else {
-                try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            try self.emitModRmDisp32(src.enc(), base, disp);
         }
 
         /// ADDSD xmm, xmm (add scalar double)
         pub fn addsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x58);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x58, dst, src);
         }
 
         /// ADDSS xmm, xmm (add scalar single)
         pub fn addssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x58);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x58, dst, src);
         }
 
         /// SUBSD xmm, xmm (subtract scalar double)
         pub fn subsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x5C);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x5C, dst, src);
         }
 
         /// SUBSS xmm, xmm (subtract scalar single)
         pub fn subssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x5C);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x5C, dst, src);
         }
 
         /// MULSD xmm, xmm (multiply scalar double)
         pub fn mulsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x59);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x59, dst, src);
         }
 
         /// MULSS xmm, xmm (multiply scalar single)
         pub fn mulssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x59);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x59, dst, src);
         }
 
         /// DIVSD xmm, xmm (divide scalar double)
         pub fn divsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x5E);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x5E, dst, src);
         }
 
         /// DIVSS xmm, xmm (divide scalar single)
         pub fn divssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x5E);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x5E, dst, src);
         }
 
         /// SQRTSD xmm, xmm (square root scalar double)
         pub fn sqrtsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x51);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x51, dst, src);
         }
 
         /// SQRTSS xmm, xmm (square root scalar single)
         pub fn sqrtssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x51);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x51, dst, src);
         }
 
         /// UCOMISD xmm, xmm (unordered compare scalar double)
@@ -1358,20 +1219,12 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// ANDPD xmm, xmm (AND packed double - used for clearing sign bit / abs)
         pub fn andpdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x66);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x54);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0x66, 0x54, dst, src);
         }
 
         /// PCMPEQD xmm, xmm (compare packed dwords for equality)
         pub fn pcmpeqdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x66);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x76);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0x66, 0x76, dst, src);
         }
 
         /// PSLLD xmm, imm8 (shift packed dwords left)
@@ -1412,11 +1265,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// XORPD xmm, xmm (XOR packed double - used for zeroing)
         pub fn xorpdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x66);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x57);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0x66, 0x57, dst, src);
         }
 
         /// XORPS xmm, xmm (XOR packed single - used for zeroing)
@@ -1457,20 +1306,12 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// CVTSS2SD xmm, xmm (convert scalar single to scalar double)
         pub fn cvtss2sdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF3);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x5A);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF3, 0x5A, dst, src);
         }
 
         /// CVTSD2SS xmm, xmm (convert scalar double to scalar single)
         pub fn cvtsd2ssRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0xF2);
-            try self.emitFloatRex(dst, src);
-            try self.buf.append(self.allocator, 0x0F);
-            try self.buf.append(self.allocator, 0x5A);
-            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+            try self.emitPrefixedSseRegReg(0xF2, 0x5A, dst, src);
         }
     }; // end of struct returned by Emit
 }

@@ -262,100 +262,60 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit signed integer division: dst = a / b
-        /// Uses IDIV which requires dividend in RDX:RAX, result in RAX
         pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // IDIV uses RAX for dividend/quotient and RDX for high bits/remainder
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
-            const divisor_reg = if (b == .RAX or b == .RDX) blk: {
-                try self.emit.movRegReg(width, .R11, b);
-                break :blk .R11;
-            } else b;
-            // 1. Move dividend to RAX
-            if (a != .RAX) {
-                try self.emit.movRegReg(width, .RAX, a);
-            }
-            // 2. Sign-extend RAX into RDX:RAX
-            if (width == .w64) {
-                try self.emit.cqo();
-            } else {
-                try self.emit.cdq();
-            }
-            // 3. Perform IDIV
-            try self.emit.idivReg(width, divisor_reg);
-            // 4. Quotient is in RAX, move to dst
-            if (dst != .RAX) {
-                try self.emit.movRegReg(width, dst, .RAX);
-            }
+            try self.emitDivMod(width, dst, a, b, true, .RAX);
         }
 
         /// Emit unsigned integer division: dst = a / b
-        /// Uses DIV which requires dividend in RDX:RAX, result in RAX
         pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // DIV uses RAX for dividend/quotient and RDX for high bits/remainder
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
-            const divisor_reg = if (b == .RAX or b == .RDX) blk: {
-                try self.emit.movRegReg(width, .R11, b);
-                break :blk .R11;
-            } else b;
-            // 1. Move dividend to RAX
-            if (a != .RAX) {
-                try self.emit.movRegReg(width, .RAX, a);
-            }
-            // 2. Zero-extend: set RDX to 0
-            try self.emit.xorRegReg(width, .RDX, .RDX);
-            // 3. Perform DIV
-            try self.emit.divReg(width, divisor_reg);
-            // 4. Quotient is in RAX, move to dst
-            if (dst != .RAX) {
-                try self.emit.movRegReg(width, dst, .RAX);
-            }
+            try self.emitDivMod(width, dst, a, b, false, .RAX);
         }
 
         /// Emit signed integer modulo: dst = a % b
-        /// Uses IDIV which puts remainder in RDX
         pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
-            const divisor_reg = if (b == .RAX or b == .RDX) blk: {
-                try self.emit.movRegReg(width, .R11, b);
-                break :blk .R11;
-            } else b;
-            // 1. Move dividend to RAX
-            if (a != .RAX) {
-                try self.emit.movRegReg(width, .RAX, a);
-            }
-            // 2. Sign-extend RAX into RDX:RAX
-            if (width == .w64) {
-                try self.emit.cqo();
-            } else {
-                try self.emit.cdq();
-            }
-            // 3. Perform IDIV
-            try self.emit.idivReg(width, divisor_reg);
-            // Remainder is in RDX
-            if (dst != .RDX) {
-                try self.emit.movRegReg(width, dst, .RDX);
-            }
+            try self.emitDivMod(width, dst, a, b, true, .RDX);
         }
 
         /// Emit unsigned integer modulo: dst = a % b
-        /// Uses DIV which puts remainder in RDX
         pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
+            try self.emitDivMod(width, dst, a, b, false, .RDX);
+        }
+
+        /// Emit IDIV or DIV of `a` by `b` and move `result_reg` to `dst`.
+        /// Both take the dividend in RDX:RAX and leave the quotient in RAX
+        /// and the remainder in RDX.
+        fn emitDivMod(
+            self: *Self,
+            width: RegisterWidth,
+            dst: GeneralReg,
+            a: GeneralReg,
+            b: GeneralReg,
+            comptime signed: bool,
+            comptime result_reg: GeneralReg,
+        ) Allocator.Error!void {
+            // Save b to R11 before moving a to RAX, in case b is in RAX or RDX.
             const divisor_reg = if (b == .RAX or b == .RDX) blk: {
                 try self.emit.movRegReg(width, .R11, b);
                 break :blk .R11;
             } else b;
-            // 1. Move dividend to RAX
             if (a != .RAX) {
                 try self.emit.movRegReg(width, .RAX, a);
             }
-            // 2. Zero-extend: set RDX to 0
-            try self.emit.xorRegReg(width, .RDX, .RDX);
-            // 3. Perform DIV
-            try self.emit.divReg(width, divisor_reg);
-            // Remainder is in RDX
-            if (dst != .RDX) {
-                try self.emit.movRegReg(width, dst, .RDX);
+            if (signed) {
+                // Sign-extend RAX into RDX:RAX
+                if (width == .w64) {
+                    try self.emit.cqo();
+                } else {
+                    try self.emit.cdq();
+                }
+                try self.emit.idivReg(width, divisor_reg);
+            } else {
+                // Zero-extend: set RDX to 0
+                try self.emit.xorRegReg(width, .RDX, .RDX);
+                try self.emit.divReg(width, divisor_reg);
+            }
+            if (dst != result_reg) {
+                try self.emit.movRegReg(width, dst, result_reg);
             }
         }
 
