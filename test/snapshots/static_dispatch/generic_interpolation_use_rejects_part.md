@@ -100,7 +100,7 @@ NO CHANGE
 					(p-assign (ident "#interp_0"))
 					(e-lookup-local
 						(p-assign (ident "name"))))
-				(e-interpolation (constraint-fn-var 252) (dispatcher-var 9)
+				(e-interpolation (constraint-fn-var 248) (dispatcher-var 9)
 					(first
 						(e-literal (string "hi ")))
 					(parts
@@ -109,7 +109,7 @@ NO CHANGE
 						(e-literal (string "")))))))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 270)
+		(e-call (constraint-fn-var 267)
 			(e-lookup-local
 				(p-assign (ident "greet")))
 			(e-string
@@ -118,7 +118,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-call (constraint-fn-var 286)
+		(e-call (constraint-fn-var 284)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-typed-int (value "42") (type "U64")))
 		(annotation
@@ -128,11 +128,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [b.from_interpolation : Str, Iter((a, Str)) -> b]"))
+		(patt (type "a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
 		(patt (type "Str"))
 		(patt (type "Str")))
 	(expressions
-		(expr (type "a -> b where [b.from_interpolation : Str, Iter((a, Str)) -> b]"))
+		(expr (type "a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
 		(expr (type "Str"))
 		(expr (type "Str"))))
 ~~~

@@ -37,7 +37,10 @@ TYPE MISMATCH - unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
 			(text "  where [")
 			(line-break)
 			(indent 1)
-			(text "    b.from_interpolation : List(Str) -> Try(List(_c) -> b, [InvalidInterpolation(Str)]),")
+			(text "    a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)]),")
 			(line-break)
 			(indent 1)
 			(text "  ]")
@@ -145,7 +148,7 @@ expect f(["a"]) == "x"
 						(p-assign (ident "#interp_1"))
 						(e-lookup-local
 							(p-assign (ident "inner"))))
-					(e-interpolation (constraint-fn-var 277) (dispatcher-var 23)
+					(e-interpolation (constraint-fn-var 269) (dispatcher-var 23)
 						(first
 							(e-literal (string "<tr>")))
 						(parts
@@ -155,9 +158,8 @@ expect f(["a"]) == "x"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 300)
-					(e-lookup-local
-						(p-assign (ident "f")))
+				(e-call (constraint-fn-var 298)
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-list
 						(elems
 							(e-string
@@ -170,7 +172,7 @@ expect f(["a"]) == "x"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c -> d where [c.map : c, (_arg -> e) -> _ret, d.from_interpolation : List(Str) -> Try(List(_g) -> d, [InvalidInterpolation(Str)]), e.from_interpolation : List(Str) -> Try(List(_h) -> e, [InvalidInterpolation(Str)])]")))
+		(patt (type "c -> d where [c.map : c, (e -> g) -> h, d.from_interpolation : List(Str) -> Try(List(h) -> d, [InvalidInterpolation(Str)]), g.from_interpolation : List(Str) -> Try(List(e) -> g, [InvalidInterpolation(Str)])]")))
 	(expressions
-		(expr (type "c -> d where [c.map : c, (_arg -> e) -> _ret, d.from_interpolation : List(Str) -> Try(List(_g) -> d, [InvalidInterpolation(Str)]), e.from_interpolation : List(Str) -> Try(List(_h) -> e, [InvalidInterpolation(Str)])]"))))
+		(expr (type "c -> d where [c.map : c, (e -> g) -> h, d.from_interpolation : List(Str) -> Try(List(h) -> d, [InvalidInterpolation(Str)]), g.from_interpolation : List(Str) -> Try(List(e) -> g, [InvalidInterpolation(Str)])]"))))
 ~~~

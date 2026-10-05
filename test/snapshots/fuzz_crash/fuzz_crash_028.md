@@ -2278,7 +2278,19 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..d], _arg -> Error where [d.is_eq : d, d -> Bool]")
+			(text "[Blue, Red, ..d], _arg -> j")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -3217,7 +3229,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1400) (dispatcher-var 280)
+						(e-interpolation (constraint-fn-var 1352) (dispatcher-var 280)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3245,11 +3257,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1582)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1535)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1579)
+										(e-dispatch-call (method "times") (constraint-fn-var 1532)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3264,18 +3276,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1615)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1568)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1605)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1558)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1642)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1595)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1632)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1585)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3290,11 +3302,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1679)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1634)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1676)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1631)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3309,12 +3321,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1754)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1714)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1717)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1677)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
@@ -3435,7 +3447,7 @@ EndOfFile,
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "[Blue, Red, ..d], _arg -> Error where [d.is_eq : d, d -> Bool]"))
+		(patt (type "[Blue, Red, ..d], _arg -> j where [d.is_eq : d, d -> Bool, j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> Error"))
 		(patt (type "_arg -> [Blue]"))
 		(patt (type "{}"))
@@ -3463,7 +3475,7 @@ EndOfFile,
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "[Blue, Red, ..d], _arg -> Error where [d.is_eq : d, d -> Bool]"))
+		(expr (type "[Blue, Red, ..d], _arg -> j where [d.is_eq : d, d -> Bool, j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> Error"))
 		(expr (type "_arg -> [Blue]"))
 		(expr (type "{}"))

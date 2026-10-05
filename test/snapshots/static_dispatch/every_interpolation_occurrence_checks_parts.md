@@ -189,7 +189,7 @@ main = build(1.U64, "not a number")
 								(e-literal (string "")))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 372)
+		(e-call (constraint-fn-var 370)
 			(e-lookup-local
 				(p-assign (ident "build")))
 			(e-typed-int (value "1") (type "U64"))
@@ -207,13 +207,13 @@ main = build(1.U64, "not a number")
 (inferred-types
 	(defs
 		(patt (type "List(Str) -> Try(List(U64) -> Rendered, [InvalidInterpolation(Str)])"))
-		(patt (type "_arg, _arg2 -> List(a) where [a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)]), a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)])]"))
+		(patt (type "a, a -> List(b) where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)]), b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
 		(patt (type "List(Rendered)")))
 	(type_decls
 		(nominal (type "Rendered")
 			(ty-header (name "Rendered"))))
 	(expressions
 		(expr (type "List(Str) -> Try(List(U64) -> Rendered, [InvalidInterpolation(Str)])"))
-		(expr (type "_arg, _arg2 -> List(a) where [a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)]), a.from_interpolation : List(Str) -> Try(List(b) -> a, [InvalidInterpolation(Str)])]"))
+		(expr (type "a, a -> List(b) where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)]), b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
 		(expr (type "List(Rendered)"))))
 ~~~

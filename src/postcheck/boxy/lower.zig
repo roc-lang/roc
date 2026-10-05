@@ -44879,20 +44879,32 @@ fn constTagPayloadTypes(
     checked_ty: checked.CheckedTypeId,
     tag_name: []const u8,
 ) ConstTagPayloadTypes {
-    const tag_union = switch (resolvedTypePayload(module, checked_ty)) {
-        .tag_union => |tag_union| tag_union,
+    switch (resolvedTypePayload(module, checked_ty)) {
+        .tag_union => {},
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag restored with a non-tag-union checked type"),
-    };
-    constRowExtensionIsClosed(module, tag_union.ext, .empty_tag_union);
-    for (tag_union.tags) |tag| {
-        if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
-            return .{
-                .name = tag.name,
-                .payload_tys = tag.argsSlice(module.checked_types),
-            };
-        }
     }
-    boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type");
+    constRowExtensionIsClosed(module, checked_ty, .empty_tag_union);
+    // A closed row's tags can span several row segments.
+    var current = checked_ty;
+    while (true) {
+        const tag_union = switch (resolvedTypePayload(module, current)) {
+            .tag_union => |tag_union| tag_union,
+            .alias => |alias| {
+                current = alias.backing;
+                continue;
+            },
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type"),
+        };
+        for (tag_union.tags) |tag| {
+            if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
+                return .{
+                    .name = tag.name,
+                    .payload_tys = tag.argsSlice(module.checked_types),
+                };
+            }
+        }
+        current = tag_union.ext;
+    }
 }
 
 /// Like `constTagPayloadTypes`, but for restoration into a dynamic (open-row)

@@ -43835,12 +43835,7 @@ fn satisfyBuiltinStrInterpolation(
 
     if (did_err) {
         try self.markStaticDispatchRejected(constraint);
-        if (failure_expr orelse self.instantiatedInterpolationOwner(constraint)) |expr_idx| {
-            try self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
-        } else {
-            try self.markErroneous(dispatcher_var);
-            try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-        }
+        try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr orelse self.instantiatedInterpolationOwner(constraint));
         return true;
     }
     // `Str.from_interpolation` receives `Iter((Str, Str))`, so the
