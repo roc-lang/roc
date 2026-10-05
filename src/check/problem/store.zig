@@ -293,6 +293,7 @@ pub const Store = struct {
                     .comptime_unused_branch,
                     .comptime_condition,
                     .derived_parser_error_row,
+                    .derived_codec_open_record,
                     .associated_item_not_found,
                     .redundant_open_tag_union,
                     => unreachable,

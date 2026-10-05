@@ -734,7 +734,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 428)
+								(e-call (constraint-fn-var 432)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -759,7 +759,7 @@ closure_arg = |xs| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 468)
+							(e-call (constraint-fn-var 472)
 								(e-lookup-local
 									(p-assign (ident "parse")))
 								(e-lookup-local
@@ -792,7 +792,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 508)
+								(e-call (constraint-fn-var 512)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -814,7 +814,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 556)
+				(e-call (constraint-fn-var 560)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
@@ -832,7 +832,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 557)
+								(e-dispatch-call (method "first") (constraint-fn-var 561)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "xs"))))
@@ -854,7 +854,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 602)
+				(e-call (constraint-fn-var 606)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local

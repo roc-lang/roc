@@ -13858,6 +13858,84 @@ test "check type - polarity - nominal declarations close direct and alias rows" 
     try testing.expectEqual(@as(usize, 4), count);
 }
 
+test "check type - declaration body - bare parameterized alias has too few args" {
+    var env = try TestEnv.init("BareAliasInNominal",
+        \\Pair(a) : (a, a)
+        \\
+        \\Thing :: { p : Pair }
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - bare parameterized nominal has too few args" {
+    var env = try TestEnv.init("BareNominalInNominal",
+        \\Box2(a) :: { v : a }
+        \\
+        \\Thing :: [T(Box2)]
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - bare parameterized alias inside an alias application has too few args" {
+    var env = try TestEnv.init("BareAliasInAlias",
+        \\Pair(a) : (a, a)
+        \\
+        \\Pairs : List(Pair)
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+}
+
+test "check type - declaration body - bare re-export of a parameterized type has too few args" {
+    var env = try TestEnv.init("BareReexportInNominal",
+        \\Pair(a) : (a, a)
+        \\
+        \\LocalPair : Pair
+        \\
+        \\Thing :: { p : LocalPair }
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - bare imported parameterized alias has too few args" {
+    var lib = try TestEnv.init("BareLib",
+        \\Pair(a) : (a, a)
+    );
+    defer lib.deinit();
+    var env = try TestEnv.initWithImport("BareMain",
+        \\import BareLib
+        \\
+        \\Thing :: { p : BareLib.Pair }
+    , "BareLib", &lib);
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - an alias may re-export a parameterized type" {
+    var env = try TestEnv.init("Reexport",
+        \\Pair(a) : (a, a)
+        \\
+        \\LocalPair : Pair
+        \\ParenPair : (Pair)
+        \\Applied : Pair(U8)
+        \\
+        \\Thing :: { p : Applied }
+        \\
+        \\x : Pair
+        \\x = (1, 2)
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try env.assertNominalDeclValidity("Thing", true);
+}
+
 test "check type - polarity - wrapped shared hidden row joins all occurrences" {
     for ([_][]const u8{ "((Str -> a), a)", "(a, (Str -> a))" }) |body| {
         for ([_]bool{ false, true }) |output| {
