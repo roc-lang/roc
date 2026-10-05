@@ -10783,6 +10783,66 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
     try std.testing.expectEqual(@as(usize, 0), main_retained.?);
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/12063
+//
+// The early `return` keeps `step` out of line, so `main` reads `pair.a` from
+// the call's record result, and the default arm of `??` assigns that field straight
+// into the loop's join result cell. The take still moves the record's unit
+// into the cell, so the list `main` hands around the loop through `step` stays
+// unique and its `List.set` needs no runtime uniqueness check.
+test "a field take assigned into a join result cell keeps a loop list unique" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Pair : { a : List(U16), b : List(U16) }
+        \\
+        \\step : List(U16), List(U16), U64 -> Pair
+        \\step = |a, b0, i| {
+        \\    if i > 100 {
+        \\        return { a, b: b0 }
+        \\    } else {
+        \\    }
+        \\    { a, b: List.set(b0, i, 1) ?? b0 }
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        pair = step($a, $b, $i)
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    (List.get($a, 3) ?? 0).to_u64() + (List.get($b, 2) ?? 0).to_u64()
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var main_sets: ?ListSetCounts = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpec(proc_id).body == null) continue;
+        const sets = listSetCounts(store, proc_id);
+        var total = main_sets orelse ListSetCounts{};
+        total.checked += sets.checked;
+        total.check_free += sets.check_free;
+        main_sets = total;
+    }
+    try std.testing.expect(main_sets != null);
+    try std.testing.expect(main_sets.?.check_free >= 1);
+    try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
+}
+
 // A record of lists updated through a helper function stays in place: the
 // call site demands a mode-specialized variant whose owned parameter lets the
 // field reads take, so no emitted variant both mutates a list and retains a
@@ -10825,7 +10885,8 @@ test "owned variants take a helper parameter's fields at the call" {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
         const proc = store.getProcSpec(proc_id);
         if (proc.body == null) continue;
-        if (!procContainsListSet(store, proc_id)) continue;
+        const sets = listSetCounts(store, proc_id);
+        if (sets.checked + sets.check_free == 0) continue;
         const retained = try fieldReadRetainCount(allocator, &optimized.lowered, proc_id);
         if (retained == 0) mutating_retain_free += 1;
     }
@@ -10851,9 +10912,17 @@ test "owned variants take a helper parameter's fields at the call" {
     }
 }
 
-fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) bool {
+const ListSetCounts = struct {
+    /// `list_set` statements that keep their runtime uniqueness check.
+    checked: usize = 0,
+    /// `list_set` statements ARC proved unique and marked check-free.
+    check_free: usize = 0,
+};
+
+fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSetCounts {
+    var counts: ListSetCounts = .{};
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return false;
+    const body = proc.body orelse return counts;
     var cursor_stack: [256]LIR.CFStmtId = undefined;
     var top: usize = 0;
     cursor_stack[top] = body;
@@ -10866,7 +10935,9 @@ fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) b
         seen.set(@intFromEnum(cursor));
         switch (store.getCFStmt(cursor)) {
             .assign_low_level => |stmt| {
-                if (stmt.op == .list_set) return true;
+                if (stmt.op == .list_set) {
+                    if (stmt.unique_args == 0) counts.checked += 1 else counts.check_free += 1;
+                }
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -10919,7 +10990,7 @@ fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) b
             => {},
         }
     }
-    return false;
+    return counts;
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must

@@ -6347,16 +6347,6 @@ pub fn ensureContentIdentity(
     defer import_hashes.deinit(self.gpa);
     for (imported_envs) |imported_env| {
         if (imported_env == @as(*const Self, self)) continue;
-        // An import that is this module's own content (same name, same source
-        // bytes—e.g. the baked Builtin env while `roc check Builtin.roc`
-        // checks the identical source) contributes nothing to the transitive
-        // closure; folding it in would make byte-identical modules disagree
-        // on identity depending on which copy was loaded first.
-        if (std.mem.eql(u8, imported_env.module_name, self.module_name) and
-            std.mem.eql(u8, imported_env.common.source, self.common.source))
-        {
-            continue;
-        }
         const import_hash = imported_env.contentIdentityHash() orelse {
             base.invariant(
                 "module content identity missing for import '{s}' of module '{s}'",
