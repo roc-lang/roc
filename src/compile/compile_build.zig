@@ -250,15 +250,15 @@ pub const BuildEnv = struct {
     /// import cycle) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
-    /// Compiler role to assign to the root module of this build.
-    root_module_role: ModuleEnv.ModuleRole = .user,
-
-    /// Post-canonicalization validation to apply to the root module of this
-    /// build. `roc test` sets `.explicit_roots` because it runs the root file's
-    /// top-level `expect`s, which are compile-time roots in their own right: a
-    /// headerless root that is neither a type module nor a default app is a
-    /// plain module there rather than a file missing its `main!`.
-    root_validation: Can.Validation = .checking,
+    /// Post-canonicalization validation of the module this build was pointed
+    /// at when that module is the package root. `roc test` sets
+    /// `.explicit_roots` because it runs the file's top-level `expect`s, which
+    /// are compile-time roots in their own right: a headerless file that is
+    /// neither a type module nor a default app is a plain module there rather
+    /// than a file missing its `main!`. A separate entry module below an
+    /// owning `main.roc` always takes `.explicit_roots`, and that `main.roc`
+    /// takes ordinary `.checking` validation.
+    entry_validation: Can.Validation = .checking,
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
@@ -512,12 +512,8 @@ pub const BuildEnv = struct {
         self.post_check_publication_mode = mode;
     }
 
-    pub fn setRootModuleRole(self: *BuildEnv, role: ModuleEnv.ModuleRole) void {
-        self.root_module_role = role;
-    }
-
-    pub fn setRootValidation(self: *BuildEnv, validation: Can.Validation) void {
-        self.root_validation = validation;
+    pub fn setEntryValidation(self: *BuildEnv, validation: Can.Validation) void {
+        self.entry_validation = validation;
     }
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
@@ -1097,8 +1093,14 @@ pub const BuildEnv = struct {
         const coord_pkg = coord.getPackage(pkg_name).?;
         const module_name = base.module_path.getModuleName(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
-        coord_pkg.modules.items[root_id].module_role = self.root_module_role;
-        coord_pkg.modules.items[root_id].validation = self.root_validation;
+        // When an owning `main.roc` supplied the packages, the file the build
+        // was pointed at is a separate entry module and owns the entry
+        // validation; the `main.roc` root is validated as an ordinary module.
+        const has_separate_entry = if (self.entry_module_abs) |entry_file|
+            !std.mem.eql(u8, entry_file, pkg_root_file)
+        else
+            false;
+        coord_pkg.modules.items[root_id].validation = if (has_separate_entry) .checking else self.entry_validation;
         if (self.root_source_dir_override) |source_dir| {
             coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
         }

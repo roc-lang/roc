@@ -42,7 +42,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 237)
+		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 241)
 			(receiver
 				(e-num (value "0")))
 			(args

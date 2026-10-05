@@ -19591,6 +19591,8 @@ fn resolveWhereAliasReference(
 fn unifyAnnoWithExternalType(
     self: *Self,
     resolved: ?ExternalType,
+    anno_idx: CIR.TypeAnno.Idx,
+    name: Ident.Idx,
     anno_var: Var,
     anno_region: Region,
     polarity: Polarity,
@@ -19603,6 +19605,7 @@ fn unifyAnnoWithExternalType(
         try self.markErroneous(anno_var);
         return;
     };
+    if (try self.rejectUnappliedTypeConstructorInDeclaration(ctx, anno_idx, ext_ref.local_var, name, anno_var, anno_region)) return;
     const ext_instantiated_var = try self.instantiateVarPolarized(
         ext_ref.local_var,
         env,
@@ -19613,6 +19616,90 @@ fn unifyAnnoWithExternalType(
         .none,
     );
     _ = try self.unify(anno_var, ext_instantiated_var, env);
+}
+
+/// A type declaration body leaves no type variable unbound (a written `_` or
+/// undeclared variable there is an error), so a bare reference there to a
+/// type constructor that takes arguments is an arity mismatch. The one bare
+/// reference a declaration body may hold is an alias's whole body, which
+/// re-exports the type constructor itself. Reports the mismatch and marks the
+/// annotation erroneous; returns whether it did.
+fn rejectUnappliedTypeConstructorInDeclaration(
+    self: *Self,
+    ctx: GenTypeAnnoCtx,
+    anno_idx: CIR.TypeAnno.Idx,
+    decl_var: Var,
+    name: Ident.Idx,
+    anno_var: Var,
+    anno_region: Region,
+) std.mem.Allocator.Error!bool {
+    const decl = switch (ctx) {
+        .annotation => return false,
+        .type_decl => |decl| decl,
+    };
+    if (decl.type_ == .alias and self.isWholeAliasBody(decl.idx, anno_idx)) return false;
+    const unapplied = self.unappliedTypeConstructorArity(decl_var);
+    if (unapplied == 0) return false;
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+        .type_name = name,
+        .region = anno_region,
+        .num_expected_args = unapplied,
+        .num_actual_args = 0,
+    } });
+    try self.markErroneous(anno_var);
+    return true;
+}
+
+/// Whether `anno_idx` is the whole body of the alias declared by `statement_idx`.
+fn isWholeAliasBody(self: *const Self, statement_idx: CIR.Statement.Idx, anno_idx: CIR.TypeAnno.Idx) bool {
+    var body = switch (self.cir.store.getStatement(statement_idx)) {
+        .s_alias_decl => |alias| alias.anno,
+        .s_nominal_decl, .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => return false,
+    };
+    while (true) {
+        if (body == anno_idx) return true;
+        switch (self.cir.store.getTypeAnno(body)) {
+            .parens => |parens| body = parens.anno,
+            .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => return false,
+        }
+    }
+}
+
+/// How many arguments a bare reference to the declaration whose type is
+/// `decl_var` leaves unapplied: a parameterized declaration's own formals,
+/// or, for an alias re-exporting a type constructor, the arguments its
+/// re-exported application leaves unbound. A declaration body binds every
+/// other variable, so an unbound argument there is exactly an unapplied one.
+fn unappliedTypeConstructorArity(self: *const Self, decl_var: Var) u32 {
+    var current = decl_var;
+    var declared = true;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| {
+                const args = self.types.sliceAliasArgs(alias);
+                if (args.len != 0) return if (declared) @intCast(args.len) else self.countUnboundTypeVars(args);
+                current = self.types.getAliasBackingVar(alias);
+                declared = false;
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal| {
+                    const args = self.types.sliceNominalArgs(nominal);
+                    return if (declared) @intCast(args.len) else self.countUnboundTypeVars(args);
+                },
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return 0,
+            },
+            .flex, .rigid, .field_presence, .err => return 0,
+        }
+    }
+}
+
+fn countUnboundTypeVars(self: *const Self, vars: []const Var) u32 {
+    var count: u32 = 0;
+    for (vars) |var_| switch (self.types.resolveVar(var_).desc.content) {
+        .flex, .rigid => count += 1,
+        .alias, .structure, .field_presence, .err => {},
+    };
+    return count;
 }
 
 /// Resolve a where alias whose declaration lives in another module, from the
@@ -20663,6 +20750,8 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     },
                     .external => |ext| try self.unifyAnnoWithExternalType(
                         try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx),
+                        frame.anno_idx,
+                        lookup.name,
                         anno_var,
                         anno_region,
                         polarity,
@@ -20671,6 +20760,8 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     ),
                     .external_identity => |ext| try self.unifyAnnoWithExternalType(
                         try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx),
+                        frame.anno_idx,
+                        lookup.name,
                         anno_var,
                         anno_region,
                         polarity,
@@ -20695,6 +20786,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                 try self.markErroneous(anno_var);
                 return anno_gen_done;
             }
+            if (try self.rejectUnappliedTypeConstructorInDeclaration(ctx, frame.anno_idx, ModuleEnv.varFrom(local.decl_idx), lookup.name, anno_var, anno_region)) return anno_gen_done;
             const instantiated_var = try self.instantiateVarPolarized(
                 ModuleEnv.varFrom(local.decl_idx),
                 env,
@@ -35400,6 +35492,123 @@ fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const Boun
     }
 }
 
+/// Close every record row in the value shape of a pending derived `parser_for`
+/// or `encoder_for` relation, when this boundary owns the row's flexible
+/// extension and no boundary root's interface reaches it. Nothing outside the
+/// definition can name such an extension, so no later use can add a field: the
+/// fields the row has are the fields it gets, exactly as at module
+/// finalization. Closing it
+/// here lets the codec produce its constraints, including its error row,
+/// before generalization publishes the definition's type; deferring it to
+/// module finalization would add errors to a scheme that callers have already
+/// instantiated. A codec whose open row the interface does reach is rejected
+/// by `reportDerivedCodecOpenRecord` instead.
+fn closeBoundaryLocalDerivedCodecRecordRows(
+    self: *Self,
+    roots: []const BoundaryRoot,
+    env: *Env,
+) Allocator.Error!void {
+    const rank = env.rank();
+    var exts = std.ArrayList(Var).empty;
+    defer exts.deinit(self.gpa);
+    var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer interface_vars.deinit();
+    var interface_collected = false;
+
+    var shape_exts = std.ArrayList(Var).empty;
+    defer shape_exts.deinit(self.gpa);
+
+    var open_in_interface = std.ArrayList(OpenRecordCodec).empty;
+    defer open_in_interface.deinit(self.gpa);
+
+    for (env.deferred_static_dispatch_constraints.items.items) |deferred| {
+        const codec_constraint = for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
+            if (self.staticDispatchConstraintIsInactive(constraint)) continue;
+            if (constraint.fn_name.eql(self.cir.idents.parser_for) or
+                constraint.fn_name.eql(self.cir.idents.encoder_for))
+            {
+                break constraint;
+            }
+        } else continue;
+
+        shape_exts.clearRetainingCapacity();
+        try self.collectDerivedCodecOpenRecordExts(deferred.var_, &shape_exts);
+        const local_start = exts.items.len;
+        const reaches_interface = for (shape_exts.items) |ext| {
+            if (self.types.resolveVar(ext).desc.rank != rank) continue;
+            if (!interface_collected) {
+                for (roots) |root| try self.collectReachableVars(root.interface, &interface_vars);
+                interface_collected = true;
+            }
+            if (interface_vars.contains(ext)) break true;
+            try exts.append(self.gpa, ext);
+        } else false;
+        if (reaches_interface) {
+            exts.shrinkRetainingCapacity(local_start);
+            try open_in_interface.append(self.gpa, .{ .deferred = deferred, .constraint = codec_constraint });
+        }
+    }
+
+    for (open_in_interface.items) |open| {
+        try self.reportDerivedCodecOpenRecord(open.deferred, open.constraint, env);
+    }
+    if (exts.items.len == 0) return;
+
+    for (exts.items) |ext| {
+        if (self.types.resolveVar(ext).desc.content != .flex) continue;
+        try self.unifyWith(ext, .{ .structure = .empty_record }, env);
+    }
+    try self.checkStaticDispatchConstraints(env, false);
+    try self.checkAllConstraints(env);
+}
+
+/// The expression whose checking instantiated the scheme that introduced this
+/// dispatch constraint (for a codec, the `Json.parse` or `Json.to_str` lookup).
+/// Searched only when reporting a failure.
+fn dispatchInstantiationExpr(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
+    const fn_root = self.types.resolveVar(constraint.fn_var).var_;
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const expr_idx = dispatcher.instantiation_expr orelse continue;
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
+            if (self.types.resolveVar(copied.fn_var).var_ == fn_root) return expr_idx;
+        }
+    }
+    return null;
+}
+
+const OpenRecordCodec = struct {
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+};
+
+/// Reject a derived codec whose value shape holds a record row that a
+/// definition's interface reaches while it is still open: callers may use that
+/// record with more fields, so the codec's exact field set is not known, and
+/// closing the row would narrow the definition's own type.
+fn reportDerivedCodecOpenRecord(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    const failure_expr = explicitDeferredConstraintFailureExpr(deferred);
+    // The codec call is where the program requested the derivation, and where
+    // destructuring or annotating fixes it.
+    const region = self.derivedCodecDiagnosticRegion(
+        constraint,
+        self.dispatchInstantiationExpr(constraint) orelse failure_expr,
+        self.getRegionAt(deferred.var_),
+    );
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, deferred.var_);
+    _ = try self.problems.appendProblem(self.gpa, .{ .derived_codec_open_record = .{
+        .region = region,
+        .direction = if (constraint.fn_name.eql(self.cir.idents.parser_for)) .parse else .encode,
+        .record_snapshot = snapshot,
+    } });
+    try self.poisonConstraintFailure(deferred.var_, constraint, env, failure_expr);
+    try self.markStaticDispatchRejected(constraint);
+}
+
 /// `defaultLiteralsAtGeneralizationBoundary` for a whole binding group: the
 /// reachable protection set is seeded from every member's root, so a literal
 /// reachable from any member's signature stays open across the shared
@@ -35412,6 +35621,8 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     const rank = env.rank();
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
+
+    try self.closeBoundaryLocalDerivedCodecRecordRows(roots, env);
 
     // Generalization publishes a complete scheme: its root type plus every
     // unresolved method relation the definition owns. Capture those relations
@@ -42167,6 +42378,7 @@ inline fn processDeferredDispatchEntry(
                     }
                 } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                     if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
+                    if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                     const region = self.getRegionAt(deferred_constraint.var_);
                     // A derived parser determines each tag row exactly, so
                     // implicit output-position openness collapses first
@@ -42225,6 +42437,7 @@ inline fn processDeferredDispatchEntry(
                     }
                 } else if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
                     if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
+                    if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                     const region = self.getRegionAt(deferred_constraint.var_);
                     // A derived encoder determines each tag row exactly, so
                     // implicit output-position openness collapses first
@@ -43937,27 +44150,68 @@ fn derivedParseTagUnionHasAnyTag(self: *Self, tag_union: types_mod.TagUnion) All
     }
 }
 
-/// Close an inferred record row so a parser can be derived for it.
+/// Close the inferred record rows of a value shape so a parser can be derived
+/// for it.
 ///
 /// A record whose shape comes only from use sites keeps an open row: every
 /// field access adds a field and leaves the rest of the row a flex var that
-/// another access could still extend. Deriving a parser needs the exact field
-/// set, so once the dispatch has been deferred as far as it can go and nothing
-/// further is coming, take the fields the row has as the fields it gets and
-/// close it. Reports whether the row closed and now supports derivation, which
+/// another access could still extend. That holds for a record nested in the
+/// shape (`rec.person.name`) as much as for the outermost one. Deriving a
+/// parser needs the exact field set of every record it reads, so once the
+/// dispatch has been deferred as far as it can go and nothing further is
+/// coming, take the fields each row has as the fields it gets and close it.
+/// Reports whether any row closed and the shape now supports derivation, which
 /// it does not when a field's own type never resolved.
 fn closeRecordRowForDerivedParse(
     self: *Self,
     var_: Var,
     env: *Env,
 ) Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_).desc.content;
-    if (resolved != .structure or resolved.structure != .record) return false;
-    const record = resolved.structure.record;
-    if (self.types.resolveVar(record.ext).desc.content != .flex) return false;
-
-    try self.unifyWith(record.ext, .{ .structure = .empty_record }, env);
+    if (!try self.closeDerivedCodecOpenRecordExts(var_, env)) return false;
     return (try self.varSupportsDerivedParseShape(var_)) == .supported;
+}
+
+/// Collect, in variable order, the flexible extension of every record a
+/// derived codec's value shape reaches as data. A literal-carrying extension
+/// is not one: a pending literal can still add information to it.
+fn collectDerivedCodecOpenRecordExts(
+    self: *Self,
+    root: Var,
+    out: *std.ArrayList(Var),
+) Allocator.Error!void {
+    var reachable = collections.DenseMap(Var, void).init(self.gpa);
+    defer reachable.deinit();
+    try self.collectDataReachableVars(root, &reachable);
+
+    const start = out.items.len;
+    var iter = reachable.keyIterator();
+    while (iter.next()) |var_| {
+        const content = self.types.resolveVar(var_.*).desc.content;
+        if (content != .structure or content.structure != .record) continue;
+        const ext = self.types.resolveVar(content.structure.record.ext);
+        if (ext.desc.content != .flex) continue;
+        if (self.varLiteralKind(ext.var_) != null) continue;
+        try out.append(self.gpa, ext.var_);
+    }
+    std.mem.sort(Var, out.items[start..], {}, varLessThan);
+}
+
+fn varLessThan(_: void, a: Var, b: Var) bool {
+    return @intFromEnum(a) < @intFromEnum(b);
+}
+
+/// Close every flexible record extension `collectDerivedCodecOpenRecordExts`
+/// finds in `root`'s shape. Reports whether there was any to close.
+fn closeDerivedCodecOpenRecordExts(self: *Self, root: Var, env: *Env) Allocator.Error!bool {
+    var exts = std.ArrayList(Var).empty;
+    defer exts.deinit(self.gpa);
+    try self.collectDerivedCodecOpenRecordExts(root, &exts);
+    if (exts.items.len == 0) return false;
+    for (exts.items) |ext| {
+        if (self.types.resolveVar(ext).desc.content != .flex) continue;
+        try self.unifyWith(ext, .{ .structure = .empty_record }, env);
+    }
+    return true;
 }
 
 const DerivedSupport = enum {
@@ -44171,12 +44425,7 @@ fn closeRecordRowForDerivedEncode(
     var_: Var,
     env: *Env,
 ) Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_).desc.content;
-    if (resolved != .structure or resolved.structure != .record) return false;
-    const record = resolved.structure.record;
-    if (self.types.resolveVar(record.ext).desc.content != .flex) return false;
-
-    try self.unifyWith(record.ext, .{ .structure = .empty_record }, env);
+    if (!try self.closeDerivedCodecOpenRecordExts(var_, env)) return false;
     return (try self.varSupportsDerivedEncodeShape(var_)) == .supported;
 }
 

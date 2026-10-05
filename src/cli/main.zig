@@ -187,9 +187,6 @@ const CliBuildEnvOptions = struct {
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
-    /// Root path tested against the compiler-owned builtin sources; matches
-    /// are compiled with the `.builtin` module role (check sites).
-    builtin_role_path: ?[]const u8 = null,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
     root_source_url: ?[]const u8 = null,
@@ -229,11 +226,6 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     }
     if (opts.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
-    }
-    if (opts.builtin_role_path) |path| {
-        if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, path)) {
-            build_env.setRootModuleRole(.builtin);
-        }
     }
     if (opts.root_source_url) |url| {
         // The URL was validated before any pipeline could receive it, so the
@@ -15468,7 +15460,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // file needs no entrypoint: a headerless file that is neither a type module
     // nor a default app is tested as a plain module, and an app is tested
     // whether or not it supplies the definitions its platform requires.
-    build_env.setRootValidation(.explicit_roots);
+    build_env.setEntryValidation(.explicit_roots);
 
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
@@ -18356,26 +18348,6 @@ fn buildForCheckWithOptionalMain(build_env: *BuildEnv, filepath: []const u8, mai
     try build_env.buildResolvingMain(filepath, main_filepath);
 }
 
-/// Returns true when `filepath` is the compiler-owned builtin module (`Builtin.roc`).
-///
-/// We deliberately do NOT compare against the absolute path of the builtin source
-/// on the *build* machine: a distributed binary would then only recognize the
-/// builtin when run from the exact checkout directory it was built in. Instead we
-/// detect the builtin by its filename plus two markers that only
-/// the compiler-owned builtin source contains: the `ProvidedByCompiler` tag and
-/// the `Str ::` declaration. This heuristic is host-independent and reliable in
-/// practice.
-fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, io: std.Io, filepath: []const u8) bool {
-    if (!std.mem.eql(u8, std.fs.path.basename(filepath), "Builtin.roc")) return false;
-
-    const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.Io.Dir.cwd().readFileAlloc(io, filepath, gpa, .limited(max_source_size)) catch return false;
-    defer gpa.free(source);
-
-    return std.mem.find(u8, source, "ProvidedByCompiler") != null and
-        std.mem.find(u8, source, "Str ::") != null;
-}
-
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliCtx,
@@ -18404,7 +18376,6 @@ fn checkFileWithBuildEnvPreserved(
         .track_watch_inputs = track_watch_inputs,
         .synthetic_default_app = synthetic_default_app,
         .source_dir_override = source_dir_override,
-        .builtin_role_path = filepath,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
     });
@@ -18553,7 +18524,6 @@ fn checkFileWithBuildEnv(
         // root once (which also resolves the platform target config constants
         // the check flow depends on).
         .post_check_publication_mode = .executable_artifacts,
-        .builtin_role_path = filepath,
     });
     defer build_env.deinit();
 
@@ -19823,6 +19793,15 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    if (args_in.builtins) {
+        try generateBuiltinDocs(ctx, args_in.output, args_in.with_lang_ref);
+        ctx.io.stdout().print("\nGenerated docs for the builtins\n", .{}) catch {};
+        if (args_in.serve) {
+            try serveDocumentation(ctx, args_in.output);
+        }
+        return;
+    }
+
     var args = args_in;
     const resolved_source = try resolveSourceArg(ctx, args_in.path, false);
     args.path = resolved_source.path;
@@ -20039,10 +20018,40 @@ fn generateDocs(
 
     const modules_slice = try module_docs_list.toOwnedSlice(ctx.gpa);
 
-    var package_docs = DocModel.PackageDocs{
-        .name = pkg_name,
-        .modules = modules_slice,
+    try writeDocsSite(ctx, .{ .name = pkg_name, .modules = modules_slice }, base_output_dir, with_lang_ref);
+}
+
+/// Generate documentation for the builtin module embedded in this compiler:
+/// the exact module, already checked when the compiler was built, that every
+/// program this compiler builds uses.
+fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref: bool) CliMainError!void {
+    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
+    defer builtin_modules.deinit();
+
+    const package_docs = package_docs: {
+        const modules = try ctx.gpa.alloc(docs.DocModel.ModuleDocs, 1);
+        errdefer ctx.gpa.free(modules);
+        // The builtin is documented as a standalone root type module, whose
+        // display package name is `module` (see `BuildEnv.displayNameForPackage`).
+        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{
+            .checked_artifact = &builtin_modules.checked_artifact,
+        });
+        errdefer modules[0].deinit(ctx.gpa);
+        break :package_docs docs.DocModel.PackageDocs{ .name = try ctx.gpa.dupe(u8, "Builtin"), .modules = modules };
     };
+
+    try writeDocsSite(ctx, package_docs, base_output_dir, with_lang_ref);
+}
+
+/// Render `package_docs` as an HTML documentation site in `base_output_dir`,
+/// taking ownership of `package_docs`.
+fn writeDocsSite(
+    ctx: *CliCtx,
+    package_docs_in: docs.DocModel.PackageDocs,
+    base_output_dir: []const u8,
+    with_lang_ref: bool,
+) CliMainError!void {
+    var package_docs = package_docs_in;
     defer package_docs.deinit(ctx.gpa);
 
     // Promote the builtin types (Str, Num, …) to top-level modules so the
@@ -20441,42 +20450,6 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
-}
-
-test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content markers" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-    const io = std.Io.Threaded.global_single_threaded.io();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const tmp_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
-    defer allocator.free(tmp_root);
-
-    const markers = "Str :: [ProvidedByCompiler].{\n}\n";
-
-    const expectClassified = struct {
-        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) CliMainError!void {
-            try dir.writeFile(t_io, .{ .sub_path = name, .data = data });
-            const path = try std.fs.path.join(gpa, &.{ root, name });
-            defer gpa.free(path);
-            try testing.expectEqual(expected, isCompilerOwnedBuiltinSourcePath(gpa, t_io, path));
-        }
-    }.check;
-
-    // The real builtin: correct filename plus both content markers.
-    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", markers, true);
-    // Correct filename but missing the markers (a user file that happens to be
-    // named Builtin.roc) must not be classified as compiler-owned.
-    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "foo = 1\n", false);
-    // The markers in a file that isn't named Builtin.roc must not match.
-    try expectClassified(allocator, io, tmp_root, tmp.dir, "NotBuiltin.roc", markers, false);
-
-    // A non-existent path is not the builtin (read failure → false, not a crash).
-    const missing = try std.fs.path.join(allocator, &.{ tmp_root, "Missing.roc" });
-    defer allocator.free(missing);
-    try testing.expect(!isCompilerOwnedBuiltinSourcePath(allocator, io, missing));
 }
 
 test "classifyNativeRunTermination preserves successful exit" {
