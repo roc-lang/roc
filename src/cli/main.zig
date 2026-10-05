@@ -17017,7 +17017,7 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
 /// that work's time summed across threads rather than a slice of wall time.
 fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
     return .{
-        .{ .name = "Parsing (summed across threads)", .ns = timing.tokenize_parse_ns },
+        .{ .name = "Parsing (summed)", .ns = timing.tokenize_parse_ns },
         .{ .name = "Name Resolution (summed)", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
         .{ .name = "Type Inference (summed)", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
         .{ .name = "Module Compile-Time Eval (summed)", .ns = timing.module_compile_time_evaluation_ns },
@@ -17041,7 +17041,7 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
     };
 }
 
-const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (aggregate call time)";
+const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (summed)";
 
 fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]progress.SubTiming {
     const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
@@ -17733,7 +17733,7 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     if (timing.program_finalization_ns != 0) {
         var subs_buf: [12]progress.SubTiming = undefined;
         reporter.recordCompletedWithBreakdown(
-            "Shared Lowering and Compile-Time Evaluation",
+            "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
             .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
             measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
