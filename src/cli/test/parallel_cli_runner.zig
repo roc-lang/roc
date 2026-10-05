@@ -419,6 +419,7 @@ const CustomCase = enum {
     cache_fingerprints_agree,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
+    issue_12029_wasm_boxy_tail_calls,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
@@ -1568,6 +1569,21 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions build for wasm32 (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", "--output=mutual_tail_calls_dev.wasm" }, .roc_file = "test/wasm/mutual_tail_calls_static_lib_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions build for wasm32 (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=mutual_tail_calls_size.wasm" }, .roc_file = "test/wasm/mutual_tail_calls_static_lib_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions build for wasm32 (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=mutual_tail_calls_speed.wasm" }, .roc_file = "test/wasm/mutual_tail_calls_static_lib_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy lambda use supplies every dictionary its worker takes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyGenericLambdaDictionaries.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy call keeps a value it both gives and lends to its callee (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxySharedCallOperand.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy lambda use supplies every dictionary its worker takes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyGenericLambdaDictionaries.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy call keeps a value it both gives and lends to its callee (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxySharedCallOperand.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy tail calls through erased function values run in constant stack (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ErasedTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy tail calls between generic functions run in constant stack (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyGenericTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy tail calls through erased function values run in constant stack (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ErasedTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy tail calls between generic functions run in constant stack (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyGenericTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (specialized, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (specialized, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
@@ -2589,6 +2605,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 succeeds with per-specialization field defaults", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/field_default_root_order/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compile-time root request order placed a root before another root it depends on" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
@@ -4084,6 +4101,7 @@ fn runCustomCase(
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
+        .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -7836,6 +7854,44 @@ fn wasmHasExport(bytes: []const u8, wanted: []const u8) (std.Io.Reader.TakeLeb12
         return false;
     }
     return false;
+}
+
+/// Build a program of generic tail-call cycles for wasm32 without
+/// specialization and run it. The interpreter's stack is far smaller than
+/// the cycles are deep, so a cycle that kept its frames would overflow it.
+fn customIssue12029WasmBoxyTailCalls(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy-tail-calls.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no", "--no-cache", output_arg },
+        .roc_file = "test/wasm/boxy_generic_tail_calls_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the boxy tail call wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "boxy tail call wasm execution failed: {}", .{err});
+    const expected = "a result string long enough to live on the heap!";
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "boxy tail call wasm returned \"{s}\"", .{result});
+    }
+    return null;
 }
 
 fn customIssue10827PrivateCompilerSupport(

@@ -6,10 +6,23 @@ const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding
 const signal_handler = @import("signal_handler.zig");
 
 /// Error message to display on stack overflow
-const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
+const COMPILER_STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
+
+/// Error message to display when the recursion that exhausted the stack is
+/// the interpreted Roc program's own.
+const PROGRAM_STACK_OVERFLOW_MESSAGE = "\nThis Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.\n\n";
+
+/// Set while the current thread is interpreting a Roc program. The
+/// interpreter runs each Roc call on the native stack, so an overflow on such
+/// a thread is the program's recursion, not a defect in the compiler.
+pub threadlocal var interpreting_roc_program: bool = false;
 
 /// Callback for stack overflow in the compiler
 fn handleStackOverflow() noreturn {
+    const message: []const u8 = if (interpreting_roc_program)
+        PROGRAM_STACK_OVERFLOW_MESSAGE
+    else
+        COMPILER_STACK_OVERFLOW_MESSAGE;
     if (comptime builtin.os.tag == .windows) {
         // Windows: use WriteFile for signal-safe output
         const DWORD = u32;
@@ -25,14 +38,14 @@ fn handleStackOverflow() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, message.ptr, @intCast(message.len), &bytes_written, null);
         // Use TerminateProcess instead of ExitProcess: after a stack overflow the
         // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
         _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use raw write for signal-safety
-        _ = std.c.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len);
+        _ = std.c.write(posix.STDERR_FILENO, message.ptr, message.len);
         std.process.exit(134);
     } else {
         // WASI fallback

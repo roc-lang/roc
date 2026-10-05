@@ -391,6 +391,12 @@ pub const Interpreter = struct {
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
+    /// An erased call a deferred tail call left for whoever awaits its
+    /// procedure's result. It owns one reference to its closure.
+    pending_erased: ?PendingErasedCall = null,
+    /// Set while an erased call is entering its callee, so that callee can
+    /// tell this caller, which makes pending calls, from any other.
+    erased_caller_drives: bool = false,
     /// Active proc call stack for the current evaluation.
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
@@ -582,6 +588,9 @@ pub const Interpreter = struct {
     const Frame = struct {
         proc_id: LirProcSpecId,
         ret_layout: layout_mod.Idx,
+        /// Whether an erased call made this activation, which then makes
+        /// whatever call the activation leaves pending.
+        caller_drives: bool = false,
         /// The proc's frame locals, sorted by id; `slots` is parallel to it.
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
         /// The proc's join points, sorted by id.
@@ -666,8 +675,26 @@ pub const Interpreter = struct {
 
     const ExecOutcome = union(enum) {
         returned: LocalId,
+        /// The procedure returned without a value because a call is pending.
+        returned_pending,
         loop_continue,
         loop_break,
+        /// A frame-replacing call: the procedure's result is whatever this
+        /// call returns, so its own frame ends before the callee's begins.
+        tail_call: TailCall,
+    };
+
+    const TailCall = struct {
+        proc: LirProcSpecId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    };
+
+    /// One procedure activation ends with its result, or with the call that
+    /// replaces it.
+    const ProcStep = union(enum) {
+        result: EvalProcResult,
+        tail_call: TailCall,
     };
 
     const EvalProcResult = struct {
@@ -1547,6 +1574,14 @@ pub const Interpreter = struct {
 
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        // Freestanding Linux programs own their signal handler and have no
+        // TLS startup. Only the compiler's handler reads this diagnostic flag.
+        const tracks_compiler_signals = builtin.os.tag != .linux or builtin.link_libc;
+        const outer_interpreting = if (comptime tracks_compiler_signals) base.stack_overflow.interpreting_roc_program else false;
+        if (comptime tracks_compiler_signals) base.stack_overflow.interpreting_roc_program = true;
+        defer if (comptime tracks_compiler_signals) {
+            base.stack_overflow.interpreting_roc_program = outer_interpreting;
+        };
         self.bindBoxyRuntime();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
@@ -2427,6 +2462,9 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Run a procedure to its result. A frame-replacing call ends the
+    /// activation that made it before the callee's begins, so a chain of them
+    /// runs in this one native frame.
     fn evalProcSpec(
         self: *LirInterpreter,
         proc_id: LirProcSpecId,
@@ -2435,6 +2473,21 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         descriptor_bindings: []const EvalDescriptorBinding,
     ) Error!EvalProcResult {
+        var step = try self.evalProcActivation(proc_id, proc_spec, args, arg_layouts, descriptor_bindings);
+        while (true) switch (step) {
+            .result => |result| return result,
+            .tail_call => |call| step = try self.evalProcActivation(call.proc, self.store.getProcSpec(call.proc), call.args, call.arg_layouts, &.{}),
+        };
+    }
+
+    fn evalProcActivation(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        proc_spec: LirProcSpec,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        descriptor_bindings: []const EvalDescriptorBinding,
+    ) Error!ProcStep {
         try self.call_stack.append(self.evalAllocator(), proc_id);
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
@@ -2463,10 +2516,10 @@ pub const Interpreter = struct {
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
-            return .{
+            return .{ .result = .{
                 .value = try self.callHostedProc(proc_id, hosted, normalized_args, param_layouts, proc_spec.ret_layout),
                 .layout = proc_spec.ret_layout,
-            };
+            } };
         }
 
         trace.log(
@@ -2485,6 +2538,8 @@ pub const Interpreter = struct {
 
         var frame = try self.initFrame(proc_id, proc_spec);
         defer self.releaseFrameSlots(frame.slots);
+        frame.caller_drives = self.erased_caller_drives;
+        self.erased_caller_drives = false;
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
@@ -2591,6 +2646,11 @@ pub const Interpreter = struct {
         if (trace.enabled) self.debugPrintStmtChain(body, 32);
         const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
+            .tail_call => |call| .{ .tail_call = call },
+            .returned_pending => .{ .result = .{
+                .value = try self.poisonUninitializedValue(proc_spec.ret_layout),
+                .layout = proc_spec.ret_layout,
+            } },
             .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
@@ -2598,6 +2658,9 @@ pub const Interpreter = struct {
                 );
                 const raw_result = try self.getLocalChecked(&frame, ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
+                // A procedure that left a call pending returns no value; the
+                // pending call produces the result.
+                if (self.pending_erased != null) break :blk .{ .result = .{ .value = raw_result, .layout = raw_layout } };
                 const result_desc = if (proc_spec.runtime_ret_desc) |runtime_ret_desc|
                     try self.resolveBoxyDescRef(&frame, .{ .local = runtime_ret_desc })
                 else
@@ -2632,17 +2695,17 @@ pub const Interpreter = struct {
                 // When the coercion truly unwrapped a box, the descriptor must
                 // follow it down to the payload.
                 if (coercion_unwraps) {
-                    break :blk .{
+                    break :blk .{ .result = .{
                         .value = try self.materializeLocalValue(coerced_result, proc_spec.ret_layout),
                         .desc = if (result_desc) |desc| try self.boxyBoxAllocationPayloadDesc(&frame, raw_layout, desc) else null,
                         .layout = proc_spec.ret_layout,
-                    };
+                    } };
                 }
-                break :blk .{
+                break :blk .{ .result = .{
                     .value = try self.materializeLocalValue(coerced_result, raw_layout),
                     .desc = result_desc,
                     .layout = raw_layout,
-                };
+                } };
             },
             .loop_continue => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
@@ -2790,19 +2853,49 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    if (assign.replaces_frame) {
+                        return .{ .tail_call = .{ .proc = assign.proc, .args = arg_values, .arg_layouts = arg_layouts } };
+                    }
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                    var result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    const materialized_result = self.materializeCallResultToLayout(
+                    var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
+                    if (self.pending_erased != null) {
+                        if (!drivesHere(frame, assign.drive)) {
+                            // The conversions that follow would read a value
+                            // that is not there yet, so the procedure returns
+                            // now to whoever makes the pending call.
+                            if (assign.returns_pending) |pending_return| {
+                                self.pending_erased.?.conversion = .{
+                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                    .keeps_own_desc = pending_return.keeps_own_desc,
+                                };
+                                return .returned_pending;
+                            }
+                            // The pending call produces this statement's
+                            // value; this procedure returns to whoever makes
+                            // it without reading the value.
+                            frame.setLocal(assign.target, result.value);
+                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            current = assign.next;
+                            continue;
+                        }
+                        const driven = (try self.drivePendingErasedCalls(frame)).?;
+                        result = .{ .value = driven.value, .layout = driven.layout, .desc = driven.desc };
+                        stored_as = driven.stored_as;
+                    }
+                    const materialized_result = self.materializeDrivenCallResult(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
+                        stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     ) catch |err| {
                         if (comptime builtin.target.os.tag != .freestanding) {
@@ -2883,7 +2976,47 @@ pub const Interpreter = struct {
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalErasedCall(
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const result = if (assign.deferred) deferred: {
+                        if (self.pending_erased != null) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: deferred an erased call while another was pending",
+                                .{},
+                            );
+                        }
+                        self.pending_erased = .{
+                            .closure = try self.getLocalChecked(frame, assign.closure),
+                            .args = arg_values,
+                            .arg_layouts = arg_layouts,
+                            .arg_descs = arg_descs,
+                            .arg_desc_keys = arg_desc_keys,
+                            .arg_plan = assign.arg_plan,
+                            .site_layout = target_layout,
+                            .result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc),
+                            .conversion = null,
+                        };
+                        if (!drivesHere(frame, assign.drive)) {
+                            // The conversions that follow would read a value
+                            // that is not there yet, so the procedure returns
+                            // now to whoever makes the pending call.
+                            if (assign.returns_pending) |pending_return| {
+                                self.pending_erased.?.conversion = .{
+                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                    .keeps_own_desc = pending_return.keeps_own_desc,
+                                };
+                                return .returned_pending;
+                            }
+                            frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
+                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            current = assign.next;
+                            continue;
+                        }
+                        break :deferred (self.drivePendingErasedCalls(frame) catch |err| {
+                            self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
+                            return err;
+                        }).?;
+                    } else self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
@@ -2891,18 +3024,19 @@ pub const Interpreter = struct {
                         arg_descs,
                         arg_desc_keys,
                         assign.arg_plan,
-                        self.store.getLocal(assign.target).layout_idx,
+                        target_layout,
                         assign.reuse_closure,
                     ) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    const materialized_result = try self.materializeCallResultToLayout(
+                    const materialized_result = try self.materializeDrivenCallResult(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
+                        result.stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     );
                     try self.setLocalChecked(
@@ -4107,7 +4241,101 @@ pub const Interpreter = struct {
         value: Value,
         layout: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc = null,
+        /// When the value came unconverted from a pending call: the
+        /// descriptor that call's statement stored it as.
+        stored_as: ?*const LirProgram.BoxyTypeDesc = null,
     };
+
+    const PendingErasedCall = struct {
+        closure: Value,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
+        /// The layout and result descriptor the deferring statement calls
+        /// with.
+        site_layout: layout_mod.Idx,
+        result_desc: ?*const LirProgram.BoxyTypeDesc,
+        /// The last conversion a procedure skipped by returning while this
+        /// call was pending. Each procedure that returns early replaces it.
+        conversion: ?PendingConversion,
+    };
+
+    /// A conversion of a pending call's result that a procedure left to
+    /// whoever makes the call: the layout that procedure returns and the
+    /// descriptor it would have stored the result as.
+    const PendingConversion = struct {
+        layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
+        /// The conversion stores the result under the descriptor the value
+        /// arrives with.
+        keeps_own_desc: bool,
+    };
+
+    /// Whether calls pending after a statement are made in this frame.
+    fn drivesHere(frame: *const Frame, drive: LIR.PendingDrive) bool {
+        return switch (drive) {
+            .none, .handed_up => false,
+            .always => true,
+            .unless_caller_drives => !frame.caller_drives,
+        };
+    }
+
+    /// Make every pending erased call in turn. Each is made exactly as its
+    /// statement wrote it. The result that ends the chain is then converted
+    /// the way the procedures that returned early would have converted it,
+    /// as the native erased-call runtime does.
+    fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame) Error!?ErasedCallResult {
+        var result: ?ErasedCallResult = null;
+        // The conversion skipped on the way out to this caller. It belongs
+        // to the first pending call; later ones are left inside its extent.
+        var outermost: ?PendingConversion = null;
+        var first = true;
+        while (self.pending_erased) |call| {
+            self.pending_erased = null;
+            const raw = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, call.site_layout, false);
+            if (self.pending_erased == null) {
+                var current = try self.boxy_runtime.materializeCallResult(
+                    self.boxyFrameHooks(frame),
+                    raw.value,
+                    raw.layout,
+                    raw.desc,
+                    call.result_desc,
+                    call.site_layout,
+                );
+                var current_layout = call.site_layout;
+                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
+                    const conversion = skipped orelse continue;
+                    current = try self.boxy_runtime.materializeCallResult(
+                        self.boxyFrameHooks(frame),
+                        current.value,
+                        current_layout,
+                        current.desc,
+                        if (conversion.keeps_own_desc) current.desc else conversion.desc,
+                        conversion.layout,
+                    );
+                    current_layout = conversion.layout;
+                }
+                result = .{
+                    .value = current.value,
+                    .layout = current_layout,
+                    .desc = current.desc,
+                    .stored_as = if (call.conversion == null and outermost == null) call.result_desc else null,
+                };
+            }
+            if (first) {
+                outermost = call.conversion;
+                first = false;
+            }
+            const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: pending erased call had a null closure",
+                .{},
+            );
+            builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
+        }
+        return result;
+    }
 
     fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!u64 {
         return self.boxy_runtime.readSwitchValue(value, layout_idx);
@@ -4688,6 +4916,8 @@ pub const Interpreter = struct {
         return bindings;
     }
 
+    /// Make an erased call and then every call it leaves pending, as the
+    /// native erased-call runtime does.
     fn evalErasedCall(
         self: *LirInterpreter,
         frame: *Frame,
@@ -4701,19 +4931,34 @@ pub const Interpreter = struct {
         reuse_closure: bool,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
-        const closure_value = try self.getLocalChecked(frame, closure_local);
-        const closure_layout_val = self.layout_store.getLayout(closure_layout);
-        if (closure_layout_val.tag != .erased_callable) {
+        if (self.layout_store.getLayout(closure_layout).tag != .erased_callable) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased call closure local {d} does not have erased_callable layout",
                 .{@intFromEnum(closure_local)},
             );
         }
+        const closure_value = try self.getLocalChecked(frame, closure_local);
+        const first = try self.evalErasedCallOnce(frame, closure_value, closure_local, args, arg_layouts, arg_descs, arg_desc_keys, arg_plan, ret_layout, reuse_closure);
+        return try self.drivePendingErasedCalls(frame) orelse first;
+    }
 
+    fn evalErasedCallOnce(
+        self: *LirInterpreter,
+        frame: *Frame,
+        closure_value: Value,
+        closure_local: ?LocalId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
+        ret_layout: layout_mod.Idx,
+        reuse_closure: bool,
+    ) Error!ErasedCallResult {
         const closure_ptr = self.readBoxedDataPointer(closure_value) orelse {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased call closure local {d} has null payload",
-                .{@intFromEnum(closure_local)},
+                "LIR/interpreter invariant violated: erased call closure local {?d} has null payload",
+                .{if (closure_local) |local| @intFromEnum(local) else null},
             );
         };
 
@@ -4875,6 +5120,7 @@ pub const Interpreter = struct {
             proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_closure) @intFromPtr(closure_ptr) else 0);
             proc_arg_layouts[reuse_index] = self.store.getLocal(reuse_param).layout_idx;
 
+            self.erased_caller_drives = true;
             const proc_result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
             return .{
                 .value = proc_result.value,
@@ -10059,6 +10305,33 @@ pub const Interpreter = struct {
             actual_layout,
             actual_desc,
             result_desc,
+            expected_layout,
+        );
+    }
+
+    /// Store a call's result as the statement's own descriptor describes.
+    /// `stored_as` is the descriptor a pending call's statement already
+    /// stored the value as; applying the same one again changes nothing.
+    fn materializeDrivenCallResult(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        actual_desc: ?*const LirProgram.BoxyTypeDesc,
+        result_desc_ref: ?LIR.BoxyDescRef,
+        stored_as: ?*const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!boxy_runtime.BoxyAssignedValue {
+        const own = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
+        if (stored_as) |applied| {
+            if (own == applied and actual_layout == expected_layout) return .{ .value = value, .desc = actual_desc };
+        }
+        return try self.boxy_runtime.materializeCallResult(
+            self.boxyFrameHooks(frame),
+            value,
+            actual_layout,
+            actual_desc,
+            own,
             expected_layout,
         );
     }

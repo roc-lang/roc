@@ -756,6 +756,7 @@ fn recordObjectCacheFacts(
             if (callee != caller) tail_targets.set(@intFromEnum(callee));
         }
     }
+    try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
         if (store.getProcSpec(proc).body == null) continue;
@@ -780,6 +781,46 @@ fn recordObjectCacheFacts(
             !solution.availableOutcomeSpanOf(proc).isEmpty() or
             (borrowed != 0 and tail_targets.isSet(proc_index)) or
             specialized_demand;
+    }
+}
+
+/// Stamp the procedures joined by same-SCC tail calls with their group. The
+/// group is the connected component of those calls, named by its
+/// lowest-numbered member; ownership variants inherit their source's group.
+fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
+    const proc_count = store.procSpecCount();
+    const parent = try store.allocator.alloc(u32, proc_count);
+    defer store.allocator.free(parent);
+    for (parent, 0..) |*slot, index| slot.* = @intCast(index);
+    var grouped = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
+    defer grouped.deinit(store.allocator);
+
+    const find = struct {
+        fn root(links: []u32, start: u32) u32 {
+            var current = start;
+            while (links[current] != current) {
+                links[current] = links[links[current]];
+                current = links[current];
+            }
+            return current;
+        }
+    }.root;
+
+    for (0..proc_count) |proc_index| {
+        const caller: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        for (solution.tailCallsOf(caller)) |tail_call| {
+            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            grouped.set(proc_index);
+            grouped.set(@intFromEnum(callee));
+            const caller_root = find(parent, @intCast(proc_index));
+            const callee_root = find(parent, @intFromEnum(callee));
+            if (caller_root < callee_root) parent[callee_root] = caller_root else parent[caller_root] = callee_root;
+        }
+    }
+    var members = grouped.iterator(.{});
+    while (members.next()) |proc_index| {
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        store.getProcSpecPtr(proc).tail_group = @enumFromInt(find(parent, @intCast(proc_index)));
     }
 }
 
@@ -1282,6 +1323,7 @@ const VariantTable = struct {
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
+            .tail_group = source_spec.tail_group,
             .stack_probe = source_spec.stack_probe,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
@@ -1836,6 +1878,9 @@ const ArcPlanStep = struct {
     unique_args: u64 = 0,
     low_level_selection: ?LowLevelSelection = null,
     retain_call_result: bool = false,
+    /// The call is a same-SCC tail call whose caller frame owns nothing once
+    /// the call starts.
+    replaces_frame: bool = false,
     call_callee: ?LIR.LirProcSpecId = null,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     variant_request: ?VariantRequestId = null,
@@ -1862,6 +1907,7 @@ const ArcPlanStep = struct {
         self.unique_args = 0;
         self.low_level_selection = null;
         self.retain_call_result = false;
+        self.replaces_frame = false;
         self.call_callee = null;
         self.call_demanded = arc_sig.RcSig.all_owned;
         self.variant_request = null;
@@ -2500,6 +2546,12 @@ const Inserter = struct {
             } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
+                if (step.replaces_frame) {
+                    const returned = self.store.getCFStmt(next);
+                    if (returned != .ret or returned.ret.value != assign.target) {
+                        arcInvariant("ARC frame-replacing call was not immediately followed by the return of its result");
+                    }
+                }
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
                     .proc = if (step.variant_request) |request|
@@ -2510,11 +2562,14 @@ const Inserter = struct {
                     .result_desc = assign.result_desc,
                     .out_desc = assign.out_desc,
                     .is_cold = assign.is_cold,
+                    .replaces_frame = step.replaces_frame,
                     .next = next,
                 } }, origin);
             },
             .assign_call_erased => |assign| blk: {
-                if (!assign.reuse_closure) next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
+                if (!step.replaces_frame and !assign.reuse_closure) {
+                    next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
+                }
                 break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
@@ -2527,6 +2582,7 @@ const Inserter = struct {
                     .arg_plan = assign.arg_plan,
                     .reuse_closure = assign.reuse_closure,
                     .reuse_source = assign.reuse_source,
+                    .deferred = step.replaces_frame,
                     .next = next,
                 } }, origin);
             },
@@ -3047,6 +3103,7 @@ const Inserter = struct {
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.appendSlice(self.solve_allocator, self.death_scratch.items);
                         step.pre_release_extra_reason = .tail_call_frame;
+                        step.replaces_frame = self.sharesReturnContract(assign);
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
                         try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
@@ -3069,10 +3126,20 @@ const Inserter = struct {
                     if (!assign.reuse_closure) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.closure, .reason = .closure_call_capture });
                     if (preserve_reuse_source) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.reuse_source.?, .reason = .reuse_source_preserved });
                     self.death_scratch.clearRetainingCapacity();
-                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
+                    if (self.erasedCallIsDeferred(assign)) {
+                        // The call is left pending and made after this frame
+                        // returns. It keeps the closure reference retained
+                        // above; everything else the frame owns ends first.
+                        try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
+                        try step.pre_release_extra.appendSlice(self.solve_allocator, self.death_scratch.items);
+                        step.pre_release_extra_reason = .tail_call_frame;
+                        step.replaces_frame = true;
+                    } else {
+                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
+                        try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.copyDeathScratchToStep(step);
+                    }
                     segment.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
@@ -3731,6 +3798,77 @@ const Inserter = struct {
         while (iter.next()) |bit| {
             try releases.append(self.solve_allocator, self.releaseDecisionFrom(bit, iter.entry));
         }
+    }
+
+    /// Whether an erased call is left pending for whoever awaits this
+    /// procedure's result: the callee does not repack the closure's
+    /// allocation, and the call's value is the procedure's whole result,
+    /// either as it is or after nothing but representation conversions.
+    /// Unconverted, it has the procedure's return layout and any descriptor
+    /// that comes back with it is the one the procedure returns. Converted,
+    /// whoever makes the call applies the last conversion in the
+    /// procedure's place.
+    fn erasedCallIsDeferred(self: *const Inserter, call: anytype) bool {
+        if (call.reuse_closure) return false;
+        const caller = self.store.getProcSpec(self.current_proc);
+        if (caller.hosted != null) return false;
+        const joins = self.solution.joinBodiesOf(self.current_source_proc);
+        var returned: LIR.LocalId = call.target;
+        var converted = false;
+        var current: LIR.CFStmtId = call.next;
+        // A join body that jumps back to its own join never returns, so more
+        // jumps than joins is such a cycle.
+        var jumps: usize = 0;
+        while (true) {
+            const stmt = self.store.getCFStmt(current);
+            if (stmt == .ret) {
+                if (stmt.ret.value != returned) return false;
+                if (self.store.getLocal(returned).layout_idx != caller.ret_layout) return false;
+                // The descriptor that comes back with an unconverted value
+                // is the one this procedure returns with it, or there is
+                // none on either side.
+                return converted or call.out_desc == caller.runtime_ret_desc;
+            }
+            if (stmt == .jump) {
+                if (jumps == joins.len) return false;
+                jumps += 1;
+                current = for (joins) |join| {
+                    if (join.id == stmt.jump.target) break join.body;
+                } else return false;
+                continue;
+            }
+            if (stmt == .assign_boxy_desc_ref) {
+                // The frame is released before the call, so a descriptor
+                // reference after it reads nothing the frame owned.
+                const captures = self.store.getLocalSpan(stmt.assign_boxy_desc_ref.captures);
+                for (0..GuardedList.borrowLen(captures)) |index| {
+                    if (self.localContainsRefcounted(GuardedList.at(captures, index))) return false;
+                }
+                current = stmt.assign_boxy_desc_ref.next;
+                continue;
+            }
+            if (stmt != .assign_boxy_adapt) return false;
+            const adapt = stmt.assign_boxy_adapt;
+            if (adapt.source != returned or adapt.source_mode != .move) return false;
+            returned = adapt.target;
+            converted = true;
+            current = adapt.next;
+        }
+    }
+
+    /// Whether the callee of a tail call can return on the current
+    /// procedure's behalf: both use the Roc procedure ABI, the callee's value
+    /// is the procedure's whole result, and a runtime descriptor the callee
+    /// returns alongside it is the one this procedure returns.
+    fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
+        const caller = self.store.getProcSpec(self.current_proc);
+        const callee = self.store.getProcSpec(call.proc);
+        return caller.abi == .roc and callee.abi == .roc and
+            callee.hosted == null and
+            call.out_desc == caller.runtime_ret_desc and
+            (call.out_desc != null) == (callee.runtime_ret_desc != null) and
+            self.store.getLocal(call.target).layout_idx == caller.ret_layout and
+            callee.ret_layout == caller.ret_layout;
     }
 
     /// Ends the exact ownership state of a caller frame before a same-SCC
@@ -6769,13 +6907,15 @@ const Inserter = struct {
                     try self.ownershipPlaceUsedInPath(next, owner)
                 else
                     try self.groupUsedInPath(next, local, loop_keep));
-                const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
-                    self.groupSharesOtherOperand(locals, position, local);
-                const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
+                // Another position of this call may lend the same value to the
+                // callee. Moving the caller's only unit into this position
+                // would let the callee end it while that position still reads
+                // it, so a shared operand keeps its unit.
+                const shares_other_operand = self.groupSharesOtherOperand(locals, position, local);
+                const can_transfer = owned.contains(owner) and !used_after_call and !shares_other_operand;
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
-                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
-                    !self.groupSharesOtherOperand(locals, position, local);
+                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local);
                 if (!can_transfer and !requires_tail_transfer) continue;
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take and !requires_tail_transfer) continue;
                 demanded.borrowed_params &= ~bit;

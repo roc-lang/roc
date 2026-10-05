@@ -39,6 +39,7 @@ pub fn writeProc(
     if (proc.tail_transform != .none) {
         try writer.print(" transform={s}", .{@tagName(proc.tail_transform)});
     }
+    if (proc.tail_group) |group| try writer.print(" tail_group={d}", .{@intFromEnum(group)});
     try writer.writeAll("\n");
 
     if (proc.body) |body| {
@@ -131,6 +132,16 @@ const Printer = struct {
                     }
                     if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
+                    if (s.replaces_frame) try writer.writeAll(" replaces_frame");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
+                    }
                     try writer.writeByte('\n');
                     current = s.next;
                 },
@@ -147,6 +158,16 @@ const Printer = struct {
                     if (s.reuse_closure) try writer.writeAll(" reuse_closure");
                     if (s.reuse_source) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@intFromEnum(reuse_source)});
+                    }
+                    if (s.deferred) try writer.writeAll(" deferred");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
                     }
                     try writer.writeByte('\n');
                     current = s.next;

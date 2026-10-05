@@ -5980,15 +5980,29 @@ const ProcedureBuilder = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, adapter_proc.origin);
         var continuation = ret_stmt;
 
-        const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
-        continuation = try adapter_proc.assignPlannedCallBoundary(
-            ret_local,
-            raw_ret,
-            target_function.ret,
-            source_function.ret,
-            continuation,
-        );
-        const call_target = raw_ret;
+        // A result that crosses unchanged is written straight to the return
+        // local, which leaves the wrapped callable's call in tail position.
+        const ret_desc_is_shared = if (self.result.store.getLocal(ret_local).boxy_desc) |desc|
+            if (desc.localOrNull()) |local| adapter_proc.localIsDescriptorSlot(local) else false
+        else
+            false;
+        const source_ret_layout = adapter_proc.workerRuntimeLayoutForRep(source_function.ret).layoutIdx();
+        const call_target = if (!ret_desc_is_shared and
+            self.result.store.getLocal(ret_local).layout_idx == source_ret_layout and
+            (adapter_proc.erasedCallResultCanUseTarget(target_function.ret, source_function.ret) or
+                adapter_proc.callResultAdoptsCalleeDescriptor(ret_local, target_function.ret)))
+            ret_local
+        else blk: {
+            const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
+            continuation = try adapter_proc.assignPlannedCallBoundary(
+                ret_local,
+                raw_ret,
+                target_function.ret,
+                source_function.ret,
+                continuation,
+            );
+            break :blk raw_ret;
+        };
 
         const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| {
@@ -21120,7 +21134,8 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         const call_target = if (!target_desc_is_shared and
             target_layout == callee_ret_layout and
-            self.erasedCallResultCanUseTarget(target_rep, callee_ret_rep))
+            (self.erasedCallResultCanUseTarget(target_rep, callee_ret_rep) or
+                self.callResultAdoptsCalleeDescriptor(target, target_rep)))
             target
         else blk: {
             const raw_ret = if (self.parent.result.store.getLocal(target).boxy_desc != null)
@@ -25449,7 +25464,8 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         const call_target = if (!target_desc_is_shared and
             target_layout == callee_ret_layout and
-            self.erasedCallResultCanUseTarget(target_rep, callee_function.ret))
+            (self.erasedCallResultCanUseTarget(target_rep, callee_function.ret) or
+                self.callResultAdoptsCalleeDescriptor(target, target_rep)))
             target
         else blk: {
             const raw_ret = if (self.parent.result.store.getLocal(target).boxy_desc != null)
@@ -26477,20 +26493,32 @@ const ProcBodyBuilder = struct {
         const descriptor_boundary_is_direct = !runtime_result_desc and
             ((target_desc == null and direct_result_desc.desc == null) or
                 (checked_return_types_match and (target_desc == null or direct_result_desc.desc != null)));
-        // A self call returns this worker's own result representation, so its
-        // result descriptor describes the target exactly: the call writes it
-        // straight into the target's own descriptor local.
-        const self_result_forwarded = runtime_result_desc and
-            worker_id == self.worker_layout.worker and
-            target_rep == worker_ret_rep and
-            target_layout == ret_layout.layoutIdx() and
-            self.callResultOutputDescriptorLocal(target) != null;
+        // A callee that returns its descriptor at runtime writes both the
+        // value and that descriptor straight into a target whose descriptor
+        // local is this frame's to overwrite, exactly as an erased call does.
+        const target_desc_is_shared = if (target_desc) |desc|
+            if (desc.localOrNull()) |local| self.localIsDescriptorSlot(local) else false
+        else
+            false;
+        const adopts_callee_descriptor = runtime_result_desc and
+            !target_desc_is_shared and
+            self.callResultAdoptsCalleeDescriptor(target, target_rep);
+        const runtime_boundary_is_direct = runtime_result_desc and
+            !target_desc_is_shared and
+            self.callResultOutputDescriptorLocal(target) != null and
+            self.erasedCallResultCanUseTarget(target_rep, worker_ret_rep);
         var fresh_raw_out_desc: ?LIR.LocalId = null;
-        const call_target = if (self_result_forwarded or (target_layout == ret_layout.layoutIdx() and
-            self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep) and
-            descriptor_boundary_is_direct))
+        const call_target = if (target_layout == ret_layout.layoutIdx() and
+            (adopts_callee_descriptor or
+                (self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep) and
+                    (descriptor_boundary_is_direct or runtime_boundary_is_direct))))
         blk: {
-            try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
+            // A target that only adopts the callee's descriptor keeps the
+            // bindings of its own representation; the callee's name nothing
+            // the target's other assignments could supply.
+            if (self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep)) {
+                try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
+            }
             break :blk target;
         } else blk: {
             const raw_ret = if (runtime_result_desc)
@@ -26578,15 +26606,12 @@ const ProcBodyBuilder = struct {
                 const desc = materialize.materialize orelse
                     boxyLowerInvariant("boxy recursive direct-call static descriptor materialization had no descriptor");
                 static_replacement = try self.prependDescriptorArgMaterialization(materialize, desc, static_replacement);
-            } else if (out_desc) |out_local| {
-                // A forwarded self call's static form describes the target
-                // with the result's static descriptor in place of the output.
-                if (!self_result_forwarded) {
+            } else if (out_desc) |local| {
+                // A descriptor local initialized at procedure entry already
+                // holds what the static form's result is described by.
+                if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) == null) {
                     boxyLowerInvariant("boxy recursive direct-call static form had no descriptor materialization");
                 }
-                const desc = static_direct_result_desc.desc orelse
-                    boxyLowerInvariant("boxy forwarded self call had no static result descriptor");
-                static_replacement = try self.prependDescriptorArgMaterialization(.{ .local = out_local, .materialize = desc }, desc, static_replacement);
             }
             try self.parent.pending_direct_call_descriptor_abis.append(self.parent.allocator, .{
                 .callee = callee_proc,
@@ -33306,6 +33331,18 @@ const ProcBodyBuilder = struct {
         if (target_identity != result_identity) return false;
         if (target_rep == result_rep) return true;
         return self.repIsFullyConcrete(target_identity);
+    }
+
+    /// Whether a call can deliver its result and that result's descriptor
+    /// straight into `target`. A bare dynamic value is described only by the
+    /// descriptor it arrives with, so a target whose descriptor local this
+    /// frame may write takes the callee's in place of its own.
+    fn callResultAdoptsCalleeDescriptor(
+        self: *const ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+    ) bool {
+        return self.repIsBareDynamic(target_rep) and self.callResultOutputDescriptorLocal(target) != null;
     }
 
     fn callResultOutputDescriptorLocal(

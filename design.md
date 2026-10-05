@@ -1712,7 +1712,10 @@ depth is bounded only by actual native stack memory, and exhaustion is
 reported by whoever owns the executing thread: compile-time evaluation runs on
 compiler threads covered by the stack overflow guard in `src/base`, while
 runtime interpretation runs in the shim/app process, where stack-overflow
-reporting belongs to the platform host. An arbitrary depth budget in release
+reporting belongs to the platform host. The interpreter runs each Roc call on
+the native stack, so while a thread is interpreting a Roc program
+(`interpreting_roc_program`) the guard reports that the program overflowed its
+stack rather than the compiler. An arbitrary depth budget in release
 would make a program's compile-time-evaluability depend on a compiler build
 constant rather than on the program itself, and would let Debug and release
 builds disagree about whether the same program compiles.
@@ -6457,25 +6460,50 @@ not bypass Lambda Solved. All modes therefore consume the same Monotype type
 identities, the same Lambda Solved callable information, and the same direct
 Solved-to-LIR representation decisions.
 
-### Self-Tail Return Continuations
+### Tail Return Continuations
 
-LIR construction owns ordinary self-tail-call proofs. Each procedure builder
-records exact self-call sites and join definitions as statements are emitted,
+LIR construction owns ordinary tail-call proofs. Each procedure builder
+records exact direct-call sites and join definitions as statements are emitted,
 including producer-owned placeholder replacements. After producer fixups,
 finalization resolves only the recorded calls' return continuations. Shared
 suffixes are memoized by statement identity; forwarding cycles do not prove a
 return. The query has no candidate or path-length limit and never walks unrelated
 control flow. Both Solved and Boxy lowering use this same construction contract.
 
+A proven call to the procedure being built is a self-tail site, recorded as
+described below. A proven call to any other procedure has its continuation
+replaced by a `ret` of the call's target, so the tail position is structural:
+the statement after the call returns its result. That is the only form later
+stages read. A pass that moves a body into another procedure keeps the form:
+when the call site it replaces only returns the call's result, a return in the
+moved body stays a return.
+
 A proven continuation returns the call's value unchanged through explicit
 returns, jumps, lexical joins, identity references, join-parameter forwarding
 writes, and Boxy moves whose explicit adapter operation is `relabel`. It contains
 no intervening effect, failure, constructor, or materializing representation
-adaptation. Calls with an additional runtime descriptor output need a proof for
-that output too; value-only forwarding does not authorize their elimination.
-A call whose descriptor output is the procedure's own returned descriptor local
-has that proof: whichever iteration reaches a return writes that local as it
-returns. Return-destination reuse metadata is not a tail-position proof.
+adaptation. A call with an additional runtime descriptor output needs a proof
+for that output too: the output must be the descriptor local of the call's own
+target, and for a direct call it must be the descriptor local the procedure
+returns. Such a direct call is never a self-tail site, even to the procedure
+being built; it returns its value directly like a call to any other
+procedure. Return-destination reuse metadata is not a tail-position proof.
+
+Boxy lowering keeps generic calls in this form. A callee that returns its
+descriptor at runtime writes the value and the descriptor straight into a
+target whose descriptor local the frame may write, when the two sides have the
+same representation or the target is a bare type variable, which is described
+only by the descriptor its value arrives with. A callable adapter does the
+same with the result of the callable it wraps. No conversion statement then
+follows the call.
+
+An erased call is always written in the layout of the callee's function type,
+never in a different one for the erased-call runtime to convert into. The
+runtime can convert only the results of callables it has registered, and it
+registers a callable when the value is built at run time, so a callable
+restored from a compile-time constant is called exactly as its type says. A
+result that needs another representation is converted by a statement after
+the call.
 
 The producer records a linked list of proven sites in the call nodes and a
 fresh loop join identity in the procedure. Body shards relocate these statement
@@ -17608,8 +17636,8 @@ whole call by ABI, so payload reads from them borrow without the callee
 emitting any release for the group.
 
 Tail calls need one rule so that borrow inference never blocks backend
-tail-call lowering. LIR has no tail-call statement; a call is in tail
-position when the next statement returns the call result. Call-graph SCCs
+tail-call lowering. A call is in tail position when the next statement
+returns the call result. Call-graph SCCs
 (computed once, iteratively) feed exactly this rule: every refcounted argument
 of a tail-position call within the same SCC has to outlive replacement of the
 caller frame. This is an exact lifetime constraint, not an ownership demand.
@@ -17626,6 +17654,150 @@ owned-return variant when forwarding a borrowed result would otherwise require
 a retain after the call. Calls that leave the SCC keep their ordinary lifetime
 and mode constraints because they cannot participate in unbounded recursive
 frame growth.
+
+Emission then states the result explicitly. A same-SCC tail call whose callee
+can return on the caller's behalf is emitted with `replaces_frame` set: both
+procedures use the Roc procedure ABI, the callee is not hosted, its result is
+the caller's whole result at the same layout, and neither returns a runtime
+descriptor with it. Emission checks that the statement after such a call is
+the return of its target with no ownership statement between them. Every
+procedure that makes or receives a same-SCC tail call also carries a
+`tail_group`: the connected component of those calls, which ownership variants
+inherit from their source procedure.
+
+### Frame-Replacing Calls
+
+A `replaces_frame` call is a guarantee, not an optimization: a cycle of calls
+that are all in tail position runs in constant stack space in every execution
+mode. Backends do not look for tail positions. They follow the flag, and on a
+flagged call the caller's frame ends before the callee's begins, the callee
+returns directly to the caller's caller, and the statement after the call is
+never emitted. A stack trace taken in the callee therefore does not contain
+the caller, exactly as a loop does not contain its earlier iterations. When
+the two procedures return a runtime descriptor, the callee writes it to the
+address the caller was given for its own.
+
+What each backend must arrange is where the callee's arguments live once the
+caller's frame is gone.
+
+- The dev backend gives every Roc-ABI procedure ownership of its argument
+  block: the words passed on the stack, followed by storage for every
+  aggregate passed by pointer. The block's size follows from the signature
+  alone. A caller reserves it and the callee removes it on return, so a
+  frame-replacing call can build the next callee's block where its own ends,
+  whatever the two sizes are, and move the return address to match. The block
+  is staged in the dying frame and moved into place after everything else in
+  the frame has been read, because the two overlap when the callee's block is
+  the larger. The part of the teardown that depends on the final callee-saved
+  set and frame size is emitted once per procedure, after its body.
+- The LLVM backend emits `musttail` calls between `tailcc` functions. An
+  argument passed in memory cannot point into the caller's frame, so each tail
+  group whose members take such arguments shares one block of storage for
+  them, passed as a trailing parameter: a caller outside the group allocates
+  it in its own frame, members pass it along, and a frame-replacing call
+  copies each in-memory argument into it. A callee copies its in-memory
+  arguments into its own frame on entry, so the storage is free again by the
+  time the callee makes its own frame-replacing call.
+- The WebAssembly backend targets engines without the tail-call
+  instructions, WebAssembly 1.0 included, so it replaces the frame without
+  them. A frame-replacing call stores its callee's arguments and the callee's
+  identity in one static tail area and returns. Every ordinary call to a
+  member of a tail group is followed by a call to that group's driver, which
+  loops while a callee is pending: it loads the callee's arguments from the
+  tail area and calls it. The chain therefore runs in the frame of whoever
+  entered the group. A member copies its aggregate arguments into its own
+  frame on entry, because they may sit in the tail area and the next
+  frame-replacing call overwrites it.
+- The interpreter ends the activation that made the call and starts the
+  callee's in the same native frame.
+
+LLVM's WebAssembly target has no calling convention that guarantees a tail
+call between functions of different signatures, so the LLVM backend uses the
+same driver scheme there as the WebAssembly backend: a frame-replacing call
+copies its arguments into static storage, records its callee as pending and
+returns, and every ordinary call to a tail-group member is followed by a call
+to the group's driver with the address of the call's result. Both driver
+schemes hand the driver the descriptor address as well when the group's
+members return one.
+
+A procedure with a `tail_group` is never offered to the object cache. A
+program that links a cached entry has no body for it, so it would see the
+entry outside every call cycle and reach it with an ordinary call.
+
+### Deferred Erased Calls
+
+A call through an erased function value cannot replace its caller's frame.
+The erased-call runtime sits between caller and callee, and an
+erased-callable procedure returns its result through a pointer where a
+Roc-ABI procedure returns it in registers, so neither side can return on the
+other's behalf. A cycle that passes through an erased call in tail position
+therefore gets constant stack another way.
+
+LIR construction proves the tail position of an erased call exactly as it
+does for a direct call, and ARC marks such a call `deferred` when the callee
+does not repack the closure and the call's value is the procedure's whole
+result: either unchanged, at the same layout and with any descriptor that
+comes back being the one the procedure returns, or after nothing but
+representation conversions. A deferred call is not made. Everything else the
+frame owns is released first, the call is recorded as pending together with
+its packed arguments, one owned reference to its closure, and the layout and
+result descriptor the statement calls with, and the procedure returns. Its
+target holds no value.
+
+Whoever awaits that procedure's result makes the pending call, releases the
+closure reference afterwards, and repeats while the call it made leaves
+another pending. The erased-call runtime does this after every erased call it
+makes, so an erased-callable procedure it invoked can simply return. Every
+other waiter is stated in LIR by the tail-drive pass (`src/lir/tail_drive.zig`),
+which runs after ARC and stamps a `PendingDrive` on each direct call whose
+callee can return with a call pending, and on each deferred call:
+
+- `none`: nothing can be pending after the statement.
+- `handed_up`: this procedure returns the value unchanged to a caller that
+  makes the pending call, and until then the statement's target holds no
+  value. Only reference-count statements and jumps into a join body may
+  separate the call from the return; a pending call owns its closure and
+  every argument, so running those statements first releases nothing it
+  reads.
+- `always`: pending calls are made here. This is every use of the value other
+  than returning it, and every tail position in a procedure something other
+  than Roc code or the erased-call runtime can enter: a root, a dictionary
+  worker, a procedure whose address is taken.
+- `unless_caller_drives`: in an erased-callable procedure, which reads at
+  entry whether the erased-call runtime invoked it. A host that calls an
+  erased callable directly does not make pending calls, so then the
+  procedure makes them itself. The runtime names the callable it is invoking
+  by its function pointer and the procedure asks with its own, so a value no
+  callee read cannot answer for a different procedure entered later.
+
+A call's result may be converted to another representation before it is
+returned, by statements after the call. The pass marks a direct call or a
+deferred call `returns_pending` when its value reaches the return through
+conversions alone and the only reference counts adjusted on the way are that
+value's own. If a call is still pending once the statement has run its drive,
+the procedure returns at once without a value, and nothing it owns is left
+behind. It records, on the pending call, the layout it returns and how its
+last skipped conversion describes the value: by a descriptor the procedure
+already holds at that point, or by the descriptor the value arrives with. Each procedure that returns early
+replaces the record of the one before, so the record names the conversion
+nearest whoever makes the call.
+
+Whoever makes a pending call makes it exactly as its statement wrote it, in
+that statement's layout and with its result descriptor, so the callee needs
+nothing a call from that statement would not. When the call returns a value
+rather than leaving another call pending, that value is converted the way the
+procedures that returned early would have converted it: by the conversion
+recorded on that call, then by the one recorded on the first call of the
+chain, which is the one skipped on the way out to this caller. Skipping the
+conversions in between is sound because each only changes how the same value
+is represented. The caller's own result descriptor applies last, as it would
+have to the value its callee returned.
+
+Backends follow these marks and nothing else: a deferred call becomes a call
+to the runtime's record function, a drive becomes a call to its drive
+function, and `returns_pending` becomes a query of the pending record
+followed by a return. The pending call is per-thread runtime state, held the
+same way the runtime holds its active-runtime selection.
 
 ### RC Planning and Materialization
 

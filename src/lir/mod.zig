@@ -75,6 +75,8 @@ test "LIR image tests" {
 }
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
+/// Decides where erased calls left pending by a tail call are run.
+pub const TailDrive = @import("tail_drive.zig");
 /// Final immutable failure-image guards and explicit completion.
 pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
 pub const ComptimeRootAccessors = @import("comptime_root_accessors.zig");

@@ -11915,13 +11915,41 @@ const Builder = struct {
             }
         }
 
+        // A worker nested in another's body shares that worker's frame, so
+        // the scheme variables its frame describes are its own and those of
+        // every worker enclosing it.
+        const frame_scheme = try self.allocator.alloc(WorkerDescriptorLeaves, worker_count);
+        for (frame_scheme) |*leaves| leaves.* = .{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
+        defer {
+            for (frame_scheme) |*leaves| leaves.deinit(self.allocator);
+            self.allocator.free(frame_scheme);
+        }
+        for (self.plan.workers.items, 0..) |worker, worker_index| {
+            const scheme = self.workerSchemeVars(worker.source) orelse continue;
+            for (scheme.vars) |variable| {
+                const rep = self.plan.repForSourceType(typeRef(scheme.view, variable)) orelse continue;
+                _ = try frame_scheme[worker_index].add(self.allocator, rep);
+            }
+        }
+        var frame_scheme_grew = true;
+        while (frame_scheme_grew) {
+            frame_scheme_grew = false;
+            for (self.plan.nested_callable_uses.items) |use| {
+                if (use.caller == use.worker) continue;
+                const nested = &frame_scheme[@intFromEnum(use.worker)];
+                for (frame_scheme[@intFromEnum(use.caller)].order.items) |rep| {
+                    if (try nested.add(self.allocator, rep)) frame_scheme_grew = true;
+                }
+            }
+        }
+
         // A use instantiates each callee scheme variable with a type the
-        // caller supplies. A variable of that type which the caller's own
-        // scheme or an enclosing local scope quantifies is described by the
-        // caller's frame; one reached only through a constraint signature
-        // appears in no type the caller's body mentions, so the substitution is
-        // the only place it is named. The images depend only on the edge, so
-        // they are computed once.
+        // caller supplies. A variable of that type which a scheme of the
+        // caller's frame or an enclosing local scope quantifies is described
+        // by the caller's frame; one reached only through a constraint
+        // signature appears in no type the caller's body mentions, so the
+        // substitution is the only place it is named. The images depend only
+        // on the edge, so they are computed once.
         var image_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer image_arena.deinit();
         const image_allocator = image_arena.allocator();
@@ -11956,7 +11984,7 @@ const Builder = struct {
                 try self.collectDescriptorLeaves(site_rep, &image_leaves, &seen);
                 caller_images.clearRetainingCapacity();
                 for (image_leaves.order.items) |image_leaf| {
-                    if (!own_scheme[@intFromEnum(edge.caller)].contains(image_leaf) and
+                    if (!frame_scheme[@intFromEnum(edge.caller)].set.contains(image_leaf) and
                         scopes.owner.get(image_leaf) == null) continue;
                     if (!scopes.allows(edge.caller, image_leaf)) continue;
                     try caller_images.append(self.allocator, image_leaf);
@@ -19858,7 +19886,9 @@ const Builder = struct {
         while (index < self.plan.nested_callable_uses.items.len) : (index += 1) {
             const use = self.plan.nested_callable_uses.items[index];
             const worker = self.plan.workers.items[@intFromEnum(use.worker)];
-            if (worker.hidden_dicts.len == 0 or use.hidden_dict_args.len != 0) continue;
+            // A worker gains dictionary parameters as planning iterates, so
+            // arguments planned for fewer of them are planned again.
+            if (use.hidden_dict_args.len == worker.hidden_dicts.len) continue;
 
             var source: ?Span = null;
             var source_is_ambiguous = false;
@@ -19915,7 +19945,7 @@ const Builder = struct {
 
         for (self.plan.nested_callable_uses.items) |use| {
             const worker = self.plan.workers.items[@intFromEnum(use.worker)];
-            if (worker.hidden_dicts.len != 0 and use.hidden_dict_args.len == 0) {
+            if (use.hidden_dict_args.len != worker.hidden_dicts.len) {
                 boxyPlanInvariant("nested callable value had no checked dictionary capture source");
             }
         }
