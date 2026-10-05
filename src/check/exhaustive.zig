@@ -262,23 +262,6 @@ pub const HumanIndex = struct {
     pub fn toHuman(self: HumanIndex) u32 {
         return self.value + 1;
     }
-
-    /// Returns ordinal string: "1st", "2nd", "3rd", "4th", etc.
-    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) Allocator.Error![]const u8 {
-        const n = self.toHuman();
-        const suffix = switch (n % 100) {
-            11, 12, 13 => "th",
-            else => switch (n % 10) {
-                // spellchecker:off
-                1 => "st",
-                2 => "nd",
-                3 => "rd",
-                else => "th",
-                // spellchecker:on
-            },
-        };
-        return std.fmt.allocPrint(allocator, "{d}{s}", .{ n, suffix });
-    }
 };
 
 /// A pattern for exhaustiveness checking.

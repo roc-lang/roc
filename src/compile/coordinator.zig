@@ -1590,17 +1590,6 @@ pub const Coordinator = struct {
         self.app_package_absent = true;
     }
 
-    /// Set the I/O / core context implementation. Callers must supply a fully
-    /// initialised `CoreCtx`—it must not create a replacement
-    /// `CoreCtx.default(...)` here because the existing context may have been
-    /// constructed via `CoreCtx.testing(undefined, undefined)` (see
-    /// `cache_config.zig`), in which case snapshotting its fields into a
-    /// `default()` vtable would invoke UB the first time the OS-backed
-    /// vtable dereferenced `std_io`.
-    pub fn setCoreCtx(self: *Coordinator, roc_ctx: CoreCtx) void {
-        self.roc_ctx = roc_ctx;
-    }
-
     /// Get the allocator to use for module data.
     /// - In multi-threaded mode: smp_allocator (per-thread freelists)
     /// - In single-threaded mode: gpa (better performance)
@@ -1977,32 +1966,8 @@ pub const Coordinator = struct {
         };
     }
 
-    pub fn freeWatchInputs(self: *Coordinator, inputs: []const []const u8) void {
-        for (inputs) |path| self.gpa.free(path);
-        self.gpa.free(inputs);
-    }
-
     pub fn freeWatchInputStates(self: *Coordinator, inputs: []const watch_inputs.Input) void {
         watch_inputs.deinit(self.gpa, inputs);
-    }
-
-    fn appendWatchInput(
-        self: *Coordinator,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        path: []const u8,
-    ) Allocator.Error!void {
-        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
-        errdefer self.gpa.free(absolute);
-
-        if (seen.contains(absolute)) {
-            self.gpa.free(absolute);
-            return;
-        }
-
-        try paths.append(self.gpa, absolute);
-        errdefer _ = paths.pop();
-        try seen.put(self.gpa, absolute, {});
     }
 
     fn appendWatchInputState(
@@ -2026,24 +1991,6 @@ pub const Coordinator = struct {
         });
         errdefer _ = inputs.pop();
         try seen.put(self.gpa, absolute, {});
-    }
-
-    fn appendFileDependencyWatchInputs(
-        self: *Coordinator,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        source_dir: []const u8,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
-            // A module that never reached import resolution has not read its
-            // file imports, so this run read no such file.
-            if (dep.state == .pending) continue;
-            const relative_path = env.fileDependencyRelativePath(dep);
-            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
-            defer self.gpa.free(full_path);
-            try self.appendWatchInput(paths, seen, full_path);
-        }
     }
 
     fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
@@ -2071,39 +2018,6 @@ pub const Coordinator = struct {
             defer self.gpa.free(full_path);
             try self.appendWatchInputState(inputs, seen, full_path, fileDependencyWatchState(dep));
         }
-    }
-
-    /// Collect exact filesystem inputs read by this coordinator run. Returned
-    /// paths are owned by the coordinator allocator and must be released with
-    /// `freeWatchInputs`.
-    pub fn collectWatchInputs(self: *Coordinator) Allocator.Error![]const []const u8 {
-        var paths = std.ArrayList([]const u8).empty;
-        errdefer {
-            for (paths.items) |path| self.gpa.free(path);
-            paths.deinit(self.gpa);
-        }
-
-        var seen = std.StringHashMapUnmanaged(void){};
-        defer seen.deinit(self.gpa);
-
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            if (pkg.url != null) continue;
-
-            if (pkg.root_file) |root_file| {
-                try self.appendWatchInput(&paths, &seen, root_file);
-            }
-
-            for (pkg.modules.items) |*mod| {
-                try self.appendWatchInput(&paths, &seen, mod.path);
-
-                const env = mod.moduleEnv() orelse continue;
-                try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), env);
-            }
-        }
-
-        return paths.toOwnedSlice(self.gpa);
     }
 
     /// Collect exact filesystem inputs read by this coordinator run, paired

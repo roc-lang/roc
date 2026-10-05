@@ -5,19 +5,16 @@
 //! It provides common functions for:
 //! - Extracting identifiers from patterns
 //! - Finding definitions by name
-//! - Looking up modules
 //! - Getting type variables for patterns
 //! - Extracting statement parts
 
 const std = @import("std");
 const can = @import("can");
-const compile = @import("compile");
 const base = @import("base");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const NodeStore = can.NodeStore;
-const BuildEnv = compile.BuildEnv;
 const Ident = base.Ident;
 
 /// Information about a found definition.
@@ -28,14 +25,6 @@ pub const DefinitionInfo = struct {
     expr_idx: ?CIR.Expr.Idx,
     /// The identifier for the definition
     ident_idx: Ident.Idx,
-};
-
-/// Information about a found module.
-pub const ModuleInfo = struct {
-    /// The module environment
-    module_env: *ModuleEnv,
-    /// The path to the module source file
-    path: []const u8,
 };
 
 /// Parts extracted from a statement for common processing.
@@ -247,30 +236,6 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
 }
 
 // Module Lookup Functions
-
-/// Find a module by name in the build environment's Coordinator state within an importing package context.
-/// Returns null if the module is not found or the build environment is null.
-pub fn findModuleByNameInPackage(
-    build_env: *BuildEnv,
-    importing_pkg: ?*compile.coordinator.PackageState,
-    module_name: []const u8,
-) ?ModuleInfo {
-    if (build_env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)) |mod_state| {
-        if (mod_state.moduleEnv()) |module_env_ptr| {
-            return ModuleInfo{
-                .module_env = module_env_ptr,
-                .path = mod_state.path,
-            };
-        }
-    }
-    return null;
-}
-
-/// Find a module by name in the build environment's Coordinator state.
-/// Returns null if the module is not found or the build environment is null.
-pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
-    return findModuleByNameInPackage(build_env, null, module_name);
-}
 
 // Type Variable Functions
 

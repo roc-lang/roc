@@ -31,8 +31,6 @@ pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 pub const GuardedList = @import("GuardedList.zig");
 
-pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
-
 pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
 
 pub const DenseMap = @import("DenseMap.zig").DenseMap;
@@ -90,7 +88,6 @@ pub const NonEmptyRange = struct {
 test "collections tests" {
     std.testing.refAllDecls(@import("CompactWriter.zig"));
     std.testing.refAllDecls(@import("ExposedItems.zig"));
-    std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("GuardedList.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));

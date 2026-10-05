@@ -803,51 +803,6 @@ pub const SyntaxChecker = struct {
         return module_state.moduleEnv();
     }
 
-    /// Get all imported ModuleEnvs for a given module.
-    /// Returns a slice of ModuleEnv pointers for the module's imports.
-    /// Caller must free the returned slice.
-    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) Allocator.Error!?[]*ModuleEnv {
-        const env = self.getModuleLookupEnv() orelse return null;
-
-        // First, find the module and its coordinator package.
-        var target_pkg: ?*compile.coordinator.PackageState = null;
-        var target_module_imports: ?[]const compile.coordinator.LocalImportEdge = null;
-
-        const coord = env.coordinator orelse return null;
-        var pkg_it = coord.packages.iterator();
-        outer: while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*module_state| {
-                if (std.mem.eql(u8, module_state.path, module_path)) {
-                    target_pkg = pkg;
-                    target_module_imports = module_state.imports.items;
-                    break :outer;
-                }
-            }
-        }
-
-        const pkg = target_pkg orelse return null;
-        const imports = target_module_imports orelse return null;
-
-        // Collect ModuleEnvs for all imports
-        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .empty;
-        errdefer imported_envs.deinit(self.allocator);
-
-        // Local imports (within same package)
-        for (imports) |edge| {
-            if (edge.module_id < pkg.modules.items.len) {
-                const imported_module = &pkg.modules.items[edge.module_id];
-                if (imported_module.moduleEnv()) |imp_env| {
-                    try imported_envs.append(self.allocator, imp_env);
-                }
-            }
-        }
-
-        // TODO: Handle external_imports (cross-package) when needed
-
-        return try imported_envs.toOwnedSlice(self.allocator);
-    }
-
     /// Update the dependency graph from a successful build.
     fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) Allocator.Error!void {
         self.logDebug(.build, "[DEPS] Updating dependency graph...", .{});

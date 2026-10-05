@@ -767,15 +767,6 @@ pub const Cursor = struct {
             false;
     }
 
-    /// Requires that the next byte is `ch`, otherwise pushes a message.
-    pub fn require(self: *Cursor, ch: u8, tag: Diagnostic.Tag) void {
-        if (self.peek() == ch) {
-            self.pos += 1;
-        } else {
-            self.pushMessageHere(tag);
-        }
-    }
-
     /// Chomps "trivia" (whitespace, comments, etc.).
     pub fn chompTrivia(self: *Cursor) void {
         while (self.pos < self.buf.len) {

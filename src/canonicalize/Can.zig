@@ -17574,15 +17574,6 @@ const ExprKernelWork = struct {
         }
     }
 
-    fn clearRetainingCapacity(self: *ExprKernelWork) void {
-        self.labels.clearRetainingCapacity();
-        self.targets.clearRetainingCapacity();
-        self.current_target = .return_value;
-        inline for (@typeInfo(ExprKernelLabel).@"enum".fields) |label| {
-            if (@hasField(ExprKernelWork, label.name)) @field(self, label.name).clearRetainingCapacity();
-        }
-    }
-
     inline fn pushLabel(self: *ExprKernelWork, allocator: std.mem.Allocator, label: ExprKernelLabel, target: ExprResultTarget) std.mem.Allocator.Error!void {
         try self.labels.append(allocator, label);
         errdefer _ = self.labels.pop();

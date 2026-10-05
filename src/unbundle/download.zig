@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const base = @import("base");
 const unbundle = @import("unbundle.zig");
 const localhost = @import("localhost.zig");
@@ -25,39 +24,6 @@ fn generateRandomSuffix(io: std.Io, buf: *[RANDOM_SUFFIX_LEN]u8) void {
     for (buf) |*byte| {
         byte.* = charset[byte.* % charset.len];
     }
-}
-
-/// Get a handle to the system temp directory.
-/// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
-fn getTempDir(allocator: std.mem.Allocator, io: std.Io) Allocator.Error!std.Io.Dir {
-    // Try a named env var; returns an opened dir or null if env var is unset.
-    const tryEnv = struct {
-        fn call(alloc: std.mem.Allocator, io_inner: std.Io, name: []const u8) Allocator.Error!?std.Io.Dir {
-            const path = std.process.getEnvVarOwned(alloc, name) catch |err| switch (err) {
-                error.EnvironmentVariableNotFound => return null,
-                error.InvalidWtf8 => return null,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            defer alloc.free(path);
-            return std.Io.Dir.cwd().openDir(io_inner, path, .{}) catch return error.FileError;
-        }
-    }.call;
-
-    // Check TMPDIR first (standard on Unix)
-    if (try tryEnv(allocator, io, "TMPDIR")) |dir| return dir;
-
-    // Check TEMP (common on Windows)
-    if (try tryEnv(allocator, io, "TEMP")) |dir| return dir;
-
-    // Check TMP (fallback on Windows)
-    if (try tryEnv(allocator, io, "TMP")) |dir| return dir;
-
-    // Fall back to /tmp on Unix-like systems
-    if (comptime builtin.os.tag != .windows) {
-        return std.Io.Dir.cwd().openDir(io, "/tmp", .{}) catch return error.FileError;
-    }
-
-    return error.FileError;
 }
 
 /// Errors that can occur during the download operation.
@@ -314,62 +280,4 @@ fn initProxiesFromEnv(client: *std.http.Client, arena: Allocator) DownloadError!
         => return error.InvalidProxyUrl,
         error.OutOfMemory => return error.OutOfMemory,
     };
-}
-
-/// Download and extract a bundled tar.zst file to memory buffers.
-///
-/// Returns a BufferExtractWriter containing all extracted files and directories.
-/// The caller owns the returned writer and must call deinit() on it.
-pub fn downloadAndExtractToBuffer(
-    allocator: *std.mem.Allocator,
-    io: std.Io,
-    url: []const u8,
-    options: DownloadOptions,
-) DownloadError!unbundle.BufferExtractWriter {
-    // Validate URL and extract hash
-    const parsed_url = try validateUrl(url);
-    const base58_hash = parsed_url.hash;
-
-    // Validate the hash before starting any I/O
-    const expected_hash = (try unbundle.validateBase58Hash(base58_hash)) orelse {
-        return error.InvalidHash;
-    };
-
-    // Use a temp directory for downloading
-    var tmp_dir = getTempDir(allocator.*, io) catch {
-        return error.FileError;
-    };
-    defer tmp_dir.close(io);
-
-    // Build prefix for temp filename
-    var prefix_buf: [64]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&prefix_buf, "roc_{s}", .{base58_hash}) catch {
-        return error.InvalidHash;
-    };
-
-    // Download to temp file with unique random suffix
-    var temp_filename_buf: [96]u8 = undefined;
-    const temp_filename = try downloadToFile(allocator, io, url, tmp_dir, prefix, &temp_filename_buf);
-    defer tmp_dir.deleteFile(io, temp_filename) catch {};
-
-    // Open the downloaded file for reading
-    var temp_file = tmp_dir.openFile(io, temp_filename, .{}) catch {
-        return error.FileError;
-    };
-    defer temp_file.close(io);
-
-    // Create a buffered reader from the file
-    var read_buffer: [IO_BUFFER_SIZE]u8 = undefined;
-    var file_reader = temp_file.reader(io, &read_buffer);
-
-    // Setup buffer extract writer
-    var buffer_writer = unbundle.BufferExtractWriter.init(allocator);
-    errdefer buffer_writer.deinit();
-
-    // Extract the content using the streaming architecture
-    _ = try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null, .{
-        .max_expanded_bytes = options.max_expanded_bytes,
-    });
-
-    return buffer_writer;
 }

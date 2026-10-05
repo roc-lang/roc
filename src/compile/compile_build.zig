@@ -465,12 +465,6 @@ pub const BuildEnv = struct {
         self.cache_manager = manager;
     }
 
-    /// Set the I/O implementation.
-    pub fn setCoreCtx(self: *BuildEnv, roc_ctx: CoreCtx) void {
-        self.filesystem = roc_ctx;
-        self.sink.std_io = self.filesystem.std_io;
-    }
-
     /// Get the TargetsConfig from the platform package, if any.
     pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
         const name = self.selected_platform_package_name orelse return null;
@@ -2346,19 +2340,6 @@ pub const BuildEnv = struct {
         module_time_min_ns: u64 = std.math.maxInt(u64),
         module_time_max_ns: u64 = 0,
         module_time_sum_ns: u64 = 0,
-
-        /// Get average module compile time in nanoseconds
-        pub fn moduleTimeAvgNs(self: BuildStats) u64 {
-            if (self.modules_compiled == 0) return 0;
-            return self.module_time_sum_ns / self.modules_compiled;
-        }
-
-        /// Get cache hit rate as percentage (0-100)
-        pub fn cacheHitPercent(self: BuildStats) u32 {
-            const total = self.cache_hits + self.cache_misses;
-            if (total == 0) return 0;
-            return @intCast((@as(u64, self.cache_hits) * 100 + total / 2) / total);
-        }
     };
 
     /// Get build statistics from the coordinator
