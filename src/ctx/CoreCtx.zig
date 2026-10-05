@@ -11,6 +11,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const private_dir_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o700) else .default_dir;
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 
 const Self = @This();
 
@@ -718,7 +720,7 @@ fn osReadFileInto(_: ?*anyopaque, std_io: std.Io, path: []const u8, buffer: []u8
 }
 
 fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u8) WriteError!void {
-    std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = path, .data = data }) catch |err| return switch (err) {
+    std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = path, .data = data, .flags = .{ .permissions = private_file_permissions } }) catch |err| return switch (err) {
         error.AntivirusInterference,
         error.BadPathName,
         error.BrokenPipe,
@@ -941,7 +943,7 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
 }
 
 fn osMakePath(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| return switch (err) {
+    _ = std.Io.Dir.cwd().createDirPathStatus(std_io, path, private_dir_permissions) catch |err| return switch (err) {
         error.AntivirusInterference,
         error.BadPathName,
         error.Canceled,
@@ -1217,7 +1219,7 @@ fn osDeleteTree(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!vo
 }
 
 fn osCreateDir(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().createDir(std_io, path, .default_dir) catch |err| return switch (err) {
+    std.Io.Dir.cwd().createDir(std_io, path, private_dir_permissions) catch |err| return switch (err) {
         error.BadPathName,
         error.Canceled,
         error.DiskQuota,

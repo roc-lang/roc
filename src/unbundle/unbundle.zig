@@ -6,6 +6,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const private_dir_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o700) else .default_dir;
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 const base58 = @import("base58");
 const zstd = std.compress.zstd;
 const format = @import("format.zig");
@@ -143,10 +145,10 @@ pub const DirExtractWriter = struct {
 
         // Ensure parent directories exist
         if (std.fs.path.dirname(path)) |parent| {
-            self.dir.createDirPath(self.io, parent) catch return error.FileCreateFailed;
+            _ = self.dir.createDirPathStatus(self.io, parent, private_dir_permissions) catch return error.FileCreateFailed;
         }
 
-        const file = self.dir.createFile(self.io, path, .{}) catch return error.FileCreateFailed;
+        const file = self.dir.createFile(self.io, path, .{ .permissions = private_file_permissions }) catch return error.FileCreateFailed;
 
         // Append entry first to get stable memory in the array list.
         // We must initialize the writer AFTER appending, because the writer
@@ -182,7 +184,7 @@ pub const DirExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
-        self.dir.createDirPath(self.io, path) catch return error.DirectoryCreateFailed;
+        _ = self.dir.createDirPathStatus(self.io, path, private_dir_permissions) catch return error.DirectoryCreateFailed;
     }
 };
 
