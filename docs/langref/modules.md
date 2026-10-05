@@ -556,7 +556,7 @@ The `app` placeholder represents the compiled Roc application. The order files a
 
 The default behaviour for `roc build` without a `--target` flag is the first compatible target in the `targets` section.
 
-Linking uses only the listed `inputs` and Roc's own objects. Nothing is taken from the machine running the build: no system C runtime, SDK, or default library is searched for, on any target. A Windows target (`x64win`, `arm64win`, `x64mingw`, `arm64mingw`) therefore lists everything a Windows link needs:
+Linking takes nothing from a toolchain installed on the machine running the build: no system C runtime, SDK, or default library is searched for. On Linux, BSD, and Windows targets the link uses only the listed `inputs` and Roc's own objects. A macOS target additionally links `libSystem`, and the frameworks in a `macos-sysroot` directory the platform provides, from that sysroot or the minimal one bundled with Roc. A Windows target (`x64win`, `arm64win`, `x64mingw`, `arm64mingw`) therefore lists everything a Windows link needs:
 
 - the entry point the linker infers, `mainCRTStartup` (or `_DllMainCRTStartup` for a `Shared` output), from a startup object or archive;
 - whatever C runtime the host calls into;

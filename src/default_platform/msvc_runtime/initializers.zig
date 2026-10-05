@@ -5,23 +5,32 @@
 //! name, so the sentinels declared here bracket every pointer an input
 //! contributed.
 
-const Initializer = ?*const fn () callconv(.c) void;
+/// A C initializer reports failure with a nonzero result.
+const CInitializer = ?*const fn () callconv(.c) c_int;
+const CppInitializer = ?*const fn () callconv(.c) void;
 
-var xi_a: Initializer linksection(".CRT$XIA") = null;
-var xi_z: Initializer linksection(".CRT$XIZ") = null;
-var xc_a: Initializer linksection(".CRT$XCA") = null;
-var xc_z: Initializer linksection(".CRT$XCZ") = null;
-
-fn runTable(first: *Initializer, last: *Initializer) void {
-    var entry: [*]Initializer = @ptrCast(first);
-    const end: [*]Initializer = @ptrCast(last);
-    while (@intFromPtr(entry) < @intFromPtr(end)) : (entry += 1) {
-        if (entry[0]) |initializer| initializer();
-    }
-}
+var xi_a: CInitializer linksection(".CRT$XIA") = null;
+var xi_z: CInitializer linksection(".CRT$XIZ") = null;
+var xc_a: CppInitializer linksection(".CRT$XCA") = null;
+var xc_z: CppInitializer linksection(".CRT$XCZ") = null;
 
 /// Runs every initializer the image's inputs registered, C before C++.
-pub fn run() void {
-    runTable(&xi_a, &xi_z);
-    runTable(&xc_a, &xc_z);
+/// Stops at the first C initializer that fails and returns its result;
+/// returns zero when all of them succeeded.
+pub fn run() c_int {
+    var c_entry: [*]CInitializer = @ptrCast(&xi_a);
+    const c_end: [*]CInitializer = @ptrCast(&xi_z);
+    while (@intFromPtr(c_entry) < @intFromPtr(c_end)) : (c_entry += 1) {
+        if (c_entry[0]) |initializer| {
+            const result = initializer();
+            if (result != 0) return result;
+        }
+    }
+
+    var cpp_entry: [*]CppInitializer = @ptrCast(&xc_a);
+    const cpp_end: [*]CppInitializer = @ptrCast(&xc_z);
+    while (@intFromPtr(cpp_entry) < @intFromPtr(cpp_end)) : (cpp_entry += 1) {
+        if (cpp_entry[0]) |initializer| initializer();
+    }
+    return 0;
 }

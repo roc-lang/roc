@@ -20,6 +20,6 @@ const argv_unexpanded = 1;
 
 export fn mainCRTStartup() callconv(.winapi) noreturn {
     if (_configure_narrow_argv(argv_unexpanded) != 0) exit(255);
-    initializers.run();
+    if (initializers.run() != 0) exit(255);
     exit(main(__p___argc().*, __p___argv().*));
 }
