@@ -6881,7 +6881,10 @@ pub const MonoLlvmCodeGen = struct {
 
     fn lowerIntToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
-            .exact => try self.emitScalarCoercion(target, arg),
+            .exact => if (spec.src.bits() == 128)
+                try self.emitInt128ToFloatConversion(target, arg, spec.src.isSigned(), spec.dst == .f32)
+            else
+                try self.emitScalarCoercion(target, arg),
             .wrap, .trunc, .@"try", .try_unsafe => return error.UnsupportedLowLevel,
         }
     }
@@ -6950,6 +6953,27 @@ pub const MonoLlvmCodeGen = struct {
         const value = try self.loadScalar(self.slot(arg).ptr, src_layout);
         const coerced = try self.coerceScalar(value, self.scalarType(target_layout), src_layout.isSigned());
         try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
+    }
+
+    /// 128-bit integer to float conversion, routed through the same
+    /// decomposed-to-64-bit builtins the dev and wasm backends call.
+    ///
+    /// No target Roc compiles to converts a 128-bit integer to a float in one
+    /// instruction, so a `sitofp`/`uitofp` from i128 in the module makes
+    /// instruction selection lower it to a compiler-rt libcall
+    /// (`__floattidf`, `__floatuntisf`, ...). See `emitI128DivRem` for why
+    /// the module must not contain one.
+    fn emitInt128ToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_signed: bool, is_f32: bool) Error!void {
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const parts = try self.splitI128Value(value);
+        const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
+        const result = try self.callBuiltin(
+            LowLevelBuiltins.int128ToFloat(is_signed, is_f32).symbolName(),
+            float_ty,
+            &.{ .i64, .i64 },
+            &.{ parts.low, parts.high },
+        );
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
     fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
