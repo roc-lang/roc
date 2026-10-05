@@ -221,6 +221,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Add the three machine words of a RocStr or RocList stored at `offset`
+        /// as three consecutive integer-class memory arguments.
+        pub inline fn addThreeWordMemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.addMemArg(base_reg, offset);
+            try self.addMemArg(base_reg, offset + 8);
+            try self.addMemArg(base_reg, offset + 16);
+        }
+
         /// Add an integer-class memory argument at its ABI-assigned register.
         pub fn addMemArgAt(
             self: *Self,
