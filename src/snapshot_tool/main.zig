@@ -4188,7 +4188,7 @@ fn processDevObjectSnapshot(
                 target,
                 .{ .include_provided_exports = true },
             ) catch |err| {
-                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field_name, err });
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;
@@ -4927,6 +4927,7 @@ fn renderSnapshotReplTypeProblems(
         error.ParseFailed,
         error.ParsingFailed,
         error.PathAlreadyExists,
+        error.PathExceedsLimit,
         error.PathOutsideWorkspace,
         error.PermissionDenied,
         error.PipeBusy,
@@ -5165,6 +5166,7 @@ fn snapshotReplDefinitionStep(
             error.ParseFailed,
             error.ParsingFailed,
             error.PathAlreadyExists,
+            error.PathExceedsLimit,
             error.PathOutsideWorkspace,
             error.PermissionDenied,
             error.PipeBusy,
@@ -5323,6 +5325,7 @@ fn compileAndEvaluateSnapshotReplExpr(
             error.ParseFailed,
             error.ParsingFailed,
             error.PathAlreadyExists,
+            error.PathExceedsLimit,
             error.PathOutsideWorkspace,
             error.PermissionDenied,
             error.PipeBusy,
@@ -5503,6 +5506,7 @@ fn snapshotReplExpressionStep(
                             error.ParseFailed,
                             error.ParsingFailed,
                             error.PathAlreadyExists,
+                            error.PathExceedsLimit,
                             error.PathOutsideWorkspace,
                             error.PermissionDenied,
                             error.PipeBusy,
@@ -5668,6 +5672,7 @@ fn snapshotReplExpressionStep(
             error.ParseFailed,
             error.ParsingFailed,
             error.PathAlreadyExists,
+            error.PathExceedsLimit,
             error.PathOutsideWorkspace,
             error.PermissionDenied,
             error.PipeBusy,

@@ -66,6 +66,7 @@ fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
 const TestError = util.RocRunError ||
     std.Io.File.ReadStreamingError ||
     std.Io.File.Reader.Error ||
+    std.Io.net.Stream.Reader.Error ||
     std.Io.File.Writer.Error ||
     std.fmt.ParseIntError ||
     error{

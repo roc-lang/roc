@@ -10672,7 +10672,7 @@ pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
         .double => try self.doubleConst(std.math.nan(f64)),
         .fp128 => try self.fp128Const(std.math.nan(f128)),
         .x86_fp80 => try self.x86_fp80Const(std.math.nan(f80)),
-        .ppc_fp128 => try self.ppc_fp128Const(@splat(.{std.math.nan(f64)})),
+        .ppc_fp128 => try self.ppc_fp128Const(@splat(std.math.nan(f64))),
         else => unreachable,
     };
 }

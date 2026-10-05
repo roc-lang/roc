@@ -9080,7 +9080,7 @@ test "pack withholds an entry whose stable references reach a constant holding a
             .relocations = &.{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }},
             .data = &.{.{
                 .name = "roc__d0",
-                .bytes = @as([8]u8, @splat('\x00')),
+                .bytes = &@as([8]u8, @splat('\x00')),
                 .alignment = 8,
                 .symbol_offset = 0,
                 .relocations = &.{.{ .offset = 0, .name = "roc__pcallback", .addend = 0, .function = true }},
@@ -9133,7 +9133,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             },
             .data = &.{.{
                 .name = "roc__d0",
-                .bytes = @as([8]u8, @splat('\x00')),
+                .bytes = &@as([8]u8, @splat('\x00')),
                 .alignment = 8,
                 .symbol_offset = 0,
                 .program_local_name = true,
