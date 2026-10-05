@@ -18678,17 +18678,19 @@ const Builder = struct {
                 self.active_stored_fn = outer_stored_fn;
                 self.active_stored_substitution = outer_stored_substitution;
             }
-            self.plan.callable_uses.items[callable_index].hidden_dict_args =
-                try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
-                    use.worker,
-                    use.caller,
-                    arg_types,
-                    ret_type,
-                    evidence.view,
-                    evidence.entries,
-                    self.useSchemeSubstitution(use.worker, use.use),
-                    0,
-                );
+            // Materializing evidence can append callable uses and move the
+            // array. Reacquire the destination after that work completes.
+            const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
+                use.worker,
+                use.caller,
+                arg_types,
+                ret_type,
+                evidence.view,
+                evidence.entries,
+                self.useSchemeSubstitution(use.worker, use.use),
+                0,
+            );
+            self.plan.callable_uses.items[callable_index].hidden_dict_args = hidden_dict_args;
         }
 
         // Materialize checked instantiation edges first. A local callable's
@@ -18704,8 +18706,9 @@ const Builder = struct {
             }
             const evidence = self.checkedEvidenceForProcedureUse(use.use);
             if (evidence.entries == null and typeRefEql(use.callable_ty, worker.checked_type)) continue;
-            self.plan.nested_callable_uses.items[index].hidden_dict_args =
-                try self.materializeNestedCallableUseDictionaries(use, evidence.view, evidence.entries);
+            // Nested materialization may also grow its destination array.
+            const hidden_dict_args = try self.materializeNestedCallableUseDictionaries(use, evidence.view, evidence.entries);
+            self.plan.nested_callable_uses.items[index].hidden_dict_args = hidden_dict_args;
         }
 
         const dictionary_use_count = self.worker_dictionary_uses.items.len;
@@ -18756,8 +18759,8 @@ const Builder = struct {
 
             if (self.workerBindsAllDictionaryParams(use.caller, worker.hidden_dicts)) {
                 const view = self.moduleForId(use.use.module);
-                self.plan.nested_callable_uses.items[index].hidden_dict_args =
-                    try self.materializeNestedCallableUseDictionaries(use, view, null);
+                const hidden_dict_args = try self.materializeNestedCallableUseDictionaries(use, view, null);
+                self.plan.nested_callable_uses.items[index].hidden_dict_args = hidden_dict_args;
                 continue;
             }
 
