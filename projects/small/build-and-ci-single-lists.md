@@ -1,121 +1,93 @@
-# One Module List, One CI Step List, One Toolchain Pin
+# One CI Gate List Outside Pull Requests
 
 ## Problem
 
-Three inventories in the build/CI layer are maintained as parallel
-hand-written lists, and two of them have already diverged:
+Pull-request CI has one gate list: `src/build/minici.zig`'s `jobs`
+array, which `.github/workflows/ci_manager.yml` runs shard by shard and
+`--minici-verify-workflow` checks against the workflow. The module
+unit-test jobs in it are derived from the module inventory in
+`src/build/modules.zig` (`ModuleType.info`), so a new module's tests
+reach MiniCI without a second edit.
 
-1. **The compiler module list is restated ~7 times in one file, plus
-   once more in minici.** In `src/build/modules.zig`: the
-   `ModuleType` enum (`:288-324`), the `getDependencies` switch
-   (`:327-365`), the `RocModules` struct fields (`:371-406`), the
-   `create()` `addModule` calls (`:429-479`), the `all_modules` array
-   (`:516-552`), the `addAll` `addImport` calls (`:591-632`), the
-   `getModule` switch (`:641-678`), the `test_configs` array
-   (`:699-728`), and the `aggregatorFilters` map (`:26-44`). The
-   switches are exhaustive (safe); the arrays are not—and
-   `test_configs` already omits several modules present in the enum,
-   so "modules that exist" and "modules that get a unit-test step"
-   have silently diverged. `src/build/minici.zig:55-82` then
-   hardcodes the per-module step names again as strings.
-2. **The CI gate list exists in three orchestrators.** `build.zig`
-   defines the `run-check-*`/`run-test-*` steps; `minici.zig:35-100`
-   lists the leaf steps `zig build minici` runs (with a comment
-   instructing humans to keep it in sync); `.github/workflows/ci_zig.yml:59-117`
-   re-lists them as individual workflow steps; `src/flake.nix:82-102`
-   re-lists a subset again. The two CI paths already run different
-   granularities (ci_zig.yml uses aggregate `run-test-zig`; minici
-   enumerates `run-test-zig-module-*`), so "what CI ran" depends on
-   which orchestrator fired. A new gate must be added in up to four
-   places or it silently runs in only some paths.
-3. **The Zig toolchain version is pinned in ~12 places.**
-   `build.zig.zon:4` (`minimum_zig_version`, the only enforced one),
-   eight `setup-zig` pins across `.github/workflows/` (`ci_zig.yml:42,
-   210, 311, 454, 513`, `ci_cross_compile.yml:32`,
-   `ci_zig_nix.yml:33`, `ci_manager.yml:124`), `src/flake.nix:67`,
-   and the bootstrap dependency URLs in `build.zig.zon:12-47`. A Zig
-   bump that misses a workflow runs that job on the wrong toolchain.
+Two other orchestrators still name MiniCI jobs by hand:
+
+1. **The nightly `zig-tests` job** in `.github/workflows/ci_zig.yml`
+   runs on operating systems pull-request CI never uses. On those legs
+   (`pr_os` unset) it re-lists four MiniCI jobs as individual workflow
+   steps (`run-test-cli`, `run-test-zig-machine-code-shim`,
+   `run-test-eval-host-effects`, `run-test-wasm-static-lib`) and then
+   runs the `run-test-zig` aggregate. A job added to MiniCI runs on
+   those operating systems only if someone also adds a step there, so
+   "what the nightly ran on those legs" and "what a PR ran" are two
+   lists with nothing comparing them.
+2. **The Nix leg** (`ci/zig_nix_ci.sh`, called by
+   `.github/workflows/ci_zig_nix.yml`) names `run-check-snapshots` and
+   `run-test-zig` itself.
+
+One module's unit tests are deliberately outside MiniCI: `glue` is
+marked `.minici = false` in the module inventory, so only the nightly
+`run-test-zig` aggregate runs `run-test-zig-module-glue`. Whether that
+should stay nightly-only is an open decision; the marker makes it a
+visible one.
 
 ## Background
 
-The build layer also contains the counter-examples: `RocTarget`
-(`src/target/mod.zig`) is deliberately importable by both `build.zig`
-and the CLI, and the compiler version is assembled once into
-`build_options`. The module list is the last large inventory without
-that treatment. Note `ci_manager.yml` already runs `zig build minici`
-as its whole gate—proof the single-entry-point form works in CI.
+`zig build minici` already takes `--minici-shard`, `--minici-from`/
+`--minici-to`, and `--minici-skip-build`, and each job carries a
+`Placement` saying which hosts its result can differ on. The nightly
+legs want exactly "every `every_host` job", which is what a secondary
+`Lane` selects.
 
-## Evidence
-
-- `src/build/modules.zig`—diff the enum against `test_configs` to
-  see the existing omissions.
-- `minici.zig:36-38`—the keep-in-sync comment.
-- `ci_zig.yml:381-385` vs `minici.zig:55-82`—the granularity
-  divergence.
-- `grep -rn '0.16.0' .github/workflows build.zig.zon src/flake.nix`.
+The Zig toolchain version is pinned in `build.zig.zon`
+(`minimum_zig_version`), in each workflow's `setup-zig` step, and in
+`src/flake.nix`. `run-check-tidy` compares the workflow and flake pins
+against the zon value, so a bump that misses one fails the `source`
+lane.
 
 ## Solution design
 
-1. **Comptime-drive modules.zig from the enum.** `getDependencies`
-   and `getModule` are already exhaustive; convert `all_modules`,
-   `create`, `addAll`, and `test_configs` to `inline for
-   (std.enums.values(ModuleType))` loops over one comptime table
-   (per-module: name, deps, has-tests flag, aggregator filter). A
-   module deliberately excluded from testing carries an explicit
-   `no_tests` marker in the table, so the current silent omissions
-   become visible decisions. The struct-of-fields stays (Zig field
-   names), guarded by a comptime assert that its field set equals the
-   enum. minici derives the `run-test-zig-module-*` job names from
-   the same table (exported via a generated list or a `build.zig`
-   query) instead of string literals.
-2. **Collapse the CI lists.** `ci_zig.yml`'s `check-once` job becomes
-   a single `zig build minici` invocation (as `ci_manager.yml`
-   already does), and `flake.nix` calls the same aggregate. The gate
-   list then lives in exactly two places with one direction of flow:
-   `build.zig` defines steps; `minici.zig` enumerates the gates; CI
-   invokes minici. If per-step GitHub-UI granularity is worth
-   keeping, instead generate the workflow's step list from
-   `minici.zig`'s `jobs` array with a checked-in generated file and a
-   CI check that it is current.
-3. **One toolchain pin.** Read the version in workflows from
-   `build.zig.zon` (setup-zig supports a version-file/zon read; if
-   the pinned action version does not, a one-line
-   `grep minimum_zig_version` shell step feeding the action input
-   does). `flake.nix` and the bootstrap URLs stay manual but get a CI
-   check comparing them against the zon value, so a partial bump
-   fails fast.
+1. Give the nightly's non-PR legs one invocation: `zig build minici`
+   restricted to the secondary lane (a shard set for "any other host",
+   or a `--minici-lane secondary` selector), replacing the four named
+   steps. The steps that are nightly-only by design (ReleaseFast
+   `run-test-zig`, `run-check-snapshots -- --debug`, the Lambda Mono
+   differential sweep, static-link checks, kcov) stay, because MiniCI
+   does not run them.
+2. Have `ci/zig_nix_ci.sh` call the same selector instead of naming
+   steps, or record in `minici.zig` why the Nix sandbox needs a
+   different set.
+3. Decide `glue`: either flip `.minici` to true (and rebalance the
+   shards from measured timings) or state the reason beside the marker.
 
 ## What success looks like
 
 Every criterion below must hold; the project is not done until all do:
 
-- Adding a module = one table entry; `zig build` fails at comptime if
-  the struct field, dependency arm, or test decision is missing.
-- Every enum module is either tested or explicitly marked `no_tests`;
-  the current divergence list is triaged in that change.
-- `grep -n 'run-test-zig-module' src/build/minici.zig` shows derived
-  names, not literals.
-- One CI path: `ci_zig.yml` and `flake.nix` invoke the minici
-  aggregate (or consume a generated, checked list).
-- A wrong-version workflow pin fails CI via the zon-comparison check.
+- `grep -n 'zig build run-test' .github/workflows/ci_zig.yml ci/zig_nix_ci.sh`
+  shows only steps MiniCI does not run.
+- Adding a job to `minici.zig`'s `jobs` makes it run on every nightly
+  leg with no workflow edit.
+- The `glue` marker either is gone or carries its reason.
 
 ## How to evaluate the result
 
 ### Correctness ideal
 
-"What does CI run" has one answer, derivable from `minici.zig`; "what
-modules exist" has one answer, the enum. A skipped gate or untested
-module is impossible to create silently.
+"What does CI run" has one answer on every host, derivable from
+`minici.zig`. A gate that exists on PR hosts but is skipped on
+nightly-only hosts is impossible to create silently.
 
 ### Performance ideal
 
-CI wall-time unchanged or better (minici already parallelizes its
-jobs; verify total pipeline time on one run before/after). Build
-graph construction cost of the comptime loops is negligible (same
-work, generated).
+Nightly wall-time unchanged or better: MiniCI already parallelizes its
+jobs and reuses one `build-ci`. Verify total pipeline time on one
+nightly run before and after.
 
 ## Tests to add
 
-- The comptime field-set/enum assert in modules.zig.
-- The zon-vs-workflow/flake version-comparison CI check.
-- If the generated-workflow route is chosen: the freshness check.
+- A `minici.zig` test that the nightly selector covers every
+  `every_host` job exactly once, beside the existing "MiniCI shards
+  cover" tests.
+- `--minici-verify-workflow` extended to `ci_zig.yml`, so the nightly
+  workflow is checked against the selector the way `ci_manager.yml` is
+  checked against the shards.

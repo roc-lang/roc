@@ -73,8 +73,8 @@ batches and of each other:
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
 - [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
-  one module inventory (seven restatements plus minici's copy, with
-  existing test-coverage divergence), one CI gate list, one Zig pin.
+  the nightly and Nix CI legs name MiniCI jobs by hand instead of
+  invoking MiniCI's own gate list.
 
 A fourth batch (2026-07-20) targets operational robustness and
 build-throughput gaps rather than sources of truth. The projects are
