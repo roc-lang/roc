@@ -35,8 +35,11 @@ zig build roc -Droc-deps-path=/path/to/bundle
 This option uses the same LLVM/LLD/Binaryen configuration as a downloaded
 bundle. It cannot be combined with `-Dllvm-path` or `-Dsystem-llvm`, which select
 legacy LLVM dependency modes. Bundle headers and libraries at mutable paths
-participate by content in the cache identity; immutable Nix store paths identify
-their contents.
+participate by content in the cache identity. Verified immutable Nix bundles
+use their full store path to avoid copying and hashing several gigabytes of
+libraries. A stable store path reuses the identity; reassembling identical
+headers and libraries at a different store path conservatively invalidates it,
+including when only bundle metadata changed.
 
 The displayed Git version is separate from application-cache compatibility.
 Compatibility tracks compiler/runtime/vendor sources, the build recipe and
@@ -48,6 +51,12 @@ Generated compiler embedding assets live in Zig's cache.
 The complete Zig library and mutable dependency contents have independent
 cached digest stages. Production edits reuse those unchanged large input trees;
 the final compatibility identity includes their declared content digests.
+
+Deleting an installed executable under `zig-out/` restores it from the cached
+compile. Files inside Zig's local cache must remain together with their cache
+manifests: cached Run, WriteFiles, and Options steps do not recover individually
+deleted generated files. If those internal files are missing, rebuild with a
+fresh `--cache-dir /new/cache/path` or discard the affected local cache.
 
 Integration tests prepare their fixture trees and generated host libraries in
 Zig's cache, then run in private temporary copies. Concurrent build modes and
