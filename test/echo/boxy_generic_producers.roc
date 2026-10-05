@@ -5,8 +5,8 @@
 #   described by the part's own type.
 # - A top-level value built by a generic factory is a stored function whose
 #   captures describe the factory's type variables.
-# - A top-level callable whose body is a block is evaluated at each use, at
-#   that use's types, including the dictionaries the callable it builds needs.
+# - A top-level callable whose body is a block is a value, so every use shares
+#   its one type, including the dictionaries the callable it builds needs.
 
 greet = |name| "hi ${name}"
 
@@ -26,8 +26,8 @@ greeter = {
 }
 
 main! = |args| {
-	(p, s) = pair_with("s")
+	(p, s) = pair_with(List.len(args) + 1)
 	(_, n) = pair_with(List.len(args) + 2)
-	echo!("${greet("x")},${shown(List.len(args) + 41)},${p}${s}${n.to_str()},${greeter("y")}")
+	echo!("${greet("x")},${shown(List.len(args) + 41)},${p}${s.to_str()}${n.to_str()},${greeter("y")}")
 	Ok({})
 }
