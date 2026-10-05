@@ -290,7 +290,7 @@ pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, InvalidVersion, Ambiguou
 pub fn isSafeUrl(url: []const u8) bool {
     // Package group keys use NUL to separate the URL spans around a version.
     // Reject it before a URL can enter resolution or reach a fetcher.
-    if (std.mem.indexOfScalar(u8, url, 0) != null) return false;
+    if (std.mem.findScalar(u8, url, 0) != null) return false;
 
     return std.mem.startsWith(u8, url, "https://") or
         std.mem.startsWith(u8, url, "http://localhost:") or
