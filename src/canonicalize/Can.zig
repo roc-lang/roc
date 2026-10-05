@@ -13707,7 +13707,7 @@ fn runExprKernel(
                 const if_expr_idx = try self.env.addExpr(Expr{ .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
-                    .warn_unused_branches = false,
+                    .origin = if (op == .@"and") .short_circuit_and else .short_circuit_or,
                 } }, state.region);
 
                 const if_free_vars = self.scratch_free_vars.spanFrom(state.free_vars_start);
@@ -14325,7 +14325,7 @@ fn runExprKernel(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = can_else.idx,
-                    .warn_unused_branches = true,
+                    .origin = .source,
                 },
             }, state.region);
 
@@ -14372,7 +14372,7 @@ fn runExprKernel(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = empty_record_idx,
-                    .warn_unused_branches = true,
+                    .origin = .source,
                 },
             }, state.region);
 

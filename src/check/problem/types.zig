@@ -47,6 +47,7 @@ pub const Problem = union(enum) {
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
+    polymorphic_value_annotation: PolymorphicValueAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_comptime_expression: EffectfulComptimeExpression,
     effectful_expect: EffectfulExpect,
@@ -213,6 +214,36 @@ pub const AssociatedItemNotFound = struct {
 /// bound—the variable must have a concrete type.
 pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
+};
+
+/// A value binding whose annotation introduces a type variable. Only a binding
+/// whose right-hand side is a function (or a value alias) generalizes, so this
+/// binding has exactly one type and cannot quantify the variable.
+pub const PolymorphicValueAnnotation = struct {
+    /// The binding's name as written, when its pattern is a plain identifier.
+    name_region: ?base.Region,
+    /// The whole annotation, name included.
+    region: base.Region,
+    /// The annotated type alone, for the suggested thunk signature.
+    type_region: base.Region,
+    /// The annotation's where clause, from the end of its type through the
+    /// end of its last clause (the closing `]` is not included), for the
+    /// suggested thunk signature.
+    where_region: ?base.Region,
+    /// Whether the annotated type is itself a function type, which the
+    /// suggested thunk signature must parenthesize.
+    type_is_function: bool,
+    /// The binding's right-hand side, for the suggested thunk body.
+    rhs_region: base.Region,
+    /// The annotated function type's arity, when the right-hand side is a
+    /// placeholder (`...` or a `crash`) for a function that is not
+    /// implemented yet; the report then suggests writing the placeholder
+    /// inside a lambda of that arity.
+    stub_arity: ?u32,
+    /// Whether the annotation writes an anonymous `..` extension.
+    writes_open_extension: bool,
+    /// Whether the annotation writes a named type variable.
+    writes_named_variable: bool,
 };
 
 /// A top-level value definition performs effects while initializing.
@@ -670,6 +701,45 @@ pub const StaticDispatch = union(enum) {
     undetermined_codec_type: UndeterminedCodecType,
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
+    undetermined_type: UndeterminedType,
+};
+
+/// A requirement failed on a type that nothing in the program determined: a
+/// defaulting decision chose the type, and the chosen default cannot satisfy
+/// every requirement on it. Reported once per defaulted type, in terms of the
+/// type as the program wrote it—never the default the checker chose, which
+/// the user did not write.
+pub const UndeterminedType = struct {
+    /// Where the undetermined type comes from: the literal itself, or the
+    /// expression that owns the failed requirement.
+    region: base.Region,
+    subject: Subject,
+    /// The type before the default was committed, listing every requirement
+    /// on it. Absent for a shared-literal conflict, whose only requirements
+    /// are the two literals themselves.
+    requirements_snapshot: ?SnapshotContentIdx,
+    /// The requirement whose failure was observed first.
+    method_name: Ident.Idx,
+    /// The requirement came from a desugared operator, which the report names
+    /// instead of its method.
+    is_binop: bool,
+    /// For a literal subject: none of the built-in types the literal's kind
+    /// can default to has `method_name`, so an annotation naming a built-in
+    /// type cannot help. Always false for other subjects.
+    builtin_candidates_lack_method: bool = false,
+
+    pub const Subject = enum {
+        number_literal,
+        string_literal,
+        value,
+        /// A string literal and a number literal share the type, and the
+        /// failed requirement is the string literal's own conversion; the
+        /// region is that string literal.
+        string_literal_shared_with_number,
+        /// The mirror case: the failed requirement is a number literal's own
+        /// conversion, and the type is shared with a string literal.
+        number_literal_shared_with_string,
+    };
 };
 
 /// Error when a static dispatch method is called on a receiver whose type is an
@@ -735,9 +805,6 @@ pub const DispatcherDoesNotImplMethod = struct {
     num_literal: ?types_mod.NumeralInfo = null,
     /// Source region of the string literal for `from_literal` constraints of kind `quote`
     quote_region: ?base.Region = null,
-    /// True when the dispatcher was a numeric literal that was defaulted to Dec
-    /// because no type annotation was given. Used to add explanatory text in errors.
-    defaulted_from_numeric_literal: bool = false,
     /// Set when the dispatcher is a record's or tag union's `..` extension,
     /// whose obligation came from deriving the method for that whole type.
     row_extension_of: ?RowExtension = null,

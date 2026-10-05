@@ -856,6 +856,34 @@ pub const Store = struct {
         return true;
     }
 
+    /// Record that a defaulting decision is about to choose `target_var`'s
+    /// equivalence class. Provenance only: content and links are untouched.
+    pub fn markVarDefaultDecided(self: *Self, target_var: Var) Allocator.Error!void {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        if (resolved.desc.flags.default_decided) return;
+        var desc = resolved.desc;
+        desc.flags.default_decided = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Withdraw a `markVarDefaultDecided` whose decision left the class
+    /// undetermined: the default it anticipated never reached this class.
+    pub fn clearVarDefaultDecided(self: *Self, target_var: Var) Allocator.Error!void {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        if (!resolved.desc.flags.default_decided) return;
+        var desc = resolved.desc;
+        desc.flags.default_decided = false;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Whether a defaulting decision chose `target_var`'s equivalence class.
+    pub fn varDefaultDecided(self: *const Self, target_var: Var) bool {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        return self.resolveVar(target_var).desc.flags.default_decided;
+    }
+
     /// Whether checking rejected a static-dispatch obligation on `target_var`'s
     /// equivalence class.
     pub fn varStaticDispatchRejected(self: *const Self, target_var: Var) bool {
@@ -1726,6 +1754,10 @@ pub const Store = struct {
         // an opened nominal backing component is that component.
         merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
             b_data.desc.flags.nominal_backing_structure;
+        // A defaulting decision about one side is a decision about the merged
+        // class: the default it committed is the type both sides now share.
+        merged_desc.flags.default_decided = a_data.desc.flags.default_decided or
+            b_data.desc.flags.default_decided;
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);
@@ -1754,12 +1786,16 @@ pub const Store = struct {
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
         var a = self.resolveStorageRoot(a_var);
         var b = self.resolveStorageRoot(b_var);
-        // Poisoning replaces the content, not the rejection history: a class
-        // whose dispatch check was already rejected stays rejected.
+        // Poisoning replaces the content, not the rejection or defaulting
+        // history: a class whose dispatch check was already rejected stays
+        // rejected, and a class a default chose stays default-decided.
         const err_desc = Desc{
             .content = .err,
             .rank = Rank.generalized,
-            .flags = .{ .static_dispatch_rejected = a.desc.flags.static_dispatch_rejected or b.desc.flags.static_dispatch_rejected },
+            .flags = .{
+                .static_dispatch_rejected = a.desc.flags.static_dispatch_rejected or b.desc.flags.static_dispatch_rejected,
+                .default_decided = a.desc.flags.default_decided or b.desc.flags.default_decided,
+            },
         };
 
         if (a.storage_var == b.storage_var) {

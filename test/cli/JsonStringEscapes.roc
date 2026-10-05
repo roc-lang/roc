@@ -92,7 +92,7 @@ expect {
 	result : Try(Str, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
 	result == Err(InvalidJson("unescaped control character in string"))
@@ -105,7 +105,7 @@ expect {
 	result : Try(Str, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
 	result == Err(InvalidJson("unescaped control character in string"))
@@ -117,7 +117,7 @@ expect {
 	result : Try(Str, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
 	result == Err(InvalidJson("unescaped control character in string"))
@@ -131,7 +131,7 @@ expect {
 	result : Try(Str, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
 	match (result, expected) {
@@ -223,7 +223,7 @@ expect {
 	round_tripped : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
 	round_tripped = match Json.to_str_try(original) {
 		Ok(encoded) => Json.parse(encoded)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
 	round_tripped == Ok(original)
@@ -357,7 +357,7 @@ expect {
 	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
-		Err(_) => Err(Json.invalid_json)
+		Err(_) => Err(Json.invalid_json({}))
 	}
 
 	result == Err(InvalidJson("unescaped control character in string"))

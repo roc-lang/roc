@@ -46,7 +46,7 @@ main = {
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
-MISSING METHOD - Adv.md:28:21:28:27
+TYPE NOT DETERMINED - Adv.md:28:13:28:20
 # PROBLEMS
 ~~~clojure
 (reports
@@ -101,37 +101,37 @@ MISSING METHOD - Adv.md:28:21:28:27
 			(reflow "associated with it in the type's declaration.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 28 21) (end 28 27))
+		(title "Type Not Determined")
+		(region (start 28 13) (end 28 20))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "update")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "Nothing in this program determines the type of this string:"))
 		(document
-			(source-region (file "Adv.md") (start 28 21) (end 28 27) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
+			(source-region (file "Adv.md") (start 28 13) (end 28 20) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "update")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Str")
+			(text "a where [a.update : a, b -> _ret]")
 			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "method to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "For this to work, the type would need to have a method named")
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "have a method named")
 			(reflow " ")
 			(annotated code "update")
-			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -456,19 +456,7 @@ main = {
 				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "mismatch2"))
-		(e-block
-			(s-let
-				(p-assign (ident "val"))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-num (value "10"))
-							(e-string
-								(e-literal (string "hello")))))))
-			(s-let
-				(p-assign (ident "next_val"))
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-runtime-error (tag "erroneous_value_use"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "mismatch3"))
 		(e-block
@@ -537,7 +525,7 @@ main = {
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
 		(patt (type "Adv"))
-		(patt (type "_a"))
+		(patt (type "Error"))
 		(patt (type "_a"))
 		(patt (type "(Str, U64)")))
 	(type_decls
@@ -549,7 +537,7 @@ main = {
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
 		(expr (type "Adv"))
-		(expr (type "_a"))
+		(expr (type "Error"))
 		(expr (type "_a"))
 		(expr (type "(Str, U64)"))))
 ~~~

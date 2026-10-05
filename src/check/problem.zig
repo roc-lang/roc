@@ -34,6 +34,7 @@ pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
 pub const TypeDoesNotSupportMap = types.TypeDoesNotSupportMap;
 pub const UndeterminedCodecType = types.UndeterminedCodecType;
+pub const UndeterminedType = types.UndeterminedType;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 pub const RecursiveDispatch = types.RecursiveDispatch;
 
@@ -96,6 +97,7 @@ pub const CapturingLocalTypeEscape = types.CapturingLocalTypeEscape;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
+pub const PolymorphicValueAnnotation = types.PolymorphicValueAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulComptimeExpression = types.EffectfulComptimeExpression;
 pub const EffectfulExpect = types.EffectfulExpect;

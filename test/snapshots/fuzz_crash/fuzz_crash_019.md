@@ -200,7 +200,6 @@ DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
 MISSING METHOD - fuzz_crash_019.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_019.md:89:3:89:6
-TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_019.md:93:14:93:15
 TYPE MISMATCH - fuzz_crash_019.md:93:22:93:24
@@ -1340,48 +1339,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 98 4) (end 104 3))
-		(headline
-			(reflow "This expression produces a value, but it's not being used."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 98 4) (end 104 3) (annotation error) (line-text "\tm (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tO, # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "(f, j, Error, [O], (Error, Error), List(l))")
-			(line-break)
-			(indent 1)
-			(text "  where [")
-			(line-break)
-			(indent 1)
-			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "  ]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Since this expression is used as a statement, it must evaluate to")
-			(reflow " ")
-			(annotated code "{}")
-			(reflow ".")
-			(line-break)
-			(reflow "If you don't need the value, you can ignore it with")
-			(reflow " ")
-			(annotated code "_ =")
-			(reflow ".")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
 		(region (start 105 2) (end 105 54))
 		(headline
 			(reflow "This expression produces a value, but it's not being used."))
@@ -2131,10 +2088,27 @@ expect {
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "add"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-lookup-local
+								(p-assign (ident "num")))
+							(e-runtime-error (tag "erroneous_value_expr"))))
+					(if-else
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "me"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-applied-tag))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))

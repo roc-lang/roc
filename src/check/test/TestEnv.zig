@@ -529,6 +529,34 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
+/// The body of the named top-level definition whose pattern is a plain name.
+/// Recovery tests navigate from it to observe what checking left in a
+/// rejected program.
+pub fn defExpr(self: *const TestEnv, target_def_name: []const u8) TestEnvError!CIR.Expr.Idx {
+    const idents = self.module_env.getIdentStoreConst();
+    for (self.module_env.store.sliceDefs(self.module_env.all_defs)) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const pattern = self.module_env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, target_def_name, idents.getText(pattern.assign.ident))) return def.expr;
+    }
+    std.debug.print("Expected a top-level def named '{s}'\n", .{target_def_name});
+    return error.TestUnexpectedResult;
+}
+
+/// The statement at `stmt_index` in the block body of the named top-level
+/// lambda definition.
+pub fn lambdaBodyStatement(self: *const TestEnv, target_def_name: []const u8, stmt_index: usize) TestEnvError!CIR.Statement {
+    const store = &self.module_env.store;
+    const lambda = store.getExpr(try self.defExpr(target_def_name));
+    try testing.expect(lambda == .e_lambda);
+    const body = store.getExpr(lambda.e_lambda.body);
+    try testing.expect(body == .e_block);
+    const stmts = store.sliceStatements(body.e_block.stmts);
+    try testing.expect(stmt_index < stmts.len);
+    return store.getStatement(stmts[stmt_index]);
+}
+
 fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Var {
     const idents = self.module_env.getIdentStoreConst();
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);

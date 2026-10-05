@@ -55,7 +55,7 @@ x = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
-TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
+TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
@@ -77,41 +77,32 @@ TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
+		(title "Type Not Determined")
 		(region (start 37 3) (end 37 4))
 		(headline
-			(reflow "The")
-			(reflow " ")
-			(annotated code "minus")
-			(reflow " ")
-			(reflow "method on")
-			(reflow " ")
-			(annotated code "Dec")
-			(reflow " ")
-			(reflow "has an incompatible type."))
+			(reflow "Nothing in this program determines the type of this number:"))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
 			(line-break)
-			(reflow "The method")
-			(reflow " ")
-			(annotated code "minus")
-			(reflow " ")
-			(reflow "has the type:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Dec, Dec -> Dec")
+			(text "f where [f.minus : f, g -> f]")
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But I need it to have the type:")
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated operator "-")
+			(reflow " ")
+			(reflow "to use.")
 			(line-break)
 			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec, Str -> Dec")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a suffix or a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig

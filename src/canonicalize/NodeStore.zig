@@ -448,12 +448,12 @@ pub const MatchData = extern struct {
 };
 
 /// If expression data.
-/// Stores branches span, final else, and whether to warn for untaken compile-time branches.
+/// Stores branches span, final else, and the construct the `if` canonicalizes.
 pub const IfData = extern struct {
     branches_start: u32,
     branches_len: u32,
     final_else: u32,
-    warn_unused_branches: u32,
+    origin: u32,
 };
 
 /// Match branch data.
@@ -1918,7 +1918,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
             return CIR.Expr{ .e_if = .{
                 .branches = .{ .span = .{ .start = if_data.branches_start, .len = if_data.branches_len } },
                 .final_else = @enumFromInt(if_data.final_else),
-                .warn_unused_branches = if_data.warn_unused_branches != 0,
+                .origin = @enumFromInt(if_data.origin),
             } };
         },
         .expr_field_access => {
@@ -3846,7 +3846,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .branches_start = e.branches.span.start,
                 .branches_len = e.branches.span.len,
                 .final_else = @intFromEnum(e.final_else),
-                .warn_unused_branches = @intFromBool(e.warn_unused_branches),
+                .origin = @intFromEnum(e.origin),
             });
 
             node.setPayload(.{ .expr_if_then_else = .{
@@ -4614,8 +4614,8 @@ fn loadWhereClauseSpan(store: *const NodeStore, idx: u32) CIR.WhereClause.Span {
 }
 
 /// Whether a type annotation mentions a type variable (a user-written var like
-/// `a`, or an anonymous open-extension var from `..`). This is the pre-filter
-/// for value generalization.
+/// `a`, or an anonymous open-extension var from `..`), introduced by the
+/// annotation or looked up from an enclosing one.
 fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
     return switch (anno) {
         .rigid_var, .rigid_var_lookup => true,
@@ -4626,7 +4626,8 @@ fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
 
 /// Whether a type annotation *introduces* a type variable (`.rigid_var`), not
 /// one it references from an enclosing scope. Detects a variable the
-/// annotation introduces but cannot bind (rejected on a mutable `var`).
+/// annotation introduces but its binding cannot quantify (rejected on a
+/// mutable `var` and on a value binding that does not generalize).
 fn introducesTypeVar(anno: CIR.TypeAnno) ?bool {
     return switch (anno) {
         .rigid_var => true,

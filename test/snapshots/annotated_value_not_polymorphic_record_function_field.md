@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A non-expansive value whose type embeds a function (lambda) generalizes and instantiates at two concrete record types - the RFC's lambda-set-in-scheme hazard does not arise since lambda sets are not in the type system (tier-2)
+description=An annotation cannot make a record value polymorphic, even when a field is a lambda: it is rejected, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -19,9 +19,57 @@ r2 = rec
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_record_function_field.md:3:1:3:34
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Value Is Not Polymorphic")
+		(region (start 3 1) (end 3 34))
+		(headline
+			(reflow "The type annotation on")
+			(reflow " ")
+			(annotated code "rec")
+			(reflow " ")
+			(reflow "says it can be used at many types, but")
+			(reflow " ")
+			(annotated code "rec")
+			(reflow " ")
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
+		(document
+			(source-region (file "annotated_value_not_polymorphic_record_function_field.md") (start 3 1) (end 3 34) (annotation error) (line-text "rec : { f : a -> a, n : List(b) }"))
+			(line-break)
+			(line-break)
+			(reflow "If you want me to infer its type, write")
+			(reflow " ")
+			(annotated code "_")
+			(reflow " ")
+			(reflow "in place of each type variable, or write a concrete type.")
+			(line-break)
+			(line-break)
+			(reflow "If you want to use it at many types, make it a function that takes")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ":")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "rec : {} -> { f : a -> a, n : List(b) }")
+			(line-break)
+			(indent 1)
+			(text "rec = |{}| { f: |x| x, n: [] }")
+			(annotation-end)
+			(line-break)
+			(reflow "Then call it as")
+			(reflow " ")
+			(annotated code "rec({})")
+			(reflow " ")
+			(reflow "wherever you use it."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -111,16 +159,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "rec"))
-		(e-record
-			(fields
-				(field (name "f")
-					(e-lambda
-						(args
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "x")))))
-				(field (name "n")
-					(e-empty_list))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record
 				(field (field "f")
@@ -132,8 +171,7 @@ NO CHANGE
 						(ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "r1"))
-		(e-lookup-local
-			(p-assign (ident "rec")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record
 				(field (field "f")
@@ -145,8 +183,7 @@ NO CHANGE
 						(ty-lookup (name "U64") (builtin)))))))
 	(d-let
 		(p-assign (ident "r2"))
-		(e-lookup-local
-			(p-assign (ident "rec")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record
 				(field (field "f")
@@ -167,12 +204,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ f: a -> a, n: List(b) }"))
+		(patt (type "{ f: c -> c, n: List(_d) }"))
 		(patt (type "{ f: U64 -> U64, n: List(U64) }"))
 		(patt (type "{ f: Str -> Str, n: List(Str) }"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "{ f: a -> a, n: List(b) }"))
+		(expr (type "{ f: c -> c, n: List(_d) }"))
 		(expr (type "{ f: U64 -> U64, n: List(U64) }"))
 		(expr (type "{ f: Str -> Str, n: List(Str) }"))
 		(expr (type "_arg -> {}"))))

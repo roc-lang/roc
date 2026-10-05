@@ -703,9 +703,10 @@ pub const CheckedMethodLookup = union(enum) {
     target: MethodTarget,
     rejected,
 
-    /// The lowerable target. Post-check stages run only on programs with no
-    /// diagnostics, so a rejected declaration reaching one is a compiler bug,
-    /// not a shape to route around.
+    /// The lowerable target, for a lookup whose method checking already
+    /// accepted at that use. A lookup that can land on a rejected declaration
+    /// (a compiler-generated edge) matches on `rejected` instead, so a rejected
+    /// declaration reaching this is a compiler bug, not a shape to route around.
     pub fn requireTarget(self: CheckedMethodLookup, comptime context: []const u8) MethodTarget {
         return switch (self) {
             .target => |target| target,
@@ -727,8 +728,11 @@ pub const MethodRegistryEntry = struct {
     target: ?MethodTarget,
     /// For a `to_inspect` method that generic inspection uses for its owner,
     /// the checked instance of its type that inspection calls: `T -> Str`
-    /// (design.md "Inspect Overrides"). Only `lookupInspectOverride` reads it;
-    /// ordinary method dispatch ignores it.
+    /// (design.md "Inspect Overrides"). `null` is the decision that inspection
+    /// renders the owner's default form: the method is ineligible, is not
+    /// `to_inspect`, or its declaration was rejected (`target` is `null`).
+    /// Only `lookupInspectOverride` reads it; ordinary method dispatch ignores
+    /// it.
     inspect_override: ?CheckedTypeId = null,
     /// The evidence of inspection's use of this override at
     /// `inspect_override`, published with the module's dispatch evidence.
@@ -771,15 +775,17 @@ pub const MethodRegistry = struct {
     }
 
     /// The `to_inspect` target that generic inspection calls for `key.owner`,
-    /// or null when the owner has no eligible override and inspection renders
-    /// the value's default form. `key.method` names `to_inspect`.
+    /// or null when the registry recorded no override (an ineligible or
+    /// rejected declaration) and inspection renders the value's default form.
+    /// `key.method` names `to_inspect`.
     pub fn lookupInspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         const callable_ty = found.inspect_override orelse return null;
         return .{
-            .target = found.target orelse return null,
+            .target = found.target orelse
+                std.debug.panic("checked static dispatch registry invariant violated: rejected declaration was recorded as an inspect override", .{}),
             .callable_ty = callable_ty,
             .evidence = found.inspect_evidence orelse
                 std.debug.panic("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
@@ -847,8 +853,17 @@ pub const MethodRegistry = struct {
             // target so dispatch resolution can tell it apart from a method no
             // view declares, and resolve it to a checked error instead of
             // hunting for a runtime target that cannot exist.
+            //
+            // A rejected `to_inspect` is never an inspect override: inspection
+            // renders its owner's values in the default form (design.md
+            // "Inspect Overrides"). This entry is that decision; inspection
+            // reads it through `lookupInspectOverride`.
             if (methodBindingIsRejectedDeclaration(module, entry.value)) {
-                try entries.append(allocator, .{ .key = method_key, .target = null });
+                try entries.append(allocator, .{
+                    .key = method_key,
+                    .target = null,
+                    .inspect_override = null,
+                });
                 continue;
             }
             var referenced_callable_var: ?Var = null;
@@ -1660,8 +1675,9 @@ pub const EvidenceNested = union(enum(u8)) {
     resolved: artifact_serialize.Span,
     /// Target selection occurred after checking settled the dispatcher, or
     /// checking explicitly closed a concrete recursive dispatch. The edge
-    /// derives the target's declared
-    /// evidence params from their checker-recorded paths over its concrete callable.
+    /// derives the target's declared evidence params from their
+    /// checker-recorded paths over its concrete callable, and from the
+    /// callables of the requirement targets it selects.
     from_callable,
 };
 
@@ -1774,7 +1790,9 @@ pub const EvidenceParamSource = union(enum) {
     constraint_callable: ConstraintCallableRoot,
     /// Reachable only through a nested constraint callable, with no
     /// specialization-time default to preserve. Checked use-site evidence
-    /// resolves this requirement before post-check lowering.
+    /// resolves this requirement before post-check lowering, except at a
+    /// closed recursive dispatch target, whose callable-derived evidence binds
+    /// the receiver by relating the selected targets of its requirements.
     use_site_only,
     explicit_default: NumericDefaultPhase,
     erased_row_remainder,

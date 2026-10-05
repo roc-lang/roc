@@ -50,6 +50,7 @@ const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
 const TypeDoesNotSupportMap = problem_mod.TypeDoesNotSupportMap;
 const UndeterminedCodecType = problem_mod.UndeterminedCodecType;
+const UndeterminedType = problem_mod.UndeterminedType;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 const RecursiveDispatch = problem_mod.RecursiveDispatch;
 
@@ -92,6 +93,7 @@ const CapturingLocalTypeEscape = problem_mod.CapturingLocalTypeEscape;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
+const PolymorphicValueAnnotation = problem_mod.PolymorphicValueAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
@@ -1068,6 +1070,7 @@ pub const ReportBuilder = struct {
                     .undetermined_codec_type => |data| return self.buildUndeterminedCodecType(data),
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                     .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
+                    .undetermined_type => |data| return self.buildUndeterminedType(data),
                 }
             },
             .recursive_alias => |data| {
@@ -1102,6 +1105,9 @@ pub const ReportBuilder = struct {
             },
             .polymorphic_var_annotation => |data| {
                 return self.buildPolymorphicVarAnnotationReport(data);
+            },
+            .polymorphic_value_annotation => |data| {
+                return self.buildPolymorphicValueAnnotationReport(data);
             },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
@@ -1876,7 +1882,12 @@ pub const ReportBuilder = struct {
         const snapshot_args = self.snapshots.?.sliceVars(content.structure.nominal_type.vars);
         if (snapshot_args.len == 0) return false;
         const err_snapshot = snapshot_args[snapshot_args.len - 1];
-        if (self.snapshots.?.getContent(err_snapshot) == .flex) return false;
+        // An unconstrained payload says nothing, and an erroneous one already
+        // has its own report.
+        switch (self.snapshots.?.getContent(err_snapshot)) {
+            .flex, .err => return false,
+            .rigid, .alias, .structure, .recursive => {},
+        }
         const err_type = self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
@@ -2840,20 +2851,9 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        if (data.defaulted_from_numeric_literal) {
-            try D.renderSlice(&.{
-                D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes("This numeric literal was given the type"),
-                D.bytes("Dec").withAnnotation(.inline_code),
-                D.bytes("because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation."),
-            }, self, &report);
-        }
-
         switch (data.dispatcher_type) {
             .nominal => {
-                if (data.defaulted_from_numeric_literal) {
-                    // Already provided a more specific hint above
-                } else if (is_from_binop) {
+                if (is_from_binop) {
                     if (mb_operator) |operator| {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -3439,6 +3439,136 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("A type annotation that names the full type would let the compiler derive it."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for a requirement that failed on a type nothing in the
+    /// program determines. The type is shown as the program wrote it; the
+    /// default the compiler chose for it is never named, because the user
+    /// never wrote it.
+    fn buildUndeterminedType(
+        self: *Self,
+        data: UndeterminedType,
+    ) Allocator.Error!Report {
+        switch (data.subject) {
+            .number_literal, .string_literal, .value => {},
+            .string_literal_shared_with_number, .number_literal_shared_with_string => return self.buildUndeterminedSharedLiteralType(data),
+        }
+
+        var report = try Report.init(self.gpa, "Type Not Determined", "", .runtime_error);
+        errdefer report.deinit();
+        const headline: []const u8 = switch (data.subject) {
+            .number_literal => "Nothing in this program determines the type of this number:",
+            .string_literal => "Nothing in this program determines the type of this string:",
+            .value => "Nothing in this program determines a type this needs:",
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+        };
+        try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.requirements_snapshot.?));
+        try D.renderSlice(&.{D.bytes("Its type needs all of these:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
+        if (operator) |operator_text| {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell which"),
+                D.bytes(operator_text).withAnnotation(.binary_operator),
+                D.bytes("to use."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell which"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method to use."),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (data.builtin_candidates_lack_method) {
+            const builtin_types: []const u8 = switch (data.subject) {
+                .number_literal => "None of the built-in number types",
+                .string_literal => "None of the built-in string types",
+                .value, .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+            };
+            if (operator) |operator_text| {
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes(builtin_types),
+                    D.bytes("support"),
+                    D.bytes(operator_text).withAnnotation(.binary_operator),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, &report);
+            } else {
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes(builtin_types),
+                    D.bytes("have a method named"),
+                    D.ident(data.method_name).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, &report);
+            }
+            return report;
+        }
+
+        const hint: []const u8 = switch (data.subject) {
+            .number_literal => "Add a suffix or a type annotation saying which type it should be.",
+            .string_literal, .value => "Add a type annotation saying which type it should be.",
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+        };
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes(hint),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// A string literal and a number literal must have the same type, and
+    /// nothing in the program says which type that is.
+    fn buildUndeterminedSharedLiteralType(
+        self: *Self,
+        data: UndeterminedType,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
+        errdefer report.deinit();
+        const headline: []const u8 = switch (data.subject) {
+            .string_literal_shared_with_number => "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:",
+            .number_literal_shared_with_string => "This number literal must have the same type as a string literal, and nothing in this program determines a type that can be both:",
+            .number_literal, .string_literal, .value => unreachable,
+        };
+        try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Add a type annotation saying which type it should be."),
         }, self, &report);
 
         return report;
@@ -5433,6 +5563,132 @@ pub const ReportBuilder = struct {
             D.bytes("to let the type be inferred from how the"),
             D.bytes("var").withAnnotation(.inline_code),
             D.bytes("is used."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildPolymorphicValueAnnotationReport(self: *Self, data: PolymorphicValueAnnotation) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Value Is Not Polymorphic", "", .runtime_error);
+        errdefer report.deinit();
+
+        const name_text: ?[]const u8 = if (data.name_region) |name_region|
+            try report.addOwnedString(self.source[name_region.start.offset..name_region.end.offset])
+        else
+            null;
+        if (name_text) |name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The type annotation on"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("says it can be used at many types, but"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("isn't defined as a function (like"),
+                D.bytes("|x| ...").withAnnotation(.inline_code),
+                D.bytes("), so it can only have one type.").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This type annotation says its value can be used at many types, but the value isn't defined as a function (like"),
+                D.bytes("|x| ...").withAnnotation(.inline_code),
+                D.bytes("), so it can only have one type.").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceHighlightRegion(&report, data.region);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (data.stub_arity) |arity| {
+            // An unimplemented function: the stub itself must be a function.
+            var stub = std.ArrayList(u8).empty;
+            defer stub.deinit(self.gpa);
+            try stub.append(self.gpa, '|');
+            for (0..arity) |index| {
+                if (index != 0) try stub.appendSlice(self.gpa, ", ");
+                try stub.append(self.gpa, '_');
+            }
+            try stub.print(self.gpa, "| {s}", .{self.source[data.rhs_region.start.offset..data.rhs_region.end.offset]});
+            if (name_text) |name| {
+                try D.renderSlice(&.{
+                    D.bytes("If this function is not implemented yet, write its placeholder body inside a function:"),
+                }, self, &report);
+                try report.document.addLineBreak();
+                const suggestion = try std.fmt.allocPrint(self.gpa, "{s} = {s}", .{ name, stub.items });
+                defer self.gpa.free(suggestion);
+                try report.document.addCodeBlock(try report.addOwnedString(suggestion));
+                try report.document.addLineBreak();
+            } else {
+                try D.renderSlice(&.{
+                    D.bytes("If this function is not implemented yet, write its placeholder body inside a function, like"),
+                    D.bytes(try report.addOwnedString(stub.items)).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, &report);
+            }
+            return report;
+        }
+
+        if (data.writes_named_variable and data.writes_open_extension) {
+            try D.renderSlice(&.{
+                D.bytes("If you want me to infer its type, write"),
+                D.bytes("_").withAnnotation(.inline_code),
+                D.bytes("in place of each type variable and remove each"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes(", or write a concrete type.").withNoPrecedingSpace(),
+            }, self, &report);
+        } else if (data.writes_named_variable) {
+            try D.renderSlice(&.{
+                D.bytes("If you want me to infer its type, write"),
+                D.bytes("_").withAnnotation(.inline_code),
+                D.bytes("in place of each type variable, or write a concrete type."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("If you want me to infer its type, remove each"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes(", or write a concrete type.").withNoPrecedingSpace(),
+            }, self, &report);
+        }
+
+        const name = name_text orelse return report;
+        const type_text = self.source[data.type_region.start.offset..data.type_region.end.offset];
+        const rhs_text = self.source[data.rhs_region.start.offset..data.rhs_region.end.offset];
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("If you want to use it at many types, make it a function that takes"),
+            D.bytes("{}").withAnnotation(.inline_code),
+            D.bytes(":").withNoPrecedingSpace(),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        var suggestion = std.ArrayList(u8).empty;
+        defer suggestion.deinit(self.gpa);
+        try suggestion.print(self.gpa, "{s} : {{}} -> ", .{name});
+        if (data.type_is_function) {
+            try suggestion.print(self.gpa, "({s})", .{type_text});
+        } else {
+            try suggestion.appendSlice(self.gpa, type_text);
+        }
+        if (data.where_region) |where_region| {
+            try suggestion.appendSlice(self.gpa, self.source[where_region.start.offset..where_region.end.offset]);
+            try suggestion.append(self.gpa, ']');
+        }
+        // A multi-line body is elided rather than re-indented.
+        const rhs_info = self.module_env.calcRegionInfo(data.rhs_region);
+        if (rhs_info.start_line_idx == rhs_info.end_line_idx) {
+            try suggestion.print(self.gpa, "\n{s} = |{{}}| {s}", .{ name, rhs_text });
+        } else {
+            try suggestion.print(self.gpa, "\n{s} = |{{}}| ...", .{name});
+        }
+        try report.document.addCodeBlock(try report.addOwnedString(suggestion.items));
+        try report.document.addLineBreak();
+
+        const call_text = try std.fmt.allocPrint(self.gpa, "{s}({{}})", .{name});
+        defer self.gpa.free(call_text);
+        try D.renderSlice(&.{
+            D.bytes("Then call it as"),
+            D.bytes(try report.addOwnedString(call_text)).withAnnotation(.inline_code),
+            D.bytes("wherever you use it."),
         }, self, &report);
         return report;
     }

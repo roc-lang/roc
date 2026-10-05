@@ -1981,7 +1981,15 @@ const Pass = struct {
             if (uses.external_calls != 1 or uses.value_refs != 0) continue;
             const call_expr = uses.external_call_expr orelse
                 Common.invariant("single-use specialized worker had no external call expression");
+            const caller_id = uses.external_call_owner orelse
+                Common.invariant("single-use specialized worker had no external call owner");
+            // The worker body cloned into the caller contributes its calls,
+            // constructions, and loops to the caller's shapes.
+            const outer_shapes = self.program.beginFnShapes(caller_id);
             try self.localizeTailRecursiveWorker(worker_id, call_expr);
+            var caller = self.program.getFn(caller_id);
+            caller.shapes = self.program.finishFnShapes(outer_shapes).merged(caller.shapes);
+            self.program.setFn(caller_id, caller);
 
             // Localization clones one worker body into its caller, changing
             // downstream use edges. Collect a fresh program-wide usage snapshot
@@ -2750,12 +2758,18 @@ const Pass = struct {
         // already-emitted specialization bodies need this in-place update.
         const fn_count = self.program.fnCount();
         for (self.plans.len..fn_count) |index| {
-            const fn_ = self.program.getFnAt(index);
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            var fn_ = self.program.getFn(fn_id);
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
             };
+            // A redirected call names the specialization it now targets, which
+            // may be this very body; its shapes are recorded against this owner.
+            const outer_shapes = self.program.beginFnShapes(fn_id);
             try self.rewriteCallsInExpr(body, done);
+            fn_.shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
+            self.program.setFn(fn_id, fn_);
         }
     }
 
@@ -17209,6 +17223,66 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
     try std.testing.expectEqual(symbol_before_collect, pass.symbols.next);
     try std.testing.expectEqual(join_before_collect, pass.next_join_point);
     try std.testing.expectEqual(@as(usize, 0), pass.arena.queryCapacity());
+}
+
+test "a specialization call redirected to its own body records the self call in its shapes" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const source_arg = try program.addLocal(@enumFromInt(1), unit_ty);
+    const source_body = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const source_fn_id = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @enumFromInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = source_arg, .ty = unit_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = source_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    // The specialization body still calls the source function; redirecting
+    // that call to the specialization makes it a self call.
+    const spec_fn_id = try program.reserveFnSlot();
+    const spec_arg = try program.addLocal(@enumFromInt(3), unit_ty);
+    const outer_shapes = program.beginFnShapes(spec_fn_id);
+    const spec_arg_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = spec_arg } });
+    const spec_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = source_fn_id },
+        .args = try program.addExprSpan(&.{spec_arg_ref}),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    program.setFn(spec_fn_id, .{
+        .shapes = program.finishFnShapes(outer_shapes),
+        .symbol = @enumFromInt(4),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = spec_arg, .ty = unit_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = spec_body },
+        .ret = unit_ty,
+    });
+    try std.testing.expect(!program.getFn(spec_fn_id).shapes.self_call);
+
+    const pattern_args = try pass.arena.allocator().dupe(Shape, &.{.{ .any = unit_ty }});
+    try pass.plans[@intFromEnum(source_fn_id)].specs.append(allocator, .{
+        .pattern = .{ .args = pattern_args },
+        .fn_id = spec_fn_id,
+        .written = true,
+    });
+    try pass.rewriteExistingCalls();
+
+    const redirected = program.getExpr(spec_body).data.call_proc;
+    try std.testing.expectEqual(@as(?Ast.FnId, spec_fn_id), Ast.localDirectCallee(redirected));
+    try std.testing.expect(program.getFn(spec_fn_id).shapes.self_call);
+
+    var usage = try ProgramProcedureUsage.collect(allocator, &program);
+    defer usage.deinit(allocator);
+    const tail = usage.tail_self_calls[@intFromEnum(spec_fn_id)];
+    try std.testing.expect(tail.valid);
+    try std.testing.expectEqual(@as(usize, 1), tail.count);
 }
 
 test "SpecConstr admission uses body size and worker count before cloning" {

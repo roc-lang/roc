@@ -103,7 +103,7 @@ EndOfFile,
 							(p-assign (ident "x"))))
 					(args
 						(e-num (value "1"))))))
-		(e-call (constraint-fn-var 249)
+		(e-call
 			(e-lookup-local
 				(p-assign (ident "g")))
 			(e-num (value "1")))))

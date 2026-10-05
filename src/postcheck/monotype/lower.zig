@@ -3078,9 +3078,19 @@ const ScopedMethodDispatch = struct {
     }
 };
 
+/// What an exact registry lookup by method name found for a compiler-generated
+/// edge. `rejected` is a declared method whose declaration canonicalization or
+/// checking rejected: it has no runtime target and its diagnostic is already
+/// reported, so the edge is a `checked_error` dispatch, exactly as
+/// `EvidencePass` resolves a checked dispatch that lands on it.
+const MethodLookupResult = union(enum) {
+    target: MethodLookup,
+    rejected,
+};
+
 const ScopedMethodResolution = union(enum) {
     missing,
-    target: MethodLookup,
+    found: MethodLookupResult,
 };
 
 const FunctionShape = struct {
@@ -4248,9 +4258,9 @@ const Builder = struct {
     /// build and never changes the checked outcome.
     scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
     /// Scoped inspect-override resolutions, memoized like
-    /// `scoped_method_targets`. `missing` means inspection renders the
-    /// owner's default form.
-    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
+    /// `scoped_method_targets`. `null` means inspection renders the owner's
+    /// default form.
+    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ?MethodLookup) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -9935,7 +9945,7 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         return try self.lookupMethodTargetByName(scope, owner, method_view.names.methodNameText(method));
     }
 
@@ -9944,25 +9954,25 @@ const Builder = struct {
         scope: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         const method = try self.activeNameStore().internMethodName(method_name);
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_method_targets.get(address)) |resolution| {
             return switch (resolution) {
                 .missing => null,
-                .target => |target| target,
+                .found => |found| found,
             };
         }
 
-        const resolution: ScopedMethodResolution = if (self.findMethodTargetByName(scope, owner, method_name)) |target|
-            .{ .target = target }
+        const resolution: ScopedMethodResolution = if (self.findMethodTargetByName(scope, owner, method_name)) |found|
+            .{ .found = found }
         else
             .missing;
 
         try self.scoped_method_targets.put(self.allocator, address, resolution);
         return switch (resolution) {
             .missing => null,
-            .target => |target| target,
+            .found => |found| found,
         };
     }
 
@@ -9975,23 +9985,11 @@ const Builder = struct {
     ) Allocator.Error!?MethodLookup {
         const method = try self.activeNameStore().internMethodName("to_inspect");
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
-        if (self.scoped_inspect_overrides.get(address)) |resolution| {
-            return switch (resolution) {
-                .missing => null,
-                .target => |target| target,
-            };
-        }
+        if (self.scoped_inspect_overrides.get(address)) |resolution| return resolution;
 
-        const resolution: ScopedMethodResolution = if (self.findInspectOverrideFromStore(scope, &self.program.names, owner)) |target|
-            .{ .target = target }
-        else
-            .missing;
-
+        const resolution = self.findInspectOverrideFromStore(scope, &self.program.names, owner);
         try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
-        return switch (resolution) {
-            .missing => null,
-            .target => |target| target,
-        };
+        return resolution;
     }
 
     /// Selects the view that declares `owner.to_inspect` exactly as method
@@ -10023,9 +10021,12 @@ const Builder = struct {
         const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
-        const found = view.method_registry.lookup(key) orelse return null;
-        const target = found.requireTarget("Monotype inspect lowering");
-        if (!allow_local_proc and target.kind == .local_proc) return null;
+        switch (view.method_registry.lookup(key) orelse return null) {
+            // The registry records no inspect override for a rejected
+            // declaration, so inspection renders the default form below.
+            .rejected => {},
+            .target => |target| if (!allow_local_proc and target.kind == .local_proc) return null,
+        }
         const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
         return .{ .target = .{ .view = view, .target = override.target } };
     }
@@ -10035,7 +10036,7 @@ const Builder = struct {
         scope: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) ?MethodLookup {
+    ) ?MethodLookupResult {
         return self.findMethodTargetByNameFromStore(
             scope,
             &self.program.names,
@@ -10050,14 +10051,14 @@ const Builder = struct {
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) ?MethodLookup {
-        if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |target| return target;
+    ) ?MethodLookupResult {
+        if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |found| return found;
         for (scope.method_lookup_scope) |module_id| {
             const candidate = self.moduleForId(module_id);
             // Only the module declaring a function-body type registers its
             // methods, so a local procedure found here is that owner's exact
             // target; its declaration context comes from the evidence purpose.
-            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |target| return target;
+            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |found| return found;
         }
         return null;
     }
@@ -10069,13 +10070,16 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
         allow_local_proc: bool,
-    ) ?MethodLookup {
+    ) ?MethodLookupResult {
         const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        const found = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
-        const target = found.requireTarget("Monotype lowering");
-        if (!allow_local_proc and target.kind == .local_proc) return null;
-        return .{ .view = view, .target = target };
+        return switch (view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
+            .rejected => .rejected,
+            .target => |target| if (!allow_local_proc and target.kind == .local_proc)
+                null
+            else
+                .{ .target = .{ .view = view, .target = target } },
+        };
     }
 
     fn noteBuiltinTryDef(
@@ -20102,7 +20106,7 @@ const BodyContext = struct {
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         if (self.nameStore() == &self.builder.program.names) {
             return self.builder.lookupMethodTargetByName(
                 self.method_scope,
@@ -20135,7 +20139,7 @@ const BodyContext = struct {
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         return self.lookupMethodTargetByName(
             owner,
             method_view.names.methodNameText(method),
@@ -28996,6 +29000,8 @@ const BodyContext = struct {
         inspected: InspectedTask,
         /// A divergent expression lowered for its effect.
         divergent: DivergentTask,
+        /// A rejected dispatch's operands, then its checked-error crash.
+        rejected_dispatch: RejectedDispatchTask,
         /// A loop statement.
         loop: LoopTask,
         /// An iterator method call. Boxed: its method lookup is far larger
@@ -30282,6 +30288,83 @@ const BodyContext = struct {
         }
     }
 
+    /// A call to a rejected method (`checked_error`) follows strict call
+    /// semantics: its receiver and arguments evaluate in order, each for its
+    /// effect, and then the call crashes with the checked-error message. An
+    /// operand that diverges ends the sequence, since its own crash happens
+    /// first.
+    const RejectedDispatchTask = struct {
+        /// The source expressions the dispatch's operands evaluate, in
+        /// evaluation order. Owned.
+        operands: []const checked.CheckedExprId,
+        ty: Type.TypeId,
+        index: usize = 0,
+        stmts: std.ArrayList(DraftStmtId) = .empty,
+    };
+
+    fn releaseRejectedDispatchTask(self: *BodyContext, task: *RejectedDispatchTask) void {
+        self.allocator.free(task.operands);
+        task.operands = &.{};
+        task.stmts.deinit(self.allocator);
+        task.stmts = .empty;
+    }
+
+    /// The source expressions a rejected dispatch evaluates before it
+    /// crashes. An interpolation's generated segments operand
+    /// evaluates the interpolation's segments and values; a generated numeral or quote
+    /// operand is literal source text with nothing to evaluate.
+    fn rejectedDispatchOperandExprs(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error![]const checked.CheckedExprId {
+        var exprs: std.ArrayList(checked.CheckedExprId) = .empty;
+        errdefer exprs.deinit(self.allocator);
+        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try exprs.append(self.allocator, expr),
+            .generated_interpolation_segments => |expr| {
+                const interpolation = switch (self.view.bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("rejected interpolation segments referenced a non-interpolation expression"),
+                };
+                try exprs.append(self.allocator, interpolation.segments[0]);
+                for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                    try exprs.append(self.allocator, value);
+                    try exprs.append(self.allocator, segment);
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+        return try exprs.toOwnedSlice(self.allocator);
+    }
+
+    fn stepRejectedDispatch(self: *BodyContext, task: *RejectedDispatchTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (input) |result| {
+            const lowered = result.statementValue();
+            if (lowered.stmt) |stmt| try task.stmts.append(self.allocator, stmt);
+            switch (lowered.termination) {
+                .none => {},
+                .checked_control_transfer => return try self.finishRejectedDispatch(task, try self.unreachableAfterTerminatingStatementExpr(task.ty)),
+                .uninhabited => |scrutinee| return try self.finishRejectedDispatch(task, try self.zeroBranchMatch(scrutinee, task.ty)),
+            }
+        }
+        if (task.index < task.operands.len) {
+            const operand = task.operands[task.index];
+            task.index += 1;
+            return requestLowerTask(self, .{ .discarded = .{ .expr = operand } });
+        }
+        return try self.finishRejectedDispatch(task, try self.addExpr(.{
+            .ty = task.ty,
+            .data = try self.dispatchCrashData(.checked_error),
+        }));
+    }
+
+    fn finishRejectedDispatch(self: *BodyContext, task: *RejectedDispatchTask, final_expr: DraftExprId) Allocator.Error!LowerStep {
+        return .{ .ret = .{ .data = .{ .block = .{
+            .statements = try self.addStmtSpan(task.stmts.items),
+            .final_expr = final_expr,
+        } } } };
+    }
+
     fn divergentEffectStep(self: *BodyContext, child: checked.CheckedExprId, ty: Type.TypeId) LowerStep {
         return divergentStep(self, child, .{ .effect_data = ty });
     }
@@ -30420,7 +30503,13 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         switch (self.dispatchRuntimePlan(plan)) {
             .callable => {},
-            .crash => |reason| return .{ .ret = .{ .data = try self.dispatchCrashData(reason) } },
+            .crash => |reason| switch (reason) {
+                .checked_error => return requestLowerTask(self, .{ .rejected_dispatch = .{
+                    .operands = try self.rejectedDispatchOperandExprs(plan),
+                    .ty = ty,
+                } }),
+                .unreachable_value => return .{ .ret = .{ .data = try self.dispatchCrashData(reason) } },
+            },
         }
         for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
             .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
@@ -30460,7 +30549,7 @@ const BodyContext = struct {
             for_: CheckedForLoop,
             condition: struct { loop: checked.CheckedConditionLoop, condition: WhileCondition },
         },
-        stage: enum { start, initial_iterator, step_expr, one_body, cond, body } = .start,
+        stage: enum { start, rejected_iterable, initial_iterator, step_expr, one_body, cond, body } = .start,
         carries: []LoopCarry = &.{},
         loop_cell: DraftTypeCell = undefined,
         /// The binder mappings the loop parameters replace.
@@ -30538,9 +30627,21 @@ const BodyContext = struct {
                     .for_ => |for_| {
                         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
                         task.plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
-                        if (self.dispatchCrashReason(task.plan.iter.resolution) orelse self.dispatchCrashReason(task.plan.next.resolution)) |reason| {
-                            return self.finishLoop(task, try self.dispatchCrashData(reason));
-                        }
+                        // A rejected `iter` call evaluates the iterable it
+                        // receives and then crashes; a rejected `next` call
+                        // crashes once `iter` has produced the iterator it
+                        // receives (`initial_iterator`).
+                        if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| switch (reason) {
+                            .checked_error => {
+                                task.stage = .rejected_iterable;
+                                return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.iterable } });
+                            },
+                            .unreachable_value => return self.finishLoop(task, try self.dispatchCrashData(reason)),
+                        };
+                        if (self.dispatchCrashReason(task.plan.next.resolution)) |reason| switch (reason) {
+                            .checked_error => {},
+                            .unreachable_value => return self.finishLoop(task, try self.dispatchCrashData(reason)),
+                        };
                         task.stage = .initial_iterator;
                         return self.iteratorDispatchStep(.{
                             .plan = task.plan.iter,
@@ -30564,8 +30665,32 @@ const BodyContext = struct {
                     },
                 }
             },
+            .rejected_iterable => {
+                const lowered = input.?.statementValue();
+                var statement_buf: [1]DraftStmtId = undefined;
+                const statements: []const DraftStmtId = if (lowered.stmt) |stmt| blk: {
+                    statement_buf[0] = stmt;
+                    break :blk statement_buf[0..1];
+                } else &.{};
+                const final_expr = switch (lowered.termination) {
+                    .none => try self.addExprWithTypeCell(task.loop_cell, try self.dispatchCrashData(.checked_error)),
+                    .checked_control_transfer => try self.addExprWithTypeCell(task.loop_cell, .@"unreachable"),
+                    .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, task.loop_cell),
+                };
+                return self.finishLoop(task, .{ .block = .{
+                    .statements = try self.addStmtSpan(statements),
+                    .final_expr = final_expr,
+                } });
+            },
             .initial_iterator => {
                 const plan = task.plan;
+                if (self.dispatchCrashReason(plan.next.resolution)) |reason| {
+                    const iterator_stmt = try self.addStmt(.{ .expr = input.?.exprValue() });
+                    return self.finishLoop(task, .{ .block = .{
+                        .statements = try self.addStmtSpan(&.{iterator_stmt}),
+                        .final_expr = try self.addExprWithTypeCell(task.loop_cell, try self.dispatchCrashData(reason)),
+                    } });
+                }
                 task.initial_iterator = input.?.exprValue();
                 task.iterator_cell = self.exprTypeCell(task.initial_iterator);
                 try self.constrainCheckedInterfaceToCell(plan.iterator_ty, task.iterator_cell);
@@ -31461,6 +31586,7 @@ const BodyContext = struct {
             },
             .value_then_state => |*task| self.releaseValueThenStateTask(task),
             .discarded => |*task| self.releaseDiscardedTask(task),
+            .rejected_dispatch => |*task| self.releaseRejectedDispatchTask(task),
             .statement => |*task| self.releaseStatementTask(task),
             .loop => |*task| self.releaseLoopTask(task),
             .iterator_dispatch => |task| {
@@ -31531,6 +31657,7 @@ const BodyContext = struct {
             .return_value => |*task| self.stepReturn(frame, task, input),
             .inspected => |*task| self.stepInspected(frame, task, input),
             .divergent => |*task| self.stepDivergent(frame, task, input),
+            .rejected_dispatch => |*task| self.stepRejectedDispatch(task, input),
             .loop => |*task| self.stepLoop(task, input),
             .iterator_dispatch => |task| self.stepIteratorDispatch(frame, task, input),
             .materialize => |*task| self.stepMaterialize(task, input),
@@ -51703,7 +51830,11 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
         if (self.methodOwnerFromNode(component_node)) |owner| {
-            if (try self.lookupMethodTarget(owner, view, method)) |found| {
+            if (try self.lookupMethodTarget(owner, view, method)) |result| {
+                const found = switch (result) {
+                    .rejected => return .checked_error,
+                    .target => |found| found,
+                };
                 if (found.target.kind == .structural) {
                     return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(found.target.kind.structural) } };
                 }
@@ -58465,10 +58596,7 @@ const BodyContext = struct {
             const children_start = pending.items.len;
             switch (self.graph.content(raw_node)) {
                 .list => {
-                    const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(
-                        .{ .builtin = .list },
-                        structuralDerivationMethodName(mode),
-                    )) orelse Common.invariant("checked method registry is missing the List structural derivation target"));
+                    const lookup = try self.withLocalProcContext(try self.builtinListDerivationLookup(structuralDerivationMethodName(mode)));
                     if (lookup.target.kind == .structural) {
                         Common.invariant("owned List derivation resolved to a structural registry implementation");
                     }
@@ -58491,7 +58619,14 @@ const BodyContext = struct {
                 .named => named: {
                     const named = self.graph.namedNodes(raw_node);
                     if (self.methodOwnerFromNode(raw_node)) |owner| {
-                        if (try self.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |raw_lookup| {
+                        if (try self.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |result| {
+                            // A rejected declaration is this component's
+                            // comparison; emission lowers it to a checked error
+                            // without calling anything or expanding the backing.
+                            const raw_lookup = switch (result) {
+                                .rejected => break :named,
+                                .target => |raw_lookup| raw_lookup,
+                            };
                             const lookup = try self.withLocalProcContext(raw_lookup);
                             switch (lookup.target.kind) {
                                 .structural => |kind| {
@@ -58712,7 +58847,38 @@ const BodyContext = struct {
         };
     }
 
+    /// A derivation reads each operand once per component, so the operands
+    /// are bound to locals first: each evaluates exactly once, in order, and
+    /// before any component comparison or hash runs (including a component
+    /// whose rejected method crashes).
     fn lowerDerivation(
+        self: *BodyContext,
+        comptime D: type,
+        ty: Type.TypeId,
+        operand: D.Operand,
+        ctx: DerivationCtx,
+    ) Allocator.Error!DraftExprId {
+        const values = D.callArgs(operand);
+        const second_ty = D.helperSecondArgType(ty, ctx.result_ty);
+        const first_local = try self.addLocal(self.builder.symbols.fresh(), ty);
+        const second_local = try self.addLocal(self.builder.symbols.fresh(), second_ty);
+        const derived = try self.lowerDerivationOfBound(D, ty, D.helperOperand(
+            try self.localExpr(first_local, ty),
+            try self.localExpr(second_local, second_ty),
+        ), ctx);
+        const bind_second = try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
+            .bind = try self.bindPat(second_local, second_ty),
+            .value = values[1],
+            .rest = derived,
+        } } });
+        return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
+            .bind = try self.bindPat(first_local, ty),
+            .value = values[0],
+            .rest = bind_second,
+        } } });
+    }
+
+    fn lowerDerivationOfBound(
         self: *BodyContext,
         comptime D: type,
         ty: Type.TypeId,
@@ -58833,15 +58999,28 @@ const BodyContext = struct {
                 const ty = derive.ty;
                 switch (self.typeStore().get(ty)) {
                     .list => {
-                        const lookup = try self.derivationMethodLookup(ty, ctx.method_name) orelse
-                            Common.invariant(D.missing_component_method_msg);
+                        const lookup = switch (try self.derivationMethodLookup(ty, ctx.method_name) orelse
+                            Common.invariant(D.missing_component_method_msg)) {
+                            .rejected => Common.invariant("builtin List derivation target was a rejected declaration"),
+                            .target => |lookup| lookup,
+                        };
                         if (lookup.target.kind == .structural) {
                             Common.invariant("owned List derivation resolved to a structural registry implementation");
                         }
                         return derivationExpr(try self.derivationMethodCall(D, lookup, ty, derive.operand, ctx), D);
                     },
                     .named => {
-                        if (try self.derivationMethodLookup(ty, ctx.method_name)) |lookup| {
+                        if (try self.derivationMethodLookup(ty, ctx.method_name)) |result| {
+                            const lookup = switch (result) {
+                                // The component's own method is its comparison,
+                                // and its declaration was rejected: the same
+                                // `checked_error` a direct dispatch to it is.
+                                .rejected => return derivationExpr(try self.addExpr(.{
+                                    .ty = ctx.result_ty,
+                                    .data = try self.dispatchCrashData(.checked_error),
+                                }), D),
+                                .target => |lookup| lookup,
+                            };
                             switch (lookup.target.kind) {
                                 .structural => |kind| if (kind != D.structural_kind) {
                                     Common.invariant("structural registry implementation did not match the active derivation");
@@ -59023,10 +59202,23 @@ const BodyContext = struct {
         self: *BodyContext,
         ty: Type.TypeId,
         method_name: []const u8,
-    ) Allocator.Error!?MethodLookup {
+    ) Allocator.Error!?MethodLookupResult {
         const owner = methodOwnerFromType(self.typeStore(), ty) orelse return null;
-        const lookup = (try self.lookupMethodTargetByName(owner, method_name)) orelse return null;
-        return try self.withLocalProcContext(lookup);
+        return switch ((try self.lookupMethodTargetByName(owner, method_name)) orelse return null) {
+            .rejected => .rejected,
+            .target => |lookup| .{ .target = try self.withLocalProcContext(lookup) },
+        };
+    }
+
+    /// The builtin List method a structural derivation dispatches to. The
+    /// builtin module checks without diagnostics, so its registry declares
+    /// every List derivation method with a target.
+    fn builtinListDerivationLookup(self: *BodyContext, method_name: []const u8) Allocator.Error!MethodLookup {
+        return switch ((try self.lookupMethodTargetByName(.{ .builtin = .list }, method_name)) orelse
+            Common.invariant("checked method registry is missing the List structural derivation target")) {
+            .rejected => Common.invariant("builtin List derivation target was a rejected declaration"),
+            .target => |lookup| lookup,
+        };
     }
 
     /// Dispatch a component to its exact checked method target, shared by every

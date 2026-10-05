@@ -124,7 +124,14 @@ pub const DescriptorFlags = packed struct(u8) {
     /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
     /// uses of the definition widen freely.
     bounded_row_ext: bool = false,
-    _unused: u3 = 0,
+    /// A defaulting decision—literal defaulting or a specialization default
+    /// materialization—chose this class's type: the class held a variable
+    /// that was still undetermined when its default was committed. The
+    /// checker keeps that variable's pre-default content, so diagnostics
+    /// describe the type the program wrote rather than the default owner.
+    /// See design.md's "Diagnostics About Defaulted Types" section.
+    default_decided: bool = false,
+    _unused: u2 = 0,
 };
 
 /// A type descriptor

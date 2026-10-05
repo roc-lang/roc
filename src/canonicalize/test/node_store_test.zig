@@ -379,7 +379,7 @@ test "NodeStore round trip - Expressions" {
         .e_if = .{
             .branches = CIR.Expr.IfBranch.Span{ .span = rand_span() },
             .final_else = rand_idx(CIR.Expr.Idx),
-            .warn_unused_branches = true,
+            .origin = .source,
         },
     });
     try expressions.append(gpa, CIR.Expr{

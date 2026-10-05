@@ -163,7 +163,7 @@ test "cross-module - nested capturing closure publishes its dispatch relation" {
     ;
     var test_env_c = try TestEnv.initWithImport("C", source_c, "A", &test_env_a);
     defer test_env_c.deinit();
-    try test_env_c.assertOneTypeError("Missing Method");
+    try test_env_c.assertOneTypeError("Type Not Determined");
 }
 
 test "cross-module - optional record - one optional value shared by two exports unifies" {

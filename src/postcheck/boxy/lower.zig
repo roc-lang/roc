@@ -661,6 +661,16 @@ fn resolveNestedExprWorker(
     };
 }
 
+/// The runtime captures of the nested procedure a lambda or closure
+/// expression constructs.
+fn nestedCallableExprRuntimeCaptures(module: ProcedureModuleView, expr_id: checked.CheckedExprId) []const checked.CheckedCapture {
+    switch (module.checked_bodies.expr(expr_id).data) {
+        .lambda, .closure => {},
+        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable capture lookup did not reference a lambda or closure"),
+    }
+    return Plan.nestedCallableRuntimeCaptures(module, expr_id);
+}
+
 fn nestedProcSiteForExpr(module: ProcedureModuleView, expr_id: checked.CheckedExprId) ?checked.NestedProcSite {
     for (module.nested_proc_sites.sites) |site| {
         if (site.checked_expr == expr_id) return site;
@@ -3123,6 +3133,10 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("one static dictionary supplied the same program-wide method slot twice");
             }
             const exact_method: ?Plan.DictionaryMethodEvidence = if (exact_methods.len == 0) null else exact_methods[method_index];
+            // A method needing the building frame's context reaches every
+            // worker receiving this dictionary as a context input instead, so
+            // its slot stays absent.
+            if (exact_method) |method| if (method.context != null) continue;
             const structural_kind: ?static_dispatch.StructuralKind = if (exact_method) |method|
                 if (method.resolution == .structural) method.resolution.structural else null
             else
@@ -3137,6 +3151,10 @@ const ProcedureBuilder = struct {
             else
                 null;
             if (structural_method) |method| {
+                // A derivation reaching local procedures that need the
+                // building frame's values is performed by each worker
+                // receiving this dictionary, so its slot stays absent too.
+                if (structural_kind != null and self.plan.frame_context_procs.contains(.{ .rep = rep_id, .method = method })) continue;
                 frame.slot_index = slot_index;
                 frame.phase = .structural;
                 return .{ .request = .{ .structural_slot = .{
@@ -3149,8 +3167,13 @@ const ProcedureBuilder = struct {
                 } } };
             }
             if (exact_method) |method| {
-                if (method.resolution == .unreachable_value) {
-                    frame.slots.items[slot_index] = try self.unreachableDictionaryMethodSlot(requirement, method.requirement_type);
+                const crash: ?CrashingDictionaryMethod = switch (method.resolution) {
+                    .checked_error => .checked_error,
+                    .unreachable_value => .unreachable_value,
+                    .worker, .structural, .constraint, .builtin_numeral => null,
+                };
+                if (crash) |kind| {
+                    frame.slots.items[slot_index] = try self.crashingDictionaryMethodSlot(requirement, method.requirement_type, kind);
                     continue;
                 }
             }
@@ -3158,9 +3181,8 @@ const ProcedureBuilder = struct {
                 .worker => |worker| worker,
                 .structural => boxyLowerInvariant("unsupported structural dictionary method reached boxy lowering"),
                 .constraint => boxyLowerInvariant("forwarded dictionary evidence reached static dictionary lowering"),
-                .checked_error => boxyLowerInvariant("checked-error dictionary evidence reached boxy lowering"),
                 .builtin_numeral => boxyLowerInvariant("compile-time numeral proof reached a runtime dictionary"),
-                .unreachable_value => boxyLowerInvariant("unreachable dictionary evidence reached boxy lowering"),
+                .checked_error, .unreachable_value => unreachable,
             } else self.methodWorkerForStaticDictionary(rep_id, requirement) orelse
                 boxyLowerInvariant("static boxy dictionary method target was not planned");
 
@@ -6125,17 +6147,27 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn unreachableDictionaryMethodSlot(
+    /// Why a static dictionary method slot crashes instead of calling a
+    /// method: the checked evidence for that slot is a rejected dispatch.
+    const CrashingDictionaryMethod = enum {
+        /// Checking rejected the dispatch and already reported it.
+        checked_error,
+        /// The dispatcher is a value that can never exist.
+        unreachable_value,
+    };
+
+    fn crashingDictionaryMethodSlot(
         self: *ProcedureBuilder,
         requirement: Plan.DictionaryRequirement,
         fn_type: Plan.CheckedTypeIdentity,
+        crash: CrashingDictionaryMethod,
     ) Allocator.Error!LirProgram.BoxyMethodSlot {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("unreachable dictionary function type was not analyzed");
+            boxyLowerInvariant("crashing dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("unreachable dictionary requirement was not a function");
+            boxyLowerInvariant("crashing dictionary requirement was not a function");
         if (self.layout_plan.worker_layouts.len == 0) {
-            boxyLowerInvariant("unreachable dictionary method was emitted without a worker layout context");
+            boxyLowerInvariant("crashing dictionary method was emitted without a worker layout context");
         }
 
         const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(function.ret)].worker.layoutIdx();
@@ -6148,20 +6180,25 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
         }, constructlessOrigin(.scaffold).loc);
-        try self.appendProcJob(.{ .unreachable_method = .{ .proc_id = proc_id, .fn_type = fn_type } });
+        try self.appendProcJob(.{ .crashing_method = .{ .proc_id = proc_id, .fn_type = fn_type, .crash = crash } });
         return .{
             .method = requirement.fn_name,
             .proc = proc_id,
         };
     }
 
-    /// Build a dictionary method that crashes: it can only be reached by
-    /// dispatching on a value that can never exist.
-    fn buildUnreachableDictionaryMethod(self: *ProcedureBuilder, proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity) Allocator.Error!void {
+    /// Build a dictionary method that crashes when called: the crash a
+    /// direct dispatch with the same rejected resolution lowers to.
+    fn buildCrashingDictionaryMethod(
+        self: *ProcedureBuilder,
+        proc_id: LIR.LirProcSpecId,
+        fn_type: Plan.CheckedTypeIdentity,
+        crash: CrashingDictionaryMethod,
+    ) Allocator.Error!void {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("unreachable dictionary function type was not analyzed");
+            boxyLowerInvariant("crashing dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("unreachable dictionary requirement was not a function");
+            boxyLowerInvariant("crashing dictionary requirement was not a function");
         const function_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
         const function_args = function_children[function.args_start..][0..function.arg_count];
         const saved_tail_builder = self.result.store.tail_call_builder;
@@ -6179,8 +6216,13 @@ const ProcedureBuilder = struct {
         }
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const message = switch (crash) {
+            .checked_error => "method dispatch failed to check",
+            .unreachable_value => "dispatch on a value that can never exist",
+        };
         const body = try self.result.store.addCFStmt(.{ .crash = .{
-            .msg = .{ .literal = try self.result.store.insertString("dispatch on a value that can never exist") },
+            .msg = .{ .literal = try self.result.store.insertString(message) },
+            .checked_error = crash == .checked_error,
         } }, proc.origin);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.args = args_span;
@@ -6321,7 +6363,10 @@ const ProcedureBuilder = struct {
         const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
+        // A declared `to_inspect` decides inspection in this module; the
+        // registry records an override only for an eligible, unrejected
+        // declaration.
+        _ = candidate.method_registry.lookup(key) orelse return null;
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
         // Inspection calls the method at its checked `T -> Str` instance.
         var target = override.target;
@@ -7536,7 +7581,7 @@ const ProcedureBuilder = struct {
             /// A literal conversion's procedures, filling its reserved
             /// dictionary's method slot.
             literal: struct { index: u32, method_slot: u32 },
-            unreachable_method: struct { proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity },
+            crashing_method: struct { proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity, crash: CrashingDictionaryMethod },
         },
     };
 
@@ -7582,7 +7627,7 @@ const ProcedureBuilder = struct {
                 adapter_job.deinit(self.allocator);
                 self.allocator.destroy(adapter_job);
             },
-            .literal, .unreachable_method => {},
+            .literal, .crashing_method => {},
         }
     }
 
@@ -7674,7 +7719,7 @@ const ProcedureBuilder = struct {
                 try self.pushWorkerJob(adapter_job.worker_id);
             },
             .derived => |derived_job| try self.buildDerivedHeader(derived_job),
-            .callable_adapter, .literal, .unreachable_method => {},
+            .callable_adapter, .literal, .crashing_method => {},
         }
     }
 
@@ -7699,7 +7744,7 @@ const ProcedureBuilder = struct {
             .callable_adapter => |adapter_job| try self.buildCallableAdapterBody(adapter_job),
             .static_method_adapter => |adapter_job| try self.buildStaticMethodAdapterBody(adapter_job),
             .literal => |literal| try self.buildLiteralAccessor(literal.index, literal.method_slot),
-            .unreachable_method => |method| try self.buildUnreachableDictionaryMethod(method.proc_id, method.fn_type),
+            .crashing_method => |method| try self.buildCrashingDictionaryMethod(method.proc_id, method.fn_type, method.crash),
         }
         const job = &self.proc_jobs.items[job_index];
         job.status = .finished;
@@ -7792,6 +7837,7 @@ const ProcedureBuilder = struct {
             header.body_source = try self.bodySourceForWorker(resolved, proc);
             try proc.bindHiddenDescriptorArgs();
             try proc.bindHiddenDictionaryArgs();
+            try proc.bindContextArgs();
             try proc.bindWorkerDictionaryDescriptors();
             try proc.bindLambdaArgDescriptors();
             header.ret_local = try proc.addWorkerReturnLocal(true);
@@ -7838,6 +7884,7 @@ const ProcedureBuilder = struct {
         self.result.store.tail_call_builder = &tail_builder;
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var body_stmt = try self.lowerWorkerBodyInto(resolved, proc, header.body_source, ret_local, ret_stmt);
+        body_stmt = try proc.prependOwnCaptureBindings(body_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
@@ -7906,6 +7953,7 @@ const ProcedureBuilder = struct {
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var body_stmt = try self.lowerWorkerBodyInto(resolved, proc, header.body_source, ret_local, ret_stmt);
+        body_stmt = try proc.prependOwnCaptureBindings(body_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
@@ -15601,6 +15649,13 @@ const ProcBodyBuilder = struct {
     /// Boxed slot of each recursive value binder in scope: reserved with the
     /// declaring block, or received as an erased capture.
     recursive_value_slots: std.AutoHashMapUnmanaged(checked.PatternBinderId, LIR.LocalId),
+    /// The local holding each of this worker's context inputs, in input
+    /// order; null for an input with no value.
+    context_locals: std.ArrayList(?LIR.LocalId) = .empty,
+    /// A local procedure's specialization receiving its own runtime
+    /// captures as context inputs binds each capture's pattern from its
+    /// input at body start.
+    own_capture_bindings: std.ArrayList(OwnCaptureBinding) = .empty,
     worker_argument_desc_initializers: std.ArrayList(DescriptorArgLocal),
     erased_capture_value_desc_initializers: std.ArrayList(DescriptorArgLocal),
     stored_capture_initializers: std.ArrayList(StoredCaptureInitializer),
@@ -15917,6 +15972,11 @@ const ProcBodyBuilder = struct {
     /// resolved against the bindings before it, so one lookup suffices.
     const NominalFormalBinding = Plan.DerivedBinding;
 
+    const OwnCaptureBinding = struct {
+        pattern: checked.CheckedPatternId,
+        local: LIR.LocalId,
+    };
+
     const DerivedContext = struct {
         frame: ?Plan.WorkerPlanId,
         bindings_start: usize,
@@ -16098,6 +16158,8 @@ const ProcBodyBuilder = struct {
         self.worker_argument_desc_initializers.deinit(self.parent.allocator);
         self.erased_capture_locals.deinit(self.parent.allocator);
         self.recursive_value_slots.deinit(self.parent.allocator);
+        self.context_locals.deinit(self.parent.allocator);
+        self.own_capture_bindings.deinit(self.parent.allocator);
         self.parent.allocator.free(self.dictionary_slots);
         self.parent.allocator.free(self.dictionary_bound);
         self.parent.allocator.free(self.dictionary_locals);
@@ -16537,6 +16599,161 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    /// The locals supplying `worker`'s context inputs from `args`, one per
+    /// input (null for an input with no value): this worker's own input
+    /// for a forwarded one, or a fresh local the call constructs it into.
+    fn contextArgLocals(self: *ProcBodyBuilder, worker_id: Plan.WorkerPlanId, args: []const Plan.ContextArg) Allocator.Error![]?LIR.LocalId {
+        const inputs = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(worker_id)].context);
+        if (inputs.len != args.len) {
+            boxyLowerInvariant("boxy call context arguments disagreed with its worker's context inputs");
+        }
+        const locals = try self.parent.allocator.alloc(?LIR.LocalId, args.len);
+        errdefer self.parent.allocator.free(locals);
+        for (inputs, args, locals) |input, arg, *local| {
+            local.* = switch (arg) {
+                .forward => |index| self.contextLocalAt(index) orelse
+                    boxyLowerInvariant("boxy call forwarded a context input its caller did not receive"),
+                .construct => try self.addFrameLocalForRep(input.rep orelse
+                    boxyLowerInvariant("boxy constructed context input had no representation")),
+                .structural => null,
+                .capture => |capture| blk: {
+                    if (!checked_moduleKeyEqual(capture.site.module, self.module.key)) {
+                        boxyLowerInvariant("a local procedure capture was read outside its declaring module");
+                    }
+                    const captures = nestedCallableExprRuntimeCaptures(self.module, capture.site.expr);
+                    break :blk self.sourceCaptureLocal(.{ .nested_expr = capture.site }, null, capture.index, captures[capture.index]);
+                },
+            };
+        }
+        return locals;
+    }
+
+    /// Construct each constructed context argument into its local before
+    /// `next`.
+    fn prependContextArgConstructions(
+        self: *ProcBodyBuilder,
+        args: []const Plan.ContextArg,
+        locals: []const ?LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = args.len;
+        while (index > 0) {
+            index -= 1;
+            switch (args[index]) {
+                .forward, .structural, .capture => {},
+                .construct => |id| continuation = try self.runExprStep(try self.beginContextConstructValue(locals[index].?, id, continuation)),
+            }
+        }
+        return continuation;
+    }
+
+    /// Construct the erased callable one context argument names, in this
+    /// frame: a local procedure reads its captures from this frame, and a
+    /// context-specialized worker captures its own context inputs.
+    fn beginContextConstructValue(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        id: Plan.ContextConstructId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const construct = self.parent.plan.contextConstruct(id);
+        if (construct.caller != self.worker_layout.worker) {
+            boxyLowerInvariant("boxy context callable was constructed outside the frame planned to build it");
+        }
+        const worker = self.parent.plan.workers.items[@intFromEnum(construct.worker)];
+        const maybe_expr: ?checked.CheckedExprId = switch (worker.source) {
+            .nested_expr => |expr_ref| if (checked_moduleKeyEqual(expr_ref.module, self.module.key)) expr_ref.expr else boxyLowerInvariant("boxy context local procedure was constructed outside its declaring module"),
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => null,
+        };
+        return try self.beginContextWorkerValue(
+            target,
+            worker.checked_type,
+            construct.callable_type,
+            worker.source,
+            maybe_expr,
+            self.parent.plan.directCallHiddenDescriptorArgSlice(construct.hidden_desc_args),
+            self.parent.plan.directCallHiddenDictionaryArgSlice(construct.hidden_dict_args),
+            construct.worker,
+            self.parent.plan.contextArgSlice(construct.context_args),
+            next,
+        );
+    }
+
+    /// Bind a context-specialized worker's valued context inputs, passed
+    /// after its hidden dictionaries.
+    fn bindContextArgs(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const inputs = self.parent.plan.contextInputSlice(worker.context);
+        const layouts = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.context);
+        try self.ensureContextLocals();
+        var layout_index: usize = 0;
+        const own_site: ?Plan.CheckedExprIdentity = switch (worker.source) {
+            .nested_expr => |site| site,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => null,
+        };
+        for (inputs, 0..) |input, index| {
+            if (!input.isValue()) continue;
+            if (layout_index >= layouts.len) boxyLowerInvariant("boxy worker context input count disagreed with layout plan");
+            const local = try self.addArgLocal(layouts[layout_index].layoutIdx());
+            self.context_locals.items[index] = local;
+            layout_index += 1;
+            switch (input.key) {
+                .capture => |capture| if (own_site) |site| {
+                    if (std.meta.eql(capture.site, site)) {
+                        const captures = self.workerSourceCaptures();
+                        const pattern = captures[capture.index].pattern;
+                        try self.reservePatternBindings(pattern);
+                        try self.own_capture_bindings.append(self.parent.allocator, .{ .pattern = pattern, .local = local });
+                    }
+                },
+                .requirement, .structural => {},
+            }
+        }
+        if (layout_index != layouts.len) boxyLowerInvariant("boxy worker context input count disagreed with layout plan");
+    }
+
+    /// Bind the patterns of the runtime captures this local procedure's
+    /// specialization receives as context inputs.
+    fn prependOwnCaptureBindings(self: *ProcBodyBuilder, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = self.own_capture_bindings.items.len;
+        while (index > 0) {
+            index -= 1;
+            const binding = self.own_capture_bindings.items[index];
+            continuation = try self.bindPatternFromLocal(binding.pattern, binding.local, continuation);
+        }
+        return continuation;
+    }
+
+    fn ensureContextLocals(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        if (self.context_locals.items.len == worker.context.len) return;
+        try self.context_locals.appendNTimes(self.parent.allocator, null, worker.context.len);
+    }
+
+    fn contextLocalAt(self: *const ProcBodyBuilder, index: u32) ?LIR.LocalId {
+        if (index >= self.context_locals.items.len) return null;
+        return self.context_locals.items[index];
+    }
+
+    fn contextLocalForKey(self: *const ProcBodyBuilder, key: Plan.ContextInput.Key) ?LIR.LocalId {
+        if (self.synthetic_adapter) return null;
+        const index = self.parent.plan.workerContextInput(self.worker_layout.worker, key) orelse return null;
+        return self.contextLocalAt(index);
+    }
+
+    /// The local holding this worker's context input for `requirement`.
+    fn contextLocalForRequirement(self: *const ProcBodyBuilder, requirement: Plan.DictionaryRequirementId) ?LIR.LocalId {
+        return self.contextLocalForKey(.{ .requirement = requirement });
+    }
+
+    /// The structural derivation this worker performs for `requirement`.
+    fn structuralContextFor(self: *const ProcBodyBuilder, requirement: Plan.DictionaryRequirementId) ?Plan.StructuralContext {
+        if (self.synthetic_adapter) return null;
+        return self.parent.plan.workerStructuralContext(self.worker_layout.worker, requirement);
+    }
+
     fn prepareErasedWorkerCaptures(self: *ProcBodyBuilder) Allocator.Error!void {
         if (self.erased_capture_arg != null) {
             boxyLowerInvariant("boxy erased worker capture argument was prepared twice");
@@ -16572,6 +16789,11 @@ const ProcBodyBuilder = struct {
             try self.erased_capture_locals.append(self.parent.allocator, local);
             switch (capture.kind) {
                 .captured_value => {
+                    if (capture.context_input) |input_index| {
+                        try self.ensureContextLocals();
+                        self.context_locals.items[input_index] = local;
+                        continue;
+                    }
                     if (generated_runtime) continue;
                     if (source_capture_index >= source_captures.len) {
                         boxyLowerInvariant("boxy erased capture plan had more value captures than the source closure");
@@ -17094,7 +17316,7 @@ const ProcBodyBuilder = struct {
             index -= 1;
             const capture = captures[index];
             const slot_local = self.erased_capture_locals.items[index];
-            if (capture.kind != .captured_value) continue;
+            if (capture.kind != .captured_value or capture.context_input != null) continue;
             if (generated_runtime) {
                 continuation = try self.prependErasedCaptureSlotRead(slot_local, capture_value, @intCast(index), continuation);
                 continue;
@@ -17169,7 +17391,7 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const capture = captures[index];
-            if (capture.kind == .captured_value) continue;
+            if (capture.kind == .captured_value and capture.context_input == null) continue;
             const slot_local = self.erased_capture_locals.items[index];
             continuation = try self.prependErasedCaptureSlotRead(slot_local, capture_value, @intCast(index), continuation);
         }
@@ -17257,15 +17479,7 @@ const ProcBodyBuilder = struct {
     fn workerSourceCaptures(self: *ProcBodyBuilder) []const checked.CheckedCapture {
         const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
         return switch (worker.source) {
-            .nested_expr => |expr_ref| blk: {
-                const module = procedureModuleById(self.parent.modules, expr_ref.module);
-                const expr = module.checked_bodies.expr(expr_ref.expr);
-                break :blk switch (expr.data) {
-                    .closure => |closure| closure.captures,
-                    .lambda => &.{},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable worker source did not point at a lambda or closure"),
-                };
-            },
+            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(procedureModuleById(self.parent.modules, expr_ref.module), expr_ref.expr),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -18057,6 +18271,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const target_rep = self.repForType(expected_ty);
         const source_rep = self.exprStorageRep(expr, self.repForType(expr.ty));
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
@@ -18114,6 +18332,10 @@ const ProcBodyBuilder = struct {
         }
 
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         if (self.procedureValueRefForExpr(expr) != null) {
             return try self.beginProcedureValueRefTypeRef(
                 target,
@@ -18151,6 +18373,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const source_rep = self.repForType(expr.ty);
         try self.ensureBoundaryTargetDescriptorForSourceRep(target, source_rep);
         if (self.representationBoundaryIsDirect(target_rep, source_rep)) {
@@ -18170,6 +18396,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const source_rep = self.repForType(expr.ty);
         if (self.parent.result.store.getLocal(target).layout_idx == self.workerRuntimeLayoutForRep(source_rep).layoutIdx() and
             self.repsUseSameDynamicBoxStorage(target_rep, source_rep))
@@ -19484,6 +19714,9 @@ const ProcBodyBuilder = struct {
             .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => null,
         };
         if (closure) |closure_ref| {
+            // A worker reached by this procedure's frame through a structural
+            // derivation receives its captures as context inputs.
+            if (self.contextLocalForKey(.{ .capture = .{ .site = closure_ref, .index = @intCast(capture_index) } })) |local| return local;
             if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
                 if (locals[capture_index]) |local| return local;
             }
@@ -19747,8 +19980,12 @@ const ProcBodyBuilder = struct {
                 .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
-            .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
+            .checked_error => return try self.beginRejectedDispatch(dispatch),
             .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+        }
+
+        if (self.capturingLocalProcDispatchTarget(dispatch)) |local| {
+            return try self.beginCapturingLocalProcDispatch(target, call_expr, dispatch, local, ret_ty, next);
         }
 
         const direct_plan = if (self.literal_initializer) |index|
@@ -19791,6 +20028,112 @@ const ProcBodyBuilder = struct {
             .direct_plan = direct_plan,
             .next = continuation,
         } } };
+    }
+
+    /// A local procedure a direct dispatch selects whose construction needs
+    /// values of its declaration context: its nested procedure site and the
+    /// instantiation this edge calls it at.
+    const CapturingLocalProcDispatch = struct {
+        site_expr: checked.CheckedExprId,
+        callable_ty: checked.CheckedTypeId,
+    };
+
+    fn capturingLocalProcDispatchTarget(
+        self: *ProcBodyBuilder,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+    ) ?CapturingLocalProcDispatch {
+        const node = switch (dispatch.resolution) {
+            .direct_closed, .direct_parametric => |direct| self.module.static_dispatch_plans.evidenceNode(direct.evidence),
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
+        };
+        const local = switch (node.target.kind) {
+            .local_proc => |local| local,
+            .procedure, .structural => return null,
+        };
+        if (topLevelProcedureBindingForExpr(self.module, local.expr) != null) return null;
+        const site_expr = nestedCallableSiteExprForExpr(self.module, local.expr) orelse local.expr;
+        if (nestedCallableExprRuntimeCaptures(self.module, site_expr).len == 0) return null;
+        return .{
+            .site_expr = site_expr,
+            .callable_ty = switch (node.instantiation) {
+                .callable => |callable_ty| callable_ty,
+                .monomorphic => node.target.callable_ty,
+            },
+        };
+    }
+
+    /// Dispatch to a local procedure that needs values of its declaration
+    /// context: construct its callable from this frame, as a lookup of its
+    /// binding does, and call it with the dispatch's operands.
+    fn beginCapturingLocalProcDispatch(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        call_expr: checked.CheckedExprId,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+        local: CapturingLocalProcDispatch,
+        ret_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const dispatch_operands = dispatch.argsSlice(self.module.static_dispatch_plans);
+        const operands = try self.parent.allocator.alloc(Plan.CallOperand, dispatch_operands.len);
+        defer self.parent.allocator.free(operands);
+        for (dispatch_operands, operands) |operand, *call_operand| call_operand.* = switch (operand) {
+            .checked_expr => |expr| .{ .checked_expr = expr },
+            .generated_interpolation_segments => |expr| .{ .generated_interpolation_segments = expr },
+            .generated_numeral => |literal| .{ .generated_numeral = literal },
+            .generated_quote => |literal| .{ .generated_quote = literal },
+        };
+        switch (dispatch.result_mode) {
+            .equality => |eq| if (eq.negated) {
+                const raw = try self.addFrameLocal(.bool);
+                const negate = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = .bool_not,
+                    .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
+                    .next = next,
+                } }, self.origin);
+                return try self.beginErasedOperandCall(raw, ret_ty, .{ .local_proc = .{ .site_expr = local.site_expr, .ty = local.callable_ty, .use = call_expr } }, operands, negate);
+            },
+            .value,
+            .hash,
+            .parser_for,
+            .encoder_for,
+            .map,
+            .map_effectful,
+            => {},
+        }
+        return try self.beginErasedOperandCall(target, ret_ty, .{ .local_proc = .{ .site_expr = local.site_expr, .ty = local.callable_ty, .use = call_expr } }, operands, next);
+    }
+
+    /// Construct the callable of the local procedure at `site_expr` for the
+    /// planned use `use`, at the instantiation `callable_ty`, reading its
+    /// captures from this frame.
+    fn beginLocalProcUseCallable(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        site_expr: checked.CheckedExprId,
+        callable_ty: checked.CheckedTypeId,
+        use: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const call_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = callable_ty };
+        const planned = self.parent.plan.nestedCallableUsePlan(
+            .{ .module = self.module.key, .expr = use },
+            self.worker_layout.worker,
+            call_type,
+        ) orelse boxyLowerInvariant("local procedure dispatch reached boxy lowering without a planned callable use");
+        return try self.beginWorkerValueWithCallDictionaryArgs(
+            target,
+            .{ .module = self.module.key, .ty = self.module.checked_bodies.expr(site_expr).ty },
+            call_type,
+            self.workerSourceForCallableExpr(site_expr),
+            site_expr,
+            &.{},
+            self.parent.plan.directCallHiddenDescriptorArgSlice(planned.hidden_desc_args),
+            self.parent.plan.directCallHiddenDictionaryArgSlice(planned.hidden_dict_args),
+            next,
+        );
     }
 
     fn beginInspectExpr(
@@ -19967,7 +20310,7 @@ const ProcBodyBuilder = struct {
             .structural,
             => try self.beginDispatchCall(target, plan.expr, maybe_plan, self.module.checked_bodies.expr(plan.expr).ty, next),
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
+            .checked_error => try self.beginRejectedDispatch(plan),
             .@"unreachable" => exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         };
     }
@@ -20071,14 +20414,46 @@ const ProcBodyBuilder = struct {
                 const plan_id = task.for_.plan orelse
                     boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
                 const plan = self.iteratorForPlan(plan_id);
-                inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
-                    switch (resolution) {
-                        .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
-                        .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
-                        .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
-                        .direct_closed, .direct_parametric, .evidence_dependent => {},
-                        .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
-                    }
+                // A rejected `iter` call evaluates the iterable it receives
+                // and then crashes; a rejected `next` call crashes once
+                // `iter` has produced the iterator it receives.
+                switch (plan.iter.resolution) {
+                    .checked_error => {
+                        const iterable = self.module.checked_bodies.expr(plan.iterable);
+                        const discarded = if (iterable.data == .runtime_error)
+                            try self.addFrameLocal(.zst)
+                        else
+                            try self.addFrameLocalForType(iterable.ty);
+                        const chain_items = try self.parent.allocator.alloc(ExprChainItem, 1);
+                        chain_items[0] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = plan.iterable, .next = undefined } } };
+                        return exprChain(chain_items, try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"));
+                    },
+                    .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+                    .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                    .direct_closed, .direct_parametric, .evidence_dependent => {},
+                    .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
+                }
+                switch (plan.next.resolution) {
+                    .checked_error => {
+                        const iterator_type = if (self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker)) |call_plan|
+                            call_plan.ret_type
+                        else
+                            Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = plan.iterator_ty };
+                        const discarded = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(iterator_type));
+                        return .{ .tail = .{ .iter_dispatch = .{
+                            .target = discarded,
+                            .plan_id = plan_id,
+                            .kind = .iter,
+                            .plan = plan,
+                            .call = plan.iter,
+                            .loop_iterator = null,
+                            .next = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+                        } } };
+                    },
+                    .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+                    .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                    .direct_closed, .direct_parametric, .evidence_dependent => {},
+                    .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
                 }
                 if (!self.isZstLocal(task.target)) {
                     boxyLowerInvariant("checked iterator for reached boxy lowering with non-Unit result layout");
@@ -20519,7 +20894,7 @@ const ProcBodyBuilder = struct {
         const ret_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = task.checked_ret_ty };
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(direct_plan.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(direct_plan.hidden_dict_args);
-        const call_entry = try self.lowerWorkerCallLocalsInto(
+        const call_entry = try self.lowerContextWorkerCallLocalsInto(
             state.call_result_target,
             ret_type,
             state.operand_types,
@@ -20531,6 +20906,7 @@ const ProcBodyBuilder = struct {
             direct_plan.worker,
             hidden_desc_args,
             hidden_dict_args,
+            self.parent.plan.contextArgSlice(direct_plan.context_args),
             state.continuation,
         );
         try self.parent.result.store.replaceCFStmt(state.call_placeholder, self.parent.result.store.getCFStmt(call_entry), self.parent.result.store.stmtOrigin(call_entry));
@@ -20583,11 +20959,58 @@ const ProcBodyBuilder = struct {
         args: []const checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const callee = self.module.checked_bodies.expr(callee_expr);
-        const callee_local = try self.addFrameLocalForType(callee.ty);
-        const callee_function = self.functionChildrenForRep(self.repForType(callee.ty)) orelse
+        const operands = try self.parent.allocator.alloc(Plan.CallOperand, args.len);
+        defer self.parent.allocator.free(operands);
+        for (args, operands) |arg, *operand| operand.* = .{ .checked_expr = arg };
+        return try self.beginErasedOperandCall(target, ret_ty, .{ .expr = callee_expr }, operands, next);
+    }
+
+    /// The callable an erased call invokes.
+    const ErasedCallee = union(enum) {
+        /// A checked expression producing the callable at its own type.
+        expr: checked.CheckedExprId,
+        /// A local procedure constructed from this frame for the dispatch
+        /// `use`, at the instantiation `ty` that dispatch's edge selected.
+        local_proc: struct {
+            site_expr: checked.CheckedExprId,
+            ty: checked.CheckedTypeId,
+            use: checked.CheckedExprId,
+        },
+        /// A callable this frame already holds, of checked type `ty`.
+        local: struct {
+            local: LIR.LocalId,
+            ty: Plan.CheckedTypeIdentity,
+        },
+
+        fn ty(self: ErasedCallee, module: ProcedureModuleView) Plan.CheckedTypeIdentity {
+            return switch (self) {
+                .expr => |expr| .{ .module = module.key, .ty = module.checked_bodies.expr(expr).ty },
+                .local_proc => |local| .{ .module = module.key, .ty = local.ty },
+                .local => |local| local.ty,
+            };
+        }
+    };
+
+    /// Call the erased callable `callee` with `operands`. A checked operand
+    /// is lowered at its own type and crosses into the callee's argument
+    /// representation; a generated operand is produced directly in that
+    /// representation.
+    fn beginErasedOperandCall(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        ret_ty: checked.CheckedTypeId,
+        callee: ErasedCallee,
+        operands: []const Plan.CallOperand,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const callee_ty = callee.ty(self.module);
+        const callee_local = switch (callee) {
+            .local => |local| local.local,
+            .expr, .local_proc => try self.addFrameLocalForRep(self.repForTypeRef(callee_ty)),
+        };
+        const callee_function = self.functionChildrenForRep(self.repForTypeRef(callee_ty)) orelse
             boxyLowerInvariant("erased call callee expression did not have an erased callable representation");
-        if (callee_function.arg_count != args.len) {
+        if (callee_function.arg_count != operands.len) {
             boxyLowerInvariant("erased call argument count disagreed with callee function representation");
         }
 
@@ -20595,22 +21018,97 @@ const ProcBodyBuilder = struct {
         const callee_children = self.parent.plan.childSlice(callee_rep.children);
         const callee_arg_children = callee_children[callee_function.args_start..][0..callee_function.arg_count];
 
-        const source_args = try self.lowerExprsToTemps(args);
+        const source_args = try self.parent.allocator.alloc(LIR.LocalId, operands.len);
         defer self.parent.allocator.free(source_args);
-        const call_args = try self.parent.allocator.alloc(LIR.LocalId, args.len);
+        const source_reps = try self.parent.allocator.alloc(Plan.TypeRepId, operands.len);
+        defer self.parent.allocator.free(source_reps);
+        for (operands, source_args, source_reps, callee_arg_children) |operand, *source_arg, *source_rep, callee_arg| {
+            switch (operand) {
+                .checked_expr => |arg_expr_id| {
+                    source_rep.* = self.repForType(self.module.checked_bodies.expr(arg_expr_id).ty);
+                    source_arg.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(source_rep.*).layoutIdx()))
+                        try self.addFrameLocalForRepWithFreshDescriptor(source_rep.*)
+                    else
+                        try self.addFrameLocalForRep(source_rep.*);
+                },
+                .generated_interpolation_segments, .generated_numeral, .generated_quote => {
+                    source_rep.* = callee_arg.rep;
+                    source_arg.* = try self.addFrameBoundaryTargetLocalForRep(callee_arg.rep);
+                },
+            }
+        }
+        var continuation = try self.lowerErasedCallWithLocalsInto(target, self.repForType(ret_ty), callee_local, callee_function, source_args, source_reps, next);
+        switch (callee) {
+            .expr, .local => {},
+            // Constructing the procedure only reads its captures from this
+            // frame, so it runs after the operands, right before the call.
+            .local_proc => |local| continuation = try self.runExprStep(try self.beginLocalProcUseCallable(callee_local, local.site_expr, local.ty, local.use, continuation)),
+        }
+        // Walking backwards: the arguments from the last, then a callee
+        // expression.
+        const callee_items: usize = switch (callee) {
+            .expr => 1,
+            .local_proc, .local => 0,
+        };
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, operands.len + callee_items);
+        for (0..operands.len) |offset| {
+            const arg_index = operands.len - 1 - offset;
+            chain_items[offset] = switch (operands[arg_index]) {
+                .checked_expr => |arg_expr| .{ .lower = .{ .expr = .{ .target = source_args[arg_index], .expr_id = arg_expr, .next = undefined } } },
+                .generated_interpolation_segments, .generated_numeral, .generated_quote => blk: {
+                    // A generated operand is produced at the callee's own
+                    // argument type and representation.
+                    const arg_type = Plan.CheckedTypeIdentity{
+                        .module = callee_ty.module,
+                        .ty = checkedFunctionPayload(procedureModuleById(self.parent.modules, callee_ty.module), callee_ty.ty).args[arg_index],
+                    };
+                    break :blk .{ .call_operand = .{
+                        .operand = operands[arg_index],
+                        .operand_type = arg_type,
+                        .arg_type = arg_type,
+                        .storage_arg_rep = callee_arg_children[arg_index].rep,
+                        .lowered = source_args[arg_index],
+                    } };
+                },
+            };
+        }
+        switch (callee) {
+            .expr => |callee_expr| chain_items[operands.len] = .{ .lower = .{ .expr = .{ .target = callee_local, .expr_id = callee_expr, .next = undefined } } },
+            .local_proc, .local => {},
+        }
+        return exprChain(chain_items, continuation);
+    }
+
+    /// Call the erased callable in `callee_local` with already-lowered
+    /// `source_args`, each crossing from its representation into the
+    /// callee's argument representation, writing `target` at `target_rep`.
+    fn lowerErasedCallWithLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        callee_local: LIR.LocalId,
+        callee_function: FunctionChildren,
+        source_args: []const LIR.LocalId,
+        source_reps: []const Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (callee_function.arg_count != source_args.len or source_reps.len != source_args.len) {
+            boxyLowerInvariant("erased call argument count disagreed with callee function representation");
+        }
+        const callee_rep = self.parent.plan.representations.items[@intFromEnum(callee_function.rep)];
+        const callee_children = self.parent.plan.childSlice(callee_rep.children);
+        const callee_arg_children = callee_children[callee_function.args_start..][0..callee_function.arg_count];
+        const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_args.len);
         defer self.parent.allocator.free(call_args);
-        for (args, source_args, call_args, callee_arg_children) |arg_expr_id, source_arg, *call_arg, callee_arg| {
-            const arg_expr = self.module.checked_bodies.expr(arg_expr_id);
-            const source_rep = self.repForType(arg_expr.ty);
-            const target_rep = callee_arg.rep;
+        for (source_args, source_reps, call_args, callee_arg_children) |source_arg, source_rep, *call_arg, callee_arg| {
+            const arg_rep = callee_arg.rep;
             const source_layout = self.parent.result.store.getLocal(source_arg).layout_idx;
-            const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
-            call_arg.* = if (source_layout == target_layout and self.descriptorStorageRep(source_rep) == self.descriptorStorageRep(target_rep))
+            const arg_layout = self.workerRuntimeLayoutForRep(arg_rep).layoutIdx();
+            call_arg.* = if (source_layout == arg_layout and self.descriptorStorageRep(source_rep) == self.descriptorStorageRep(arg_rep))
                 source_arg
             else
-                try self.addFrameBoundaryTargetLocalForRep(target_rep);
+                try self.addFrameBoundaryTargetLocalForRep(arg_rep);
         }
-        const target_rep = self.repForType(ret_ty);
         const callee_ret_rep = callee_function.ret;
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const callee_ret_layout = self.workerRuntimeLayoutForRep(callee_ret_rep).layoutIdx();
@@ -20682,27 +21180,19 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(arg_desc_initializers.items, continuation);
 
-        var index = args.len;
+        var index = source_args.len;
         while (index > 0) {
             index -= 1;
             if (call_args[index] == source_args[index]) continue;
-            const arg_expr = self.module.checked_bodies.expr(args[index]);
             continuation = try self.assignRepresentationBoundary(
                 call_args[index],
                 source_args[index],
                 callee_arg_children[index].rep,
-                self.repForType(arg_expr.ty),
+                source_reps[index],
                 continuation,
             );
         }
-        // Walking backwards: the arguments from the last, then the callee.
-        const chain_items = try self.parent.allocator.alloc(ExprChainItem, args.len + 1);
-        for (0..args.len) |offset| {
-            const arg_index = args.len - 1 - offset;
-            chain_items[offset] = .{ .lower = .{ .expr = .{ .target = source_args[arg_index], .expr_id = args[arg_index], .next = undefined } } };
-        }
-        chain_items[args.len] = .{ .lower = .{ .expr = .{ .target = callee_local, .expr_id = callee_expr, .next = undefined } } };
-        return exprChain(chain_items, continuation);
+        return continuation;
     }
 
     fn beginLowLevel(
@@ -22513,6 +23003,20 @@ const ProcBodyBuilder = struct {
         if (@intFromEnum(node) >= store_module.const_store.values.items.len) {
             boxyLowerInvariant("ConstStore node id was outside the store");
         }
+        // A crash or checked-error node is the value of a root whose
+        // evaluation stopped. It has no shape to unwrap at any
+        // representation, so it restores as that crash before the
+        // representation is consulted.
+        switch (store_module.const_store.get(node)) {
+            .crash => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+            } }, self.scaffoldOrigin())),
+            .checked_error => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
+            } }, self.scaffoldOrigin())),
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+        }
         const stored_type_value = store_module.const_store.type_store.get(stored_type);
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         switch (rep.kind) {
@@ -22537,7 +23041,8 @@ const ProcBodyBuilder = struct {
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing_node = switch (store_module.const_store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .fn_value => node,
+                        .crash, .checked_error => unreachable,
                     };
                     const backing_local = try self.addFrameLocalForRep(backing_rep);
                     const assign = try self.assignRepresentationBoundary(
@@ -22558,7 +23063,8 @@ const ProcBodyBuilder = struct {
                 while (true) switch (store_module.const_store.get(bool_node)) {
                     .nominal => |nominal| bool_node = nominal.backing,
                     .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
-                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .crash, .checked_error => unreachable,
                 };
             },
             .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
@@ -23433,6 +23939,8 @@ const ProcBodyBuilder = struct {
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
             self.staticFnHiddenDescArgs(static_fn),
             self.parent.plan.directCallHiddenDictionaryArgSlice(static_fn.hidden_dict_args),
+            static_fn.worker,
+            &.{},
             next,
         );
     }
@@ -23569,6 +24077,8 @@ const ProcBodyBuilder = struct {
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
             self.staticFnHiddenDescArgs(static_fn),
             self.parent.plan.directCallHiddenDictionaryArgSlice(static_fn.hidden_dict_args),
+            static_fn.worker,
+            &.{},
             continuation,
         );
     }
@@ -23646,6 +24156,18 @@ const ProcBodyBuilder = struct {
             self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args)
         else
             null;
+        if (nested_use) |use| return try self.beginContextWorkerValue(
+            target,
+            .{ .module = self.module.key, .ty = expr.ty },
+            checked_type,
+            source,
+            expr_id,
+            hidden_desc_args,
+            hidden_dict_args,
+            use.worker,
+            self.parent.plan.contextArgSlice(use.context_args),
+            next,
+        );
         return try self.beginWorkerValueWithCallDictionaryArgs(
             target,
             .{ .module = self.module.key, .ty = expr.ty },
@@ -23668,7 +24190,7 @@ const ProcBodyBuilder = struct {
 
         var found: ?Plan.CheckedTypeIdentity = null;
         for (self.parent.plan.nested_callable_uses.items) |use| {
-            if (use.worker != worker or
+            if ((self.parent.plan.workers.items[@intFromEnum(use.worker)].context_base orelse use.worker) != worker or
                 use.caller != self.worker_layout.worker or
                 !planExprRefEql(use.use, use_ref))
             {
@@ -23825,15 +24347,17 @@ const ProcBodyBuilder = struct {
         const worker = self.parent.plan.workers.items[@intFromEnum(use.worker)];
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(use.hidden_dict_args);
-        return try self.beginWorkerValueWithCallDictionaryArgs(
+        return try self.beginWorkerValueWithValueRep(
             target,
             worker.checked_type,
-            call_type,
+            self.repForTypeRef(call_type),
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(use.stored_capture_sources),
             hidden_desc_args,
             hidden_dict_args,
+            use.worker,
+            self.parent.plan.contextArgSlice(use.context_args),
             next,
         );
     }
@@ -23900,7 +24424,25 @@ const ProcBodyBuilder = struct {
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, stored_capture_sources, hidden_desc_args, hidden_dict_args, next);
+        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, stored_capture_sources, hidden_desc_args, hidden_dict_args, null, &.{}, next);
+    }
+
+    /// A callable value of the exact planned `worker_id`, which may be a
+    /// context-specialized worker capturing the inputs `context_args` supply.
+    fn beginContextWorkerValue(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        worker_type: Plan.CheckedTypeIdentity,
+        call_type: Plan.CheckedTypeIdentity,
+        source: Plan.WorkerSource,
+        maybe_expr: ?checked.CheckedExprId,
+        hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        worker_id: Plan.WorkerPlanId,
+        context_args: []const Plan.ContextArg,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, &.{}, hidden_desc_args, hidden_dict_args, worker_id, context_args, next);
     }
 
     fn beginWorkerValueWithValueRep(
@@ -23913,9 +24455,11 @@ const ProcBodyBuilder = struct {
         stored_capture_sources: []const Plan.StoredCallableCaptureSource,
         hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        planned_worker: ?Plan.WorkerPlanId,
+        context_args: []const Plan.ContextArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const worker_id = self.parent.plan.workerForSourceType(source, worker_type) orelse
+        const worker_id = planned_worker orelse self.parent.plan.workerForSourceType(source, worker_type) orelse
             boxyLowerInvariant("planned callable value had no worker for its source type");
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const value_function = self.functionChildrenForRep(value_rep) orelse
@@ -23934,6 +24478,7 @@ const ProcBodyBuilder = struct {
                 value_function,
                 hidden_desc_args,
                 hidden_dict_args,
+                context_args,
                 boundary_placeholder,
                 .{
                     .target = target,
@@ -23947,7 +24492,7 @@ const ProcBodyBuilder = struct {
             );
         }
 
-        return try self.beginRawWorkerValue(target, source, maybe_expr, stored_capture_sources, worker_id, value_function, hidden_desc_args, hidden_dict_args, next, null);
+        return try self.beginRawWorkerValue(target, source, maybe_expr, stored_capture_sources, worker_id, value_function, hidden_desc_args, hidden_dict_args, context_args, next, null);
     }
 
     fn beginRawWorkerValue(
@@ -23960,6 +24505,7 @@ const ProcBodyBuilder = struct {
         value_function: FunctionChildren,
         hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        context_args: []const Plan.ContextArg,
         next: LIR.CFStmtId,
         adapter: ?CallableAdapterBoundary,
     ) Allocator.Error!ExprStep {
@@ -24007,9 +24553,20 @@ const ProcBodyBuilder = struct {
         var source_capture_index: usize = 0;
         const source_captures = self.callableValueSourceCaptures(source, maybe_expr);
 
+        const context_inputs = self.parent.plan.contextInputSlice(worker.context);
+        if (context_inputs.len != context_args.len) {
+            boxyLowerInvariant("boxy callable value context arguments disagreed with its worker's context inputs");
+        }
+        const context_arg_locals = try self.contextArgLocals(worker_id, context_args);
+        defer self.parent.allocator.free(context_arg_locals);
         for (captures, field_locals) |capture, *field_local| {
             switch (capture.kind) {
                 .captured_value => {
+                    if (capture.context_input) |input_index| {
+                        field_local.* = context_arg_locals[input_index] orelse
+                            boxyLowerInvariant("boxy erased context capture had no value");
+                        continue;
+                    }
                     if (stored_capture_sources.len != 0) {
                         const capture_id = capture.capture_id orelse
                             boxyLowerInvariant("stored callable value capture had no checked capture id");
@@ -24244,6 +24801,7 @@ const ProcBodyBuilder = struct {
         if (hidden_dict_index != 0) {
             boxyLowerInvariant("boxy callable use planned more dictionaries than its erased worker captures");
         }
+        continuation = try self.prependContextArgConstructions(context_args, context_arg_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
 
         // The stored captures are lowered inside this capture window, last
@@ -24810,12 +25368,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn callableExprCaptures(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) []const checked.CheckedCapture {
-        const expr = self.module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .closure => |closure| closure.captures,
-            .lambda => &.{},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("callable expression capture lookup did not reference a lambda or closure"),
-        };
+        return nestedCallableExprRuntimeCaptures(self.module, expr_id);
     }
 
     fn callableValueSourceCaptures(
@@ -24825,15 +25378,7 @@ const ProcBodyBuilder = struct {
     ) []const checked.CheckedCapture {
         if (maybe_expr) |expr_id| return self.callableExprCaptures(expr_id);
         return switch (source) {
-            .nested_expr => |expr_ref| blk: {
-                const module = procedureModuleById(self.parent.modules, expr_ref.module);
-                const expr = module.checked_bodies.expr(expr_ref.expr);
-                break :blk switch (expr.data) {
-                    .closure => |closure| closure.captures,
-                    .lambda => &.{},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable value source did not point at a lambda or closure"),
-                };
-            },
+            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(procedureModuleById(self.parent.modules, expr_ref.module), expr_ref.expr),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -25216,6 +25761,50 @@ const ProcBodyBuilder = struct {
         return try self.lowerCheckedErrorDispatchInto("runtime error");
     }
 
+    /// A call to a rejected method (`checked_error`) uses strict evaluation:
+    /// its receiver and arguments evaluate in order, each into a
+    /// discarded local, and then the call crashes with the checked-error
+    /// message. An interpolation's generated segments operand
+    /// evaluates the interpolation's segments and values; a generated numeral or quote
+    /// operand is literal source text with nothing to evaluate. A checked
+    /// runtime error produces no value, so its discarded local is
+    /// zero-sized.
+    fn beginRejectedDispatch(
+        self: *ProcBodyBuilder,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!ExprStep {
+        var exprs: std.ArrayList(checked.CheckedExprId) = .empty;
+        defer exprs.deinit(self.parent.allocator);
+        for (dispatch.argsSlice(self.module.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try exprs.append(self.parent.allocator, expr),
+            .generated_interpolation_segments => |expr| {
+                const interpolation = switch (self.module.checked_bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("rejected interpolation segments referenced a non-interpolation expression"),
+                };
+                try exprs.append(self.parent.allocator, interpolation.segments[0]);
+                for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                    try exprs.append(self.parent.allocator, value);
+                    try exprs.append(self.parent.allocator, segment);
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+        const crash = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check");
+        if (exprs.items.len == 0) return exprDone(crash);
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, exprs.items.len);
+        for (exprs.items, 0..) |expr_id, index| {
+            const expr = self.module.checked_bodies.expr(expr_id);
+            const discarded = if (expr.data == .runtime_error)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[exprs.items.len - 1 - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = expr_id, .next = undefined } } };
+        }
+        return exprChain(chain_items, crash);
+    }
+
     fn lowerCheckedErrorDispatchInto(
         self: *ProcBodyBuilder,
         comptime message: []const u8,
@@ -25306,6 +25895,12 @@ const ProcBodyBuilder = struct {
             .slot = self.parent.plan.dictionaries.items[@intFromEnum(requirement)].slot,
         } else self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a matching dictionary requirement");
+        if (self.contextLocalForRequirement(match.requirement)) |callable| {
+            return try self.beginContextDispatchCall(target, dispatch, planned, match.requirement, callable, ret_ty, next);
+        }
+        if (self.structuralContextFor(match.requirement)) |structural| {
+            return try self.beginStructuralContextDispatch(target, dispatch, planned, structural, next);
+        }
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");
         if (!self.dictionaryBindingIsBound(match.requirement)) {
@@ -25488,6 +26083,107 @@ const ProcBodyBuilder = struct {
         return .{ .tail = .{ .chain = .{ .items = items, .current = continuation, .snapshot = descriptor_snapshot } } };
     }
 
+    /// A dispatch whose dictionary method this context-specialized worker
+    /// receives as a context input: call that input with the dispatch's
+    /// operands.
+    fn beginContextDispatchCall(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+        planned: Plan.DictionaryDispatchPlan,
+        requirement: Plan.DictionaryRequirementId,
+        callable: LIR.LocalId,
+        ret_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const worker = self.worker_layout.worker;
+        const input_index = self.parent.plan.workerContextInput(worker, .{ .requirement = requirement }) orelse
+            boxyLowerInvariant("boxy context dispatch had no context input in its worker");
+        const input = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(worker)].context)[input_index];
+        const callee = ErasedCallee{ .local = .{ .local = callable, .ty = input.callable_type.? } };
+        const operands = self.parent.plan.callOperandSlice(planned.operands);
+        switch (dispatch.result_mode) {
+            .equality => |eq| if (eq.negated) {
+                const raw = try self.addFrameLocal(.bool);
+                const negate = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = .bool_not,
+                    .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
+                    .next = next,
+                } }, self.origin);
+                return try self.beginErasedOperandCall(raw, ret_ty, callee, operands, negate);
+            },
+            .value,
+            .hash,
+            .parser_for,
+            .encoder_for,
+            .map,
+            .map_effectful,
+            => {},
+        }
+        return try self.beginErasedOperandCall(target, ret_ty, callee, operands, next);
+    }
+
+    /// A dispatch whose method this worker performs as a structural
+    /// derivation over a closed type: the operands cross into that type's
+    /// representation and the comparison or hash runs here, where the local
+    /// procedures it reaches are context inputs.
+    fn beginStructuralContextDispatch(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+        planned: Plan.DictionaryDispatchPlan,
+        structural: Plan.StructuralContext,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const operands = self.parent.plan.callOperandSlice(planned.operands);
+        if (operands.len != 2) boxyLowerInvariant("structural context dispatch did not take two operands");
+        const first_expr = switch (operands[0]) {
+            .checked_expr => |expr| expr,
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural context dispatch operand was not a checked expression"),
+        };
+        const second_expr = switch (operands[1]) {
+            .checked_expr => |expr| expr,
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural context dispatch operand was not a checked expression"),
+        };
+        const negated = switch (dispatch.result_mode) {
+            .equality => |eq| eq.negated,
+            .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => false,
+        };
+        switch (structural.method) {
+            .equality => return try self.beginStructuralEq(target, first_expr, second_expr, structural.rep, negated, next),
+            .hash => {
+                const value = try self.addStructuralEqOperandLocalForRep(structural.rep);
+                const hasher = try self.addFrameLocalForType(self.module.checked_bodies.expr(second_expr).ty);
+                const continuation = try self.lowerStructuralContextDerivationInto(target, value, hasher, structural, false, next);
+                const chain_items = try self.parent.allocator.alloc(ExprChainItem, 2);
+                chain_items[0] = .{ .lower = .{ .expr = .{ .target = hasher, .expr_id = second_expr, .next = undefined } } };
+                chain_items[1] = .{ .lower = .{ .into_rep = .{ .target = value, .target_rep = structural.rep, .expr_id = first_expr, .next = undefined } } };
+                return exprChain(chain_items, continuation);
+            },
+        }
+    }
+
+    /// The structural derivation `structural` names, over operands already
+    /// in its closed representation, performed in this worker's frame.
+    fn lowerStructuralContextDerivationInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        first: LIR.LocalId,
+        second: LIR.LocalId,
+        structural: Plan.StructuralContext,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const outer_derived = try self.enterDerivedContext(self.worker_layout.worker, structural.rep);
+        defer self.derived_context = outer_derived;
+        return switch (structural.method) {
+            .equality => try self.lowerEqRepLocalsInto(target, first, second, structural.rep, negated, next),
+            .hash => try self.lowerHashRepLocalsInto(target, first, second, structural.rep, next),
+        };
+    }
+
     fn bindConversionResultDescriptorArgs(
         self: *ProcBodyBuilder,
         args: []const Plan.DirectCallHiddenDescriptorArg,
@@ -25645,6 +26341,27 @@ const ProcBodyBuilder = struct {
         hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerContextWorkerCallLocalsInto(target, ret_type, arg_types, hidden_desc_arg_types, source_args, actual_arg_reps, arg_substitutions, ret_substitution, worker_id, hidden_desc_args, hidden_dict_args, &.{}, next);
+    }
+
+    /// A direct worker call, passing a context-specialized worker's context
+    /// inputs after its hidden dictionaries.
+    fn lowerContextWorkerCallLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        ret_type: Plan.CheckedTypeIdentity,
+        arg_types: []const Plan.CheckedTypeIdentity,
+        hidden_desc_arg_types: []const Plan.CheckedTypeIdentity,
+        source_args: []const LIR.LocalId,
+        actual_arg_reps: ?[]const Plan.TypeRepId,
+        arg_substitutions: ?[]const Plan.CallTypeSubstitution,
+        ret_substitution: ?Plan.CallTypeSubstitution,
+        worker_id: Plan.WorkerPlanId,
+        hidden_desc_args: []const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg,
+        context_args: []const Plan.ContextArg,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const worker_layout = self.parent.layout_plan.workerLayoutFor(worker_id);
         const worker_args = self.parent.layout_plan.workerLayoutSlice(worker_layout.args);
         if (source_args.len != worker_args.len or arg_types.len != worker_args.len or hidden_desc_arg_types.len != worker_args.len) {
@@ -25723,8 +26440,15 @@ const ProcBodyBuilder = struct {
         try self.bindDirectCallHiddenDescriptorLocals(hidden_desc_args, hidden_desc_locals, true);
         const hidden_dict_locals = try self.lowerDirectCallHiddenDictionaryArgs(hidden_dict_args);
         defer self.parent.allocator.free(hidden_dict_locals);
+        const context_arg_locals = try self.contextArgLocals(worker_id, context_args);
+        defer self.parent.allocator.free(context_arg_locals);
+        var context_value_locals = std.ArrayList(LIR.LocalId).empty;
+        defer context_value_locals.deinit(self.parent.allocator);
+        for (context_arg_locals) |maybe_local| {
+            if (maybe_local) |local| try context_value_locals.append(self.parent.allocator, local);
+        }
 
-        const call_locals = try self.parent.allocator.alloc(LIR.LocalId, adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len);
+        const call_locals = try self.parent.allocator.alloc(LIR.LocalId, adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len + context_value_locals.items.len);
         defer self.parent.allocator.free(call_locals);
         @memcpy(call_locals[0..adapted_args.len], adapted_args);
         for (hidden_desc_locals, 0..) |hidden, index| {
@@ -25732,6 +26456,9 @@ const ProcBodyBuilder = struct {
         }
         for (hidden_dict_locals, 0..) |hidden, index| {
             call_locals[adapted_args.len + hidden_desc_locals.len + index] = hidden.local;
+        }
+        for (context_value_locals.items, 0..) |local, index| {
+            call_locals[adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len + index] = local;
         }
 
         var continuation = next;
@@ -25873,6 +26600,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy direct call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
+        continuation = try self.prependContextArgConstructions(context_args, context_arg_locals, continuation);
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
         // Hidden descriptors read only the original operands and the caller
         // frame, so they are initialized before the operands are adapted and
@@ -35748,6 +36476,7 @@ const ProcBodyBuilder = struct {
                 .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
                 .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
                 .descriptor => return try self.lowerDescriptorEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
+                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
                 .helper => {
                     if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
                     const raw = try self.addFrameLocal(.bool);
@@ -36116,6 +36845,9 @@ const ProcBodyBuilder = struct {
         convert: Plan.TypeRepId,
         /// Read the box's payload first.
         unbox: Plan.TypeRepId,
+        /// The component's own method is a rejected declaration: the
+        /// comparison is a checked-error crash.
+        checked_error,
     };
 
     fn derivedStep(self: *ProcBodyBuilder, method: Plan.DerivedMethod, rep_id: Plan.TypeRepId) Allocator.Error!DerivedStep {
@@ -36174,6 +36906,7 @@ const ProcBodyBuilder = struct {
             .scheme_dictionary => |requirement| .{ .scheme_dictionary = requirement },
             .descriptor => .descriptor,
             .shared_closed => |closed| .{ .convert = closed },
+            .checked_error => .checked_error,
         };
     }
 
@@ -36442,7 +37175,11 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const call = self.parent.plan.derived_component_calls.items[index];
-        return try self.lowerWorkerCallLocalsInto(
+        const worker = self.parent.plan.workers.items[@intFromEnum(call.worker)];
+        if (worker.context.len != 0 and self.synthetic_adapter) {
+            boxyLowerInvariant("a derived method procedure reached a component needing its frame's context");
+        }
+        return try self.lowerContextWorkerCallLocalsInto(
             target,
             call.ret_type,
             &call.arg_types,
@@ -36454,6 +37191,7 @@ const ProcBodyBuilder = struct {
             call.worker,
             self.parent.plan.directCallHiddenDescriptorArgSlice(call.hidden_desc_args),
             self.parent.plan.directCallHiddenDictionaryArgSlice(call.hidden_dict_args),
+            self.parent.plan.contextArgSlice(call.context_args),
             next,
         );
     }
@@ -36468,6 +37206,34 @@ const ProcBodyBuilder = struct {
         requirement_id: Plan.DictionaryRequirementId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.structuralContextFor(requirement_id)) |structural| {
+            if (args.len != 2) boxyLowerInvariant("structural context component did not take two arguments");
+            const converted = try self.addFrameBoundaryTargetLocalForRep(structural.rep);
+            const derivation = try self.lowerStructuralContextDerivationInto(target, converted, args[1], structural, false, next);
+            return try self.assignRepresentationBoundary(converted, args[0], structural.rep, component_rep, derivation);
+        }
+        if (self.contextLocalForRequirement(requirement_id)) |callable| {
+            const worker = self.worker_layout.worker;
+            const input_index = self.parent.plan.workerContextInput(worker, .{ .requirement = requirement_id }) orelse
+                boxyLowerInvariant("boxy derived context component had no context input in its worker");
+            const input = self.parent.plan.contextInputSlice(self.parent.plan.workers.items[@intFromEnum(worker)].context)[input_index];
+            const callable_function = self.functionChildrenForRep(input.rep.?) orelse
+                boxyLowerInvariant("boxy context input was not callable");
+            const callable_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(callable_function.rep)].children);
+            const arg_reps = try self.parent.allocator.alloc(Plan.TypeRepId, args.len);
+            defer self.parent.allocator.free(arg_reps);
+            for (arg_reps, 0..) |*arg_rep, index| {
+                // The dispatcher is this component, described by the frame;
+                // each other argument already has the callable's own type.
+                arg_rep.* = if (index == 0) component_rep else callable_children[callable_function.args_start + index].rep;
+            }
+            const requirement_function = self.functionChildrenForRep(self.repForTypeRef(self.parent.plan.dictionaries.items[@intFromEnum(requirement_id)].fn_ty)) orelse
+                boxyLowerInvariant("derived method scheme requirement was not a function");
+            return try self.lowerErasedCallWithLocalsInto(target, requirement_function.ret, callable, callable_function, args, arg_reps, next);
+        }
+        if (self.synthetic_adapter and self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)].context.len != 0) {
+            boxyLowerInvariant("a derived method procedure reached a context input of its frame");
+        }
         const dict_local = self.dictionaryLocalForRequirementOrNull(requirement_id) orelse
             boxyLowerInvariant("derived method reached a scheme requirement without a bound dictionary local");
         if (!self.dictionaryBindingIsBound(requirement_id)) {
@@ -36741,6 +37507,7 @@ const ProcBodyBuilder = struct {
                 .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
                 .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
                 .descriptor => return try self.lowerDescriptorHashLocalsInto(target, value, hasher, rep_id, next),
+                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
                 .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
                 .convert => |actual| {
                     const converted = try self.addFrameLocalForRep(actual);
@@ -45517,11 +46284,16 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
 }
 
 test "boxy lowerer restores top-level consts from resolved local lookups" {
-    try expectBoxyTopLevelConstLookup(.local);
+    try expectBoxyTopLevelConstLookup(.local, .value);
 }
 
 test "boxy lowerer restores top-level consts from resolved external lookups" {
-    try expectBoxyTopLevelConstLookup(.external);
+    try expectBoxyTopLevelConstLookup(.external, .value);
+}
+
+test "boxy lowerer restores a checked-error top-level const as a checked-error crash" {
+    try expectBoxyTopLevelConstLookup(.local, .checked_error);
+    try expectBoxyTopLevelConstLookup(.external, .checked_error);
 }
 
 const ConstLookupExprKind = enum {
@@ -45529,7 +46301,14 @@ const ConstLookupExprKind = enum {
     external,
 };
 
-fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+/// What the looked-up constant's root stored: the value 5, or the checked
+/// error its evaluation stopped at.
+const ConstLookupStoredKind = enum {
+    value,
+    checked_error,
+};
+
+fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupStoredKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45559,7 +46338,18 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
         @enumFromInt(fixtureTableIndex(0)),
         typeSchemeKey(7),
     );
-    const const_node = try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } });
+    const const_node = switch (stored) {
+        .value => try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } }),
+        .checked_error => blk: {
+            const message = "method dispatch failed to check";
+            const data = try checked_module.const_store.addBlobData(message);
+            break :blk try checked_module.const_store.append(.{ .checked_error = .{
+                .data = data,
+                .offset = 0,
+                .len = message.len,
+            } });
+        },
+    };
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
     checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root_type = root_type });
     var compile_time_roots = [_]checked.CompileTimeRoot{.{
@@ -45651,7 +46441,15 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    switch (stored) {
+        .value => {},
+        .checked_error => {
+            try std.testing.expect(body == .crash and body.crash.checked_error);
+            return;
+        },
+    }
+    const assign = body.assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| {
             try std.testing.expectEqual(@as(i128, 5), literal.value);

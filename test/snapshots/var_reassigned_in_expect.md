@@ -251,33 +251,15 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-expect
 					(e-block
-						(s-expr
-							(e-runtime-error (tag "var_reassigned_in_expect")))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 316)
+						(s-runtime-error (tag "var_reassigned_in_expect"))
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 315)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))
 							(args
 								(e-num (value "0"))))))
 				(s-expect
-					(e-block
-						(s-let
-							(p-tuple
-								(patterns
-									(p-runtime-error (tag "var_reassigned_in_expect"))
-									(p-assign (ident "extra"))))
-							(e-runtime-error (tag "erroneous_value_expr")))
-						(e-method-eq (negated "false")
-							(lhs
-								(e-dispatch-call (method "plus") (constraint-fn-var 339)
-									(receiver
-										(e-lookup-local
-											(p-var-assign (ident "$count"))))
-									(args
-										(e-lookup-local
-											(p-assign (ident "extra"))))))
-							(rhs
-								(e-num (value "3"))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expect
 					(e-block
 						(s-var
@@ -286,7 +268,7 @@ NO CHANGE
 								(p-assign (ident "balance"))))
 						(s-reassign
 							(p-var-assign (ident "$left"))
-							(e-dispatch-call (method "minus") (constraint-fn-var 352)
+							(e-dispatch-call (method "minus") (constraint-fn-var 346)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$left"))))
@@ -302,7 +284,7 @@ NO CHANGE
 							(e-block
 								(s-reassign
 									(p-var-assign (ident "$left"))
-									(e-dispatch-call (method "plus") (constraint-fn-var 416)
+									(e-dispatch-call (method "plus") (constraint-fn-var 410)
 										(receiver
 											(e-lookup-local
 												(p-var-assign (ident "$left"))))
@@ -310,7 +292,7 @@ NO CHANGE
 											(e-lookup-local
 												(p-assign (ident "x"))))))
 								(e-empty_record)))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 431)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 425)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$left"))))
@@ -333,15 +315,15 @@ NO CHANGE
 						(e-tag (name "True"))))
 				(s-reassign
 					(p-var-assign (ident "$count"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 493)
+					(e-dispatch-call (method "plus") (constraint-fn-var 487)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$count"))))
 						(args
 							(e-num (value "1")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 499)
+				(e-dispatch-call (method "plus") (constraint-fn-var 493)
 					(receiver
-						(e-dispatch-call (method "minus") (constraint-fn-var 495)
+						(e-dispatch-call (method "minus") (constraint-fn-var 489)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))

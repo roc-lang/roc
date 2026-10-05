@@ -198,9 +198,9 @@ MISSING METHOD - fuzz_crash_020.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_020.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:74:1:74:22
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
+MISSING METHOD - fuzz_crash_020.md:68:14:68:16
 MISSING METHOD - fuzz_crash_020.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_020.md:89:3:89:6
-TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_020.md:93:14:93:15
 TYPE MISMATCH - fuzz_crash_020.md:93:22:93:24
@@ -1282,6 +1282,30 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
+		(region (start 68 14) (end 68 16))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 68 14) (end 68 16) (annotation error) (line-text "\t\tOk(123) => 12"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
 		(region (start 86 11) (end 86 17))
 		(headline
 			(reflow "This")
@@ -1314,48 +1338,6 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 			(line-break)
 			(line-break)
 			(reflow "Give that declaration a value body, or stop referring to it here.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 98 4) (end 104 3))
-		(headline
-			(reflow "This expression produces a value, but it's not being used."))
-		(document
-			(source-region (file "fuzz_crash_020.md") (start 98 4) (end 104 3) (annotation error) (line-text "\tm (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tO, # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "(f, j, Error, [O], (Error, Error), List(l))")
-			(line-break)
-			(indent 1)
-			(text "  where [")
-			(line-break)
-			(indent 1)
-			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "  ]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Since this expression is used as a statement, it must evaluate to")
-			(reflow " ")
-			(annotated code "{}")
-			(reflow ".")
-			(line-break)
-			(reflow "If you don't need the value, you can ignore it with")
-			(reflow " ")
-			(annotated code "_ =")
-			(reflow ".")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
@@ -2106,10 +2088,25 @@ expect {
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "add"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-applied-tag))
+			(e-block
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "erroneous_value_expr"))))
+					(if-else
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "me"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))

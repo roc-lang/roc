@@ -917,13 +917,13 @@ is_named_color = |str| {
 											(e-if
 												(if-branches
 													(if-branch
-														(e-dispatch-call (method "is_gte") (constraint-fn-var 800)
+														(e-dispatch-call (method "is_gte") (constraint-fn-var 802)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "b"))))
 															(args
 																(e-num (value "97"))))
-														(e-dispatch-call (method "is_lte") (constraint-fn-var 811)
+														(e-dispatch-call (method "is_lte") (constraint-fn-var 813)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "b"))))
@@ -940,13 +940,13 @@ is_named_color = |str| {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 832)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 836)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
 														(args
 															(e-num (value "65"))))
-													(e-dispatch-call (method "is_lte") (constraint-fn-var 843)
+													(e-dispatch-call (method "is_lte") (constraint-fn-var 847)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))

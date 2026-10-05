@@ -285,7 +285,9 @@ pub const Constants = struct {
     /// 129: Interpolation plans validate segments before assembling values.
     /// 130: Recursive value bindings, erased row evidence, and row-default
     /// constraint discharge are explicit in checked artifacts.
-    pub const CACHE_VERSION = 130;
+    /// 131: If-expression metadata records source, and, or or origin instead
+    ///      of a boolean warning flag.
+    pub const CACHE_VERSION = 131;
 };
 
 /// Configuration for the Roc cache system.

@@ -102,19 +102,15 @@ test "redundant open rows - retained phantom callback arguments" {
     , .exact);
 }
 
-test "redundant open rows - values and non-lambda bodies" {
+test "redundant open rows - value alias bodies" {
+    // A value alias generalizes, so the checker reports its `..`; the
+    // formatter cannot tell a lookup body from a value and keeps it.
     try expectFormatterMatchesChecker(
-        \\boom : [Boom, ..]
-        \\boom = Boom
-        \\
         \\parse : Str -> [Fail, Ok, ..]
         \\parse = |_| Ok
         \\
         \\alias : Str -> [Fail, Ok, ..]
         \\alias = parse
-        \\
-        \\made : Str -> [Fail, Ok, ..]
-        \\made = if Bool.True parse else parse
     , .formatter_subset);
 }
 
@@ -199,7 +195,7 @@ test "redundant open rows - associated and block-local annotations" {
         \\        helper : Str -> [Worse, ..]
         \\        helper = |_| Worse
         \\
-        \\        value : [Bad, ..]
+        \\        value : [Bad]
         \\        value = Bad
         \\
         \\        match helper(s) {
@@ -246,13 +242,12 @@ test "redundant open rows - annotation-only definition outside an app" {
 
 test "redundant open rows - destructured top-level literals in an app" {
     // Can attaches a top-level annotation to the def a destructured literal
-    // splits off for that name. A value keeps its `..`; the formatter keeps
-    // a function's too, since it does not decide which literal field a name
-    // binds.
+    // splits off for that name. The formatter keeps a function's `..`, since
+    // it does not decide which literal field a name binds.
     try expectFormatterMatchesChecker(
         \\app [main] { pf: platform "platform.roc" }
         \\
-        \\e : [Boom, ..]
+        \\e : [Boom]
         \\(e, n) = (Boom, 1)
         \\
         \\f : Str -> [A, ..]

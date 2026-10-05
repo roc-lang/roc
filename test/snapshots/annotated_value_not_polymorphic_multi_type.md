@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotated, non-expansive value is a true scheme, instantiable at two different concrete types (tier-2 generalization)
+description=An annotation cannot make a non-function value polymorphic: `empty : List(a)` on `empty = []` is rejected, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -19,9 +19,57 @@ strs = empty
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_multi_type.md:3:1:3:16
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Value Is Not Polymorphic")
+		(region (start 3 1) (end 3 16))
+		(headline
+			(reflow "The type annotation on")
+			(reflow " ")
+			(annotated code "empty")
+			(reflow " ")
+			(reflow "says it can be used at many types, but")
+			(reflow " ")
+			(annotated code "empty")
+			(reflow " ")
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
+		(document
+			(source-region (file "annotated_value_not_polymorphic_multi_type.md") (start 3 1) (end 3 16) (annotation error) (line-text "empty : List(a)"))
+			(line-break)
+			(line-break)
+			(reflow "If you want me to infer its type, write")
+			(reflow " ")
+			(annotated code "_")
+			(reflow " ")
+			(reflow "in place of each type variable, or write a concrete type.")
+			(line-break)
+			(line-break)
+			(reflow "If you want to use it at many types, make it a function that takes")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ":")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "empty : {} -> List(a)")
+			(line-break)
+			(indent 1)
+			(text "empty = |{}| []")
+			(annotation-end)
+			(line-break)
+			(reflow "Then call it as")
+			(reflow " ")
+			(annotated code "empty({})")
+			(reflow " ")
+			(reflow "wherever you use it."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -86,21 +134,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "empty"))
-		(e-empty_list)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-rigid-var (name "a")))))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-lookup-local
-			(p-assign (ident "empty")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-lookup-local
-			(p-assign (ident "empty")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "Str") (builtin)))))
@@ -115,12 +161,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(a)"))
+		(patt (type "List(_b)"))
 		(patt (type "List(U64)"))
 		(patt (type "List(Str)"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(a)"))
+		(expr (type "List(_b)"))
 		(expr (type "List(U64)"))
 		(expr (type "List(Str)"))
 		(expr (type "_arg -> {}"))))

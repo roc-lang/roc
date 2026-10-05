@@ -3161,7 +3161,11 @@ EndOfFile,
 								(p-assign (ident "other")))))))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -3191,12 +3195,10 @@ EndOfFile,
 				(s-return
 					(e-lookup-local
 						(p-assign (ident "tag"))))
-				(s-expr
-					(e-runtime-error (tag "expr_syntax_error")))
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "expr_syntax_error"))
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(s-expr
 					(e-run-low-level (op "crash")
 						(args

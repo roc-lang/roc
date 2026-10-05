@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotated, non-expansive value bound inside a block (not top-level) is still a true scheme, instantiable at two different concrete types (tier-2 generalization)
+description=An annotation cannot make a value bound inside a block polymorphic: `empty : List(a)` on `empty = []` is rejected, the binding is checked without the annotation, and its uses at two types report nothing further
 type=file
 ~~~
 # SOURCE
@@ -23,9 +23,57 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_block_local.md:4:5:4:20
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Value Is Not Polymorphic")
+		(region (start 4 5) (end 4 20))
+		(headline
+			(reflow "The type annotation on")
+			(reflow " ")
+			(annotated code "empty")
+			(reflow " ")
+			(reflow "says it can be used at many types, but")
+			(reflow " ")
+			(annotated code "empty")
+			(reflow " ")
+			(reflow "isn't defined as a function (like")
+			(reflow " ")
+			(annotated code "|x| ...")
+			(reflow "), so it can only have one type."))
+		(document
+			(source-region (file "annotated_value_not_polymorphic_block_local.md") (start 4 5) (end 4 20) (annotation error) (line-text "    empty : List(a)"))
+			(line-break)
+			(line-break)
+			(reflow "If you want me to infer its type, write")
+			(reflow " ")
+			(annotated code "_")
+			(reflow " ")
+			(reflow "in place of each type variable, or write a concrete type.")
+			(line-break)
+			(line-break)
+			(reflow "If you want to use it at many types, make it a function that takes")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ":")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "empty : {} -> List(a)")
+			(line-break)
+			(indent 1)
+			(text "empty = |{}| []")
+			(annotation-end)
+			(line-break)
+			(reflow "Then call it as")
+			(reflow " ")
+			(annotated code "empty({})")
+			(reflow " ")
+			(reflow "wherever you use it."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -123,15 +171,13 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "empty"))
-					(e-empty_list))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "nums"))
-					(e-lookup-local
-						(p-assign (ident "empty"))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "strs"))
-					(e-lookup-local
-						(p-assign (ident "empty"))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-underscore)
 					(e-lookup-local

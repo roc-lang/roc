@@ -137,5 +137,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "_a"))
 ~~~
