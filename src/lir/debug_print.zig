@@ -107,7 +107,6 @@ const Printer = struct {
                         .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{l.dec_bits}),
                         .static_data => |id| try writer.print("literal static_data s{d}", .{@intFromEnum(id)}),
                         .bytes_literal => try writer.writeAll("literal bytes"),
-                        .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }
                     if (s.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@intFromEnum(proc)});

@@ -459,7 +459,6 @@ fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
         .boxy_dynamic_frac_literal,
         .static_data,
         .bytes_literal,
-        .null_ptr,
         .proc_ref,
         => null,
     };

@@ -10293,7 +10293,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
                     .i128_literal => |literal| if (literal.value == 42) {
                         literal_answers += 1;
                     },
-                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => {},
+                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => {},
                 }
             }
             try std.testing.expectEqual(@as(usize, 0), value_exports);

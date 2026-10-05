@@ -135,7 +135,6 @@ const Pass = struct {
                 .dec_literal,
                 .boxy_dynamic_num_literal,
                 .boxy_dynamic_frac_literal,
-                .null_ptr,
                 .proc_ref,
                 => self.markOther(s.target),
             },

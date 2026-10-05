@@ -44526,7 +44526,7 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
             try std.testing.expectEqual(@as(i128, 42), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -44672,7 +44672,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
             try std.testing.expectEqual(@as(i128, 5), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -44750,7 +44750,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
     const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .dec_literal => |dec| try std.testing.expectEqual(value.toRocDec().num, dec),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }
@@ -44938,7 +44938,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const arg = out.lir_result.store.getCFStmt(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (arg.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const call = out.lir_result.store.getCFStmt(arg.next).assign_call;
     try std.testing.expect(call.proc != root_proc_id);
@@ -45248,7 +45248,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     const literal = out.lir_result.store.getCFStmt(helper_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 99), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }
@@ -45628,7 +45628,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmt(assign.next).assign_ref;
     try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
@@ -45731,7 +45731,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmt(assign.next).assign_ref;
     try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
@@ -46027,7 +46027,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
     const after_loop = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
     switch (after_loop.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
 }
@@ -46157,7 +46157,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
     const after_loop = out.lir_result.store.getCFStmt(break_unit.next).assign_literal;
     switch (after_loop.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
 }
@@ -46285,14 +46285,14 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     const then_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (then_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(then_value.next));
 
     const else_value = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
     switch (else_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(else_value.next));
 }
@@ -46440,7 +46440,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const first_value = out.lir_result.store.getCFStmt(GuardedList.at(first_branches, 0).body).assign_literal;
     switch (first_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second_join = out.lir_result.store.getCFStmt(first_join.body).join;
@@ -46456,7 +46456,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const second_value = out.lir_result.store.getCFStmt(GuardedList.at(second_branches, 0).body).assign_literal;
     switch (second_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
@@ -46614,7 +46614,7 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     const payload_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
     switch (payload_literal.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const cond_tag = out.lir_result.store.getCFStmt(payload_literal.next).assign_tag;
     try std.testing.expect(cond_tag.payload != null);
@@ -46816,7 +46816,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
             try std.testing.expectEqual(@as(i64, 2), literal.value);
             try std.testing.expectEqual(@as(layout.Idx, .u64), literal.layout_idx);
         },
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const cmp = out.lir_result.store.getCFStmt(required.next).assign_low_level;
@@ -46833,7 +46833,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     const item_index = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (item_index.value) {
         .i64_literal => |literal| try std.testing.expectEqual(@as(i64, 1), literal.value),
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const item = out.lir_result.store.getCFStmt(item_index.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_get_unsafe, item.op);
@@ -47332,7 +47332,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
@@ -47463,14 +47463,14 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
     switch (cond_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
     const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
     switch (pattern_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
@@ -47488,7 +47488,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
@@ -47925,12 +47925,12 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (lhs.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const rhs = out.lir_result.store.getCFStmt(lhs.next).assign_literal;
     switch (rhs.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const eq = out.lir_result.store.getCFStmt(rhs.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
@@ -48192,12 +48192,12 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const seed = out.lir_result.store.getCFStmt(value.next).assign_literal;
     switch (seed.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const hash = out.lir_result.store.getCFStmt(seed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash.op);
@@ -48414,7 +48414,7 @@ test "boxy lowerer emits checked string segment literals" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("hello", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -48497,7 +48497,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("abc", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -48603,13 +48603,13 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("a", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("b", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const first_concat = out.lir_result.store.getCFStmt(second.next).assign_low_level;
@@ -48622,7 +48622,7 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     const third = out.lir_result.store.getCFStmt(first_concat.next).assign_literal;
     switch (third.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("c", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second_concat = out.lir_result.store.getCFStmt(third.next).assign_low_level;
@@ -48712,7 +48712,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
@@ -48900,7 +48900,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     const payload = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (payload.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const prefix = out.lir_result.store.getCFStmt(payload.next).assign_literal;
@@ -48911,7 +48911,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
                 out.lir_result.store.getStringLiteral(literal),
             );
         },
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const rendered = out.lir_result.store.getCFStmt(prefix.next).assign_low_level;
@@ -48930,7 +48930,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
     switch (suffix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings(")", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const message = out.lir_result.store.getCFStmt(suffix.next).assign_low_level;
@@ -49039,7 +49039,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 13), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
@@ -49166,7 +49166,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
             try std.testing.expectEqual(@as(i128, 99), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const final_copy = out.lir_result.store.getCFStmt(decl_assign.next).assign_ref;
@@ -49277,7 +49277,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     try std.testing.expect(init.target != final_assign.target);
     switch (final_assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_assign.target } }, out.lir_result.store.getCFStmt(final_assign.next));
 }
@@ -49411,13 +49411,13 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     const initial = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (initial.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const replacement = out.lir_result.store.getCFStmt(initial.next).assign_literal;
     switch (replacement.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const write = out.lir_result.store.getCFStmt(replacement.next).set_local;
@@ -49601,11 +49601,11 @@ test "boxy lowerer destructures tuple declaration patterns" {
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 1), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 2), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(tuple.target, read_first.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_first.op.field.field_idx);
@@ -49803,11 +49803,11 @@ test "boxy lowerer materializes record rest declaration patterns" {
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 11), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 22), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
     try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.field.field_idx);
@@ -49967,11 +49967,11 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(list.target, bind_rest.op.local);
     try std.testing.expectEqual(bind_rest.target, final_copy.op.local);
@@ -50075,12 +50075,12 @@ test "boxy lowerer emits tuple construction in element order" {
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
@@ -50307,12 +50307,12 @@ test "boxy lowerer emits record construction in layout order after source-order 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
@@ -50430,7 +50430,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const extension_value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (extension_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const extension_message = out.lir_result.store.getCFStmt(extension_value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), extension_message.op);
@@ -50444,7 +50444,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const field_value = out.lir_result.store.getCFStmt(extension_unit.next).assign_literal;
     switch (field_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 9), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmt(field_value.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
@@ -50690,7 +50690,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 5), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmt(literal.next).assign_ref;
     try std.testing.expectEqual(literal.target, copy.op.local);
@@ -50948,11 +50948,11 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 7), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 500), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     // Construction repositions the backing record's fields into the nominal's
@@ -51561,11 +51561,11 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     const tag = out.lir_result.store.getCFStmt(payload.next).assign_tag;
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 0));
     try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 1));
@@ -51669,11 +51669,11 @@ test "boxy lowerer emits list construction with committed element layout" {
     const list = out.lir_result.store.getCFStmt(second.next).assign_list;
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 8), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 9), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 0));
     try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 1));
@@ -51975,7 +51975,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     const close = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (close.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const finish = out.lir_result.store.getCFStmt(close.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), finish.op);
@@ -51985,7 +51985,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     const step_zero = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
     switch (step_zero.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 0), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const separator_check = out.lir_result.store.getCFStmt(step_zero.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), separator_check.op);
@@ -52161,12 +52161,12 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 10), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 20), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const add = out.lir_result.store.getCFStmt(second.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_int_add_crash_on_overflow), add.op);
@@ -52264,7 +52264,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
@@ -52516,7 +52516,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
@@ -52625,7 +52625,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
@@ -52633,7 +52633,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     const prefix = out.lir_result.store.getCFStmt(boxed.next).assign_literal;
     switch (prefix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("Box(", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const unboxed = out.lir_result.store.getCFStmt(prefix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
@@ -52652,7 +52652,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
     switch (suffix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings(")", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmt(suffix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), message.op);
@@ -53408,7 +53408,7 @@ fn expectListMapCanReuseFalse(out: *Output) error{ TestExpectedEqual, TestUnexpe
             try std.testing.expectEqual(@as(i64, 0), value.value);
             try std.testing.expectEqual(out.lir_result.store.getLocal(literal.target).layout_idx, value.layout_idx);
         },
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }

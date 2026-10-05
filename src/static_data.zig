@@ -318,7 +318,7 @@ const StaticInitializerMachine = struct {
                         {
                             if (try self.readyStatic(dependency) == null) return dependency;
                         },
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .null_ptr, .proc_ref => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
                     }
                     break :blk assign.next;
                 },
@@ -553,7 +553,6 @@ const StaticInitializerMachine = struct {
             .boxy_dynamic_num_literal,
             .boxy_dynamic_frac_literal,
             => staticDataInvariant("descriptor-dependent Boxy literal reached target static initializer"),
-            .null_ptr => {},
             .proc_ref => |proc| try value.relocations.append(self.allocator(), .{
                 .offset = 0,
                 .target = .{ .procedure = proc },

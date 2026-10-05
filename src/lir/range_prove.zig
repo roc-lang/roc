@@ -4089,7 +4089,7 @@ const Pass = struct {
     fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue) ResourceError!void {
         const literal: ?i128 = switch (value) {
             inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
             // A non-negative literal is the same number whatever its type,

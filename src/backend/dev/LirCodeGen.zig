@@ -9847,7 +9847,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             ctx.descriptor(lit.desc);
                             ctx.outputDescriptor(s.target);
                         },
-                        .i64_literal, .i128_literal, .f32_literal, .f64_literal, .dec_literal, .str_literal, .bytes_literal, .null_ptr, .static_data, .proc_ref => {},
+                        .i64_literal, .i128_literal, .f32_literal, .f64_literal, .dec_literal, .str_literal, .bytes_literal, .static_data, .proc_ref => {},
                     },
                     inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
                     .assign_call_dict => |s| ctx.outputDescriptor(s.target),
@@ -21919,7 +21919,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .boxy_dynamic_num_literal => |lit| try self.generateBoxyDynamicNumLiteral(assign.target, lit),
                                 .boxy_dynamic_frac_literal => |lit| try self.generateBoxyDynamicFracLiteral(assign.target, lit),
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
-                                .null_ptr => .{ .immediate_i64 = 0 },
                                 .static_data => |id| blk: {
                                     self.fragment_context.static_data = true;
                                     if (self.comptime_hooks) |hooks| {

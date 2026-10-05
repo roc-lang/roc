@@ -59,7 +59,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v37: numeric `*_from_str_prefix`/`*_from_utf8_prefix` ops renumber later LowLevel ops.
 /// v39: `crash` statements record whether checking rejected the code they stand for.
 /// v40: source file table entries carry their module's content identity.
-pub const FORMAT_VERSION: u32 = 40;
+/// v41: `proc_ref` is the `LIR.LiteralValue` tag that follows `bytes_literal`.
+pub const FORMAT_VERSION: u32 = 41;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

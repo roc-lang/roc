@@ -1785,7 +1785,7 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         },
         .assign_literal => |assign| switch (assign.value) {
             .static_data, .bytes_literal => self.shapes.static_literal = true,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
         },
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;

@@ -55,7 +55,7 @@ const Collector = struct {
                     switch (s.value) {
                         .str_literal => |literal| try self.mark(literal.backing),
                         .bytes_literal => |literal| try self.mark(literal.bytes.backing),
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .null_ptr, .proc_ref => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .proc_ref => {},
                     }
                     try self.pushStmt(s.next);
                 },

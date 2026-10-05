@@ -2695,7 +2695,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .dec_literal,
                 .boxy_dynamic_num_literal,
                 .boxy_dynamic_frac_literal,
-                .null_ptr,
                 .proc_ref,
                 => try solver.unique_facts.append(allocator, .{ .birth = assign.target }),
             }
@@ -5770,7 +5769,6 @@ fn computeUniquenessDetailed(
                     .dec_literal,
                     .boxy_dynamic_num_literal,
                     .boxy_dynamic_frac_literal,
-                    .null_ptr,
                     .proc_ref,
                     => marks.noteBirth(&born, assign.target),
                 }

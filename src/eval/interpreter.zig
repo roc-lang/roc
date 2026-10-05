@@ -4033,7 +4033,6 @@ pub const Interpreter = struct {
                 .{},
             ),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
-            .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
             .static_data => |id| self.evalStaticDataLiteral(id, target_layout),
         };
@@ -4063,16 +4062,6 @@ pub const Interpreter = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         return try self.boxy_runtime.boxyDynamicFracLiteral(self.boxyFrameHooks(null), dec_bits, desc, target_layout);
-    }
-
-    fn evalNullPtrLiteral(self: *LirInterpreter) Error!Value {
-        const val = try self.alloc(.opaque_ptr);
-        switch (self.layout_store.targetUsize().size()) {
-            4 => val.write(u32, 0),
-            8 => val.write(usize, 0),
-            else => unreachable,
-        }
-        return val;
     }
 
     fn evalProcRefLiteral(self: *LirInterpreter, proc_id: LIR.LirProcSpecId) Error!Value {

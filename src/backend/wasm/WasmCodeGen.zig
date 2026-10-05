@@ -8458,9 +8458,6 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
         ),
         .static_data => |id| try self.generateStaticDataLiteral(id, self.procLocalLayoutIdx(target)),
         .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
-        .null_ptr => {
-            try self.emitI32Const(0);
-        },
         .proc_ref => |proc_id| {
             const key: u32 = @intFromEnum(proc_id);
             const table_idx = self.proc_table_indices.get(key) orelse {

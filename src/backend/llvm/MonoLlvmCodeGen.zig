@@ -3665,9 +3665,6 @@ pub const MonoLlvmCodeGen = struct {
             .boxy_dynamic_frac_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true),
             .static_data => |id| try self.emitStaticDataLiteral(slot_v, id),
             .bytes_literal => |bytes_idx| try self.emitBytesLiteral(slot_v.ptr, bytes_idx),
-            .null_ptr => {
-                if (slot_v.size > 0) try self.zeroBytes(slot_v.ptr, slot_v.size);
-            },
             .proc_ref => |proc_id| {
                 const func = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
                 try self.storePointer(slot_v.ptr, func.toValue(self.builder.?));

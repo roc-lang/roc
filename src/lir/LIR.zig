@@ -902,7 +902,6 @@ pub const LiteralValue = union(enum) {
     },
     static_data: StaticDataId,
     bytes_literal: ListLiteral,
-    null_ptr,
     proc_ref: LirProcSpecId,
 };
 
