@@ -72,10 +72,6 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/frontend-name-and-sentinel-single-sourcing.md](small/frontend-name-and-sentinel-single-sourcing.md)—
-  six frontend seams: duplicate NumKind map, hardcoded Bool
-  discriminant, method-name literals, hand-written builtin-name maps,
-  five row comparators, default-cased lowering switches.
 - [small/syntax-fact-single-sourcing.md](small/syntax-fact-single-sourcing.md)—
   keyword spellings (tokenizer vs ~25 fmt literals), the
   numeric-suffix bidirectional pair, the twice-scanned number
