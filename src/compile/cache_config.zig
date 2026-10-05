@@ -601,10 +601,9 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get a compiler version-specific directory name.
 ///
-/// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
-/// to isolate cache entries between different compiler builds.
+/// Returns the content identity of the compiler that owns these entries.
+/// Dirty source changes invalidate entries without removing another build's cache.
 pub fn getCompilerVersionDir(allocator: Allocator) Allocator.Error![]u8 {
-    // Use build-time compiler version that includes git commit SHA
-    const version_info = build_options.compiler_version;
+    const version_info = build_options.compiler_compatibility_id;
     return allocator.dupe(u8, version_info);
 }

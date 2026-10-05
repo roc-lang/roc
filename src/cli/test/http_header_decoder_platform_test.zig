@@ -143,7 +143,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_HTTP_HEADER_DECODER_PREBUILT_EXE");
+    const prebuilt_path = @as(?[]u8, try allocator.dupe(u8, @import("prebuilt_paths").app));
 
     const exe_name = if (builtin.os.tag == .windows) "http_header_decoder_server.exe" else "http_header_decoder_server";
     const output_path = if (prebuilt_path) |path|

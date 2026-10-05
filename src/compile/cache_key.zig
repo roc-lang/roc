@@ -15,7 +15,7 @@ const CheckedArtifact = check.CheckedArtifact;
 
 /// Names one module's canonicalization output in the canonicalized-module cache.
 pub const CanonicalizedModuleCacheKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @as([32]u8, @splat(0)),
 };
 
 /// Every input canonicalization reads, and nothing else.
@@ -50,14 +50,15 @@ pub const CanonicalizedCacheKeyInput = struct {
 /// Compute the canonicalized-module cache key for one module.
 pub fn canonicalizedModuleCacheKey(input: CanonicalizedCacheKeyInput) CanonicalizedModuleCacheKey {
     var hasher = Sha256.init(.{});
-    hasher.update("roc-canonicalized-module-key-v1");
+    hasher.update("roc-canonicalized-module-key-v2");
+    hasher.update(&@import("build_options").compiler_compatibility_hash);
     hasher.update(&input.entry_version_hash);
     hashLengthPrefixed(&hasher, input.compiler_version);
     hashLengthPrefixed(&hasher, input.module_basename);
     hashLengthPrefixed(&hasher, input.source);
     hasher.update(&[_]u8{@intFromBool(input.is_entry_module)});
-    hasher.update(&[_]u8{@intFromEnum(input.validation)});
-    hasher.update(&[_]u8{@intFromEnum(input.module_role)});
+    hasher.update(&[_]u8{@backingInt(input.validation)});
+    hasher.update(&[_]u8{@backingInt(input.module_role)});
 
     var key = CanonicalizedModuleCacheKey{};
     hasher.final(&key.bytes);
@@ -118,15 +119,15 @@ pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
 }
 
 fn hashWithByte(byte: u8) [32]u8 {
-    return [_]u8{byte} ** 32;
+    return @as([32]u8, @splat(byte));
 }
 
 fn moduleIdentity(byte: u8) CheckedArtifact.ModuleIdentity {
     return .{
         .stable_hash = hashWithByte(byte),
         .module_idx = byte,
-        .module_name = @enumFromInt(@as(u32, byte)),
-        .display_module_name = @enumFromInt(@as(u32, byte + 1)),
+        .module_name = @fromBackingInt(@intCast(@as(u32, byte))),
+        .display_module_name = @fromBackingInt(@intCast(@as(u32, byte + 1))),
         .kind = .app,
     };
 }

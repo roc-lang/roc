@@ -1322,7 +1322,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             }
 
             if (is_tty) {
-                std.debug.print("\r{s}\r", .{" " ** 72});
+                std.debug.print("\r{s}\r", .{@as([72]u8, @splat(' '))});
             }
         }
 
@@ -1883,7 +1883,7 @@ fn freezeOnCrash(sig: posix.SIG, info: *const posix.siginfo_t, _: ?*anyopaque) c
     var buf: [192]u8 = undefined;
     const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d} signo={d} si_code={d} addr=0x{x} cpu={d}\n", .{
         linux.getpid(),
-        @intFromEnum(sig),
+        @backingInt(sig),
         info.code,
         @intFromPtr(info.fields.sigfault.addr),
         cpu,

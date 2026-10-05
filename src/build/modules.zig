@@ -14,8 +14,6 @@ const FilterInjection = struct {
     forced_count: usize,
 };
 
-const wrapper_scan_max_bytes = 16 * 1024 * 1024;
-
 fn filtersContain(haystack: []const []const u8, needle: []const u8) bool {
     for (haystack) |item| {
         if (std.mem.eql(u8, item, needle)) return true;
@@ -67,11 +65,6 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         => &.{},
     };
 }
-
-const FileToScan = struct {
-    path: []const u8,
-    include_imports: bool,
-};
 
 const glue_platform_files = [_][]const u8{
     "AbiFieldLayout.roc",
@@ -139,173 +132,6 @@ fn createCompilerPlatformSourcesModule(b: *Build) *Module {
     return b.createModule(.{ .root_source_file = generated_source });
 }
 
-// Count `test { ... }` blocks (no names) so filtered runs can subtract the
-// wrappers they inevitably execute even when Zig test filters are set.
-fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
-    const lazy_path = module.root_source_file orelse return 0;
-    const root_file_path = lazy_path.getPath(b);
-    const aggregator_names = aggregatorFilters(module_type);
-    const has_aggregators = aggregator_names.len != 0;
-
-    var arena = std.heap.ArenaAllocator.init(b.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var pending = std.ArrayList(FileToScan).empty;
-    defer pending.deinit(allocator);
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-
-    const root_copy = allocator.dupe(u8, root_file_path) catch @panic("OOM");
-    pending.append(allocator, .{
-        .path = root_copy,
-        .include_imports = has_aggregators,
-    }) catch @panic("OOM");
-    seen.put(root_copy, {}) catch @panic("OOM");
-
-    var total: usize = 0;
-    while (pending.items.len != 0) {
-        const entry = pending.items[pending.items.len - 1];
-        pending.items.len -= 1;
-        total += scanFileForWrappers(
-            allocator,
-            b.graph.io,
-            entry,
-            &pending,
-            &seen,
-            has_aggregators,
-        );
-    }
-
-    return total;
-}
-
-fn scanFileForWrappers(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    entry: FileToScan,
-    pending: *std.ArrayList(FileToScan),
-    seen: *std.StringHashMap(void),
-    has_aggregators: bool,
-) usize {
-    const path = entry.path;
-    const source = std.Io.Dir.cwd().readFileAllocOptions(
-        io,
-        path,
-        allocator,
-        .limited(wrapper_scan_max_bytes),
-        .@"1",
-        0,
-    ) catch |err| {
-        std.log.warn(
-            "Failed to read {s} while counting unnamed tests: {s}",
-            .{ path, @errorName(err) },
-        );
-        return 0;
-    };
-
-    var tree = std.zig.Ast.parse(allocator, source, .zig) catch |err| {
-        std.log.warn(
-            "Failed to parse {s} while counting unnamed tests: {s}",
-            .{ path, @errorName(err) },
-        );
-        return 0;
-    };
-    defer tree.deinit(allocator);
-
-    const tags = tree.nodes.items(.tag);
-    const all_data = tree.nodes.items(.data);
-
-    var unnamed: usize = 0;
-    for (tags, all_data) |tag, data| {
-        if (tag == .test_decl and data.opt_token_and_node[0] == .none) {
-            unnamed += 1;
-        }
-    }
-
-    if (entry.include_imports and has_aggregators) {
-        collectAggregatorImports(allocator, source, path, pending, seen);
-    }
-
-    return unnamed;
-}
-
-fn collectAggregatorImports(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    current_path: []const u8,
-    pending: *std.ArrayList(FileToScan),
-    seen: *std.StringHashMap(void),
-) void {
-    const pattern = "std.testing.refAllDecls(@import(\"";
-    var search_index: usize = 0;
-    const current_dir = std.fs.path.dirname(current_path) orelse ".";
-
-    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
-        const literal_start = match_pos + pattern.len;
-        var cursor = literal_start;
-        while (cursor < source.len) : (cursor += 1) {
-            if (source[cursor] == '\\') {
-                cursor += 1;
-                continue;
-            }
-            if (source[cursor] == '"') break;
-        }
-        if (cursor >= source.len) break;
-
-        const literal_bytes = source[literal_start..cursor];
-        const quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{literal_bytes}) catch break;
-        const import_rel = std.zig.string_literal.parseAlloc(allocator, quoted) catch |err| {
-            std.log.warn(
-                "Failed to parse aggregator import in {s}: {s}",
-                .{ current_path, @errorName(err) },
-            );
-            search_index = cursor + 1;
-            continue;
-        };
-        if (!std.mem.endsWith(u8, import_rel, ".zig")) {
-            search_index = cursor + 1;
-            continue;
-        }
-
-        const resolved = resolveImportPath(allocator, current_dir, import_rel) catch |err| {
-            std.log.warn(
-                "Failed to resolve aggregator import {s} from {s}: {s}",
-                .{ import_rel, current_path, @errorName(err) },
-            );
-            search_index = cursor + 1;
-            continue;
-        };
-
-        if (seen.contains(resolved)) {
-            search_index = cursor + 1;
-            continue;
-        }
-
-        seen.put(resolved, {}) catch @panic("OOM");
-        pending.append(allocator, .{
-            .path = resolved,
-            .include_imports = false,
-        }) catch @panic("OOM");
-
-        search_index = cursor + 1;
-    }
-}
-
-fn resolveImportPath(
-    allocator: std.mem.Allocator,
-    current_dir: []const u8,
-    import_rel: []const u8,
-) ![]const u8 {
-    if (std.fs.path.isAbsolute(import_rel)) {
-        return std.fs.path.resolve(allocator, &.{import_rel});
-    }
-    return std.fs.path.resolve(allocator, &.{ current_dir, import_rel });
-}
-
-// Keep module-level aggregator tests (e.g. "check tests") when user passes
-// a filter for an inner test: we must still run the aggregator so that
-// std.testing.refAllDecls brings the inner test into the build.
 fn ensureAggregatorFilters(
     b: *Build,
     module_type: ModuleType,
@@ -615,7 +441,16 @@ pub const RocModules = struct {
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
         // Note: unbundle uses Zig's stdlib zstd for WASM compatibility
         if (zstd) |z| {
-            self.bundle.linkLibrary(z.artifact("zstd"));
+            const library = z.artifact("zstd");
+            const headers = b.addWriteFiles();
+            const translate = b.addTranslateC(.{
+                .root_source_file = headers.add("roc_zstd.h", "#define ZSTD_STATIC_LINKING_ONLY 1\n#include <zstd.h>\n"),
+                .target = library.root_module.resolved_target.?,
+                .optimize = library.root_module.optimize.?,
+            });
+            translate.addIncludePath(library.getEmittedIncludeTree());
+            self.bundle.addImport("zstd", translate.createModule());
+            self.bundle.linkLibrary(library);
         }
 
         // The interpreter's hosted-call trampoline is hand-written assembly (see
@@ -760,7 +595,18 @@ pub const RocModules = struct {
     }
 
     pub fn addAll(self: RocModules, step: *Step.Compile) void {
-        const is_wasm = step.rootModuleTarget().cpu.arch == .wasm32;
+        const target = step.rootModuleTarget();
+        const is_wasm = target.cpu.arch == .wasm32;
+        if (target.os.tag == .windows) {
+            const b = step.step.owner;
+            const headers = b.addWriteFiles();
+            const translate = b.addTranslateC(.{
+                .root_source_file = headers.add("roc_windows.h", "#include <windows.h>\n"),
+                .target = step.root_module.resolved_target.?,
+                .optimize = step.root_module.optimize orelse .debug,
+            });
+            step.root_module.addImport("windows_c", translate.createModule());
+        }
 
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
@@ -922,10 +768,6 @@ pub const RocModules = struct {
             const module = self.getModule(module_type);
             const filter_injection = ensureAggregatorFilters(b, module_type, test_filters);
             forced_passes += filter_injection.forced_count;
-            if (test_filters.len != 0) {
-                const wrappers = wrapperTestCount(b, module_type, module);
-                forced_passes += wrappers;
-            }
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}", .{@tagName(module_type)}),
                 .root_module = b.createModule(.{
@@ -962,6 +804,7 @@ pub const RocModules = struct {
             // Link zstd for bundle module (unbundle uses stdlib zstd)
             if (module_type == .bundle) {
                 if (zstd) |z| {
+                    test_step.root_module.addImport("zstd", self.bundle.import_table.get("zstd").?);
                     test_step.root_module.linkLibrary(z.artifact("zstd"));
                 }
             }

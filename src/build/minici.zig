@@ -364,7 +364,7 @@ fn aarch64HasSha2() bool {
     if (builtin.cpu.arch != .aarch64) return false;
     return switch (target.classifyOs(builtin.os.tag)) {
         // HWCAP_SHA2 is bit 6 of AT_HWCAP on aarch64 Linux.
-        .linux => (std.os.linux.getauxval(std.elf.AT_HWCAP) & (1 << 6)) != 0,
+        .linux => (std.os.linux.getauxval(std.elf.AT.HWCAP) & (1 << 6)) != 0,
         // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
         // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
         // trust the build target, which also requires `sha2`.
@@ -1643,7 +1643,7 @@ const workflow_shard_key = "minici_shard:";
 fn workflowShardProblems(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {
     var problems = std.ArrayList([]const u8).empty;
     errdefer problems.deinit(allocator);
-    var counts = [_]usize{0} ** shards.len;
+    var counts = @as([shards.len]usize, @splat(0));
 
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw_line| {
