@@ -112,6 +112,21 @@ def main():
     check("worktree-commondir-deleted", "no-git")
     git.unlink()
     check("worktree-pointer-deleted", "no-git")
+    def malformed(label, diagnostic):
+        result = subprocess.run(command, cwd=source, capture_output=True, text=True)
+        output = result.stdout + result.stderr
+        (work / f"{label}.log").write_text(output)
+        assert result.returncode != 0 and diagnostic in output, output
+        records.append({"label": label, "argv": command, "exitCode": result.returncode,
+                        "expectedFailure": True, "diagnostic": diagnostic})
+
+    git.mkdir()
+    (git / "HEAD").mkdir()
+    malformed("non-file-head", "expected regular Git metadata file")
+    (git / "HEAD").rmdir()
+    (git / "HEAD").write_text("ref: refs/heads/topic\n")
+    (git / "refs").write_text("not a directory\n")
+    malformed("non-directory-reference-parent", "cannot inspect Git metadata")
     (work / "results.json").write_text(json.dumps(records, indent=2) + "\n")
 
 

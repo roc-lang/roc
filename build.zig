@@ -7315,19 +7315,20 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
     const io = b.graph.io;
     const cwd = std.Io.Dir.cwd();
     const dot_git = b.root.joinString(b.allocator, ".git") catch @panic("OOM");
-    const git_stat = cwd.statFile(io, dot_git, .{}) catch {
+    const git_stat = cwd.statFile(io, dot_git, .{}) catch |err| {
+        if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ dot_git, err });
         dependOnExistingParentDirectory(b, dot_git);
         return "no-git";
     };
     const git_dir = if (git_stat.kind == .directory) dir: {
         b.dependOnDirectoryMetadata(b.graph.cwdRelativePath(dot_git));
         break :dir dot_git;
-    } else dir: {
+    } else if (git_stat.kind == .file) dir: {
         const pointer = readVersionFile(b, dot_git) orelse return "no-git";
         const prefix = "gitdir: ";
         if (!std.mem.startsWith(u8, pointer, prefix)) return "no-git";
         break :dir std.fs.path.resolve(b.allocator, &.{ std.fs.path.dirname(dot_git).?, pointer[prefix.len..] }) catch @panic("OOM");
-    };
+    } else std.debug.panic("expected Git metadata directory or pointer file: {s}", .{dot_git});
     const head = readVersionFile(b, b.pathJoin(&.{ git_dir, "HEAD" })) orelse return "no-git";
     if (!std.mem.startsWith(u8, head, "ref: ")) return shortCommit(head);
     const ref_name = head["ref: ".len..];
@@ -7347,13 +7348,13 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
 
 fn readVersionFile(b: *std.Build, path: []const u8) ?[]const u8 {
     const cwd = std.Io.Dir.cwd();
-    const stat = cwd.statFile(b.graph.io, path, .{}) catch {
+    const stat = cwd.statFile(b.graph.io, path, .{}) catch |err| {
+        if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata {s}: {t}", .{ path, err });
         dependOnExistingParentDirectory(b, path);
         return null;
     };
     if (stat.kind != .file) {
-        dependOnExistingParentDirectory(b, path);
-        return null;
+        std.debug.panic("expected regular Git metadata file: {s}", .{path});
     }
     b.dependOnFileContents(b.graph.cwdRelativePath(path));
     const contents = cwd.readFileAlloc(b.graph.io, path, b.allocator, .limited(1024 * 1024)) catch return null;
@@ -7361,21 +7362,21 @@ fn readVersionFile(b: *std.Build, path: []const u8) ?[]const u8 {
 }
 
 /// Zig 0.17 cannot record contents of a missing configure input. Watching its
-/// nearest existing directory detects creation without poisoning every build.
+/// nearest existing directory's entries detects ordinary creation/deletion
+/// without poisoning every build. Stock Zig still trusts cached stat data.
 fn dependOnExistingParentDirectory(b: *std.Build, path: []const u8) void {
     const cwd = std.Io.Dir.cwd();
     var parent = std.fs.path.dirname(path) orelse ".";
     while (true) {
-        if (cwd.statFile(b.graph.io, parent, .{})) |stat| {
-            if (stat.kind == .directory) {
-                b.dependOnDirectoryMetadata(b.graph.cwdRelativePath(parent));
-                return;
-            }
-        } else |_| {}
-        parent = std.fs.path.dirname(parent) orelse {
-            b.dependOnDirectoryMetadata(b.path("."));
-            return;
+        const stat = cwd.statFile(b.graph.io, parent, .{}) catch |err| {
+            if (err != error.FileNotFound) std.debug.panic("cannot inspect Git metadata parent {s}: {t}", .{ parent, err });
+            parent = std.fs.path.dirname(parent) orelse
+                std.debug.panic("no existing directory for Git metadata dependency: {s}", .{path});
+            continue;
         };
+        if (stat.kind != .directory) std.debug.panic("Git metadata parent is not a directory: {s}", .{parent});
+        b.dependOnDirectoryContents(b.graph.cwdRelativePath(parent));
+        return;
     }
 }
 
