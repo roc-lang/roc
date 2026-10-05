@@ -19148,15 +19148,19 @@ outlives the compiler process, as `roc build --opt=interpreter` embeds one in th
 executable it links. It is a raw-byte boundary under "Fully Defined Persisted
 Bytes": every scrubbable table item is canonicalized in the image's own copy,
 never in the store it was copied from, and the producer supplies a zero-filled
-image buffer so the bytes between allocations are defined too. A *mapped* image
-lives in shared or process memory for one run, is read only through typed views,
-and is never hashed, compared, or written to a file, so its tables are copied
-verbatim with no canonicalization pass. Both contracts classify every table
-item type at compile time, so a type with undefined bytes that nothing
-identifies cannot enter either form, and moving a producer from mapped to
-persisted never meets an item that cannot be canonicalized. The rows the
-image authors itself, such as its header and frozen-graph export and relocation
-rows, are fixed layouts that declare every byte.
+image buffer so the bytes between allocations are defined too. A persisted image
+built in shared memory is detached from that mapping: the shared-memory header
+at its start records the image's own length as both its used and total size,
+never the size of the address-space reservation the producing process obtained.
+
+A *mapped* image lives in shared or process memory for one run, is read only
+through typed views, and is never hashed, compared, or written to a file, so its
+tables are copied verbatim with no canonicalization pass. Both contracts
+classify every table item type at compile time, so a type with undefined bytes
+that nothing identifies cannot enter either form, and moving a producer from
+mapped to persisted never meets an item that cannot be canonicalized. The rows
+the image authors itself, such as its header and frozen-graph export and
+relocation rows, are fixed layouts that declare every byte.
 
 An interpreter-mode host entry pins each root's `LirInterpreter` on the heap.
 Every interpreter-created erased-callable allocation owns one reference to that

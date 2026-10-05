@@ -11308,8 +11308,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
     // These bytes are embedded in the output executable. The image was copied
     // under the persisted contract into newly created shared memory, which the
-    // OS supplies zero-filled, so every byte here is a function of the program.
-    const lir_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
+    // OS supplies zero-filled, and the detached copy's header describes the
+    // copy rather than this process's mapping, so every byte here is a
+    // function of the program.
+    const lir_image = try shm.dupeDetachedImage(ctx.arena);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {

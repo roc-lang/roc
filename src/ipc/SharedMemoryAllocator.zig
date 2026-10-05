@@ -511,6 +511,27 @@ pub fn getAvailableSize(self: *const SharedMemoryAllocator) usize {
     return self.total_size - self.offset.load(.monotonic);
 }
 
+comptime {
+    // A detached image carries this header in bytes that can outlive the
+    // process, so every byte of it must belong to a declared field.
+    var declared: usize = 0;
+    for (@typeInfo(Header).@"struct".fields) |field| declared += @sizeOf(field.type);
+    std.debug.assert(declared == @sizeOf(Header));
+}
+
+/// Copy the used prefix of this mapping into memory owned by `gpa` as an image
+/// detached from the mapping. The copy's header describes the copy itself: its
+/// used and total sizes are both the copy's length. The size of this mapping,
+/// which depends on how much address space the OS granted this process, does
+/// not enter the copy, so its bytes depend only on what was allocated.
+pub fn dupeDetachedImage(self: *const SharedMemoryAllocator, gpa: Allocator) Allocator.Error![]u8 {
+    const used = self.getUsedSize();
+    const image = try gpa.dupe(u8, self.base_ptr[0..used]);
+    const header: Header = .{ .used_size = used, .total_size = used };
+    @memcpy(image[0..@sizeOf(Header)], std.mem.asBytes(&header));
+    return image;
+}
+
 /// Reset the user-data region to allow reuse.
 ///
 /// This preserves the shared-memory coordination header at the start of the
@@ -584,6 +605,35 @@ test "shared memory allocator rewinds mapped header to a used-size boundary" {
     try testing.expectEqual(@as(u64, @intCast(reusable_boundary)), header_ptr.used_size);
     try testing.expectEqual(reusable_boundary, try mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
     try testing.expectError(error.InvalidSharedMemory, rewindMappedHeader(shm.base_ptr, shm.total_size, @sizeOf(Header) - 1));
+}
+
+test "detached image bytes do not depend on the size of the mapping" {
+    const testing = std.testing;
+    const page_size = try getSystemPageSize();
+
+    var images: [2][]u8 = undefined;
+    var built: usize = 0;
+    defer for (images[0..built]) |image| testing.allocator.free(image);
+
+    for ([_]usize{ 1024 * 1024, 4 * 1024 * 1024 }) |mapping_size| {
+        var shm = try SharedMemoryAllocator.create(testing.io, mapping_size, page_size);
+        defer shm.deinit(testing.allocator);
+
+        const data = try shm.allocator().alloc(u32, 100);
+        for (data, 0..) |*item, i| item.* = @intCast(i);
+        shm.updateHeader();
+
+        images[built] = try shm.dupeDetachedImage(testing.allocator);
+        built += 1;
+    }
+
+    try testing.expectEqualSlices(u8, images[0], images[1]);
+
+    const header: *align(1) const Header = @ptrCast(images[0].ptr);
+    try testing.expectEqual(@as(u64, images[0].len), header.used_size);
+    try testing.expectEqual(@as(u64, images[0].len), header.total_size);
+    const data: []align(1) const u32 = @ptrCast(images[0][images[0].len - 100 * @sizeOf(u32) ..]);
+    for (data, 0..) |item, i| try testing.expectEqual(@as(u32, @intCast(i)), item);
 }
 
 test "fromFd maps pages that can be marked executable" {
