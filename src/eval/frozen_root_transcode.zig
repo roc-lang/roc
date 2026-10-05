@@ -371,7 +371,7 @@ const Builder = struct {
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
-                .boxy_capture, .interpreter_context_drop => invariant("frozen callable target lacks durable drop authority"),
+                .boxy_capture => invariant("frozen callable target lacks durable drop authority"),
             }
 
             if (entry.boxy) |boxy| {

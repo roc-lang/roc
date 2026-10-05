@@ -16320,15 +16320,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitInternalCodeAddress(.{ .rc_helper = key }, helper_offset, on_drop_reg);
                     }
                 },
-                .interpreter_context_drop => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "Dev/codegen invariant violated: interpreter_context_drop reached native backend",
-                            .{},
-                        );
-                    }
-                    unreachable;
-                },
             }
             return on_drop_reg;
         }

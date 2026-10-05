@@ -473,7 +473,7 @@ const Builder = struct {
             const on_drop: ?layout.RcHelperKey = switch (entry.on_drop) {
                 .none => null,
                 .rc_helper => |helper| helper,
-                .boxy_capture, .interpreter_context_drop => invariant("frozen callable lacks durable producer drop authority"),
+                .boxy_capture => invariant("frozen callable lacks durable producer drop authority"),
             };
             if (on_drop) |helper| {
                 try self.node(result.dest).relocations.append(self.allocator, .{

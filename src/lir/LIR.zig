@@ -1018,7 +1018,6 @@ pub const ErasedCallableOnDrop = union(enum) {
         capture_layout: layout.Idx,
         desc_field_offset: u32,
     },
-    interpreter_context_drop,
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.

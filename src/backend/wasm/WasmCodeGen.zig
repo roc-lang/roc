@@ -9233,15 +9233,6 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
             break :blk table_idx;
         },
         .boxy_capture => |drop| try self.boxyCaptureDropTableIndex(drop.capture_layout, drop.desc_field_offset),
-        .interpreter_context_drop => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "WasmCodeGen invariant violated: interpreter_context_drop reached wasm backend",
-                    .{},
-                );
-            }
-            unreachable;
-        },
     };
 }
 

@@ -1007,7 +1007,6 @@ const StaticInitializerMachine = struct {
                     .kind = .function_pointer,
                 });
             },
-            .interpreter_context_drop => staticDataInvariant("interpreter erased callable reached target static initializer"),
             .boxy_capture => staticDataInvariant("descriptor-dependent Boxy capture drop reached target static initializer"),
         }
         if (assign.capture) |capture_local| {

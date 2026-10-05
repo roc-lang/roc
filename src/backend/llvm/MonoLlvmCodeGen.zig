@@ -4430,7 +4430,6 @@ pub const MonoLlvmCodeGen = struct {
                 const helper = try self.declareBoxyCaptureDropHelper(drop.capture_layout, drop.desc_field_offset);
                 break :blk helper.toValue(builder);
             },
-            .interpreter_context_drop => return error.CompilationFailed,
         };
         const metadata_desc = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
 

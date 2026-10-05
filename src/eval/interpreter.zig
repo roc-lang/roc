@@ -4732,18 +4732,18 @@ pub const Interpreter = struct {
         );
 
         const capture_drop_kind: ErasedCallableCaptureDrop = switch (assign.on_drop) {
-            .none, .interpreter_context_drop => .none,
+            .none => .none,
             .rc_helper => .rc_helper,
             .boxy_capture => .boxy_capture,
         };
         const drop_layout: ?layout_mod.Idx = switch (assign.on_drop) {
-            .none, .interpreter_context_drop => null,
+            .none => null,
             .rc_helper => |helper| helper.layout_idx,
             .boxy_capture => |plan| plan.capture_layout,
         };
         const drop_desc_field_offset: u32 = switch (assign.on_drop) {
             .boxy_capture => |plan| plan.desc_field_offset,
-            .none, .rc_helper, .interpreter_context_drop => 0,
+            .none, .rc_helper => 0,
         };
         const on_drop: ?builtins.erased_callable.OnDropFn = if (self.retained_owner != null or capture_drop_kind != .none)
             &interpreterErasedCallableOnDrop
