@@ -5513,26 +5513,55 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.feature) } });
         },
-        .invalid_num_literal => |r| {
-            node.tag = .diag_invalid_num_literal;
+        inline .invalid_num_literal,
+        .empty_tuple,
+        .erroneous_value_expr,
+        .expr_not_canonicalized,
+        .expr_syntax_error,
+        .unreachable_string_pattern_capture,
+        .pattern_arg_invalid,
+        .pattern_not_canonicalized,
+        .if_expr_without_else,
+        .malformed_type_annotation,
+        .malformed_where_clause,
+        .where_clause_not_allowed_in_type_decl,
+        .open_ext_not_allowed_in_type_decl,
+        .unnamed_field_not_allowed_in_structural_record,
+        .optional_field_cannot_have_default,
+        .unnamed_field_cannot_have_default,
+        .default_not_allowed_in_structural_record,
+        .default_not_allowed_on_local_type_decl,
+        .execution_requires_app_or_default_app,
+        .module_header_deprecated,
+        .var_across_function_boundary,
+        .crash_expects_string,
+        .f64_pattern_literal,
+        .break_outside_loop,
+        .infinite_loop_never_exits,
+        .trailing_try_suffix,
+        .range_op_chained,
+        => |r, tag| {
+            node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
             region = r.region;
         },
-        .empty_tuple => |r| {
-            node.tag = .diag_empty_tuple;
-            region = r.region;
-        },
-        .ident_already_in_scope => |r| {
-            node.tag = .diag_ident_already_in_scope;
+        inline .ident_already_in_scope,
+        .provided_value_is_required,
+        .ident_not_in_scope,
+        .read_uninitialized_var,
+        .self_referential_definition,
+        .circular_value_definition,
+        .local_reference_before_definition,
+        .erroneous_value_use,
+        .qualified_ident_does_not_exist,
+        .unused_variable,
+        .used_underscore_variable,
+        => |r, tag| {
+            node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .exposed_but_not_implemented => |r| {
             node.tag = .diagnostic_exposed_but_not_implemented;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .provided_value_is_required => |r| {
-            node.tag = .diag_provided_value_is_required;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
@@ -5546,49 +5575,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             });
             node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .region_span2_idx = region_span2_idx } });
         },
-        .ident_not_in_scope => |r| {
-            node.tag = .diag_ident_not_in_scope;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .read_uninitialized_var => |r| {
-            node.tag = .diag_read_uninitialized_var;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .self_referential_definition => |r| {
-            node.tag = .diag_self_referential_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .circular_value_definition => |r| {
-            node.tag = .diag_circular_value_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .local_reference_before_definition => |r| {
-            node.tag = .diag_local_reference_before_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .mutually_recursive_local_definitions => |r| {
             node.tag = .diag_mutually_recursive_local_definitions;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.ident1), .ident2 = @bitCast(r.ident2) } });
-        },
-        .erroneous_value_use => |r| {
-            node.tag = .diag_erroneous_value_use;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .erroneous_value_expr => |r| {
-            node.tag = .diag_erroneous_value_expr;
-            region = r.region;
-        },
-        .qualified_ident_does_not_exist => |r| {
-            node.tag = .diag_qualified_ident_does_not_exist;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
@@ -5600,70 +5590,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt) } });
         },
-        .expr_not_canonicalized => |r| {
-            node.tag = .diag_expr_not_canonicalized;
-            region = r.region;
-        },
-        .expr_syntax_error => |r| {
-            node.tag = .diag_expr_syntax_error;
-            region = r.region;
-        },
-        .unreachable_string_pattern_capture => |r| {
-            node.tag = .diag_unreachable_string_pattern_capture;
-            region = r.region;
-        },
-        .pattern_arg_invalid => |r| {
-            node.tag = .diag_pattern_arg_invalid;
-            region = r.region;
-        },
-        .pattern_not_canonicalized => |r| {
-            node.tag = .diag_pattern_not_canonicalized;
-            region = r.region;
-        },
-        .if_expr_without_else => |r| {
-            node.tag = .diag_if_expr_without_else;
-            region = r.region;
-        },
-        .malformed_type_annotation => |r| {
-            node.tag = .diag_malformed_type_annotation;
-            region = r.region;
-        },
-        .malformed_where_clause => |r| {
-            node.tag = .diag_malformed_where_clause;
-            region = r.region;
-        },
-        .where_clause_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_where_clause_not_allowed_in_type_decl;
-            region = r.region;
-        },
         .where_alias_constraint_not_on_receiver => |r| {
             node.tag = .diag_where_alias_constraint_not_on_receiver;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.receiver_name) } });
-        },
-        .open_ext_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_open_ext_not_allowed_in_type_decl;
-            region = r.region;
-        },
-        .unnamed_field_not_allowed_in_structural_record => |r| {
-            node.tag = .diag_unnamed_field_not_allowed_in_structural_record;
-            region = r.region;
-        },
-        .optional_field_cannot_have_default => |r| {
-            node.tag = .diag_optional_field_cannot_have_default;
-            region = r.region;
-        },
-        .unnamed_field_cannot_have_default => |r| {
-            node.tag = .diag_unnamed_field_cannot_have_default;
-            region = r.region;
-        },
-        .default_not_allowed_in_structural_record => |r| {
-            node.tag = .diag_default_not_allowed_in_structural_record;
-            region = r.region;
-        },
-        .default_not_allowed_on_local_type_decl => |r| {
-            node.tag = .diag_default_not_allowed_on_local_type_decl;
-            region = r.region;
         },
         .record_default_reference_cycle => |r| {
             node.tag = .diag_record_default_reference_cycle;
@@ -5695,18 +5625,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
-        .execution_requires_app_or_default_app => |r| {
-            node.tag = .diag_execution_requires_app_or_default_app;
-            region = r.region;
-        },
         .type_name_case_mismatch => |r| {
             node.tag = .diag_type_name_case_mismatch;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
-        },
-        .module_header_deprecated => |r| {
-            node.tag = .diag_module_header_deprecated;
-            region = r.region;
         },
         .roc_version_mismatch => |r| {
             node.tag = .diag_roc_version_mismatch;
@@ -5722,10 +5644,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_invalid_main_type_rename_in_exposing;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.alias) } });
-        },
-        .var_across_function_boundary => |r| {
-            node.tag = .diag_var_across_function_boundary;
-            region = r.region;
         },
         .shadowing_warning => |r| {
             node.tag = .diag_shadowing_warning;
@@ -5878,16 +5796,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             });
             node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.parameter_name), .region_span2_idx = region_span2_idx } });
         },
-        .unused_variable => |r| {
-            node.tag = .diag_unused_variable;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .used_underscore_variable => |r| {
-            node.tag = .diag_used_underscore_variable;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
             region = r.duplicate_region;
@@ -5903,14 +5811,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.duplicate_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.tag_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
-        .crash_expects_string => |r| {
-            node.tag = .diag_crash_expects_string;
-            region = r.region;
-        },
-        .f64_pattern_literal => |r| {
-            node.tag = .diag_f64_pattern_literal;
-            region = r.region;
-        },
         .type_var_starting_with_dollar => |r| {
             node.tag = .diag_type_var_starting_with_dollar;
             region = r.region;
@@ -5920,18 +5820,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.declared) } });
-        },
-        .break_outside_loop => |r| {
-            node.tag = .diag_break_outside_loop;
-            region = r.region;
-        },
-        .infinite_loop_never_exits => |r| {
-            node.tag = .diag_infinite_loop_never_exits;
-            region = r.region;
-        },
-        .trailing_try_suffix => |r| {
-            node.tag = .diag_trailing_try_suffix;
-            region = r.region;
         },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
@@ -5962,10 +5850,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_deprecated_number_suffix;
             region = r.region;
             node.setPayload(.{ .diag_two_enums = .{ .enum1 = @intFromEnum(r.suffix), .enum2 = @intFromEnum(r.suggested) } });
-        },
-        .range_op_chained => |r| {
-            node.tag = .diag_range_op_chained;
-            region = r.region;
         },
     }
 
@@ -6017,21 +5901,52 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .feature = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
+        inline .diag_invalid_num_literal,
+        .diag_empty_tuple,
+        .diag_erroneous_value_expr,
+        .diag_expr_not_canonicalized,
+        .diag_expr_syntax_error,
+        .diag_unreachable_string_pattern_capture,
+        .diag_pattern_arg_invalid,
+        .diag_pattern_not_canonicalized,
+        .diag_if_expr_without_else,
+        .diag_var_across_function_boundary,
+        .diag_malformed_type_annotation,
+        .diag_malformed_where_clause,
+        .diag_where_clause_not_allowed_in_type_decl,
+        .diag_open_ext_not_allowed_in_type_decl,
+        .diag_unnamed_field_not_allowed_in_structural_record,
+        .diag_optional_field_cannot_have_default,
+        .diag_unnamed_field_cannot_have_default,
+        .diag_default_not_allowed_in_structural_record,
+        .diag_default_not_allowed_on_local_type_decl,
+        .diag_execution_requires_app_or_default_app,
+        .diag_module_header_deprecated,
+        .diag_crash_expects_string,
+        .diag_f64_pattern_literal,
+        .diag_break_outside_loop,
+        .diag_infinite_loop_never_exits,
+        .diag_trailing_try_suffix,
+        .diag_range_op_chained,
+        => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .region = store.getRegionAt(node_idx),
-        } },
-        .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
+        }),
+        inline .diag_ident_already_in_scope,
+        .diag_provided_value_is_required,
+        .diag_ident_not_in_scope,
+        .diag_read_uninitialized_var,
+        .diag_self_referential_definition,
+        .diag_circular_value_definition,
+        .diag_local_reference_before_definition,
+        .diag_erroneous_value_use,
+        .diag_qualified_ident_does_not_exist,
+        .diag_unused_variable,
+        .diag_used_underscore_variable,
+        => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
-        } },
+        }),
         .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_provided_value_is_required => return CIR.Diagnostic{ .provided_value_is_required = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
@@ -6047,40 +5962,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_read_uninitialized_var => return CIR.Diagnostic{ .read_uninitialized_var = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_local_reference_before_definition => return CIR.Diagnostic{ .local_reference_before_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_mutually_recursive_local_definitions => return CIR.Diagnostic{ .mutually_recursive_local_definitions = .{
             .ident1 = @bitCast(payload.diag_two_idents.ident1),
             .ident2 = @bitCast(payload.diag_two_idents.ident2),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
@@ -6089,27 +5973,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_invalid_associated_statement => return CIR.Diagnostic{ .invalid_associated_statement = .{
             .stmt = @enumFromInt(payload.diag_single_value.value),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_expr_syntax_error => return CIR.Diagnostic{ .expr_syntax_error = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unreachable_string_pattern_capture => return CIR.Diagnostic{ .unreachable_string_pattern_capture = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_shadowing_warning => {
@@ -6252,35 +6115,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_where_alias_constraint_not_on_receiver => return CIR.Diagnostic{ .where_alias_constraint_not_on_receiver = .{
             .receiver_name = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unnamed_field_not_allowed_in_structural_record => return CIR.Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_optional_field_cannot_have_default => return CIR.Diagnostic{ .optional_field_cannot_have_default = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unnamed_field_cannot_have_default => return CIR.Diagnostic{ .unnamed_field_cannot_have_default = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_default_not_allowed_in_structural_record => return CIR.Diagnostic{ .default_not_allowed_in_structural_record = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_default_not_allowed_on_local_type_decl => return CIR.Diagnostic{ .default_not_allowed_on_local_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_record_default_reference_cycle => return CIR.Diagnostic{ .record_default_reference_cycle = .{
@@ -6307,9 +6143,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .module_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_execution_requires_app_or_default_app => return CIR.Diagnostic{ .execution_requires_app_or_default_app = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_type_name_case_mismatch => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_name_case_mismatch = .{
@@ -6318,9 +6151,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_roc_version_mismatch => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .roc_version_mismatch = .{
@@ -6395,14 +6225,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_duplicate_record_field => {
             const p = payload.diag_ident_with_region;
             return CIR.Diagnostic{ .duplicate_record_field = .{
@@ -6436,12 +6258,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_type_var_starting_with_dollar => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
@@ -6452,15 +6268,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
             .declared = @enumFromInt(payload.diag_single_value.value),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_trailing_try_suffix => return CIR.Diagnostic{ .trailing_try_suffix = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {
@@ -6509,9 +6316,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .diag_range_op_chained => return CIR.Diagnostic{ .range_op_chained = .{
-            .region = store.getRegionAt(node_idx),
-        } },
     }
 }
 

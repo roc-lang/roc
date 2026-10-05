@@ -123,6 +123,35 @@ fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CI
     };
 }
 
+/// The type annotation an alias or nominal declaration introduces; null for
+/// every other statement.
+fn typeDeclAnno(stmt: CIR.Statement) ?CIR.TypeAnno.Idx {
+    return switch (stmt) {
+        .s_alias_decl => |a| a.anno,
+        .s_nominal_decl => |n| n.anno,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
@@ -1976,30 +2005,7 @@ pub const SyntaxChecker = struct {
         const statements_slice = mod_env.store.sliceStatements(mod_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = mod_env.store.getSourceStatement(stmt_idx);
-            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                .s_alias_decl => |a| a.anno,
-                .s_nominal_decl => |n| n.anno,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => null,
-            };
+            const maybe_anno = typeDeclAnno(stmt);
             if (maybe_anno) |anno_idx| {
                 if (findTagInTypeAnno(&mod_env.store, &mod_env.common, anno_idx, tag_name)) |r| {
                     return r;
@@ -2040,30 +2046,7 @@ pub const SyntaxChecker = struct {
                         const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
                         if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
                             const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(@intFromEnum(target_node_idx)));
-                            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                                .s_alias_decl => |a| a.anno,
-                                .s_nominal_decl => |n| n.anno,
-                                .s_decl,
-                                .s_var,
-                                .s_var_uninitialized,
-                                .s_reassign,
-                                .s_crash,
-                                .s_dbg,
-                                .s_expr,
-                                .s_expect,
-                                .s_for,
-                                .s_while,
-                                .s_infinite_loop,
-                                .s_breakable_loop,
-                                .s_break,
-                                .s_return,
-                                .s_import,
-                                .s_where_alias_decl,
-                                .s_type_anno,
-                                .s_type_var_alias,
-                                .s_runtime_error,
-                                => null,
-                            };
+                            const maybe_anno = typeDeclAnno(stmt);
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
@@ -2099,30 +2082,7 @@ pub const SyntaxChecker = struct {
         // navigate directly to that local statement.
         if (tag_ref.nominal_decl) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                .s_alias_decl => |a| a.anno,
-                .s_nominal_decl => |n| n.anno,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => null,
-            };
+            const maybe_anno = typeDeclAnno(stmt);
             if (maybe_anno) |anno_idx| {
                 if (findTagInTypeAnno(&module_env.store, &module_env.common, anno_idx, tag_name)) |tag_region| {
                     const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
@@ -2146,30 +2106,7 @@ pub const SyntaxChecker = struct {
                 // Defined in current module
                 if (origin_info.source_decl.toOptional()) |stmt_num| {
                     const stmt = module_env.store.getSourceStatement(@enumFromInt(stmt_num));
-                    const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                        .s_alias_decl => |a| a.anno,
-                        .s_nominal_decl => |n| n.anno,
-                        .s_decl,
-                        .s_var,
-                        .s_var_uninitialized,
-                        .s_reassign,
-                        .s_crash,
-                        .s_dbg,
-                        .s_expr,
-                        .s_expect,
-                        .s_for,
-                        .s_while,
-                        .s_infinite_loop,
-                        .s_breakable_loop,
-                        .s_break,
-                        .s_return,
-                        .s_import,
-                        .s_where_alias_decl,
-                        .s_type_anno,
-                        .s_type_var_alias,
-                        .s_runtime_error,
-                        => null,
-                    };
+                    const maybe_anno = typeDeclAnno(stmt);
                     if (maybe_anno) |anno_idx| {
                         if (findTagInTypeAnno(&module_env.store, &module_env.common, anno_idx, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
@@ -2202,30 +2139,7 @@ pub const SyntaxChecker = struct {
                     if (target_mod_state.moduleEnv()) |target_mod_env| {
                         if (origin_info.source_decl.toOptional()) |stmt_num| {
                             const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(stmt_num));
-                            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
-                                .s_alias_decl => |a| a.anno,
-                                .s_nominal_decl => |n| n.anno,
-                                .s_decl,
-                                .s_var,
-                                .s_var_uninitialized,
-                                .s_reassign,
-                                .s_crash,
-                                .s_dbg,
-                                .s_expr,
-                                .s_expect,
-                                .s_for,
-                                .s_while,
-                                .s_infinite_loop,
-                                .s_breakable_loop,
-                                .s_break,
-                                .s_return,
-                                .s_import,
-                                .s_where_alias_decl,
-                                .s_type_anno,
-                                .s_type_var_alias,
-                                .s_runtime_error,
-                                => null,
-                            };
+                            const maybe_anno = typeDeclAnno(stmt);
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;

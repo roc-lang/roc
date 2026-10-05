@@ -277,17 +277,7 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = f.expr,
             .expr2 = f.body,
         },
-        .s_while => |w| .{
-            .pattern = null,
-            .expr = w.cond,
-            .expr2 = w.body,
-        },
-        .s_infinite_loop => |w| .{
-            .pattern = null,
-            .expr = w.cond,
-            .expr2 = w.body,
-        },
-        .s_breakable_loop => |w| .{
+        inline .s_while, .s_infinite_loop, .s_breakable_loop => |w| .{
             .pattern = null,
             .expr = w.cond,
             .expr2 = w.body,
@@ -302,12 +292,7 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = e.body,
             .expr2 = null,
         },
-        .s_crash => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_break => .{
+        .s_crash, .s_break, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => .{
             .pattern = null,
             .expr = null,
             .expr2 = null,
@@ -315,41 +300,6 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
         .s_return => |r| .{
             .pattern = null,
             .expr = r.expr,
-            .expr2 = null,
-        },
-        .s_import => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_alias_decl => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_nominal_decl => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_where_alias_decl => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_type_anno => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_type_var_alias => .{
-            .pattern = null,
-            .expr = null,
-            .expr2 = null,
-        },
-        .s_runtime_error => .{
-            .pattern = null,
-            .expr = null,
             .expr2 = null,
         },
     };
