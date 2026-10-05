@@ -291,27 +291,20 @@ pub const ReportBuilder = struct {
         return region;
     }
 
+    /// Appends the checked module's source excerpt for `region_info` to `document`.
+    fn addSourceRegionTo(self: *const Self, document: *Document, region_info: base.RegionInfo, annotation: reporting.Annotation) Allocator.Error!void {
+        try document.addSourceRegion(region_info, annotation, self.filename, self.source, self.module_env.getLineStarts());
+    }
+
     fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
         const region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(region));
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
     }
 
     /// Add source code warning highlighting for a region.
     fn addSourceWarningRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
         const region_info = self.module_env.calcRegionInfo(region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
     }
 
     fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
@@ -2090,13 +2083,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2171,13 +2158,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2209,13 +2190,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2247,13 +2222,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2380,13 +2349,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
 
         return report;
     }
@@ -2412,13 +2375,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2448,13 +2405,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2480,13 +2431,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2512,13 +2457,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2562,13 +2501,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2610,13 +2543,7 @@ pub const ReportBuilder = struct {
         const region: Region = owner_region orelse
             (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
         const region_info = self.module_env.calcRegionInfo(region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
     }
 
@@ -2863,13 +2790,7 @@ pub const ReportBuilder = struct {
         // Add source region highlighting on the offending dispatch call (the
         // primary region).
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         // When the dispatch is hidden inside a helper, the call site (primary
@@ -2887,13 +2808,7 @@ pub const ReportBuilder = struct {
                 try report.document.addLineBreak();
 
                 const secondary_info = self.module_env.calcRegionInfo(secondary);
-                try report.document.addSourceRegion(
-                    secondary_info,
-                    .error_highlight,
-                    self.filename,
-                    self.source,
-                    self.module_env.getLineStarts(),
-                );
+                try self.addSourceRegionTo(&report.document, secondary_info, .error_highlight);
                 try report.document.addLineBreak();
             }
         }
@@ -2923,13 +2838,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2999,13 +2908,7 @@ pub const ReportBuilder = struct {
             (if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero());
         const region_info = self.module_env.calcRegionInfo(literal_region);
 
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -3037,13 +2940,7 @@ pub const ReportBuilder = struct {
         // This might be different if the type came from somewhere else (e.g., a type annotation)
         const dispatcher_region = if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero();
 
-        try report.document.addSourceRegion(
-            num_region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, num_region_info, .error_highlight);
         try report.document.addLineBreak();
 
         // Check if we have a different origin region we can show
@@ -3056,13 +2953,7 @@ pub const ReportBuilder = struct {
             }, self, &report);
             try report.document.addLineBreak();
 
-            try report.document.addSourceRegion(
-                dispatcher_region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, dispatcher_region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -3086,13 +2977,7 @@ pub const ReportBuilder = struct {
         const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -3123,13 +3008,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -3163,13 +3042,7 @@ pub const ReportBuilder = struct {
         try D.renderSliceInto(&.{D.bytes(owned_message)}, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
 
         return report;
     }
@@ -3197,13 +3070,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         const hint: []const u8 = switch (data.kind) {
@@ -3634,13 +3501,7 @@ pub const ReportBuilder = struct {
         }
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.");
 
@@ -3661,13 +3522,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A default is filled in by the compiler wherever construction omits the field, so running effects here would happen at unpredictable times. Compute the value with an effectful function first, then pass it explicitly.");
 
@@ -3688,13 +3543,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Every omitted defaulted field is filled in by the compiler. This chain of omitted fields comes back to the default it started from, so construction would never finish. Supply a field explicitly somewhere in the cycle or use a non-recursive default.");
 
@@ -3735,13 +3584,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("An optional access produces a ");
         try report.document.addAnnotated("Try", .inline_code);
@@ -3783,13 +3626,7 @@ pub const ReportBuilder = struct {
         }
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         switch (data.reason) {
@@ -3866,13 +3703,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Unsetting a field selects the missing state of an optional field\u{2014}but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.");
 
@@ -3898,13 +3729,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.");
 
@@ -4212,13 +4037,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         }
 
         try report.document.addLineBreak();
@@ -4245,13 +4064,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         }
 
         try report.document.addLineBreak();
@@ -4641,13 +4454,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4692,13 +4499,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4788,13 +4589,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4828,13 +4623,7 @@ pub const ReportBuilder = struct {
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -5302,13 +5091,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5342,13 +5125,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5382,13 +5159,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5433,13 +5204,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting - shows the expect expression with syntax highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         if (data.origin) |origin| {
@@ -5480,13 +5245,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -5669,13 +5428,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
 
         return report;
     }
@@ -5694,13 +5447,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.branch_region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -5734,13 +5481,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
 
         return report;
     }
