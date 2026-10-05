@@ -64,6 +64,8 @@ pub const bidi = @import("bidi.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+/// Default expanded-size cap for platform and CLI URL bundles.
+pub const max_bundle_expanded_bytes: u64 = 512 * 1024 * 1024;
 pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.

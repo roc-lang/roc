@@ -39,9 +39,9 @@
 //! swept once they are a day old.
 //!
 //! As a defense against decompression bombs, each package bundle's expanded
-//! size is limited (platforms are exempt, since an app declares exactly one
-//! platform on purpose), and the combined content size attributable to any
-//! one of the root's direct dependencies is limited. Both limits count
+//! size is limited (platforms use the larger platform limit), and the
+//! combined content size attributable to any one of the root's direct
+//! dependencies is limited. Both limits count
 //! already-cached packages, so deleting the cache never changes whether a
 //! dependency graph is accepted.
 
@@ -66,13 +66,14 @@ const MAX_CONCURRENT_DOWNLOADS: usize = 8;
 /// Limits applied during resolution.
 pub const Config = struct {
     /// Maximum decompressed size for any single package bundle, in bytes.
-    /// Null means unlimited. Platform bundles are always exempt.
+    /// Null means unlimited. Platform bundles use the platform limit below.
     max_package_expanded_bytes: ?u64 = default_max_package_expanded_bytes,
     /// Maximum combined content size attributable to any single non-platform
     /// direct dependency of the root, in bytes. Null means unlimited.
     max_transitive_expanded_bytes: ?u64 = default_max_transitive_expanded_bytes,
     /// Maximum combined content size attributable to a direct platform
-    /// dependency of the root, in bytes. Null means unlimited.
+    /// dependency of the root, in bytes. Also caps each platform bundle during
+    /// extraction. Null explicitly disables both platform limits.
     max_platform_transitive_expanded_bytes: ?u64 = default_max_platform_transitive_expanded_bytes,
     /// Invocation-scoped `--replace-dep OLD NEW` requests, exactly as given
     /// on the command line. The resolver validates and canonicalizes them.
@@ -80,7 +81,7 @@ pub const Config = struct {
 
     pub const default_max_package_expanded_bytes: u64 = 10 * 1024 * 1024;
     pub const default_max_transitive_expanded_bytes: u64 = 100 * 1024 * 1024;
-    pub const default_max_platform_transitive_expanded_bytes: u64 = 512 * 1024 * 1024;
+    pub const default_max_platform_transitive_expanded_bytes: u64 = base.max_bundle_expanded_bytes;
 };
 
 /// One `--replace-dep OLD NEW` request, as written on the command line.
@@ -198,7 +199,7 @@ pub const Fetcher = struct {
     /// Fetch the bundle for `url` (whose trailing hash segment is `hash`),
     /// allocating all returned strings with `allocator`. Must be safe to call
     /// from multiple threads at once. `max_expanded_bytes` is the per-bundle
-    /// decompression limit to enforce (null for exempt bundles).
+    /// decompression limit to enforce (null for explicitly unlimited bundles).
     fetchUrlFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage,
     /// Load and scan the local package rooted at `root_file_abs`.
     loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage,
@@ -444,8 +445,8 @@ const Missing = struct {
     url: []const u8,
     hash: []const u8,
     /// True if any edge requiring this download is a platform dependency,
-    /// which exempts the bundle from the per-package size limit.
-    platform_exempt: bool,
+    /// which selects the larger platform limit for the bundle.
+    is_platform: bool,
 };
 
 const WalkResult = struct {
@@ -843,10 +844,10 @@ pub const Resolver = struct {
                                 .group = group,
                                 .url = follow.url,
                                 .hash = follow.hash,
-                                .platform_exempt = dep.is_platform,
+                                .is_platform = dep.is_platform,
                             });
                         } else if (dep.is_platform) {
-                            result.missing_urls.items[missing_gop.value_ptr.*].platform_exempt = true;
+                            result.missing_urls.items[missing_gop.value_ptr.*].is_platform = true;
                         }
                     }
                 } else {
@@ -1178,7 +1179,7 @@ pub const Resolver = struct {
             task.* = .{
                 .fetcher = self.fetcher,
                 .missing = missing,
-                .max_expanded_bytes = if (missing.platform_exempt) null else self.config.max_package_expanded_bytes,
+                .max_expanded_bytes = if (missing.is_platform) self.config.max_platform_transitive_expanded_bytes else self.config.max_package_expanded_bytes,
                 .task_arena = std.heap.ArenaAllocator.init(self.gpa),
                 .result = error.DownloadFailed,
             };
@@ -1214,9 +1215,14 @@ pub const Resolver = struct {
                 error.ExpandedSizeLimitExceeded => {
                     try self.addDiagnostic(
                         "Package Too Large",
-                        "The package at\n\n    {s}\n\nexpands to more than the per-package limit of {d} bytes.\n\n" ++
-                            "You can raise the limit with the --max-package-mb flag, or stop depending on this package.",
-                        .{ task.missing.url, self.config.max_package_expanded_bytes orelse 0 },
+                        "The {s} at\n\n    {s}\n\nexpands to more than the per-bundle limit of {d} bytes.\n\n" ++
+                            "You can raise the limit with the {s} flag, or stop depending on this package.",
+                        .{
+                            if (task.missing.is_platform) "platform" else "package",
+                            task.missing.url,
+                            task.max_expanded_bytes orelse unreachable,
+                            if (task.missing.is_platform) "--max-transitive-mb" else "--max-package-mb",
+                        },
                     );
                     continue;
                 },
@@ -3124,7 +3130,7 @@ test "platform dependencies have a larger transitive size limit" {
     try std.testing.expect(std.mem.find(u8, diagnostic.message, package_url) != null);
 }
 
-test "per-package size limit is enforced for packages but not platforms" {
+test "platform bundles use the larger platform size limit" {
     const gpa = std.testing.allocator;
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
@@ -3139,12 +3145,13 @@ test "per-package size limit is enforced for packages but not platforms" {
             .{ .alias = "a", .spec = a_url, .is_platform = false },
         },
     });
-    // Both are bigger than the per-package limit; only the package errors.
+    // Both exceed the package cap but fit within the platform cap.
     try registry.urls.put(platform_url, .{ .kind = .platform, .content_bytes = 9000 });
     try registry.urls.put(a_url, .{ .content_bytes = 9000 });
 
     var resolver = Resolver.init(gpa, registry.fetcher(), .{
         .max_package_expanded_bytes = 5000,
+        .max_platform_transitive_expanded_bytes = 10000,
         .max_transitive_expanded_bytes = null,
     });
     defer resolver.deinit();
@@ -3155,6 +3162,43 @@ test "per-package size limit is enforced for packages but not platforms" {
     try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_url) != null);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-package-mb") != null);
+}
+
+test "platform bundle extraction limit rejects oversized downloads and permits explicit opt-out" {
+    const gpa = std.testing.allocator;
+    const platform_url = "https://example.com/pf/1.0.0/hashPf.tar.zst";
+    for ([_]?u64{ base.max_bundle_expanded_bytes, 5000, null }) |limit| {
+        var registry = TestRegistry.init(gpa);
+        defer registry.deinit();
+        try registry.locals.put("/app/main.roc", .{
+            .kind = .app,
+            .deps = &.{.{ .alias = "pf", .spec = platform_url, .is_platform = true }},
+        });
+        try registry.urls.put(platform_url, .{
+            .kind = .platform,
+            .content_bytes = if (limit) |max| max + 1 else base.max_bundle_expanded_bytes + 1,
+        });
+        var resolver = Resolver.init(gpa, registry.fetcher(), .{
+            .max_platform_transitive_expanded_bytes = limit,
+        });
+        defer resolver.deinit();
+        if (limit) |max| {
+            try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+            try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
+            const diagnostic = resolver.diagnostics.items[0];
+            try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
+            try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-transitive-mb") != null);
+            var size_buf: [32]u8 = undefined;
+            const size = try std.fmt.bufPrint(&size_buf, "{d} bytes", .{max});
+            try std.testing.expect(std.mem.find(u8, diagnostic.message, size) != null);
+            // Failed downloads never enter the graph for a later transitive check.
+            try std.testing.expectEqual(@as(usize, 0), resolver.url_nodes.count());
+        } else {
+            var resolved = try resolver.resolve("/app/main.roc");
+            defer resolved.deinit();
+            try std.testing.expectEqual(@as(usize, 0), resolver.diagnostics.items.len);
+        }
+    }
 }
 
 test "platform targets must be marked and packages may not depend on apps" {
