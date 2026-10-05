@@ -21488,7 +21488,7 @@ const ProcBodyBuilder = struct {
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
         if (self.parent.plan.convertsInPlace(.{ .module = self.module.key, .expr = expr_id })) {
-            return try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next);
+            return try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next);
         }
         const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
             boxyLowerInvariant("checked from_quote expression had no compile-time conversion root"));

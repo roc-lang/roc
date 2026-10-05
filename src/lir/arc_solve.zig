@@ -4651,8 +4651,7 @@ pub fn computeProcUniqueness(
     proc: LIR.LirProcSpecId,
     stmts: []const LIR.CFStmtId,
     local_to_dense: []const u32,
-    /// The local each dense index names, in dense order.
-    dense_locals: []const LIR.LocalId,
+    dense_local_count: usize,
     layouts: *const layout_mod.Store,
     order_scratch: *UseOrderScratch,
 ) SolveError!Uniqueness {
@@ -4664,7 +4663,7 @@ pub fn computeProcUniqueness(
         null,
         proc,
         stmts,
-        .{ .local_to_dense = local_to_dense, .count = dense_locals.len, .locals = @ptrCast(dense_locals) },
+        .{ .local_to_dense = local_to_dense, .count = dense_local_count },
         true,
         layouts,
         .stamped,
@@ -5785,12 +5784,10 @@ fn computeUniquenessDetailed(
     defer alias_defs.deinit(allocator);
 
     const component_procs = if (proc_domain) |domain| domain.procs else null;
-    const only_proc_index: ?u32 = if (only_proc) |proc_id| @intFromEnum(proc_id) else null;
-    const proc_slots = if (component_procs) |procs| procs.len else if (only_proc != null) 1 else store.procSpecCount();
-    for (0..proc_slots) |proc_slot| {
-        const proc_index = if (component_procs) |procs| procs[proc_slot] else only_proc_index orelse proc_slot;
-        if (only_proc_index) |proc_id| {
-            if (proc_index != proc_id) continue;
+    for (0..if (component_procs) |procs| procs.len else store.procSpecCount()) |proc_slot| {
+        const proc_index = if (component_procs) |procs| procs[proc_slot] else proc_slot;
+        if (only_proc) |proc_id| {
+            if (proc_index != @intFromEnum(proc_id)) continue;
         }
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const params = store.getLocalSpan(proc.args);

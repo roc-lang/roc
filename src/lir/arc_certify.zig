@@ -493,7 +493,7 @@ fn certifyUniqueArgs(
             proc_id,
             proc_stmts.items,
             local_to_dense,
-            dense_locals.items,
+            dense_locals.items.len,
             layouts,
             &order_scratch,
         );
@@ -2087,12 +2087,9 @@ const Certifier = struct {
     /// statements can be revisited by distinct control-flow walks, so only
     /// these need quotient-state memoization.
     memo_points: collections.DenseMap(LIR.CFStmtId, void),
-    /// Structural predecessor counts (saturating at 2) of the statements
-    /// `collectMemoPoints` reaches, and the statements it has walked. Both
-    /// are kept for their capacity across procedures and hold only the
-    /// current procedure's statements.
+    /// Structural predecessor count per statement of the current proc,
+    /// saturating at two, while collecting memo points.
     memo_predecessors: collections.DenseMap(LIR.CFStmtId, u8),
-    memo_walked: collections.DenseMap(LIR.CFStmtId, void),
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
     align_left_scratch: std.ArrayList(LocalSummary) = .empty,
     align_right_scratch: std.ArrayList(LocalSummary) = .empty,
@@ -2213,11 +2210,10 @@ const Certifier = struct {
             .claim_arena = std.heap.ArenaAllocator.init(allocator),
             .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
             .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
-            .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
-            .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
             .memo_points = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .memo_predecessors = collections.DenseMap(LIR.CFStmtId, u8).init(allocator),
-            .memo_walked = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
+            .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
             .join_components = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .region_of_join = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .domain_scratch = collections.DenseMap(u32, void).init(allocator),
@@ -2245,7 +2241,6 @@ const Certifier = struct {
         self.memo.deinit();
         self.memo_points.deinit();
         self.memo_predecessors.deinit();
-        self.memo_walked.deinit();
         self.summary_scratch.deinit(self.allocator);
         self.align_left_scratch.deinit(self.allocator);
         self.align_right_scratch.deinit(self.allocator);
@@ -4204,11 +4199,15 @@ const Certifier = struct {
     /// deduplication, so summarizing the whole proc state at each one would
     /// turn large generated initializers into quadratic work.
     fn collectMemoPoints(self: *Certifier, body: LIR.CFStmtId) Allocator.Error!void {
+        // Sized by the proc's own statements: per-proc tables indexed by the
+        // whole store would make certifying a program cost its proc count
+        // times its statement count.
         self.memo_points.clearRetainingCapacity();
         self.memo_predecessors.clearRetainingCapacity();
-        self.memo_walked.clearRetainingCapacity();
         const predecessor_counts = &self.memo_predecessors;
 
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
+        defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
 
@@ -4219,7 +4218,8 @@ const Certifier = struct {
                 allocator: Allocator,
                 successor: LIR.CFStmtId,
             ) Allocator.Error!void {
-                const count = try counts.getOrPutValue(successor, 0);
+                const count = try counts.getOrPut(successor);
+                if (!count.found_existing) count.value_ptr.* = 0;
                 if (count.value_ptr.* < 2) count.value_ptr.* += 1;
                 try work.append(allocator, successor);
             }
@@ -4231,7 +4231,8 @@ const Certifier = struct {
         try stack.append(self.allocator, body);
 
         while (stack.pop()) |current| {
-            if ((try self.memo_walked.getOrPut(current)).found_existing) continue;
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
 
             switch (self.store.getCFStmt(current)) {
                 inline .assign_ref,

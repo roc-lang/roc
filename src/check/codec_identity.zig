@@ -10,10 +10,8 @@ const CodecId = dispatch.GeneratedCodecDerivationId;
 const Span = @import("artifact_serialize.zig").Span;
 const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shape_ty", "source_body_shape_ty", "source_encoding_ty", "source_state_ty", "source_error_ty", "constructor_ty", "runtime_ty", "shape_ty", "body_shape_ty", "encoding_ty", "state_ty", "error_ty" };
 
-/// Intern each completed contract once, in table order. Type and call keys
-/// select candidates; exact comparison of the proof graph is the equality
-/// authority. A nested contract interned earlier in the order is reached
-/// through its identity, so a comparison never walks a nested chain again.
+/// Intern each completed contract once. Type and call keys select candidates;
+/// exact comparison of the whole proof graph is the equality authority.
 pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: *dispatch.StaticDispatchPlanTable) Allocator.Error!void {
     var buckets = std.AutoHashMap(u64, u32).init(allocator);
     defer buckets.deinit();
@@ -23,7 +21,6 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
-        comparer.interned_len = raw;
         // Bucket selector only: the derivation's own types and method names
         // are package-controlled, but a Wyhash collision just adds a chain
         // step, because a candidate is accepted solely by `comparer.equal`.
@@ -75,7 +72,7 @@ pub fn callsEquivalent(
         .pending => unreachable,
         .checked_error => {},
         .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(right.resolution.callable) }),
-        .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
+        .structural => |id| _ = try comparer.codecs(id, right.resolution.structural),
     }
     return try comparer.run();
 }
@@ -88,10 +85,6 @@ const Comparer = struct {
     /// Specialization identity is exact; agreement between repeated
     /// occurrences of one role is modulo transparent aliases, like the role.
     types_eql: enum { exact, alias_transparent } = .exact,
-    /// While interning, how many contracts at the front of the table already
-    /// hold their identity. Two of them are equal exactly when their
-    /// identities are.
-    interned_len: u32 = 0,
     work: std.ArrayList(Pair) = .empty,
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
     left_types: std.ArrayList(TypeId) = .empty,
@@ -117,14 +110,7 @@ const Comparer = struct {
 
     fn codecs(self: *Comparer, left: ?CodecId, right: ?CodecId) Allocator.Error!bool {
         if ((left == null) != (right == null)) return false;
-        const left_id = left orelse return true;
-        const right_index = @intFromEnum(right.?);
-        const left_index = @intFromEnum(left_id);
-        if (left_index < self.interned_len and right_index < self.interned_len) {
-            const derivations = self.table.generated_codec_derivations;
-            return derivations[left_index].identity == derivations[right_index].identity;
-        }
-        try self.work.append(self.allocator, .{ .kind = .codec, .left = left_index, .right = right_index });
+        if (left) |id| try self.work.append(self.allocator, .{ .kind = .codec, .left = @intFromEnum(id), .right = @intFromEnum(right.?) });
         return true;
     }
 
@@ -200,7 +186,7 @@ const Comparer = struct {
                             .pending => unreachable,
                             .checked_error => {},
                             .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(bc.resolution.callable) }),
-                            .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,
+                            .structural => |id| _ = try self.codecs(id, bc.resolution.structural),
                         }
                     }
                 },

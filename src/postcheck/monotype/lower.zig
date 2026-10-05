@@ -1682,8 +1682,8 @@ fn requestComponentRelation(
     left_node: NodeId,
     right_node: NodeId,
 ) Allocator.Error!enum { unify, public_private, private_public, matching_containers } {
-    const left_root_private = (try isGeneratedPrivateRootNode(graph, left_node));
-    const right_root_private = (try isGeneratedPrivateRootNode(graph, right_node));
+    const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
+    const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
     if (left_root_private and right_root_private) return .unify;
     if (right_root_private) return .public_private;
     if (left_root_private) return .private_public;
@@ -1708,22 +1708,22 @@ fn appendMatchingRequestContainerOps(
     row_width: solve.RowWidthRelation,
 ) Allocator.Error!?RequestContainerJoin {
     const gpa = graph.allocator;
-    const left_content = (try graph.content(left_node));
-    const right_content = (try graph.content(right_node));
+    const left_content = graph.content(left_node);
+    const right_content = graph.content(right_node);
     switch (left_content) {
         .list => |left_elem| switch (right_content) {
             .list => |right_elem| {
                 try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .box => |left_elem| switch (right_content) {
             .box => |right_elem| {
                 try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .tuple => |left_items| switch (right_content) {
             .tuple => |right_items| {
@@ -1735,7 +1735,7 @@ fn appendMatchingRequestContainerOps(
                 }
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .func => |left_fn| switch (right_content) {
             .func => |right_fn| {
@@ -1748,21 +1748,21 @@ fn appendMatchingRequestContainerOps(
                 try ops.append(gpa, .{ .pair = .{ .left = left_fn.ret, .right = right_fn.ret } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .tag_union => switch (right_content) {
             .tag_union => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .record => switch (right_content) {
             .record => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .named => |left_named| switch (right_content) {
             .named => |right_named| {
@@ -1776,9 +1776,9 @@ fn appendMatchingRequestContainerOps(
                 } });
                 return .named;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
         },
-        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+        .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
     }
     return null;
 }
@@ -1815,7 +1815,7 @@ fn transparentAliasBacking(graph: *InstGraph, content: anytype) ?NodeId {
             if (backing.authority == .generated_private) return null;
             return graph.rootNode(backing.node);
         },
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
     }
 }
 
@@ -1847,7 +1847,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 const checked_root = graph.rootNode(pair.checked_node);
                 const request_root = graph.rootNode(pair.request_node);
                 if (checked_root == request_root) continue;
-                if ((try graph.content(checked_root)) == .unresolved) {
+                if (graph.content(checked_root) == .unresolved) {
                     try relateRequestComponent(graph, checked_root, request_root);
                     continue;
                 }
@@ -1877,8 +1877,8 @@ fn deferredTemplateTypeArgumentsStep(
     });
     if (entry.found_existing) return;
 
-    const checked_content = (try graph.content(checked_root));
-    const request_content = (try graph.content(request_root));
+    const checked_content = graph.content(checked_root);
+    const request_content = graph.content(request_root);
 
     // A transparent alias names its backing without adding structure, and
     // aliases cannot introduce phantom parameters, so every alias argument
@@ -1899,11 +1899,11 @@ fn deferredTemplateTypeArgumentsStep(
         .unresolved => return,
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
@@ -1921,7 +1921,7 @@ fn deferredTemplateTypeArgumentsStep(
                 }
                 try pending.append(gpa, .{ .relate_named = .{ .checked_node = checked_root, .request_node = request_root } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return,
         },
         .func => |checked_fn| switch (request_content) {
             .func => |request_fn| {
@@ -1933,7 +1933,7 @@ fn deferredTemplateTypeArgumentsStep(
                 }
                 try pending.append(gpa, .{ .at = .{ .checked_node = checked_fn.ret, .request_node = request_fn.ret } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .tuple => |checked_items| switch (request_content) {
             .tuple => |request_items| {
@@ -1944,7 +1944,7 @@ fn deferredTemplateTypeArgumentsStep(
                     try pending.append(gpa, .{ .at = .{ .checked_node = checked_item, .request_node = request_item } });
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .record => |checked_record| switch (request_content) {
             .record => |request_record| {
@@ -1965,7 +1965,7 @@ fn deferredTemplateTypeArgumentsStep(
                     try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .tag_union => |checked_union| switch (request_content) {
             .tag_union => |request_union| {
@@ -1990,20 +1990,20 @@ fn deferredTemplateTypeArgumentsStep(
                     }
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-        .redirect, .leaf => unreachable,
+        .redirect => unreachable,
     }
 }
 
-fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
-    return switch ((try graph.content(node))) {
+fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) bool {
+    return switch (graph.content(node)) {
         .named => |named| if (named.backing) |backing|
             backing.authority == .generated_private
         else
             false,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
     };
 }
 
@@ -2153,7 +2153,7 @@ fn graphHostedTryInfoOrNull(
     graph: *InstGraph,
     capability: HostedTryAdapterCapability,
     node: NodeId,
-) Allocator.Error!?GraphHostedTryInfo {
+) ?GraphHostedTryInfo {
     var current = node;
     // Bounded by the graph's node count, the bound `InstGraph`'s own chain
     // walks use. A one-step self-check would still spin on a backing cycle
@@ -2163,9 +2163,9 @@ fn graphHostedTryInfoOrNull(
     // instead of a diagnostic.
     var remaining = graph.nodes.items.len;
     const named = while (remaining > 0) : (remaining -= 1) {
-        const probe = switch ((try graph.content(current))) {
+        const probe = switch (graph.content(current)) {
             .named => |probe| probe,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
         };
         if (sameTypeDef(probe.def, capability.def)) break probe;
         if (probe.kind != .alias) return null;
@@ -2189,8 +2189,8 @@ fn graphHostedTryWideningOrNull(
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?GraphHostedTryWidening {
-    const public_try = (try graphHostedTryInfoOrNull(graph, capability, public_ret)) orelse return null;
-    const request_try = (try graphHostedTryInfoOrNull(graph, capability, request_ret)) orelse return null;
+    const public_try = graphHostedTryInfoOrNull(graph, capability, public_ret) orelse return null;
+    const request_try = graphHostedTryInfoOrNull(graph, capability, request_ret) orelse return null;
     const public_err = (try graph.tagRowNodesOrNull(public_try.err)) orelse return null;
     const request_err = (try graph.tagRowNodesOrNull(request_try.err)) orelse return null;
 
@@ -2295,10 +2295,10 @@ const ResultRowWidening = struct {
 const try_error_type_arg_index: usize = 1;
 
 /// Whether a node is directly function-shaped.
-fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
-    return switch ((try graph.content(node))) {
+fn isFunctionNode(graph: *InstGraph, node: NodeId) bool {
+    return switch (graph.content(node)) {
         .func => true,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
     };
 }
 
@@ -2306,10 +2306,10 @@ fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
 /// reading a row through its backing would inspect a representation this
 /// relation has no business seeing, and a runtime-layout-only backing rejects
 /// the read outright.
-fn isBareTagRowNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
-    return switch ((try graph.content(node))) {
+fn isBareTagRowNode(graph: *InstGraph, node: NodeId) bool {
+    return switch (graph.content(node)) {
         .tag_union, .empty_tag_union => true,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => false,
+        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => false,
     };
 }
 
@@ -2320,7 +2320,7 @@ fn requestRowIncludesClosedRow(
     public_row: NodeId,
     request_row: NodeId,
 ) Allocator.Error!bool {
-    if (!(try isBareTagRowNode(graph, public_row)) or !(try isBareTagRowNode(graph, request_row))) return false;
+    if (!isBareTagRowNode(graph, public_row) or !isBareTagRowNode(graph, request_row)) return false;
     const public = (try graph.tagRowNodesOrNull(public_row)) orelse return false;
     const request = (try graph.tagRowNodesOrNull(request_row)) orelse return false;
     if (request.tags.len <= public.tags.len) return false;
@@ -2351,13 +2351,13 @@ fn resultRowWideningOrNull(
         if (!try requestRowIncludesClosedRow(graph, public_ret, request_ret)) return null;
         return .{ .exact = &.{}, .widened = .{ .public = public_ret, .request = request_ret } };
     }
-    const public_named = switch ((try graph.content(public_ret))) {
+    const public_named = switch (graph.content(public_ret)) {
         .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
     };
-    const request_named = switch ((try graph.content(request_ret))) {
+    const request_named = switch (graph.content(request_ret)) {
         .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
     };
     // Only the `Try` nominal itself. An alias node's type arguments are not
     // the `Try` arguments the adapter reads, and crossing to its backing row
@@ -2395,7 +2395,7 @@ fn relateIncludedRowPayloads(
 ) Allocator.Error!void {
     // Each guard here stands between the adapter and a wrong tag layout, so
     // all of them stop the build in every mode.
-    if (!(try isBareTagRowNode(graph, public_row)) or !(try isBareTagRowNode(graph, request_row))) {
+    if (!isBareTagRowNode(graph, public_row) or !isBareTagRowNode(graph, request_row)) {
         Common.compilerBug("result-row widening related a non-tag-union row");
     }
     const public = (try graph.tagRowNodesOrNull(public_row)) orelse
@@ -2428,7 +2428,7 @@ fn resultRowWideningRequestOrNull(
     // Only a directly function-shaped pair is inspected here. Reading a
     // function interface through a named backing is the caller's ordinary
     // relation's business, not this one's.
-    if (!(try isFunctionNode(graph, public_fn)) or !(try isFunctionNode(graph, request_fn))) return null;
+    if (!isFunctionNode(graph, public_fn) or !isFunctionNode(graph, request_fn)) return null;
     const public = try graph.functionNodes(public_fn);
     const request = try graph.functionNodes(request_fn);
     if (public.args.len != request.args.len) {
@@ -2587,6 +2587,10 @@ const CheckedMonoRequestFrame = struct {
     ops_start: usize,
     ops_end: usize,
     next: usize,
+    /// The graph structure epoch at which neither root contained generated-
+    /// private evidence. While the epoch is unchanged no class has changed,
+    /// so no component of either root contains any either.
+    public_at_epoch: ?u32,
 };
 
 fn relateCheckedMonoRequestNodeAt(
@@ -2606,7 +2610,7 @@ fn relateCheckedMonoRequestNodeAt(
         };
         frames.deinit(allocator);
     }
-    try beginCheckedMonoRequestPair(graph, checked_node, request_node, row_width, false, seen, &ops, &frames);
+    try beginCheckedMonoRequestPair(graph, checked_node, request_node, row_width, null, seen, &ops, &frames);
     while (frames.items.len > 0) {
         const top = frames.items.len - 1;
         const frame = &frames.items[top];
@@ -2618,8 +2622,9 @@ fn relateCheckedMonoRequestNodeAt(
         }
         const op = ops.items[frame.next];
         frame.next += 1;
+        const public_at_epoch = frame.public_at_epoch;
         switch (op) {
-            .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, true, seen, &ops, &frames),
+            .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, public_at_epoch, seen, &ops, &frames),
             .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
             .join_container => |pair| try graph.joinRelatedRequestContainer(pair.checked, pair.request),
             .named_instances => |pair| try graph.relateNamedInstances(pair.checked, pair.request),
@@ -2638,11 +2643,8 @@ fn beginCheckedMonoRequestPair(
     checked_node: NodeId,
     request_node: NodeId,
     row_width: solve.RowWidthRelation,
-    /// Whether these are components of a pair this walk already found
-    /// public. Every step of the walk relates two public classes, which
-    /// merges only classes already reachable from them, so a component of a
-    /// public pair stays public for the rest of the walk.
-    enclosing_public: bool,
+    /// The enclosing pair's `public_at_epoch`, whose roots reach these.
+    enclosing_public_at_epoch: ?u32,
     seen: *std.AutoHashMap(CheckedMonoRequestPair, void),
     ops: *std.ArrayList(CheckedMonoRequestOp),
     frames: *std.ArrayList(CheckedMonoRequestFrame),
@@ -2652,7 +2654,7 @@ fn beginCheckedMonoRequestPair(
     const request_root = graph.rootNode(request_node);
     if (checked_root == request_root) return;
 
-    if (!enclosing_public) {
+    if (enclosing_public_at_epoch != graph.structure_epoch) {
         if (try graph.containsGeneratedPrivate(checked_root) or
             try graph.containsGeneratedPrivate(request_root))
         {
@@ -2660,12 +2662,7 @@ fn beginCheckedMonoRequestPair(
             return;
         }
     }
-
-    // Two unread leaves of one type relate without being read.
-    if (graph.leafType(checked_root)) |checked_leaf| if (graph.leafType(request_root)) |request_leaf| if (checked_leaf == request_leaf) {
-        try unifyRequestComponentAtWidth(graph, checked_root, request_root, row_width);
-        return;
-    };
+    const public_at_epoch = graph.structure_epoch;
 
     const roots: CheckedMonoRequestPair = .{ .checked = checked_root, .request = request_root };
     const entry = try seen.getOrPut(roots);
@@ -2677,8 +2674,8 @@ fn beginCheckedMonoRequestPair(
         _ = seen.remove(roots);
     }
 
-    const checked_content = (try graph.content(checked_root));
-    const request_content = (try graph.content(request_root));
+    const checked_content = graph.content(checked_root);
+    const request_content = graph.content(request_root);
     const structural = structural: switch (checked_content) {
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
@@ -2703,7 +2700,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .named_instances = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
         },
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| {
@@ -2711,7 +2708,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| {
@@ -2719,7 +2716,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
         },
         .tuple => |checked_items| switch (request_content) {
             .tuple => |request_items| {
@@ -2732,7 +2729,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
         },
         .func => |checked_fn| switch (request_content) {
             .func => |request_fn| {
@@ -2746,7 +2743,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
         },
         .record => |checked_row| switch (request_content) {
             .record => |request_row| {
@@ -2766,7 +2763,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
         },
         .tag_union => switch (request_content) {
             .tag_union => {
@@ -2775,8 +2772,8 @@ fn beginCheckedMonoRequestPair(
                 // complete normalized rows before relating their residuals.
                 try graph.normalizeTagRow(checked_root);
                 try graph.normalizeTagRow(request_root);
-                const checked_row = (try graph.content(checked_root)).tag_union;
-                const request_row = (try graph.content(request_root)).tag_union;
+                const checked_row = graph.content(checked_root).tag_union;
+                const request_row = graph.content(request_root).tag_union;
                 if (checked_row.tags.len != request_row.tags.len) break :structural false;
                 for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
                     if (checked_tag.name != request_tag.name or checked_tag.payloads.len != request_tag.payloads.len) break :structural false;
@@ -2790,9 +2787,9 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
         },
-        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
+        .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
     };
     if (!structural) try ops.append(allocator, .{ .unify = roots });
     frames.appendAssumeCapacity(.{
@@ -2800,6 +2797,7 @@ fn beginCheckedMonoRequestPair(
         .ops_start = ops_start,
         .ops_end = ops.items.len,
         .next = ops_start,
+        .public_at_epoch = public_at_epoch,
     });
 }
 
@@ -4279,13 +4277,6 @@ const Builder = struct {
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
-    /// `monoTypeMentionsFunction`'s answers, indexed by program type id. A
-    /// program type store rollback frees ids for reuse, so the column is cut
-    /// back to the rollback floor before each read.
-    function_mentions: std.ArrayList(FunctionMention) = .empty,
-    /// The types on `monoTypeMentionsFunction`'s current walk path and those
-    /// its walk finished open, kept for its capacity between walks.
-    function_scan_path: collections.DenseMap(Type.TypeId, void),
     /// Resolved copies of symbolic callable evidence vectors, by callee
     /// template. Repeated requests over the same open leaves resolve every
     /// slot identically, so they read an equal copy back instead of
@@ -4484,7 +4475,6 @@ const Builder = struct {
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
-            .function_scan_path = collections.DenseMap(Type.TypeId, void).init(allocator),
             .resolved_callable_vectors = std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
@@ -4720,8 +4710,6 @@ const Builder = struct {
         self.reassigned_binder_pool.deinit(self.allocator);
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
-        self.function_mentions.deinit(self.allocator);
-        self.function_scan_path.deinit();
         var resolved_vectors = self.resolved_callable_vectors.valueIterator();
         while (resolved_vectors.next()) |vectors| vectors.deinit(self.allocator);
         self.resolved_callable_vectors.deinit();
@@ -6606,139 +6594,34 @@ const Builder = struct {
     /// erased callable anywhere, nominal backings included.
     fn monoFnTypeMentionsFunction(self: *Builder, fn_ty: Type.TypeId) Allocator.Error!bool {
         const types = self.program.types.view();
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
         switch (types.get(fn_ty)) {
             .func => |func| {
-                for (types.span(func.args)) |arg| if (try self.monoTypeMentionsFunction(arg)) return true;
-                return try self.monoTypeMentionsFunction(func.ret);
+                try stack.appendSlice(self.allocator, types.span(func.args));
+                try stack.append(self.allocator, func.ret);
             },
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return try self.monoTypeMentionsFunction(fn_ty),
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => try stack.append(self.allocator, fn_ty),
         }
-    }
-
-    /// Whether a `func` or `erased` type is reachable from `root`. Answers
-    /// persist in `function_mentions` across requests, so a later scan stops
-    /// at every type an earlier one answered instead of walking the same
-    /// nested types again.
-    fn monoTypeMentionsFunction(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
-        if (self.program.types.takeRollbackFloor()) |floor| {
-            if (floor < self.function_mentions.items.len) self.function_mentions.shrinkRetainingCapacity(floor);
-        }
-        if (self.knownFunctionMention(root)) |known| return known;
-        if (functionContent(self.program.types.view().get(root))) {
-            try self.setFunctionMention(root, true);
-            return true;
-        }
-
-        // A depth-first walk. A type whose walk finishes without finding a
-        // function is function-free unless it reached a type still on the
-        // walk's path (a cycle), whose answer is not known yet; such a type
-        // is `open` and is answered only when the whole walk finishes.
-        const Frame = struct {
-            ty: Type.TypeId,
-            /// This type's children are `children[start..end]`.
-            start: usize,
-            next: usize,
-            end: usize,
-            open: bool = false,
-        };
-        var frames = std.ArrayList(Frame).empty;
-        defer frames.deinit(self.allocator);
-        var children = std.ArrayList(Type.TypeId).empty;
-        defer children.deinit(self.allocator);
-        const on_path = &self.function_scan_path;
-        on_path.clearRetainingCapacity();
-        defer on_path.clearRetainingCapacity();
-        var open_finished = std.ArrayList(Type.TypeId).empty;
-        defer open_finished.deinit(self.allocator);
-
-        try self.pushFunctionMentionFrame(Frame, &frames, &children, on_path, root);
-        while (frames.items.len != 0) {
-            const top = &frames.items[frames.items.len - 1];
-            if (top.next < top.end) {
-                const child = children.items[top.next];
-                top.next += 1;
-                const known = self.knownFunctionMention(child);
-                const found = known orelse functionContent(self.program.types.view().get(child));
-                if (found) {
-                    try self.setFunctionMention(child, true);
-                    for (frames.items) |frame| try self.setFunctionMention(frame.ty, true);
-                    return true;
-                }
-                if (known != null) continue;
-                // On the path, or finished open earlier in this walk.
-                if (on_path.contains(child)) {
-                    top.open = true;
-                    continue;
-                }
-                try self.pushFunctionMentionFrame(Frame, &frames, &children, on_path, child);
-                continue;
-            }
-            const finished = frames.pop().?;
-            children.shrinkRetainingCapacity(finished.start);
-            if (finished.open) {
-                try open_finished.append(self.allocator, finished.ty);
-                if (frames.items.len != 0) frames.items[frames.items.len - 1].open = true;
-            } else {
-                _ = on_path.remove(finished.ty);
-                try self.setFunctionMention(finished.ty, false);
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (types.get(ty)) {
+                .primitive, .zst => {},
+                .erased, .func => return true,
+                .named => |named| {
+                    try stack.appendSlice(self.allocator, types.span(named.args));
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+                .record => |span| for (types.fieldSpan(span)) |field| try stack.append(self.allocator, field.ty),
+                .tuple => |span| try stack.appendSlice(self.allocator, types.span(span)),
+                .tag_union => |span| for (types.tagSpan(span)) |tag| try stack.appendSlice(self.allocator, types.span(tag.payloads)),
+                .list, .box => |elem| try stack.append(self.allocator, elem),
             }
         }
-        // The walk from `root` found no function anywhere, so every type it
-        // left open is function-free too.
-        for (open_finished.items) |ty| try self.setFunctionMention(ty, false);
         return false;
-    }
-
-    const FunctionMention = enum(u8) { unknown, none, some };
-
-    fn knownFunctionMention(self: *const Builder, ty: Type.TypeId) ?bool {
-        const index = @intFromEnum(ty);
-        if (index >= self.function_mentions.items.len) return null;
-        return switch (self.function_mentions.items[index]) {
-            .unknown => null,
-            .none => false,
-            .some => true,
-        };
-    }
-
-    fn setFunctionMention(self: *Builder, ty: Type.TypeId, mentions: bool) Allocator.Error!void {
-        const index = @intFromEnum(ty);
-        if (index >= self.function_mentions.items.len) {
-            try self.function_mentions.appendNTimes(self.allocator, .unknown, index + 1 - self.function_mentions.items.len);
-        }
-        self.function_mentions.items[index] = if (mentions) .some else .none;
-    }
-
-    fn functionContent(content: Type.Content) bool {
-        return switch (content) {
-            .erased, .func => true,
-            .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => false,
-        };
-    }
-
-    fn pushFunctionMentionFrame(
-        self: *Builder,
-        comptime Frame: type,
-        frames: *std.ArrayList(Frame),
-        children: *std.ArrayList(Type.TypeId),
-        on_path: *collections.DenseMap(Type.TypeId, void),
-        ty: Type.TypeId,
-    ) Allocator.Error!void {
-        const types = self.program.types.view();
-        try on_path.put(ty, {});
-        const start = children.items.len;
-        switch (types.get(ty)) {
-            .primitive, .zst, .erased, .func => {},
-            .named => |named| {
-                try children.appendSlice(self.allocator, types.span(named.args));
-                if (named.backing) |backing| try children.append(self.allocator, backing.ty);
-            },
-            .record => |span| for (types.fieldSpan(span)) |field| try children.append(self.allocator, field.ty),
-            .tuple => |span| try children.appendSlice(self.allocator, types.span(span)),
-            .tag_union => |span| for (types.tagSpan(span)) |tag| try children.appendSlice(self.allocator, types.span(tag.payloads)),
-            .list, .box => |elem| try children.append(self.allocator, elem),
-        }
-        try frames.append(self.allocator, .{ .ty = ty, .start = start, .next = start, .end = children.items.len });
     }
 
     /// Everything a result-row widening adapter needs beyond the reservation
@@ -7923,7 +7806,6 @@ const Builder = struct {
         }
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
-
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
         const draft_codec_contract: ?DraftCodecContractContext = if (codec_contract) |contract| .{
             .anchor = contract.anchor,
@@ -8075,10 +7957,10 @@ const Builder = struct {
                     codec_contract,
                 ))
             {
-                const exact_interface = (try source_ctx.graph.sameFunctionInterface(
+                const exact_interface = source_ctx.graph.sameFunctionInterface(
                     active_root.request_fn_node,
                     request_fn_node,
-                ));
+                );
                 const active_recursive_edge = source_ctx.draft.ownerDescendsFromReservedFn(
                     source_ctx.draft.current_owner,
                     active_root.fn_id,
@@ -8096,7 +7978,7 @@ const Builder = struct {
                     } else {
                         try source_ctx.graph.unify(active_root.request_fn_node, request_fn_node);
                     }
-                    if (!(try source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node))) {
+                    if (!source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node)) {
                         Common.invariant("recursive root request did not join its complete function interface");
                     }
                     self.promoteFnSignatureRelation(active_root.fn_id, signature_relation);
@@ -8182,10 +8064,10 @@ const Builder = struct {
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                     if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
-                    const exact_interface = (try source_ctx.graph.sameFunctionInterface(
+                    const exact_interface = source_ctx.graph.sameFunctionInterface(
                         draftTemplateSpecLookupRequestNode(spec),
                         request_fn_node,
-                    ));
+                    );
                     const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
                         source_ctx.draft.current_owner,
                         spec.fn_id,
@@ -8259,7 +8141,7 @@ const Builder = struct {
             } else {
                 try source_ctx.graph.unify(draftTemplateSpecLookupRequestNode(spec), request_fn_node);
             }
-            if (!(try source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node))) {
+            if (!source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node)) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
             if (signature_relation == .exact_graph) {
@@ -10906,7 +10788,7 @@ const Builder = struct {
                                 continue;
                             }
                             const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
-                            const exact_interface = (try source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node));
+                            const exact_interface = source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node);
                             const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
                                 request_owner,
                                 spec.fn_id,
@@ -10971,13 +10853,13 @@ const Builder = struct {
                     spec.initial_request_arg_classes,
                     request_fn_node,
                 );
-                if (!(try source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node))) {
+                if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
                     Common.invariant("recursive draft nested request did not join its complete function interface");
                 }
             } else {
                 const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                 try source_ctx.graph.unify(spec_fn_node, request_fn_node);
-                if (!(try source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node))) {
+                if (!source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node)) {
                     Common.invariant("draft nested request did not join its complete function interface");
                 }
             }
@@ -17247,6 +17129,7 @@ const BodyDraftStore = struct {
     /// rather than changing the meaning of an existing cache key.
     parse_result_ok_types: std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId),
     generated_try_types: std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId),
+    uninhabited_type_cache: collections.DenseMap(Type.TypeId, bool),
     /// Ordinary queued drafts borrow the Builder-owned persistent workspace.
     /// Other private-graph tests and paths retain draft-owned relocation below.
     spec_job_workspace: ?*SpecJobWorkspace,
@@ -17350,6 +17233,7 @@ const BodyDraftStore = struct {
             .literal_roots = .empty,
             .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
             .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
+            .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .spec_job_workspace = null,
             .mutable_graph_names = null,
             .program_type_relocation = null,
@@ -17492,6 +17376,7 @@ const BodyDraftStore = struct {
         self.impossibility_proof_ids.deinit(self.allocator);
         self.impossibility_proofs.deinit(self.allocator);
         if (self.program_type_relocation) |*relocation| relocation.deinit();
+        self.uninhabited_type_cache.deinit();
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
         self.static_data_request_ids.deinit();
@@ -18163,6 +18048,8 @@ const BodyDraftStore = struct {
         self.parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(self.allocator);
         self.generated_try_types.deinit();
         self.generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(self.allocator);
+        self.uninhabited_type_cache.deinit();
+        self.uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(self.allocator);
     }
 
     /// Verify that retained body data no longer contains a graph node in a
@@ -19918,22 +19805,6 @@ const InstantiatingNodeMap = struct {
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
 /// body context.
-/// How an instantiation context instantiates a closed checked type.
-const ClosedTypeInstantiation = union(enum) {
-    /// Its whole structure, like every other checked type.
-    structure,
-    /// An unread leaf of the Monotype it denotes, shared by every closed type
-    /// of that Monotype the context instantiates through this leaf scope. A
-    /// codec contract or structural-evidence context relates a whole checked
-    /// codec shape at every boundary; only the parts of it something reads
-    /// are ever built.
-    leaves: solve.LeafScopeId,
-    /// Learning the Monotypes closed types denote. A closed type whose
-    /// Monotype is already known is a leaf in this scope; any other builds
-    /// its structure and is recorded in `measured`.
-    measuring: solve.LeafScopeId,
-};
-
 const TypeInstantiationContext = struct {
     allocator: Allocator,
     id: InstantiationScopeId,
@@ -19951,10 +19822,6 @@ const TypeInstantiationContext = struct {
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
     field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
-    closed_types: ClosedTypeInstantiation = .structure,
-    /// Closed checked types a `.measuring` context built, each with its node,
-    /// in the order their builds finished.
-    measured: std.ArrayList(solve.ClosedTypeBuild) = .empty,
 
     fn init(
         allocator: Allocator,
@@ -19973,7 +19840,6 @@ const TypeInstantiationContext = struct {
     }
 
     fn deinit(self: *TypeInstantiationContext) void {
-        self.measured.deinit(self.allocator);
         self.decl_scopes.deinit(self.allocator);
         self.field_kind_decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
@@ -20037,6 +19903,7 @@ const BodyContext = struct {
     settled_node_uninhabited: [2]std.AutoHashMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
     /// The stacks the uninhabitedness scans run on, kept between scans.
     node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
+    type_uninhabited_scratch: TypeUninhabitedScan.Evaluation.Scratch = .{},
     pattern_uninhabited_scratch: PatternUninhabitedScan.Evaluation.Scratch = .{},
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
@@ -21131,6 +20998,7 @@ const BodyContext = struct {
         self.inhabitation_entered.deinit(self.allocator);
         for (&self.settled_node_uninhabited) |*settled| settled.deinit(self.allocator);
         self.node_uninhabited_scratch.deinit(self.allocator);
+        self.type_uninhabited_scratch.deinit(self.allocator);
         self.pattern_uninhabited_scratch.deinit(self.allocator);
         self.instantiation.deinit();
         self.local_proc_contexts.deinit();
@@ -21597,17 +21465,17 @@ const BodyContext = struct {
         defer layers.deinit(self.allocator);
         var current = node;
         while (true) {
-            const representation_node = (try self.constructorRepresentationNode(current));
-            switch ((try self.graph.content(representation_node))) {
+            const representation_node = self.constructorRepresentationNode(current);
+            switch (self.graph.content(representation_node)) {
                 .named => {
-                    const named = (try self.graph.namedNodes(representation_node));
+                    const named = self.graph.namedNodes(representation_node);
                     if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
                     const backing = named.backing orelse
                         Common.invariant("named constructor graph node had no explicit backing");
                     try layers.append(self.allocator, representation_node);
                     current = backing.node;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break,
             }
         }
         var expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(current), data);
@@ -21621,10 +21489,10 @@ const BodyContext = struct {
     /// representation node used by constructor and pattern topology. A
     /// nominal or opaque node remains as an explicit construction layer;
     /// an alias never creates a `.nominal` expression or pattern.
-    fn constructorRepresentationNode(self: *BodyContext, node: NodeId) Allocator.Error!NodeId {
+    fn constructorRepresentationNode(self: *BodyContext, node: NodeId) NodeId {
         var current = node;
-        while ((try self.graph.content(current)) == .named) {
-            const named = (try self.graph.namedNodes(current));
+        while (self.graph.content(current) == .named) {
+            const named = self.graph.namedNodes(current);
             if (named.kind != .alias) return current;
             const backing = named.backing orelse
                 Common.invariant("transparent alias graph node had no explicit backing");
@@ -21648,8 +21516,8 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const source_node = try source_cell.toGraphNode(self.graph);
-        const source_root_private = (try self.isGeneratedPrivateRootNode(source_node));
-        const expected_root_private = (try self.isGeneratedPrivateRootNode(expected_node));
+        const source_root_private = self.isGeneratedPrivateRootNode(source_node);
+        const expected_root_private = self.isGeneratedPrivateRootNode(expected_node);
         const preserves_distinct_interface = if (source_root_private or expected_root_private)
             source_root_private != expected_root_private
         else
@@ -21659,16 +21527,16 @@ const BodyContext = struct {
         if (preserves_distinct_interface) {
             return try self.addExprWithTypeCell(source_cell, .{ .local = local });
         }
-        const source_representation_node = (try self.constructorRepresentationNode(source_node));
+        const source_representation_node = self.constructorRepresentationNode(source_node);
 
         var layers = std.ArrayList(NodeId).empty;
         defer layers.deinit(self.allocator);
 
         var current = expected_node;
         while (true) {
-            current = (try self.constructorRepresentationNode(current));
+            current = self.constructorRepresentationNode(current);
             if (self.graph.sameClass(source_representation_node, current)) break;
-            if ((try self.graph.content(current)) != .named) {
+            if (self.graph.content(current) != .named) {
                 Common.invariant("related local and request had no exact nominal backing path");
             }
             for (layers.items) |layer| {
@@ -21677,7 +21545,7 @@ const BodyContext = struct {
                 }
             }
             try layers.append(self.allocator, current);
-            const named = (try self.graph.namedNodes(current));
+            const named = self.graph.namedNodes(current);
             if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
             current = (named.backing orelse
                 Common.invariant("named expression graph node had no explicit backing")).node;
@@ -21712,10 +21580,10 @@ const BodyContext = struct {
         defer layers.deinit(self.allocator);
         var current = node;
         while (true) {
-            const representation_node = (try self.constructorRepresentationNode(current));
-            const raw = (try self.graph.content(representation_node));
+            const representation_node = self.constructorRepresentationNode(current);
+            const raw = self.graph.content(representation_node);
             if (raw != .named) break;
-            const named = (try self.graph.namedNodes(representation_node));
+            const named = self.graph.namedNodes(representation_node);
             if (named.kind == .alias) Common.invariant("constructor witness retained a transparent alias node");
             const backing = named.backing orelse
                 Common.invariant("named constructor witness had no explicit backing");
@@ -21749,9 +21617,9 @@ const BodyContext = struct {
         defer layers.deinit(self.allocator);
         var current = node;
         while (true) {
-            const raw = (try self.graph.content(current));
+            const raw = self.graph.content(current);
             if (raw != .named) break;
-            const named = (try self.graph.namedNodes(current));
+            const named = self.graph.namedNodes(current);
             if (named.kind != .alias) break;
             const backing = named.backing orelse
                 Common.invariant("transparent alias graph node had no explicit backing");
@@ -21800,7 +21668,7 @@ const BodyContext = struct {
     fn addPatWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyPatData) Allocator.Error!DraftPatId {
         if (std.debug.runtime_safety and data == .nominal) {
             switch (ty) {
-                .graph_node => |node| if ((try self.graph.content(node)) == .named and (try self.graph.namedNodes(node)).kind == .alias) {
+                .graph_node => |node| if (self.graph.content(node) == .named and self.graph.namedNodes(node).kind == .alias) {
                     Common.invariant("Monotype graph lowering emitted a nominal pattern at an alias type");
                 },
                 .sealed => {},
@@ -22675,7 +22543,7 @@ const BodyContext = struct {
 
             // Components are pushed last-first so the first is visited next.
             const mark = pending.items.len;
-            switch ((try self.graph.content(node))) {
+            switch (self.graph.content(node)) {
                 .primitive => |primitive| switch (Common.primitiveInspectLowering(primitive)) {
                     .builtin_method => added = (try self.prepareToInspectMethodAtNode(
                         node,
@@ -22690,7 +22558,7 @@ const BodyContext = struct {
                         try pending.append(self.allocator, named.args[0]);
                         continue;
                     }
-                    if ((try self.methodOwnerFromNode(node))) |owner| {
+                    if (self.methodOwnerFromNode(node)) |owner| {
                         if (try self.prepareToInspectMethodAtNode(node, str_ty, owner)) |prepared| {
                             added = prepared or added;
                             continue;
@@ -22704,7 +22572,7 @@ const BodyContext = struct {
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .record => |record| for (record.fields) |field| try pending.append(self.allocator, field.ty),
                 .tag_union => |tag_union| for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads),
-                .redirect, .leaf => unreachable,
+                .redirect => unreachable,
                 .unresolved,
                 .func,
                 .empty_tag_union,
@@ -24225,49 +24093,8 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
         }
-        if (try self.closedTypeLeaf(task.scoped_ty)) |leaf| return leaf;
         task.probed = true;
         return null;
-    }
-
-    /// The leaf a closed checked type instantiates to in a leaf-instantiating
-    /// context, recorded as its node there; null when the type builds its
-    /// structure instead.
-    fn closedTypeLeaf(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
-        const scope, const mono = switch (self.instantiation.closed_types) {
-            .structure => return null,
-            .leaves => |scope| blk: {
-                if (!self.checkedTypeIsClosed(checked_ty)) return null;
-                break :blk .{ scope, try self.closedCheckedMono(checked_ty) };
-            },
-            .measuring => |scope| blk: {
-                if (!self.checkedTypeIsClosed(checked_ty)) return null;
-                break :blk .{ scope, self.graph.closedCheckedMono(self.view.key.bytes, checked_ty) orelse return null };
-            },
-        };
-        const node = try self.graph.checkedLeaf(scope, mono);
-        try self.instantiation.node_map.put(checked_ty, .{ .node = node });
-        return node;
-    }
-
-    /// The Monotype a closed checked type of this context's module denotes.
-    /// One that is not known yet is measured: instantiated in a fresh
-    /// measuring context, where every closed type whose Monotype is known
-    /// stays a leaf, and sealed together with every closed type the build
-    /// reached.
-    fn closedCheckedMono(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        if (self.graph.closedCheckedMono(self.view.key.bytes, checked_ty)) |known| return known;
-        const previous = self.instantiation;
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
-        defer {
-            self.instantiation.deinit();
-            self.instantiation = previous;
-        }
-        self.instantiation.closed_types = .{ .measuring = try self.graph.newLeafScope() };
-        _ = try self.instNode(checked_ty);
-        try self.graph.recordClosedCheckedMonos(self.view.key.bytes, self.instantiation.measured.items);
-        return self.graph.closedCheckedMono(self.view.key.bytes, checked_ty) orelse
-            Common.invariant("measuring a closed checked type did not record its Monotype");
     }
 
     fn stepInstNode(self: *BodyContext, frame: *InstFrame, task: *InstNodeTask, input: ?InstResult) Allocator.Error!InstStep {
@@ -24371,12 +24198,6 @@ const BodyContext = struct {
         const node = try entry.finish(self.graph, built);
         try map.put(task.scoped_ty, entry);
         task.reserved = false;
-        switch (self.instantiation.closed_types) {
-            .structure, .leaves => {},
-            .measuring => if (self.checkedTypeIsClosed(task.scoped_ty)) {
-                try self.instantiation.measured.append(self.allocator, .{ .checked_ty = task.scoped_ty, .node = node });
-            },
-        }
         return .{ .ret = .{ .node = node } };
     }
 
@@ -24803,14 +24624,6 @@ const BodyContext = struct {
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
         try self.scopedNodeMap(checked_ty).put(checked_ty, .{ .node = node });
-        // A leaf read later reaches a closed component through its leaf
-        // scope, so the scope names the same node for it.
-        switch (self.instantiation.closed_types) {
-            .structure, .measuring => {},
-            .leaves => |scope| if (self.checkedTypeIsClosed(checked_ty)) {
-                try self.graph.bindCheckedLeaf(scope, try self.closedCheckedMono(checked_ty), node);
-            },
-        }
     }
 
     /// Field-kind memoization scopes exactly like `scopedNode`. A kind cell
@@ -26062,12 +25875,12 @@ const BodyContext = struct {
         const arg_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), arg_cell, null);
         const local_expr = try self.addExprWithTypeCell(arg_cell, .{ .local = arg_local });
         const ret_ty = try self.activeTypeFromCell(ret_cell);
-        const body = switch ((try self.graph.content(arg_node))) {
+        const body = switch (self.graph.content(arg_node)) {
             // Rendering a function never inspects its nested signature. Keep
             // that signature graph-native so unresolved child cells survive
             // until the owning draft is sealed once.
             .func, .erased => try self.stringExpr("<function>", ret_ty),
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => if (try self.graph.typeIsResolved(arg_node))
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => if (try self.graph.typeIsResolved(arg_node))
                 try self.inspectCall(local_expr, try self.activeTypeFromNode(arg_node), ret_ty)
             else
                 try self.deferInspectAtNode(local_expr, arg_node, ret_ty),
@@ -26299,8 +26112,8 @@ const BodyContext = struct {
         };
 
         if (try self.producedRuntimeValueIsProvenUninhabited(produced_root)) return produced_node;
-        const checked_private_root = (try self.isGeneratedPrivateRootNode(checked_root));
-        const produced_private_root = (try self.isGeneratedPrivateRootNode(produced_root));
+        const checked_private_root = self.isGeneratedPrivateRootNode(checked_root);
+        const produced_private_root = self.isGeneratedPrivateRootNode(produced_root);
         if (checked_private_root or produced_private_root) {
             // The structural witness records the representation of the value
             // that was actually produced. Generated-private roots are explicit
@@ -26323,8 +26136,8 @@ const BodyContext = struct {
 
         const ops_start = ops.items.len;
         const matched: bool = matched: {
-            const checked_content = (try self.graph.content(checked_root));
-            const produced_content = (try self.graph.content(produced_root));
+            const checked_content = self.graph.content(checked_root);
+            const produced_content = self.graph.content(produced_root);
             switch (checked_content) {
                 .named => |checked_named| switch (produced_content) {
                     .named => |produced_named| {
@@ -26334,21 +26147,21 @@ const BodyContext = struct {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_backing.node, .produced = produced_backing.node } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
                 },
                 .list => |checked_elem| switch (produced_content) {
                     .list => |produced_elem| {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
                 },
                 .box => |checked_elem| switch (produced_content) {
                     .box => |produced_elem| {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
                 },
                 .tuple => |checked_items| switch (produced_content) {
                     .tuple => |produced_items| {
@@ -26358,31 +26171,31 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
                 },
                 .func => |checked_fn| switch (produced_content) {
                     .func => |produced_fn| {
                         if (checked_fn.args.len != produced_fn.args.len) break :matched false;
                         return checked_node;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
                 },
                 .record => |checked_row| switch (produced_content) {
                     .record => |produced_row| {
                         if (checked_row.fields.len != produced_row.fields.len) break :matched false;
-                        if (!(try self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record))) break :matched false;
+                        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) break :matched false;
                         for (checked_row.fields, produced_row.fields) |checked_field, produced_field| {
                             try ops.append(gpa, .{ .field_name = .{ .checked = checked_field.name, .produced = produced_field.name } });
                             try ops.append(gpa, .{ .child = .{ .checked = checked_field.ty, .produced = produced_field.ty } });
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
                         if (checked_row.tags.len != produced_row.tags.len) break :matched false;
-                        if (!(try self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union))) break :matched false;
+                        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) break :matched false;
                         for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
                             try ops.append(gpa, .{ .tag = .{
                                 .checked_name = checked_tag.name,
@@ -26397,9 +26210,9 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
                 },
-                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
             }
         };
         if (!matched) {
@@ -26409,7 +26222,7 @@ const BodyContext = struct {
         try frames.append(gpa, .{
             .checked_node = checked_node,
             .produced_node = produced_node,
-            .produced_content = (try self.graph.content(produced_root)),
+            .produced_content = self.graph.content(produced_root),
             .pair = pair,
             .ops_start = ops_start,
             .next = ops_start,
@@ -26512,7 +26325,7 @@ const BodyContext = struct {
                     .ext = self.graph.rootNode(produced_row.ext),
                 } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
+            .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
         }
     }
 
@@ -26552,8 +26365,8 @@ const BodyContext = struct {
             if (self.visiting.contains(root_pair)) return .{ .value = false };
 
             var children: usize = 0;
-            const checked_content = (try graph.content(checked_root));
-            const produced_content = (try graph.content(produced_root));
+            const checked_content = graph.content(checked_root);
+            const produced_content = graph.content(produced_root);
             switch (checked_content) {
                 .named => |checked_named| switch (produced_content) {
                     .named => |produced_named| {
@@ -26563,25 +26376,25 @@ const BodyContext = struct {
                         try items.add(.{ .request = checked_backing.node, .produced = produced_backing.node });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
                 },
                 .func => |checked_fn| switch (produced_content) {
                     .func => |produced_fn| return .{ .value = checked_fn.args.len == produced_fn.args.len },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
                 .list => |checked_elem| switch (produced_content) {
                     .list => |produced_elem| {
                         try items.add(.{ .request = checked_elem, .produced = produced_elem });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
                 .box => |checked_elem| switch (produced_content) {
                     .box => |produced_elem| {
                         try items.add(.{ .request = checked_elem, .produced = produced_elem });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
                 .tuple => |checked_items| switch (produced_content) {
                     .tuple => |produced_items| {
@@ -26592,12 +26405,12 @@ const BodyContext = struct {
                             children += 1;
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
                 .record => |checked_row| switch (produced_content) {
                     .record => |produced_row| {
                         if (checked_row.fields.len != produced_row.fields.len) return .{ .value = false };
-                        if (!(try self.ctx.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record))) return .{ .value = false };
+                        if (!self.ctx.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) return .{ .value = false };
                         for (checked_row.fields, produced_row.fields) |checked_field, produced_field| {
                             if (checked_field.name != produced_field.name) return .{ .value = false };
                             if (graph.sameClass(checked_field.ty, produced_field.ty)) continue;
@@ -26605,12 +26418,12 @@ const BodyContext = struct {
                             children += 1;
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
                         if (checked_row.tags.len != produced_row.tags.len) return .{ .value = false };
-                        if (!(try self.ctx.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union))) return .{ .value = false };
+                        if (!self.ctx.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return .{ .value = false };
                         for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
                             if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) {
                                 return .{ .value = false };
@@ -26622,9 +26435,9 @@ const BodyContext = struct {
                             }
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
-                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
+                .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
             }
             if (children == 0) return .{ .value = false };
             try self.visiting.put(root_pair, {});
@@ -26639,14 +26452,14 @@ const BodyContext = struct {
         }
     };
 
-    fn rowExtsAreValueCompatible(self: *BodyContext, checked_ext: NodeId, produced_ext: NodeId, kind: ProducedValueRowKind) Allocator.Error!bool {
+    fn rowExtsAreValueCompatible(self: *BodyContext, checked_ext: NodeId, produced_ext: NodeId, kind: ProducedValueRowKind) bool {
         const checked_root = self.graph.rootNode(checked_ext);
         const produced_root = self.graph.rootNode(produced_ext);
         if (checked_root == produced_root) return true;
-        return switch ((try self.graph.content(checked_root))) {
-            .empty_record => kind == .record and (try self.graph.content(produced_root)) == .empty_record,
-            .empty_tag_union => kind == .tag_union and (try self.graph.content(produced_root)) == .empty_tag_union,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .named, .erased, .zst => false,
+        return switch (self.graph.content(checked_root)) {
+            .empty_record => kind == .record and self.graph.content(produced_root) == .empty_record,
+            .empty_tag_union => kind == .tag_union and self.graph.content(produced_root) == .empty_tag_union,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .named, .erased, .zst => false,
         };
     }
 
@@ -26791,34 +26604,34 @@ const BodyContext = struct {
         }
         const start = ops.items.len;
         const relation: ?RequestCompletion = relation: {
-            if ((try self.checkedPublicInspectableBacking(produced_root))) |backing| {
+            if (self.checkedPublicInspectableBacking(produced_root)) |backing| {
                 try ops.append(gpa, .{ .request = request_root, .produced = backing.node, .combine = .backing });
                 break :relation null;
             }
-            if ((try self.checkedPublicInspectableBacking(request_root))) |backing| {
+            if (self.checkedPublicInspectableBacking(request_root)) |backing| {
                 try ops.append(gpa, .{ .request = backing.node, .produced = produced_root, .combine = .backing });
                 break :relation null;
             }
-            break :relation switch ((try self.graph.content(request_root))) {
-                .primitive => |request_primitive| switch ((try self.graph.content(produced_root))) {
+            break :relation switch (self.graph.content(request_root)) {
+                .primitive => |request_primitive| switch (self.graph.content(produced_root)) {
                     .primitive => |produced_primitive| if (request_primitive == produced_primitive) .unchanged else .mismatch,
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .list => |request_elem| switch ((try self.graph.content(produced_root))) {
+                .list => |request_elem| switch (self.graph.content(produced_root)) {
                     .list => |produced_elem| blk: {
                         try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .box => |request_elem| switch ((try self.graph.content(produced_root))) {
+                .box => |request_elem| switch (self.graph.content(produced_root)) {
                     .box => |produced_elem| blk: {
                         try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .tuple => |request_items| switch ((try self.graph.content(produced_root))) {
+                .tuple => |request_items| switch (self.graph.content(produced_root)) {
                     .tuple => |produced_items| blk: {
                         if (request_items.len != produced_items.len) break :blk .mismatch;
                         for (request_items, produced_items) |request_item, produced_item| {
@@ -26826,9 +26639,9 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .func => |request_fn| switch ((try self.graph.content(produced_root))) {
+                .func => |request_fn| switch (self.graph.content(produced_root)) {
                     .func => |produced_fn| blk: {
                         if (request_fn.args.len != produced_fn.args.len) break :blk .mismatch;
                         for (request_fn.args, produced_fn.args) |request_arg, produced_arg| {
@@ -26837,9 +26650,9 @@ const BodyContext = struct {
                         try ops.append(gpa, .{ .request = request_fn.ret, .produced = produced_fn.ret, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .tag_union => |request_row| switch ((try self.graph.content(produced_root))) {
+                .tag_union => |request_row| switch (self.graph.content(produced_root)) {
                     .tag_union => |produced_row| blk: {
                         try ops.append(gpa, .{ .request = request_row.ext, .produced = produced_row.ext, .combine = .unchanged_extension });
                         if (request_row.tags.len != produced_row.tags.len) break :blk .mismatch;
@@ -26853,9 +26666,9 @@ const BodyContext = struct {
                         break :blk null;
                     },
                     .empty_tag_union => .mismatch,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .record => |request_row| switch ((try self.graph.content(produced_root))) {
+                .record => |request_row| switch (self.graph.content(produced_root)) {
                     .record => |produced_row| blk: {
                         try ops.append(gpa, .{ .request = request_row.ext, .produced = produced_row.ext, .combine = .unchanged_extension });
                         if (request_row.fields.len != produced_row.fields.len) break :blk .mismatch;
@@ -26866,28 +26679,27 @@ const BodyContext = struct {
                         break :blk null;
                     },
                     .empty_record => .mismatch,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
                 },
-                .empty_tag_union => switch ((try self.graph.content(produced_root))) {
+                .empty_tag_union => switch (self.graph.content(produced_root)) {
                     .empty_tag_union => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst => .mismatch,
                 },
-                .empty_record => switch ((try self.graph.content(produced_root))) {
+                .empty_record => switch (self.graph.content(produced_root)) {
                     .empty_record => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst => .mismatch,
                 },
-                .erased => |request_digest| switch ((try self.graph.content(produced_root))) {
+                .erased => |request_digest| switch (self.graph.content(produced_root)) {
                     .erased => |produced_digest| if (std.mem.eql(u8, request_digest.bytes[0..], produced_digest.bytes[0..])) .unchanged else .mismatch,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => .mismatch,
                 },
-                .zst => switch ((try self.graph.content(produced_root))) {
+                .zst => switch (self.graph.content(produced_root)) {
                     .zst => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased => .mismatch,
                 },
                 .named,
                 .unresolved,
                 .redirect,
-                .leaf,
                 => .mismatch,
             };
         };
@@ -26899,10 +26711,10 @@ const BodyContext = struct {
         return null;
     }
 
-    fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) Allocator.Error!?InstBacking {
-        const named = switch ((try self.graph.content(node))) {
+    fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) ?InstBacking {
+        const named = switch (self.graph.content(node)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
         };
         const backing = named.backing orelse return null;
         if (backing.authority != .checked_public or backing.use != .inspectable) return null;
@@ -28100,10 +27912,10 @@ const BodyContext = struct {
                     },
                     .list => task.current_child_node = try self.graph.listElementNode(request_node),
                     .nominal => |nominal| {
-                        const representation_node = (try self.constructorRepresentationNode(request_node));
-                        const named = switch ((try self.graph.content(representation_node))) {
+                        const representation_node = self.constructorRepresentationNode(request_node);
+                        const named = switch (self.graph.content(representation_node)) {
                             .named => |value| value,
-                            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
+                            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
                         };
                         const backing = named.backing orelse
                             Common.invariant("nominal value evidence graph node had no backing");
@@ -28176,7 +27988,7 @@ const BodyContext = struct {
                     },
                     .nominal => {
                         const produced_backing = input.?.maybeNodeValue() orelse return .{ .ret = .{ .maybe_node = null } };
-                        const representation_node = (try self.constructorRepresentationNode(request_node));
+                        const representation_node = self.constructorRepresentationNode(request_node);
                         const backing_witness = try self.constructorChildWitness(
                             child_node,
                             produced_backing,
@@ -28301,9 +28113,9 @@ const BodyContext = struct {
             }
             self.destroyCallContext(call_ctx);
             task.call_ctx = null;
-            return .{ .ret = .{ .node = switch ((try self.graph.content(callable_node))) {
+            return .{ .ret = .{ .node = switch (self.graph.content(callable_node)) {
                 .func => |function| function.ret,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
             } } };
         }
 
@@ -28358,9 +28170,9 @@ const BodyContext = struct {
                 const fn_node = input.?.nodeValue();
                 self.destroyCallContext(task.call_ctx.?);
                 task.call_ctx = null;
-                return .{ .ret = .{ .node = switch ((try self.graph.content(fn_node))) {
+                return .{ .ret = .{ .node = switch (self.graph.content(fn_node)) {
                     .func => |function| function.ret,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked indirect call instantiated a non-function graph node"),
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked indirect call instantiated a non-function graph node"),
                 } } };
             },
             // A direct call's request interface.
@@ -28504,9 +28316,9 @@ const BodyContext = struct {
                 Common.invariant("checked direct call arity differs from its function type");
             }
             task.fn_node = try self.instNode(task.source_fn_ty);
-            const fn_graph = switch ((try self.graph.content(task.fn_node))) {
+            const fn_graph = switch (self.graph.content(task.fn_node)) {
                 .func => |func| func,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
             };
             if (fn_graph.args.len != task.checked_args.len) {
                 Common.invariant("checked direct call graph arity differed from its argument span");
@@ -28603,9 +28415,9 @@ const BodyContext = struct {
                 Common.invariant("checked dispatch plan arity differs from its function type");
             }
             task.fn_node = try self.instNode(source_fn_ty);
-            const fn_graph = switch ((try self.graph.content(task.fn_node))) {
+            const fn_graph = switch (self.graph.content(task.fn_node)) {
                 .func => |func| func,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function instantiation node"),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function instantiation node"),
             };
             if (fn_graph.args.len != operands.len) {
                 Common.invariant("checked dispatch plan graph arity differed from its operand span");
@@ -28810,7 +28622,7 @@ const BodyContext = struct {
             if (try self.nodeIsProvenUninhabited(arg_node)) return .{ .ret = .{ .node = fn_nodes.ret } };
         }
         if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
-            if (procedure == .next and fn_nodes.args.len == 1 and (try self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0]))) {
+            if (procedure == .next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
                 return .{ .ret = .{ .node = fn_nodes.ret } };
             }
         }
@@ -28902,11 +28714,11 @@ const BodyContext = struct {
                 },
                 .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
                 .nominal => |nominal| {
-                    const representation_node = (try self.constructorRepresentationNode(expected_node));
-                    if ((try self.graph.content(representation_node)) != .named) {
+                    const representation_node = self.constructorRepresentationNode(expected_node);
+                    if (self.graph.content(representation_node) != .named) {
                         Common.invariant("nominal constructor had no nominal graph representation");
                     }
-                    const named = (try self.graph.namedNodes(representation_node));
+                    const named = self.graph.namedNodes(representation_node);
                     const backing_node = (named.backing orelse
                         Common.invariant("nominal constructor graph node had no backing")).node;
                     task.index = 1;
@@ -31283,7 +31095,7 @@ const BodyContext = struct {
         // representation available for the generated Iter.iter/Iter.next path.
         if (self.iteratorProcedureForMethodTarget(lookup.target)) |procedure| {
             const dispatcher_node = initial_plan_fn.args[plan.dispatcher_arg_index];
-            if ((procedure == .identity or procedure == .next) and (try self.isGeneratedIteratorEvidenceNode(dispatcher_node))) {
+            if ((procedure == .identity or procedure == .next) and self.isGeneratedIteratorEvidenceNode(dispatcher_node)) {
                 try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
                 task.generated = .{ .procedure = procedure, .dispatcher_node = dispatcher_node };
                 switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.loop_iterator, dispatcher_node)) {
@@ -31755,10 +31567,10 @@ const BodyContext = struct {
             },
             .nominal => {
                 const representation_node = task.node;
-                if ((try self.graph.content(representation_node)) != .named) {
+                if (self.graph.content(representation_node) != .named) {
                     Common.invariant("nominal constructor had no nominal graph representation");
                 }
-                const named = (try self.graph.namedNodes(representation_node));
+                const named = self.graph.namedNodes(representation_node);
                 task.slots[0] = (named.backing orelse
                     Common.invariant("nominal constructor graph node had no backing")).node;
             },
@@ -32077,9 +31889,9 @@ const BodyContext = struct {
                 // values list, so the item type is the values' type. The
                 // selected `from_interpolation` determines the item only when
                 // its own signature fixes it.
-                const item_node = switch (try self.graph.content(assembler_fn.args[0])) {
+                const item_node = switch (self.graph.content(assembler_fn.args[0])) {
                     .list => |elem| elem,
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("interpolation assembler did not take a values list"),
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("interpolation assembler did not take a values list"),
                 };
                 const interpolation = switch (self.view.bodies.expr(task.expr).data) {
                     .interpolation => |value| value,
@@ -32233,7 +32045,7 @@ const BodyContext = struct {
             } })),
             .nominal => |nominal| return constructorStep(self, .{
                 .kind = .{ .nominal = nominal.backing_expr },
-                .node = (try self.constructorRepresentationNode(expected_node)),
+                .node = self.constructorRepresentationNode(expected_node),
                 .children = &.{},
             }),
             .tuple => |items| return constructorStep(self, .{ .kind = .tuple, .node = expected_node, .children = items }),
@@ -32504,14 +32316,14 @@ const BodyContext = struct {
                 // Only an unpinned target variable takes the checked literal
                 // default. Openness inside a custom target is not evidence
                 // that the target itself should default to a builtin.
-                switch ((try self.graph.content(expr_node))) {
+                switch (self.graph.content(expr_node)) {
                     .unresolved => try self.graph.materializeLiteralDefault(expr_node),
                     .primitive => {},
                     // A custom target converts through its checked conversion
                     // plan at this node; the target's own arguments may still
                     // resolve through later relations in this body.
                     .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return self.exprInnerDone(task, try self.lowerSpecializedLiteralConversion(expr_id, expr_node)),
-                    .redirect, .leaf => Common.invariant("literal type node was not a class root"),
+                    .redirect => Common.invariant("literal type node was not a class root"),
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 frame.cursor = 1;
@@ -32526,14 +32338,14 @@ const BodyContext = struct {
                 // instead of a value the target cannot hold. Checking reports
                 // every such literal, so this is reachable only while running
                 // a program with reported errors.
-                switch ((try self.graph.content(expr_node))) {
+                switch (self.graph.content(expr_node)) {
                     .primitive => |primitive| if (primitive != .str) {
                         return self.exprInnerDone(task, try self.addExprWithTypeCell(
                             DraftTypeCell.fromGraphNode(expr_node),
                             .{ .crash = try self.addStringLiteral("invalid string literal") },
                         ));
                     },
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+                    .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
                 }
                 try self.graph.unify(expr_node, try self.graph.importMono(try self.primitiveType(.str)));
                 frame.cursor = 1;
@@ -32560,7 +32372,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return constructorStep(self, .{
                     .kind = .{ .nominal = nominal.backing_expr },
-                    .node = (try self.constructorRepresentationNode(expr_node)),
+                    .node = self.constructorRepresentationNode(expr_node),
                     .children = &.{},
                 });
             },
@@ -33028,9 +32840,9 @@ const BodyContext = struct {
                 .expected_ret_ty = expected_ret_ty,
             } });
         }
-        const callable_graph = switch ((try self.graph.content(callable_node))) {
+        const callable_graph = switch (self.graph.content(callable_node)) {
             .func => |function| function,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
         };
         task.callable_node = callable_node;
         task.callable_args = callable_graph.args;
@@ -33843,7 +33655,7 @@ const BodyContext = struct {
                 const target = call.direct_target.?;
                 const fn_nodes = task.fn_nodes;
                 if (task.iterator_procedure) |procedure| {
-                    if ((try self.generatedIteratorNextOperand(procedure, call.args, fn_nodes))) |iterator| {
+                    if (self.generatedIteratorNextOperand(procedure, call.args, fn_nodes)) |iterator| {
                         frame.cursor = iterator_next_cursor;
                         return requestLowerChild(self, iterator, DraftTypeCell.fromGraphNode(fn_nodes.args[0]));
                     }
@@ -33947,7 +33759,7 @@ const BodyContext = struct {
             // A function value rendered after its evaluation.
             else => return loweredExprStep(try self.finishCallExprAtNode(expected_node, input.?.exprValue())),
         }
-        const producer_request = if ((try self.isGeneratedPrivateRootNode(expected_node))) expected_node else null;
+        const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
         if (try self.inspectOnlyCallStep(
             expr.ty,
             call,
@@ -34355,17 +34167,18 @@ const BodyContext = struct {
     fn typeIsProvenUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
-        return try self.typeIsProvenUninhabitedWith(ty, .inspectable_only);
-    }
-
-    /// A durable TypeId is already a closed snapshot. Inspecting its
-    /// inhabitation must not import it back into the active graph; deferred
-    /// inspect generation runs after relation production is frozen.
-    fn typeIsProvenUninhabitedWith(self: *BodyContext, ty: Type.TypeId, backing_access: UninhabitedBackingAccess) Allocator.Error!bool {
-        return try self.graph.typeProvenUninhabited(ty, switch (backing_access) {
-            .inspectable_only => .inspectable_only,
-            .runtime_layout => .runtime_layout,
-        });
+        // A durable TypeId is already a closed snapshot. Inspecting its
+        // inhabitation must not import it back into the active graph; deferred
+        // inspect generation runs after relation production is frozen.
+        if (self.draft.uninhabited_type_cache.get(ty)) |cached| return cached;
+        var scan = TypeUninhabitedScan{
+            .body = self,
+            .visiting = collections.DenseMap(Type.TypeId, usize).init(self.allocator),
+        };
+        defer scan.visiting.deinit();
+        const result = try TypeUninhabitedScan.Evaluation.runWith(self.allocator, &self.type_uninhabited_scratch, &scan, ty);
+        try self.draft.uninhabited_type_cache.put(ty, result);
+        return result;
     }
 
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
@@ -36057,8 +35870,8 @@ const BodyContext = struct {
         return .{ .record_fields = record_fields };
     }
 
-    fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return switch ((try self.graph.content(node))) {
+    fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
             .named => |named| switch (named.def.iterator_representation) {
                 .minted, .forced_dynamic => if (named.builtin_owner) |owner|
                     static_dispatch.isIteratorOwner(owner)
@@ -36066,24 +35879,24 @@ const BodyContext = struct {
                     false,
                 .none => false,
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
     }
 
-    fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return switch ((try self.graph.content(node))) {
+    fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
             .named => |named| named.def.iterator_representation == .forced_dynamic,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
     }
 
-    fn isGeneratedPrivateRootNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return switch ((try self.graph.content(node))) {
+    fn isGeneratedPrivateRootNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
             .named => |named| if (named.backing) |backing|
                 backing.authority == .generated_private
             else
                 false,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
     }
 
@@ -36102,7 +35915,7 @@ const BodyContext = struct {
         if (public_fn.args.len != request_fn.args.len) {
             Common.invariant("iterator public/request function arity differed");
         }
-        const expected_ret = if ((try self.isGeneratedIteratorEvidenceNode(request_fn.ret))) request_fn.ret else null;
+        const expected_ret = if (self.isGeneratedIteratorEvidenceNode(request_fn.ret)) request_fn.ret else null;
 
         if (expected_ret) |expected| switch (procedure) {
             .from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
@@ -36115,7 +35928,7 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Iter.iter reached Monotype with an unexpected arity");
                 }
-                if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))) {
+                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
                     return try self.graphFunctionNode(&.{request_fn.args[0]}, request_fn.args[0]);
                 }
             },
@@ -36123,7 +35936,7 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("iterator next reached Monotype with an unexpected arity");
                 }
-                if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))) {
+                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
                     return try self.graphFunctionNode(
                         &.{request_fn.args[0]},
                         try self.generatedIteratorStepReturnNode(request_fn.args[0]),
@@ -36134,11 +35947,11 @@ const BodyContext = struct {
                 if (checked_args.len != 3 or request_fn.args.len != 3) {
                     Common.invariant("custom iterator source reached Monotype with an unexpected arity");
                 }
-                if ((try self.expectedGeneratedIteratorProducerNode(expected_ret, mintedProducerKind(procedure)))) |expected| {
-                    if ((try self.isForcedDynamicIteratorNode(expected))) {
+                if (self.expectedGeneratedIteratorProducerNode(expected_ret, mintedProducerKind(procedure))) |expected| {
+                    if (self.isForcedDynamicIteratorNode(expected)) {
                         return try self.graphFunctionNode(request_fn.args, expected);
                     }
-                    const components = (try self.generatedIteratorComponentNodes(expected, 2));
+                    const components = self.generatedIteratorComponentNodes(expected, 2);
                     return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
                 }
                 const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
@@ -36215,8 +36028,8 @@ const BodyContext = struct {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
                 }
                 if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) or
-                    (try self.isGeneratedIteratorEvidenceNode(request_fn.args[1])))
+                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
+                    self.isGeneratedIteratorEvidenceNode(request_fn.args[1]))
                 {
                     return try self.graphFunctionNode(
                         request_fn.args,
@@ -36312,7 +36125,7 @@ const BodyContext = struct {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
-        if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
+        if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
         const callable_evidence = if (callable_index) |index|
             try self.callableArgumentEvidenceDigest(checked_args[index])
         else
@@ -36327,11 +36140,11 @@ const BodyContext = struct {
         self: *BodyContext,
         expected_ret: ?NodeId,
         kind: Type.IteratorKind,
-    ) Allocator.Error!?NodeId {
+    ) ?NodeId {
         const expected = expected_ret orelse return null;
-        if (!(try self.isGeneratedIteratorEvidenceNode(expected))) return null;
-        if ((try self.isForcedDynamicIteratorNode(expected))) return expected;
-        const named = (try self.graph.content(expected)).named;
+        if (!self.isGeneratedIteratorEvidenceNode(expected)) return null;
+        if (self.isForcedDynamicIteratorNode(expected)) return expected;
+        const named = self.graph.content(expected).named;
         return if (named.def.iterator_kind == kind) expected else null;
     }
 
@@ -36341,8 +36154,8 @@ const BodyContext = struct {
         args: []const NodeId,
         expected_ret: ?NodeId,
     ) Allocator.Error!?NodeId {
-        const expected = (try self.expectedGeneratedIteratorProducerNode(expected_ret, kind)) orelse return null;
-        if ((try self.isForcedDynamicIteratorNode(expected))) return try self.graphFunctionNode(args, expected);
+        const expected = self.expectedGeneratedIteratorProducerNode(expected_ret, kind) orelse return null;
+        if (self.isForcedDynamicIteratorNode(expected)) return try self.graphFunctionNode(args, expected);
         // A source without nominal components (ranges) initializes the
         // generated step state from its construction inputs. Its producer
         // therefore keeps the checked request arguments while returning the
@@ -36352,17 +36165,17 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(args, expected);
             }
         }
-        return try self.graphFunctionNode((try self.generatedIteratorComponentNodes(expected, args.len)), expected);
+        return try self.graphFunctionNode(self.generatedIteratorComponentNodes(expected, args.len), expected);
     }
 
     fn generatedIteratorComponentNodes(
         self: *BodyContext,
         iterator: NodeId,
         expected_components: usize,
-    ) Allocator.Error![]const NodeId {
-        const named = switch ((try self.graph.content(iterator))) {
+    ) []const NodeId {
+        const named = switch (self.graph.content(iterator)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator component nodes requested for a non-named type"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator component nodes requested for a non-named type"),
         };
         if (named.args.len != expected_components + 1) {
             Common.invariant("generated iterator producer did not contain its component count");
@@ -36400,7 +36213,7 @@ const BodyContext = struct {
     }
 
     fn generatedIteratorConstructorFunctionNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
-        const named = (try self.graph.content(iterator)).named;
+        const named = self.graph.content(iterator).named;
         const backing = named.backing orelse
             Common.invariant("generated iterator constructor requested a type without backing");
         const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner));
@@ -36411,7 +36224,7 @@ const BodyContext = struct {
     }
 
     fn generatedIteratorStepReturnNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
-        const named = (try self.graph.content(iterator)).named;
+        const named = self.graph.content(iterator).named;
         const backing = named.backing orelse
             Common.invariant("generated iterator next requested a type without backing");
         const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner));
@@ -36426,9 +36239,9 @@ const BodyContext = struct {
         components: []const NodeId,
         callable_evidence: ?names.TypeDigest,
     ) Allocator.Error!NodeId {
-        const public_named = switch ((try self.graph.content(public_iterator))) {
+        const public_named = switch (self.graph.content(public_iterator)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
         };
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
@@ -36450,9 +36263,9 @@ const BodyContext = struct {
         callable_evidence: ?names.TypeDigest,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
-        const public_named = switch ((try self.graph.content(public_iterator))) {
+        const public_named = switch (self.graph.content(public_iterator)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
         };
         const owner = public_named.builtin_owner orelse
             Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
@@ -36479,9 +36292,9 @@ const BodyContext = struct {
                 .declared_order = public_named.declared_order,
             };
         };
-        const mint_depth = (try self.generatedIteratorMintDepth(kind, components)) orelse
+        const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, item_node, public_source);
-        if ((try self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence))) |existing| {
+        if (self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
             return existing;
         }
 
@@ -36546,7 +36359,7 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: Type.IteratorKind,
         components: []const NodeId,
-    ) Allocator.Error!?u8 {
+    ) ?u8 {
         if (kind == .forced_dynamic) return null;
         const topology = kind.componentTopology() orelse
             Common.invariant("generated iterator mint requested without a producer kind");
@@ -36557,9 +36370,9 @@ const BodyContext = struct {
 
         var component_depth: u8 = 0;
         for (components) |component| {
-            const named = switch ((try self.graph.content(component))) {
+            const named = switch (self.graph.content(component)) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
             };
             switch (named.def.iterator_representation) {
                 .forced_dynamic => return null,
@@ -36585,7 +36398,7 @@ const BodyContext = struct {
         item_node: NodeId,
         public_source: solve.InstIteratorPublicSource,
     ) Allocator.Error!NodeId {
-        if ((try self.graph.findGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null))) |existing| {
+        if (self.graph.findGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null)) |existing| {
             return existing;
         }
         const Context = struct {
@@ -42135,12 +41948,12 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         checked_args: []const checked.CheckedExprId,
         fn_nodes: FunctionNodes,
-    ) Allocator.Error!?checked.CheckedExprId {
+    ) ?checked.CheckedExprId {
         if (procedure != .next) return null;
         if (checked_args.len != 1 or fn_nodes.args.len != 1) {
             Common.invariant("iterator next reached Monotype with an unexpected arity");
         }
-        if (!(try self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0]))) return null;
+        if (!self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) return null;
         return checked_args[0];
     }
 
@@ -42149,9 +41962,9 @@ const BodyContext = struct {
         iterator: DraftExprId,
         iterator_node: NodeId,
     ) Allocator.Error!BodyExprData {
-        const backing = (try self.graph.namedNodes(iterator_node)).backing orelse
+        const backing = self.graph.namedNodes(iterator_node).backing orelse
             Common.invariant("generated iterator next requested a type without backing");
-        const owner = iteratorOwnerOfNamed((try self.graph.content(iterator_node)).named.builtin_owner);
+        const owner = iteratorOwnerOfNamed(self.graph.content(iterator_node).named.builtin_owner);
         const step_name = (try self.iteratorRepresentationNames(owner)).step_field;
         const step_node = try self.graph.opaqueDefinitionFieldNode(backing.node, step_name);
         const step = try self.addExprWithTypeCell(
@@ -44957,11 +44770,11 @@ const BodyContext = struct {
             .tag, .record, .tuple => frame.form = .constructor,
             .nominal => |nominal| {
                 frame.form = .nominal;
-                frame.representation_node = (try self.constructorRepresentationNode(request_node));
-                if ((try self.graph.content(frame.representation_node)) != .named) {
+                frame.representation_node = self.constructorRepresentationNode(request_node);
+                if (self.graph.content(frame.representation_node) != .named) {
                     Common.invariant("ConstStore nominal restored without a nominal graph representation");
                 }
-                const named = (try self.graph.namedNodes(frame.representation_node));
+                const named = self.graph.namedNodes(frame.representation_node);
                 const backing = named.backing orelse
                     Common.invariant("ConstStore nominal restored with a named graph node that had no backing");
                 frame.single_child = nominal.backing;
@@ -44995,10 +44808,10 @@ const BodyContext = struct {
                 // checked constructor's original row-fragment order. Read the
                 // flattened backing row so every stored child is paired with
                 // its exact graph field cell.
-                const record_node = switch ((try self.graph.content(request_node))) {
+                const record_node = switch (self.graph.content(request_node)) {
                     .named => |named| (named.backing orelse
                         Common.invariant("ConstStore record restored through a named graph node without a backing")).node,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => request_node,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => request_node,
                 };
                 const graph_fields = (try self.graph.recordNodes(record_node)).fields;
                 if (graph_fields.len != items.len) Common.invariant("ConstStore record length differs from checked graph type");
@@ -47531,9 +47344,9 @@ const BodyContext = struct {
     }
 
     /// The structural backing node behind a (possibly named) Try node.
-    fn optionalTryBackingNode(self: *BodyContext, node: NodeId) Allocator.Error!NodeId {
-        if ((try self.graph.content(node)) == .named) {
-            const backing = (try self.graph.namedNodes(node)).backing orelse
+    fn optionalTryBackingNode(self: *BodyContext, node: NodeId) NodeId {
+        if (self.graph.content(node) == .named) {
+            const backing = self.graph.namedNodes(node).backing orelse
                 Common.invariant("optional destructure Try node had no runtime backing");
             if (backing.node == node) Common.invariant("optional destructure Try backing did not advance");
             return backing.node;
@@ -47574,7 +47387,7 @@ const BodyContext = struct {
             .name = missing_name,
             .payloads = .empty(),
         } });
-        const err_node = try self.graph.tagPayloadNode((try self.optionalTryBackingNode(try_node)), err_name, 0);
+        const err_node = try self.graph.tagPayloadNode(self.optionalTryBackingNode(try_node), err_name, 0);
         const err_body = try self.addConstructorExprAtNode(try_node, .{ .tag = .{
             .name = err_name,
             .payloads = try self.addExprSpan(&.{try self.optionalDestructMissingFieldExprAtNode(err_node)}),
@@ -47917,7 +47730,7 @@ const BodyContext = struct {
                 .payloads = .empty(),
             } });
             const err_name = try self.nameStoreMut().internTagLabel("Err");
-            const err_node = try self.graph.tagPayloadNode((try self.optionalTryBackingNode(out_try_node)), err_name, 0);
+            const err_node = try self.graph.tagPayloadNode(self.optionalTryBackingNode(out_try_node), err_name, 0);
             const missing_body = try self.addConstructorExprAtNode(out_try_node, .{ .tag = .{
                 .name = err_name,
                 .payloads = try self.addExprSpan(&.{try self.optionalDestructMissingFieldExprAtNode(err_node)}),
@@ -48883,7 +48696,7 @@ const BodyContext = struct {
             .map_effectful => expr,
             .equality => |eq| if (eq.negated) blk: {
                 const result_cell = self.exprTypeCell(expr);
-                if (!(try self.typeCellHasBuiltinOwner(result_cell, .bool))) {
+                if (!self.typeCellHasBuiltinOwner(result_cell, .bool)) {
                     Common.invariant("checked equality dispatch returned a non-Bool value");
                 }
                 break :blk try self.addExprWithTypeCell(result_cell, .{ .low_level = .{
@@ -48900,9 +48713,9 @@ const BodyContext = struct {
         self: *BodyContext,
         cell: DraftTypeCell,
         expected: static_dispatch.BuiltinOwner,
-    ) Allocator.Error!bool {
+    ) bool {
         const owner = switch (cell) {
-            .graph_node => |node| (try self.methodOwnerFromNode(node)),
+            .graph_node => |node| self.methodOwnerFromNode(node),
             .sealed => |ty| methodOwnerFromType(self.typeStore(), ty),
         } orelse return false;
         return switch (owner) {
@@ -50259,18 +50072,18 @@ const BodyContext = struct {
         path_node: u32,
     ) Allocator.Error!?NodeId {
         const step = path_nodes[path_node].step;
-        const content = (try self.graph.content(node));
+        const content = self.graph.content(node);
         switch (step.stepKind()) {
             .fn_arg => switch (content) {
                 .func => |function| {
                     if (step.data >= function.args.len) return null;
                     return function.args[step.data];
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .fn_ret => switch (content) {
                 .func => |function| return function.ret,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .alias_arg, .nominal_arg => switch (content) {
                 .named => |named| {
@@ -50281,26 +50094,26 @@ const BodyContext = struct {
                     if (step.data != 0) return null;
                     return payload;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
             },
             .alias_backing, .nominal_backing => switch (content) {
                 .named => |named| return (named.backing orelse return null).node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
             },
             .tuple_elem => switch (content) {
                 .tuple => |items| {
                     if (step.data >= items.len) return null;
                     return items[step.data];
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .record_field => switch (content) {
                 .record => return try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .tag_payload_tag => switch (content) {
                 .tag_union => return node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .tag_payload_index => {
                 const tag_node = path_nodes[path_node].parent;
@@ -50313,7 +50126,7 @@ const BodyContext = struct {
                         try self.tagName(view, @enumFromInt(tag_step.data)),
                         step.data,
                     ),
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
                 };
             },
         }
@@ -50354,10 +50167,10 @@ const BodyContext = struct {
                     path_stepper,
                 ) orelse
                     Common.invariant("callable-derived evidence path did not match its function request");
-                const resolvable = (try self.methodOwnerFromNode(component_node)) != null or
+                const resolvable = self.methodOwnerFromNode(component_node) != null or
                     param.structural != null or
                     try self.nodeIsProvenUninhabited(component_node) or
-                    (try self.nodeFinalizesAsUninhabitedLeaf(component_node));
+                    self.nodeFinalizesAsUninhabitedLeaf(component_node);
                 if (resolvable) {
                     try replacements.append(self.allocator, .{
                         .index = index,
@@ -51148,7 +50961,7 @@ const BodyContext = struct {
                     },
                     .target => {},
                 };
-                if ((try self.methodOwnerFromNode(node)) == null) continue;
+                if (self.methodOwnerFromNode(node) == null) continue;
                 out[k] = try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose);
                 derived[k] = true;
                 progress = true;
@@ -51230,7 +51043,7 @@ const BodyContext = struct {
                     .target => {},
                     .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => break :derive forwarded,
                 };
-                break :derive if ((try self.methodOwnerFromNode(node)) != null)
+                break :derive if (self.methodOwnerFromNode(node) != null)
                     try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose)
                 else
                     try self.deriveOpenRequirement(schema.view, param, node, purpose);
@@ -51498,7 +51311,6 @@ const BodyContext = struct {
             self.draft,
         );
         defer evidence_ctx.deinit();
-        evidence_ctx.instantiation.closed_types = .{ .leaves = try self.graph.newLeafScope() };
         const evidence_node = try evidence_ctx.instNode(structural.evidence.callable_ty);
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         try relateRequestComponent(self.graph, evidence_node, constraint_node);
@@ -51530,8 +51342,8 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
         if (self.forwardedRequirement(node, view.names, param.method)) |forwarded| return forwarded;
-        const default_phase: ?checked.NumericDefaultPhase = switch ((try self.graph.content(node))) {
-            .redirect, .leaf => unreachable,
+        const default_phase: ?checked.NumericDefaultPhase = switch (self.graph.content(node)) {
+            .redirect => unreachable,
             .unresolved => |variable| variable.numeric_default_phase,
             .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
         };
@@ -52273,7 +52085,7 @@ const BodyContext = struct {
         component_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        if ((try self.methodOwnerFromNode(component_node))) |owner| {
+        if (self.methodOwnerFromNode(component_node)) |owner| {
             if (try self.lookupMethodTarget(owner, view, method)) |result| {
                 const found = switch (result) {
                     .rejected => return .checked_error,
@@ -52297,7 +52109,7 @@ const BodyContext = struct {
             if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
             Common.invariant("compiler-generated graph component owner had no exact checked method target");
         }
-        if (try self.nodeIsProvenUninhabited(component_node) or (try self.nodeFinalizesAsUninhabitedLeaf(component_node))) {
+        if (try self.nodeIsProvenUninhabited(component_node) or self.nodeFinalizesAsUninhabitedLeaf(component_node)) {
             return switch (static_dispatch.unpinnedDispatchResolution(structural)) {
                 .structural => .{ .structural = .{ .derivation = structuralDerivationWithoutMap(structural.?) } },
                 .unreachable_value => .unreachable_value,
@@ -52315,8 +52127,8 @@ const BodyContext = struct {
     /// of which callee interfaces have already been related on this path: an
     /// interface replay may close the same cell to that default at any time,
     /// and evidence read before and after it must agree.
-    fn nodeFinalizesAsUninhabitedLeaf(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return switch ((try self.graph.content(node))) {
+    fn nodeFinalizesAsUninhabitedLeaf(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
             .unresolved => |variable| blk: {
                 if (variable.numeric_default_phase != null) break :blk false;
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
@@ -52325,7 +52137,7 @@ const BodyContext = struct {
                     .row_extension, .placeholder => false,
                 };
             },
-            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
         };
     }
 
@@ -52334,10 +52146,10 @@ const BodyContext = struct {
     fn methodOwnerFromNode(
         self: *BodyContext,
         node: NodeId,
-    ) Allocator.Error!?static_dispatch.MethodOwner {
+    ) ?static_dispatch.MethodOwner {
         var current = node;
-        while (true) switch ((try self.graph.content(current))) {
-            .redirect, .leaf => unreachable,
+        while (true) switch (self.graph.content(current)) {
+            .redirect => unreachable,
             .primitive => |primitive| return .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => return .{ .builtin = .list },
             .box => return .{ .builtin = .box },
@@ -55749,9 +55561,9 @@ const BodyContext = struct {
     };
 
     fn graphTryPayloads(self: *BodyContext, try_node: NodeId) Allocator.Error!GraphTryPayloads {
-        const named = switch ((try self.graph.content(try_node))) {
+        const named = switch (self.graph.content(try_node)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("codec method result was not a named Try type"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("codec method result was not a named Try type"),
         };
         const backing = named.backing orelse Common.invariant("codec Try type had no checked backing");
         const ok_name = try self.nameStoreMut().internTagLabel("Ok");
@@ -56143,9 +55955,9 @@ const BodyContext = struct {
             Common.invariant("generated codec source and frozen body-shape roles disagreed");
         }
         const body_shape_node = if (source_has_distinct_body_shape) blk: {
-            const named = switch ((try self.graph.content(shape_node))) {
+            const named = switch (self.graph.content(shape_node)) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
             };
             break :blk (named.backing orelse
                 Common.invariant("generated codec nominal boundary had no body-shape backing")).node;
@@ -56235,7 +56047,6 @@ const BodyContext = struct {
         );
         defer contract_ctx.deinit();
         contract_ctx.evidence = self.evidence;
-        contract_ctx.instantiation.closed_types = .{ .leaves = try self.graph.newLeafScope() };
         try self.bindCodecContractBoundary(
             &contract_ctx,
             derivation,
@@ -56414,7 +56225,7 @@ const BodyContext = struct {
         self: *BodyContext,
         method_name: []const u8,
         subject_node: ?NodeId,
-    ) Allocator.Error!?InstantiatedGeneratedCodecCall {
+    ) ?InstantiatedGeneratedCodecCall {
         const active = self.active_codec_contract orelse return null;
         if (active.calls_start > self.instantiated_codec_calls.items.len or
             active.calls_len > self.instantiated_codec_calls.items.len - active.calls_start)
@@ -56428,7 +56239,7 @@ const BodyContext = struct {
             if (!std.mem.eql(u8, active.view.names.methodNameText(slot.method), method_name) or
                 (slot.subject_node != null) != requested_has_subject) continue;
             if (subject_node) |requested_subject| {
-                if (!(try self.sameCodecSubject(slot.subject_node.?, requested_subject))) continue;
+                if (!self.sameCodecSubject(slot.subject_node.?, requested_subject)) continue;
             }
             if (selected != null) {
                 Common.invariant("checked generated codec contract had overlapping direct call roles");
@@ -56450,21 +56261,21 @@ const BodyContext = struct {
         return calls[slot.call_index];
     }
 
-    fn sameCodecSubject(self: *BodyContext, checked_subject: NodeId, requested_subject: NodeId) Allocator.Error!bool {
+    fn sameCodecSubject(self: *BodyContext, checked_subject: NodeId, requested_subject: NodeId) bool {
         // A declaration-backed nominal opens its backing in a declaration
         // scope, independently from the checked codec contract's snapshot.
         // Closed primitives and named applications still have exact constant-
         // time identities even when those two producer paths allocate distinct
         // graph nodes; no wider structural comparison is permitted here.
-        const checked_content = (try self.graph.content(checked_subject));
-        const requested_content = (try self.graph.content(requested_subject));
+        const checked_content = self.graph.content(checked_subject);
+        const requested_content = self.graph.content(requested_subject);
         switch (checked_content) {
             .primitive => |checked_primitive| return switch (requested_content) {
                 .primitive => |requested_primitive| checked_primitive == requested_primitive,
-                .redirect, .leaf, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+                .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
             },
-            .named => return (try self.graph.sameRelatedNamedInstance(checked_subject, requested_subject)),
-            .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return self.graph.sameClass(checked_subject, requested_subject),
+            .named => return self.graph.sameRelatedNamedInstance(checked_subject, requested_subject),
+            .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return self.graph.sameClass(checked_subject, requested_subject),
         }
     }
 
@@ -56496,20 +56307,20 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: CodecKind,
         shape_node: NodeId,
-    ) Allocator.Error!?InstantiatedGeneratedCodecCall {
+    ) ?InstantiatedGeneratedCodecCall {
         const method_name = switch (kind) {
             .parser => "parser_for",
             .encoder => "encoder_for",
         };
         const active = self.active_codec_contract orelse return null;
-        if ((try self.graph.content(shape_node)) != .named) return null;
+        if (self.graph.content(shape_node) != .named) return null;
         // Repeated occurrences of one nominal subject share the checker's
         // method role, so the role slot selects the boundary call exactly as it
         // does for every other generated codec call.
-        const selected = (try self.generatedCodecCall(method_name, shape_node)) orelse return null;
+        const selected = self.generatedCodecCall(method_name, shape_node) orelse return null;
         const selected_subject = selected.subject_node orelse
             Common.invariant("checked generated codec boundary call had no nominal subject");
-        if ((try self.graph.content(selected_subject)) != .named) {
+        if (self.graph.content(selected_subject) != .named) {
             Common.invariant("checked generated codec boundary subject was not nominal");
         }
         // At its own anchor shape the active contract is this nominal's
@@ -56537,7 +56348,7 @@ const BodyContext = struct {
         contract: EvidenceContract,
         anchor: CheckedCodecContractAnchor,
     } {
-        const call = (try self.generatedCodecCall(method_name, subject_node)) orelse
+        const call = self.generatedCodecCall(method_name, subject_node) orelse
             base.invariant(
                 "postcheck invariant violated: checked generated codec contract was missing required method call {s} (subject: {s})",
                 .{ method_name, if (subject_node == null) "none" else "present" },
@@ -56814,17 +56625,17 @@ const BodyContext = struct {
     /// A key the format renders as a key string is read by the `parse_key_*`
     /// and `encode_key_*` methods rather than by a shape codec, so only a key
     /// that needs its own codec is included.
-    fn graphBuiltinContainerShapeNodes(self: *BodyContext, node: NodeId, buf: *[2]NodeId) Allocator.Error![]const NodeId {
-        const named = switch ((try self.graph.content(node))) {
+    fn graphBuiltinContainerShapeNodes(self: *BodyContext, node: NodeId, buf: *[2]NodeId) []const NodeId {
+        const named = switch (self.graph.content(node)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return &.{},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return &.{},
         };
         const owner = named.builtin_owner orelse return &.{};
         switch (owner) {
             .dict => {
                 if (named.args.len != 2) Common.invariant("builtin Dict node had an unexpected arity");
                 buf[0] = named.args[1];
-                if ((try self.graphNodeIsStringRenderedDictKey(named.args[0]))) return buf[0..1];
+                if (self.graphNodeIsStringRenderedDictKey(named.args[0])) return buf[0..1];
                 buf[1] = named.args[0];
                 return buf[0..2];
             },
@@ -56839,8 +56650,8 @@ const BodyContext = struct {
 
     /// Whether a dict key node is one the `parse_key_*`/`encode_key_*` methods
     /// read, which is every key kind that renders as a key string.
-    fn graphNodeIsStringRenderedDictKey(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        switch ((try self.graph.content(node))) {
+    fn graphNodeIsStringRenderedDictKey(self: *BodyContext, node: NodeId) bool {
+        switch (self.graph.content(node)) {
             .tag_union => |row| {
                 for (row.tags) |tag| {
                     if (tag.payloads.len != 0) return false;
@@ -56854,27 +56665,27 @@ const BodyContext = struct {
                     .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => false,
                 };
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
         }
     }
 
-    fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        const named = switch ((try self.graph.content(node))) {
+    fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) bool {
+        const named = switch (self.graph.content(node)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
         };
         return self.builder.isBuiltinTryDef(self.nameStore(), named.def);
     }
 
-    fn graphShapeNode(self: *BodyContext, raw_node: NodeId) Allocator.Error!NodeId {
+    fn graphShapeNode(self: *BodyContext, raw_node: NodeId) NodeId {
         var node = raw_node;
         while (true) {
-            switch ((try self.graph.content(node))) {
+            switch (self.graph.content(node)) {
                 .named => |named| if (named.backing) |backing| {
                     node = backing.node;
                     continue;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
             }
             return node;
         }
@@ -56922,12 +56733,12 @@ const BodyContext = struct {
             const seen_entry = try seen.getOrPut(node);
             if (seen_entry.found_existing) continue;
 
-            if ((try self.graphNodeIsBuiltinTry(node))) {
+            if (self.graphNodeIsBuiltinTry(node)) {
                 const payloads = try self.graphTryPayloads(node);
                 try pending.append(self.allocator, .{ .node = payloads.ok });
                 continue;
             }
-            if ((try self.generatedCodecBoundaryCall(.parser, node))) |codec_call| {
+            if (self.generatedCodecBoundaryCall(.parser, node)) |codec_call| {
                 switch (codec_call.resolution) {
                     .callable => continue,
                     .structural => {
@@ -56941,7 +56752,7 @@ const BodyContext = struct {
             }
 
             const children_start = pending.items.len;
-            switch ((try self.graph.content(node))) {
+            switch (self.graph.content(node)) {
                 .list, .box => |elem| try pending.append(self.allocator, .{ .node = elem }),
                 .tuple => |items| for (items) |item| try pending.append(self.allocator, .{ .node = item }),
                 .record => {
@@ -56963,7 +56774,7 @@ const BodyContext = struct {
                         try pending.append(self.allocator, .{ .node = backing.node });
                     }
                 },
-                .redirect, .leaf => unreachable,
+                .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .func, .erased, .zst => {},
             }
             std.mem.reverse(GraphParserShapeStep, pending.items[children_start..]);
@@ -57014,9 +56825,9 @@ const BodyContext = struct {
         backing_node: NodeId,
         authority: Type.BackingAuthority,
     ) Allocator.Error!NodeId {
-        const template = switch ((try self.graph.content(template_node))) {
+        const template = switch (self.graph.content(template_node)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
         };
         return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = template.named_type,
@@ -57162,10 +56973,10 @@ const BodyContext = struct {
             field_handle_backing,
         );
 
-        const record_fields = switch ((try self.graph.content((try self.graphShapeNode(shape_node))))) {
+        const record_fields = switch (self.graph.content(self.graphShapeNode(shape_node))) {
             .zst, .empty_record => &.{},
-            .record => (try self.graph.recordNodes((try self.graphShapeNode(shape_node)))).fields,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("generated parse tag-union specification shape was not a record"),
+            .record => (try self.graph.recordNodes(self.graphShapeNode(shape_node))).fields,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("generated parse tag-union specification shape was not a record"),
         };
         const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
         for (item_fields, 0..) |*field, index| {
@@ -57318,10 +57129,10 @@ const BodyContext = struct {
         node: NodeId,
         tag_text: []const u8,
     ) Allocator.Error!bool {
-        switch ((try self.graph.content(node))) {
+        switch (self.graph.content(node)) {
             .tag_union, .named => {},
             .unresolved, .empty_tag_union => return false,
-            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => return false,
+            .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -57330,17 +57141,17 @@ const BodyContext = struct {
     }
 
     fn graphMissingTryOkNode(self: *BodyContext, node: NodeId) Allocator.Error!?NodeId {
-        if (!(try self.graphNodeIsBuiltinTry(node))) return null;
+        if (!self.graphNodeIsBuiltinTry(node)) return null;
         const payloads = try self.graphTryPayloads(node);
         return if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing")) payloads.ok else null;
     }
 
-    fn graphNodeHasJsonScalarParser(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return (try self.graphJsonParseScalarMethodName(node)) != null;
+    fn graphNodeHasJsonScalarParser(self: *BodyContext, node: NodeId) bool {
+        return self.graphJsonParseScalarMethodName(node) != null;
     }
 
-    fn graphJsonParseScalarMethodName(self: *BodyContext, node: NodeId) Allocator.Error!?[]const u8 {
-        const owner = switch ((try self.methodOwnerFromNode(node)) orelse return null) {
+    fn graphJsonParseScalarMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
+        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
             .builtin => |builtin| builtin,
             .nominal => return null,
         };
@@ -57364,8 +57175,8 @@ const BodyContext = struct {
         };
     }
 
-    fn graphJsonEncodeScalarMethodName(self: *BodyContext, node: NodeId) Allocator.Error!?[]const u8 {
-        const owner = switch ((try self.methodOwnerFromNode(node)) orelse return null) {
+    fn graphJsonEncodeScalarMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
+        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
             .builtin => |builtin| builtin,
             .nominal => return null,
         };
@@ -57389,8 +57200,8 @@ const BodyContext = struct {
         };
     }
 
-    fn graphJsonParseObjectKeyMethodName(self: *BodyContext, node: NodeId) Allocator.Error!?[]const u8 {
-        const owner = switch ((try self.methodOwnerFromNode(node)) orelse return null) {
+    fn graphJsonParseObjectKeyMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
+        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
             .builtin => |builtin| builtin,
             .nominal => return null,
         };
@@ -57414,8 +57225,8 @@ const BodyContext = struct {
         };
     }
 
-    fn graphJsonEncodeObjectKeyMethodName(self: *BodyContext, node: NodeId) Allocator.Error!?[]const u8 {
-        const owner = switch ((try self.methodOwnerFromNode(node)) orelse return null) {
+    fn graphJsonEncodeObjectKeyMethodName(self: *BodyContext, node: NodeId) ?[]const u8 {
+        const owner = switch (self.methodOwnerFromNode(node) orelse return null) {
             .builtin => |builtin| builtin,
             .nominal => return null,
         };
@@ -57624,10 +57435,10 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         switch (kind) {
             .parser => {
-                if ((try self.graphJsonParseObjectKeyMethodName(key_node))) |method_name| {
+                if (self.graphJsonParseObjectKeyMethodName(key_node)) |method_name| {
                     return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
-                if ((try self.graphNodeIsStringRenderedDictKey(key_node))) {
+                if (self.graphNodeIsStringRenderedDictKey(key_node)) {
                     const str_node = try self.graph.newNode(.{ .primitive = .str });
                     var added = try self.prepareParseObjectKeyCodecCall(boundary_expr, str_node, boundary_callable_node, "parse_key_str");
                     added = try self.prepareParserInvalidValueCodecCall(boundary_expr, key_node, boundary_callable_node) or added;
@@ -57645,10 +57456,10 @@ const BodyContext = struct {
                 return added;
             },
             .encoder => {
-                if ((try self.graphJsonEncodeObjectKeyMethodName(key_node))) |method_name| {
+                if (self.graphJsonEncodeObjectKeyMethodName(key_node)) |method_name| {
                     return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
-                if ((try self.graphNodeIsStringRenderedDictKey(key_node))) {
+                if (self.graphNodeIsStringRenderedDictKey(key_node)) {
                     const str_node = try self.graph.newNode(.{ .primitive = .str });
                     return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, str_node, boundary_callable_node, "encode_key_str");
                 }
@@ -58156,9 +57967,9 @@ const BodyContext = struct {
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
 
-            if ((try self.graphNodeHasJsonScalarParser(node))) continue;
-            if ((try self.generatedCodecBoundaryCall(.parser, node)) != null) continue;
-            if ((try self.graphNodeIsBuiltinTry(node))) {
+            if (self.graphNodeHasJsonScalarParser(node)) continue;
+            if (self.generatedCodecBoundaryCall(.parser, node) != null) continue;
+            if (self.graphNodeIsBuiltinTry(node)) {
                 const payloads = try self.graphTryPayloads(node);
                 if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
                     try self.graphErrorIsExactUnitTag(payloads.err, "Null"))
@@ -58168,7 +57979,7 @@ const BodyContext = struct {
                 continue;
             }
 
-            switch ((try self.graph.content(node))) {
+            switch (self.graph.content(node)) {
                 .list, .box => |payload| try pending.append(self.allocator, .{ .node = payload }),
                 .tuple => return true,
                 .record => try pending.append(self.allocator, .{ .fields = .{ .fields = (try self.graph.recordNodes(node)).fields, .next = 0 } }),
@@ -58177,11 +57988,11 @@ const BodyContext = struct {
                     if (named.builtin_owner == .set and named.args.len == 1) {
                         try pending.append(self.allocator, .{ .node = named.args[0] });
                     } else if (named.builtin_owner == .dict and named.args.len == 2) {
-                        if ((try self.graphJsonParseObjectKeyMethodName(named.args[0])) != null) {
+                        if (self.graphJsonParseObjectKeyMethodName(named.args[0]) != null) {
                             // A builtin scalar key is decoded directly by its
                             // exact `parse_key_*` method.
                             try pending.append(self.allocator, .{ .node = named.args[1] });
-                        } else if ((try self.graphNodeIsStringRenderedDictKey(named.args[0]))) {
+                        } else if (self.graphNodeIsStringRenderedDictKey(named.args[0])) {
                             if (try self.graphNodeIsUnitTagUnion(named.args[0])) return true;
                             try pending.append(self.allocator, .{ .node = named.args[1] });
                         } else {
@@ -58192,7 +58003,7 @@ const BodyContext = struct {
                         try pending.append(self.allocator, .{ .node = backing.node });
                     }
                 },
-                .redirect, .leaf => unreachable,
+                .redirect => unreachable,
                 .unresolved,
                 .primitive,
                 .empty_tag_union,
@@ -58207,10 +58018,10 @@ const BodyContext = struct {
     }
 
     fn graphNodeIsUnitTagUnion(self: *BodyContext, raw_node: NodeId) Allocator.Error!bool {
-        const node = (try self.graphShapeNode(raw_node));
-        switch ((try self.graph.content(node))) {
+        const node = self.graphShapeNode(raw_node);
+        switch (self.graph.content(node)) {
             .tag_union, .named => {},
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -58233,7 +58044,7 @@ const BodyContext = struct {
         const seen_entry = try seen.getOrPut(shape_node);
         if (seen_entry.found_existing) return false;
 
-        if ((try self.generatedCodecBoundaryCall(kind, shape_node))) |codec_call| {
+        if (self.generatedCodecBoundaryCall(kind, shape_node)) |codec_call| {
             switch (codec_call.resolution) {
                 .callable => return try self.prepareCustomCodecCall(
                     boundary_expr,
@@ -58261,7 +58072,7 @@ const BodyContext = struct {
         }
 
         if (kind == .parser) {
-            if ((try self.graphJsonParseScalarMethodName(shape_node))) |method_name| {
+            if (self.graphJsonParseScalarMethodName(shape_node)) |method_name| {
                 return try self.prepareParseScalarCodecCall(
                     boundary_expr,
                     shape_node,
@@ -58269,7 +58080,7 @@ const BodyContext = struct {
                     method_name,
                 );
             }
-        } else if ((try self.graphJsonEncodeScalarMethodName(shape_node))) |method_name| {
+        } else if (self.graphJsonEncodeScalarMethodName(shape_node)) |method_name| {
             return try self.prepareEncodeScalarCodecCall(
                 boundary_expr,
                 shape_node,
@@ -58280,20 +58091,20 @@ const BodyContext = struct {
 
         // A nominal opaque with a scalar backing (e.g. `Username := Str`) prepares the codec for
         // its backing scalar; the encoder/parser reaches it after unwrapping the nominal.
-        switch ((try self.graph.content(shape_node))) {
+        switch (self.graph.content(shape_node)) {
             .named => |named| if (named.backing) |backing| {
                 const backing_is_scalar = if (kind == .parser)
-                    (try self.graphJsonParseScalarMethodName(backing.node)) != null
+                    self.graphJsonParseScalarMethodName(backing.node) != null
                 else
-                    (try self.graphJsonEncodeScalarMethodName(backing.node)) != null;
+                    self.graphJsonEncodeScalarMethodName(backing.node) != null;
                 if (backing_is_scalar) {
                     return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing.node, boundary_callable_node, seen);
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
         }
 
-        if ((try self.graphNodeIsBuiltinTry(shape_node))) {
+        if (self.graphNodeIsBuiltinTry(shape_node)) {
             const payloads = try self.graphTryPayloads(shape_node);
             var added = false;
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Null")) {
@@ -58322,7 +58133,7 @@ const BodyContext = struct {
             ) or added;
         }
 
-        switch ((try self.graph.content(shape_node))) {
+        switch (self.graph.content(shape_node)) {
             .named => |named| if (named.builtin_owner) |owner| switch (owner) {
                 .set => {
                     if (named.args.len != 1) Common.invariant("builtin Set graph node had an unexpected arity");
@@ -58365,7 +58176,7 @@ const BodyContext = struct {
                 },
                 .list, .box, .fields, .field, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => {},
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
         }
 
         // A dict's and a set's own backings are private representation that no
@@ -58373,7 +58184,7 @@ const BodyContext = struct {
         // never parsed or encoded, so the walk uses the element shape the codec
         // actually reaches instead.
         var container_buf: [2]NodeId = undefined;
-        const container_shapes = (try self.graphBuiltinContainerShapeNodes(shape_node, &container_buf));
+        const container_shapes = self.graphBuiltinContainerShapeNodes(shape_node, &container_buf);
         if (container_shapes.len != 0) {
             var container_added = false;
             for (container_shapes) |container_shape| {
@@ -58389,9 +58200,9 @@ const BodyContext = struct {
         }
 
         var added = false;
-        const structural_node = (try self.graphShapeNode(shape_node));
+        const structural_node = self.graphShapeNode(shape_node);
         const contract_subject_node = try self.codecContractSubjectNode(shape_node, structural_node);
-        switch ((try self.graph.content(structural_node))) {
+        switch (self.graph.content(structural_node)) {
             .list => |elem| {
                 if (kind == .parser) {
                     added = try self.prepareParseListFormatCodecCalls(
@@ -58434,10 +58245,10 @@ const BodyContext = struct {
                 }
             },
             .record, .zst, .empty_record => {
-                const fields = switch ((try self.graph.content(structural_node))) {
+                const fields = switch (self.graph.content(structural_node)) {
                     .record => (try self.graph.recordNodes(structural_node)).fields,
                     .zst, .empty_record => &.{},
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("record codec preparation reached a non-record shape"),
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("record codec preparation reached a non-record shape"),
                 };
                 if (kind == .encoder) {
                     added = try self.prepareEncodeContainerCodecCall(
@@ -58531,7 +58342,7 @@ const BodyContext = struct {
                 }
             },
             .named => {},
-            .redirect, .leaf => unreachable,
+            .redirect => unreachable,
             .unresolved, .primitive, .empty_tag_union, .func, .erased => {},
         }
         return added;
@@ -59039,7 +58850,7 @@ const BodyContext = struct {
             if (entry.found_existing) continue;
 
             const children_start = pending.items.len;
-            switch ((try self.graph.content(raw_node))) {
+            switch (self.graph.content(raw_node)) {
                 .list => {
                     const lookup = try self.withLocalProcContext(try self.builtinListDerivationLookup(structuralDerivationMethodName(mode)));
                     if (lookup.target.kind == .structural) {
@@ -59062,8 +58873,8 @@ const BodyContext = struct {
                     for ((try self.graph.tagRowNodes(raw_node)).tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
                 },
                 .named => named: {
-                    const named = (try self.graph.namedNodes(raw_node));
-                    if ((try self.methodOwnerFromNode(raw_node))) |owner| {
+                    const named = self.graph.namedNodes(raw_node);
+                    if (self.methodOwnerFromNode(raw_node)) |owner| {
                         if (try self.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |result| {
                             // A rejected declaration is this component's
                             // comparison; emission lowers it to a checked error
@@ -59100,7 +58911,7 @@ const BodyContext = struct {
                     }
                     if (named.backing) |backing| try pending.append(self.allocator, backing.node);
                 },
-                .redirect, .leaf => unreachable,
+                .redirect => unreachable,
                 .unresolved,
                 .primitive,
                 .empty_tag_union,
@@ -61158,8 +60969,8 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .applied_tag => |tag| {
-                if ((try self.graph.content(node)) == .named) {
-                    const backing = (try self.graph.namedNodes(node)).backing orelse
+                if (self.graph.content(node) == .named) {
+                    const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag demand guard had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tag demand guard backing did not advance");
                     return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
@@ -61170,14 +60981,14 @@ const BodyContext = struct {
                 }
             },
             .nominal => |nominal| {
-                const backing = (try self.graph.namedNodes(node)).backing orelse
+                const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal demand guard had no runtime backing");
                 if (backing.node == node) Common.invariant("nominal demand guard backing did not advance");
                 try self.queuePatternBinderVisit(pending, nominal.backing_pattern, backing.node);
             },
             .record_destructure => |destructs| {
-                if ((try self.graph.content(node)) == .named) {
-                    const backing = (try self.graph.namedNodes(node)).backing orelse
+                if (self.graph.content(node) == .named) {
+                    const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal record demand guard had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal record demand guard backing did not advance");
                     return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
@@ -61220,8 +61031,8 @@ const BodyContext = struct {
                 }
             },
             .tuple => |items| {
-                if ((try self.graph.content(node)) == .named) {
-                    const backing = (try self.graph.namedNodes(node)).backing orelse
+                if (self.graph.content(node) == .named) {
+                    const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple demand guard had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tuple demand guard backing did not advance");
                     return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
@@ -63176,7 +62987,7 @@ const BodyContext = struct {
     ) Allocator.Error!IterStepShape {
         const topology = plan.step_topology;
         const iterator_node = try iterator_cell.toGraphNode(self.graph);
-        const step_node = if ((try self.isGeneratedIteratorEvidenceNode(iterator_node)))
+        const step_node = if (self.isGeneratedIteratorEvidenceNode(iterator_node))
             try self.generatedIteratorStepReturnNode(iterator_node)
         else
             try self.lowerTypeNode(plan.step_ty);
@@ -63989,8 +63800,8 @@ const BodyContext = struct {
                 try self.queuePatternBinderVisit(pending, as.pattern, node);
             },
             .applied_tag => |tag| {
-                if ((try self.graph.content(node)) == .named) {
-                    const backing = (try self.graph.namedNodes(node)).backing orelse
+                if (self.graph.content(node) == .named) {
+                    const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tag pattern backing did not advance");
                     try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
@@ -64002,14 +63813,14 @@ const BodyContext = struct {
                 }
             },
             .nominal => |nominal| {
-                const backing = (try self.graph.namedNodes(node)).backing orelse
+                const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
                 if (backing.node == node) Common.invariant("nominal pattern backing did not advance");
                 try self.queuePatternBinderVisit(pending, nominal.backing_pattern, backing.node);
             },
             .record_destructure => |destructs| {
-                if ((try self.graph.content(node)) == .named) {
-                    const backing = (try self.graph.namedNodes(node)).backing orelse
+                if (self.graph.content(node) == .named) {
+                    const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
                     try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
@@ -64046,8 +63857,8 @@ const BodyContext = struct {
                 }
             },
             .tuple => |items| {
-                if ((try self.graph.content(node)) == .named) {
-                    const backing = (try self.graph.namedNodes(node)).backing orelse
+                if (self.graph.content(node) == .named) {
+                    const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tuple pattern backing did not advance");
                     try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
@@ -64147,7 +63958,7 @@ const BodyContext = struct {
         }
 
         const pattern = self.view.bodies.pattern(pattern_id);
-        const representation_node = (try self.constructorRepresentationNode(node));
+        const representation_node = self.constructorRepresentationNode(node);
         const data: BodyPatData = switch (pattern.data) {
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPatternPlanPlaceholderAtNode(as.pattern, node, pending),
@@ -64155,8 +63966,8 @@ const BodyContext = struct {
                     Common.invariant("materialized as-pattern binder was not pre-registered"),
             } },
             .applied_tag => |tag| blk: {
-                if ((try self.graph.content(representation_node)) == .named) {
-                    const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal tag pattern shell backing did not advance");
                     return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
@@ -64174,17 +63985,17 @@ const BodyContext = struct {
                 break :blk .{ .tag = .{ .name = name, .payloads = try self.addPatSpan(payloads) } };
             },
             .nominal => |nominal| {
-                if ((try self.graph.content(representation_node)) != .named) {
+                if (self.graph.content(representation_node) != .named) {
                     Common.invariant("checked nominal pattern had no nominal graph representation");
                 }
-                const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                const backing = self.graph.namedNodes(representation_node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
                 if (backing.node == representation_node) Common.invariant("nominal pattern shell backing did not advance");
                 return .{ .nominal = .{ .representation_node = representation_node, .pattern = nominal.backing_pattern, .backing = backing.node } };
             },
             .record_destructure => |destructs| blk: {
-                if ((try self.graph.content(representation_node)) == .named) {
-                    const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal record pattern shell backing did not advance");
                     return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
@@ -64212,8 +64023,8 @@ const BodyContext = struct {
                 break :blk .{ .record = try self.addRecordDestructSpan(lowered.items) };
             },
             .tuple => |items| blk: {
-                if ((try self.graph.content(representation_node)) == .named) {
-                    const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal tuple pattern shell backing did not advance");
                     return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
@@ -64423,7 +64234,7 @@ const BodyContext = struct {
         }
         const pattern = self.view.bodies.pattern(pattern_id);
         const cell = DraftTypeCell.fromGraphNode(node);
-        const representation_node = (try self.constructorRepresentationNode(node));
+        const representation_node = self.constructorRepresentationNode(node);
         const data: BodyPatData = switch (pattern.data) {
             .pending,
             .runtime_error,
@@ -64436,8 +64247,8 @@ const BodyContext = struct {
                 return null;
             },
             .applied_tag => |tag| {
-                if ((try self.graph.content(representation_node)) == .named) {
-                    const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
                     try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
                     try self.appendPatNodeChild(pat_run, pattern_id, backing.node, in_match);
@@ -64451,18 +64262,18 @@ const BodyContext = struct {
                 return null;
             },
             .nominal => |nominal| {
-                if ((try self.graph.content(representation_node)) != .named) {
+                if (self.graph.content(representation_node) != .named) {
                     Common.invariant("checked nominal pattern had no nominal graph representation");
                 }
-                const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                const backing = self.graph.namedNodes(representation_node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
                 try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
                 try self.appendPatNodeChild(pat_run, nominal.backing_pattern, backing.node, in_match);
                 return null;
             },
             .record_destructure => |destructs| {
-                if ((try self.graph.content(representation_node)) == .named) {
-                    const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal record pattern backing did not advance");
                     try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
@@ -64513,8 +64324,8 @@ const BodyContext = struct {
                 return null;
             },
             .tuple => |items| {
-                if ((try self.graph.content(representation_node)) == .named) {
-                    const backing = (try self.graph.namedNodes(representation_node)).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
                     try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
                     try self.appendPatNodeChild(pat_run, pattern_id, backing.node, in_match);
@@ -64556,7 +64367,7 @@ const BodyContext = struct {
             switch (pattern.data) {
                 .nominal => |nominal| {
                     child = nominal.backing_pattern;
-                    result_node = (try self.optionalTryBackingNode(result_node));
+                    result_node = self.optionalTryBackingNode(result_node);
                 },
                 .pending, .assign, .as, .applied_tag, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => break pattern,
             }
@@ -64593,7 +64404,7 @@ const BodyContext = struct {
                 }
                 if (tag_name == err_name) {
                     const err_node = try self.graph.tagPayloadNode(
-                        (try self.optionalTryBackingNode(result_node)),
+                        self.optionalTryBackingNode(result_node),
                         err_name,
                         0,
                     );
@@ -65453,12 +65264,12 @@ test "open draft recursive provenance joins fresh interface cells only while low
     frames = try addRuntimeDemandGuardFrame(&draft, recursive_frames, nested_frame, recursive_proof);
     try std.testing.expectEqual(@as(u32, 2), frames.depth);
 
-    try std.testing.expect(!(try graph.sameFunctionInterface(active_fn, recursive_fn)));
+    try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, false));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, true, false));
     try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, true));
     try graph.unify(active_fn, recursive_fn);
-    try std.testing.expect((try graph.sameFunctionInterface(active_fn, recursive_fn)));
+    try std.testing.expect(graph.sameFunctionInterface(active_fn, recursive_fn));
     try std.testing.expect(graph.sameClass(shared_ret, recursive_ret));
 
     const independent_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
@@ -65466,7 +65277,7 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .args = try graph.arena().dupe(NodeId, &.{independent_arg}),
         .ret = shared_ret,
     } });
-    try std.testing.expect(!(try graph.sameFunctionInterface(active_fn, independent_fn)));
+    try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 
@@ -65680,6 +65491,8 @@ test "body context inspects graph-owned types despite program TypeId collisions"
     var ctx: BodyContext = undefined;
     ctx.spare_inst_frames = .empty;
     defer ctx.deinitSpareInstFrames();
+    ctx.type_uninhabited_scratch = .{};
+    defer ctx.type_uninhabited_scratch.deinit(gpa);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -65819,10 +65632,10 @@ test "graph constructor representation follows aliases and preserves nominal lay
     ctx.spare_inst_frames = .empty;
     defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
-    try std.testing.expectEqual(structural, (try ctx.constructorRepresentationNode(structural)));
-    try std.testing.expectEqual(structural, (try ctx.constructorRepresentationNode(alias)));
-    try std.testing.expectEqual(nominal, (try ctx.constructorRepresentationNode(nominal)));
-    try std.testing.expectEqual(nominal, (try ctx.constructorRepresentationNode(outer_alias)));
+    try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(structural));
+    try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
+    try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(nominal));
+    try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(outer_alias));
 }
 
 test "issue 11288: root substitutions share lexical cells and isolate separate instantiations" {
@@ -67216,16 +67029,12 @@ const NodeUninhabitedScan = struct {
             return .{ .value = false };
         }
         if (self.settled().get(root)) |answer| return .{ .value = answer };
-        // An unread leaf is exactly its finished type, whose answer is
-        // settled.
-        if (body.graph.leafType(root)) |ty| return .{ .value = try body.typeIsProvenUninhabitedWith(ty, self.backing_access) };
 
-        const expansion: Evaluation.Expansion = switch ((try body.graph.content(root))) {
+        const expansion: Evaluation.Expansion = switch (body.graph.content(root)) {
             .redirect => |target| blk: {
                 try items.add(target);
                 break :blk .{ .group = .any };
             },
-            .leaf => unreachable,
             .empty_tag_union => .{ .value = true },
             .named => |named| blk: {
                 self.unsettled_hits += 1;
@@ -67282,6 +67091,72 @@ const NodeUninhabitedScan = struct {
         const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
         const answer = result orelse return;
         if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
+    }
+};
+
+/// Decides whether a sealed Monotype type is proven uninhabited. A type on
+/// the active path is not.
+const TypeUninhabitedScan = struct {
+    body: *BodyContext,
+    /// Each type being expanded, with the number of cycle hits seen before
+    /// it was entered.
+    visiting: collections.DenseMap(Type.TypeId, usize),
+    /// Re-entries of a type still being expanded. A type whose expansion saw
+    /// none answers independently of the types enclosing it, so its answer
+    /// is memoized for every later scan.
+    cycle_hits: usize = 0,
+
+    const Evaluation = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
+
+    pub fn enter(self: *TypeUninhabitedScan, items: Evaluation.Items, ty: Type.TypeId) Allocator.Error!Evaluation.Expansion {
+        if (self.visiting.contains(ty)) {
+            self.cycle_hits += 1;
+            return .{ .value = false };
+        }
+        if (self.body.draft.uninhabited_type_cache.get(ty)) |cached| return .{ .value = cached };
+        const types_ = self.body.typeStore();
+        const expansion: Evaluation.Expansion = switch (types_.get(ty)) {
+            .named => |named| blk: {
+                const backing = named.backing orelse break :blk .{ .value = false };
+                if (backing.use != .inspectable) break :blk .{ .value = false };
+                try items.add(backing.ty);
+                break :blk .{ .group = .any };
+            },
+            .box => |elem_ty| blk: {
+                try items.add(elem_ty);
+                break :blk .{ .group = .any };
+            },
+            .tuple => |elems| blk: {
+                const item_types = types_.span(elems);
+                for (0..GuardedList.borrowLen(item_types)) |index| try items.add(GuardedList.at(item_types, index));
+                break :blk .{ .group = .any };
+            },
+            .record => |fields| blk: {
+                const field_span = types_.fieldSpan(fields);
+                for (0..GuardedList.borrowLen(field_span)) |index| try items.add(GuardedList.at(field_span, index).ty);
+                break :blk .{ .group = .any };
+            },
+            // Uninhabited when every tag has an uninhabited payload.
+            .tag_union => |tags| blk: {
+                const tag_span = types_.tagSpan(tags);
+                for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
+                    const payloads = types_.span(GuardedList.at(tag_span, tag_index).payloads);
+                    const payload_count = GuardedList.borrowLen(payloads);
+                    try items.group(.any, payload_count);
+                    for (0..payload_count) |payload_index| try items.add(GuardedList.at(payloads, payload_index));
+                }
+                break :blk .{ .group = .all };
+            },
+            .primitive, .list, .func, .erased, .zst => .{ .value = false },
+        };
+        if (expansion == .group) try self.visiting.put(ty, self.cycle_hits);
+        return expansion;
+    }
+
+    pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, result: ?bool) std.mem.Allocator.Error!void {
+        const hits_before = (self.visiting.fetchRemove(ty) orelse return).value;
+        const decided = result orelse return;
+        if (self.cycle_hits == hits_before) try self.body.draft.uninhabited_type_cache.put(ty, decided);
     }
 };
 
@@ -67918,15 +67793,15 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
         .err_type_arg_index = try_error_type_arg_index,
     };
 
-    const direct = (try graphHostedTryInfoOrNull(graph, capability, try_node)) orelse return error.TestExpectedEqual;
+    const direct = graphHostedTryInfoOrNull(graph, capability, try_node) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(ok_node, direct.ok);
     try std.testing.expectEqual(err_node, direct.err);
 
-    const one_layer = (try graphHostedTryInfoOrNull(graph, capability, alias_node)) orelse return error.TestExpectedEqual;
+    const one_layer = graphHostedTryInfoOrNull(graph, capability, alias_node) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(ok_node, one_layer.ok);
     try std.testing.expectEqual(err_node, one_layer.err);
 
-    const two_layers = (try graphHostedTryInfoOrNull(graph, capability, outer_alias_node)) orelse return error.TestExpectedEqual;
+    const two_layers = graphHostedTryInfoOrNull(graph, capability, outer_alias_node) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(ok_node, two_layers.ok);
     try std.testing.expectEqual(err_node, two_layers.err);
 
@@ -67940,7 +67815,7 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
         .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
         .backing = .{ .node = try_node, .use = .inspectable },
     }));
-    try std.testing.expect((try graphHostedTryInfoOrNull(graph, capability, impostor_node)) == null);
+    try std.testing.expect(graphHostedTryInfoOrNull(graph, capability, impostor_node) == null);
 }
 
 test "hosted extern boundary admits only the declared host ABI type" {
@@ -68143,8 +68018,8 @@ test "request component relation follows root authority before nested private ev
     try relateRequestComponent(graph, public, private);
 
     try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, (try graph.content(public)).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(private)).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private).named.backing.?.authority);
 }
 
 test "request component relation descends through matching private-bearing containers" {
@@ -68205,8 +68080,8 @@ test "request component relation descends through matching private-bearing conta
 
     try std.testing.expect(graph.sameClass(public_list, private_list));
     try std.testing.expect(!graph.sameClass(public_elem, private_elem));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, (try graph.content(public_elem)).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(private_elem)).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_elem).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_elem).named.backing.?.authority);
 }
 
 test "monotype lower declarations are referenced" {
@@ -68261,8 +68136,8 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     try std.testing.expect(graph.sameClass(try graph.listElementNode(mono_composite), mono_opaque));
     try std.testing.expect(!graph.sameClass(checked_opaque, mono_opaque));
     try std.testing.expect(!graph.sameClass(checked_backing, mono_backing));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, (try graph.content(checked_opaque)).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(mono_opaque)).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(checked_opaque).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(mono_opaque).named.backing.?.authority);
 }
 
 test "checked-to-mono relation joins exact tag request roots without collapsing named payloads" {
@@ -68405,8 +68280,8 @@ test "direct call request preserves generated-private return provenance" {
     try std.testing.expect(request_fn != public_fn);
     try std.testing.expectEqual(private_ret, (try graph.functionNodes(request_fn)).ret);
     try std.testing.expect(!graph.sameClass(public_ret, private_ret));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, (try graph.content(public_opaque)).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(private_opaque)).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_opaque).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_opaque).named.backing.?.authority);
 }
 
 test "dispatch call target relation preserves generated-private return provenance" {
@@ -68453,8 +68328,8 @@ test "dispatch call target relation preserves generated-private return provenanc
     try std.testing.expect(!graph.sameClass(target_fn, request_fn));
     try std.testing.expect(!graph.sameClass(public_ret, private_ret));
     try std.testing.expect(!graph.sameClass(public_opaque, private_opaque));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, (try graph.content(public_opaque)).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(private_opaque)).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_opaque).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_opaque).named.backing.?.authority);
 }
 
 test "iterator request nodes preserve generated-private operand and result provenance" {
@@ -68561,8 +68436,8 @@ test "partial synthetic request nodes preserve generated-private argument and re
     try std.testing.expectEqual(private_ret, request_ret);
     try std.testing.expect(!graph.sameClass(public_arg, request_arg));
     try std.testing.expect(!graph.sameClass(public_ret, request_ret));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, (try graph.content(public_opaque)).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(private_opaque)).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_opaque).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_opaque).named.backing.?.authority);
 }
 
 test "draft type cell seals graph nodes into closed monotypes" {
@@ -69807,7 +69682,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     const cycle = try ctx.instNode(recursive);
     try std.testing.expectEqual(before + 2, diagnostics.graph.nodes_created);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.graph.unify_requests);
-    for ((try graph.content(cycle)).tuple) |child| try std.testing.expect(graph.sameClass(cycle, child));
+    for (graph.content(cycle).tuple) |child| try std.testing.expect(graph.sameClass(cycle, child));
     try std.testing.expectEqual(cycle, try ctx.instNode(recursive));
     var entries = ctx.instantiation.node_map.valueIterator();
     while (entries.next()) |entry| try std.testing.expect(entry.* == .node);
@@ -69994,7 +69869,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.checked_node_cache_misses);
     try std.testing.expectEqual(fn_node, try ctx.instNode(acyclic));
     const recursive_node = try ctx.instNode(recursive);
-    const items = (try graph.content(recursive_node)).tuple;
+    const items = graph.content(recursive_node).tuple;
     try std.testing.expect(graph.sameClass(recursive_node, items[0]));
     try std.testing.expectEqual(items[0], items[1]);
     try std.testing.expectEqual(fn_node, items[2]);
@@ -70077,7 +69952,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     const recursive_node = try ctx.instNode(recursive);
     try std.testing.expectEqual(@as(u64, 4), diagnostics.nodes_created);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
-    for ((try graph.content(recursive_node)).tuple) |child| try std.testing.expect(graph.sameClass(child, recursive_node));
+    for (graph.content(recursive_node).tuple) |child| try std.testing.expect(graph.sameClass(child, recursive_node));
     try std.testing.expectEqual(recursive_node, try ctx.instNode(recursive));
     // Evidence remains attached to permanent nodes even when a placeholder
     // redirects. Fresh contexts allocate independent cells in this same graph.
@@ -70181,7 +70056,7 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     try std.testing.expectEqual(@as(u64, if (recursive) 4 else 3), diagnostics.graph.nodes_created);
     try std.testing.expectEqual(@as(u64, if (recursive) 1 else 0), diagnostics.graph.unify_requests);
     const tuple_node = (try graph.functionNodes(node)).args[0];
-    const items = (try graph.content(tuple_node)).tuple;
+    const items = graph.content(tuple_node).tuple;
     if (recursive) {
         try std.testing.expect(graph.sameClass(tuple_node, items[0]));
         try std.testing.expectEqual(items[0], items[1]);

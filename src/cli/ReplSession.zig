@@ -2592,7 +2592,7 @@ fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void 
 
     try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
     try expectCompiledBackend(.dev, expr, expected, &compiled.lowered);
-    try expectCompiledBackend(.wasm, expr, expected, &compiled.wasm_lowered.?);
+    try expectCompiledBackend(.wasm, expr, expected, &compiled.wasm_lowered);
 }
 
 fn expectCompiledBackend(

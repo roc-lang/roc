@@ -584,11 +584,10 @@ pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalRe
 pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
-    /// Null when the caller asked for no wasm lowering.
-    wasm_lowered: ?LoweredProgram,
+    wasm_lowered: LoweredProgram,
 
     pub fn deinit(self: *CompiledProgram, allocator: Allocator) void {
-        if (self.wasm_lowered) |*wasm_lowered| wasm_lowered.deinit(allocator);
+        self.wasm_lowered.deinit(allocator);
         self.lowered.deinit(allocator);
         cleanupParseAndCanonical(allocator, self.resources);
     }
@@ -1024,14 +1023,10 @@ pub fn compileInspectedProgramWithStrategy(
     source: []const u8,
     imports: []const ModuleSource,
     specialization_strategy: base.SpecializationStrategy,
-    wasm: WasmLowering,
 ) Error!CompiledProgram {
     const resources = try parseInspectedProgramImpl(allocator, source_kind, source, imports, null, null);
-    return lowerInspectedProgramWithStrategy(allocator, io, resources, specialization_strategy, wasm);
+    return lowerInspectedProgramWithStrategy(allocator, io, resources, specialization_strategy);
 }
-
-/// Whether a compile also lowers the program for the 32-bit wasm target.
-pub const WasmLowering = enum { lower, skip };
 
 /// Parse, check, and publish an inspect-wrapped program without lowering it.
 pub fn parseAndCanonicalizeInspectedProgram(
@@ -1120,7 +1115,7 @@ pub fn lowerInspectedProgram(
     io: std.Io,
     resources: ParsedResources,
 ) Error!CompiledProgram {
-    return lowerInspectedProgramWithStrategy(allocator, io, resources, .lss, .lower);
+    return lowerInspectedProgramWithStrategy(allocator, io, resources, .lss);
 }
 
 /// `lowerInspectedProgram` with an explicit specialization strategy.
@@ -1129,7 +1124,6 @@ pub fn lowerInspectedProgramWithStrategy(
     io: std.Io,
     resources: ParsedResources,
     specialization_strategy: base.SpecializationStrategy,
-    wasm: WasmLowering,
 ) Error!CompiledProgram {
     var owned_resources = resources;
     errdefer cleanupParseAndCanonical(allocator, owned_resources);
@@ -1142,16 +1136,13 @@ pub fn lowerInspectedProgramWithStrategy(
         owned.deinit(allocator);
     }
 
-    const wasm_lowered: ?LoweredProgram = switch (wasm) {
-        .lower => try lowerParsedProgramToLirWithOptions(allocator, io, &owned_resources, .u32, .{
-            .specialization_strategy = specialization_strategy,
-        }),
-        .skip => null,
-    };
-    errdefer if (wasm_lowered) |lowered_wasm| {
-        var owned = lowered_wasm;
+    const wasm_lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &owned_resources, .u32, .{
+        .specialization_strategy = specialization_strategy,
+    });
+    errdefer {
+        var owned = wasm_lowered;
         owned.deinit(allocator);
-    };
+    }
 
     return .{
         .resources = owned_resources,

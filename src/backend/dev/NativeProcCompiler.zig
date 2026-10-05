@@ -170,7 +170,6 @@ fn Job(comptime CG: type) type {
                 source.cpu_level,
             );
             defer cg.deinit();
-            cg.stack_plan_maps = try laneStackPlanMaps(worker);
             cg.generation_mode = source.generation_mode;
             cg.dict_seed_mode = source.dict_seed_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
@@ -183,29 +182,6 @@ fn Job(comptime CG: type) type {
                 try Artifact.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.data);
         }
     };
-}
-
-const StackPlanMapsKey = struct {
-    var value: u8 = 0;
-};
-
-/// The stack-plan maps this lane keeps across the procedures it compiles.
-fn laneStackPlanMaps(worker: tasks.Worker) Allocator.Error!*Emitter.StackPlanMaps {
-    const key: *const anyopaque = @ptrCast(&StackPlanMapsKey.value);
-    if (worker.lane_state.get(key)) |existing| return @ptrCast(@alignCast(existing));
-    const maps = try worker.allocator.create(Emitter.StackPlanMaps);
-    errdefer worker.allocator.destroy(maps);
-    maps.* = Emitter.StackPlanMaps.init(worker.allocator);
-    errdefer maps.deinit();
-    try worker.lane_state.put(key, maps, struct {
-        fn deinit(opaque_maps: *anyopaque) void {
-            const owned: *Emitter.StackPlanMaps = @ptrCast(@alignCast(opaque_maps));
-            const allocator = owned.nodes.allocator;
-            owned.deinit();
-            allocator.destroy(owned);
-        }
-    }.deinit);
-    return maps;
 }
 
 const wave_capacity = 32;
