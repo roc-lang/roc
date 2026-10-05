@@ -15354,7 +15354,32 @@ instantiation, not the target's generic declared callable, supplies the method
 worker's hidden descriptors and its nested dictionaries, so a generic target
 such as `List.is_eq` reached for `List(Str)` receives `Str`'s dictionary. A
 dictionary's method evidence entries are one contiguous span even when planning
-one of them plans a nested dictionary first.
+one of them plans a nested dictionary first. Where the target's declared
+position names variables of the target's own scheme and the requirement's
+position is written only in variables the call binds (the dispatcher and the
+calling edge's instantiated variables), the method is called at the
+requirement's position with those variables replaced: relating the target's
+declared position to it binds the target's variables, as checking would at an
+evidence edge. `U64.from_numeral`, whose checked result's error row is open,
+reached for a requirement `Try(b, [InvalidNumeral(Str)])` is called at
+`Try(U64, [InvalidNumeral(Str)])`. The plan builds that representation by
+replacing the bound variables in the requirement's representation (a nominal
+use's actuals are its replaced arguments, and its backing template stays
+shared), once per position and bindings.
+
+Boxy derives callable-derived evidence (no checked evidence vector for the
+call, a `from_callable` slot, or an evidence node whose nested evidence is
+`from_callable`) as Monotype does. A receiver reachable through the callable's
+own type is the call's type at that position. A receiver checking reached only
+through another requirement's constraint callable (`constraint_callable`, such
+as the literal in `|c| c.count + 1`, whose type only `plus`'s signature
+relates to `c.count`) is the parameter's checked path walked over the call
+types of the method the same call selected for the requirement owning that
+constraint callable, which is planned earlier in the call. The call's
+requirement substitution then names that receiver, so its dictionary's
+adapter describes requirement positions written in it, and the worker's
+descriptor for the receiver is the representation its dictionary was planned
+at.
 
 Derived `is_eq` and `to_hash` compare and hash each component with that
 component type's own method, exactly as a direct comparison would, which is
