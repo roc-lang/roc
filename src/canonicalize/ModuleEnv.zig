@@ -1831,6 +1831,19 @@ fn addSourceRegionTo(
     try document.addSourceRegion(region_info, annotation, filename, self.getSourceAll(), self.getLineStartsAll());
 }
 
+/// Appends this module's source excerpt for `region_info` to `report`, which
+/// takes its own copy of `filename`.
+fn addOwnedSourceRegionTo(
+    self: *const Self,
+    report: *Report,
+    region_info: RegionInfo,
+    annotation: reporting.Annotation,
+    filename: []const u8,
+) Allocator.Error!void {
+    const owned_filename = try report.addOwnedString(filename);
+    try self.addSourceRegionTo(&report.document, region_info, annotation, owned_filename);
+}
+
 /// Convert a canonicalization diagnostic to a Report for rendering.
 pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!Report {
     return switch (diagnostic) {
@@ -1846,8 +1859,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_literal);
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Check that the number is correctly formatted. Valid examples include: ");
@@ -1874,8 +1886,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1888,8 +1899,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("This reads ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" before every path has assigned it a value.");
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1905,8 +1915,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1922,8 +1931,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1941,8 +1949,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" above this use, or move both to the top level.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1962,8 +1969,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1979,8 +1985,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -1991,8 +1996,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Fix the syntax error reported for this expression instead of trying to execute it.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2003,8 +2007,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this expression.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2016,8 +2019,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" does not exist.");
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2097,8 +2099,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2128,8 +2129,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("The type ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2142,8 +2142,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("You are using the type ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" like a nominal type, but it is an alias.");
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -2241,8 +2240,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2258,8 +2256,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Only associated values, type declarations, and type annotations are allowed in an associated block.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2284,8 +2281,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -2294,8 +2290,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Unrecognized Syntax", "I don't recognize this syntax.", .runtime_error);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("This might be a syntax error, an unsupported language feature, or a typo.");
@@ -2312,8 +2307,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("For example: ");
             try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2396,8 +2390,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("The identifier ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is exposed multiple times in the module header.");
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 
@@ -2416,8 +2409,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2486,8 +2478,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -2567,16 +2558,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
             break :blk report;
         },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Empty Tuple Not Allowed", "I am part way through parsing this tuple, but it is empty.", .runtime_error);
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
             try report.document.addAnnotated("{}", .inline_code);
@@ -2588,8 +2577,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Malformed Where Clause", "This where clause could not be parsed correctly.", .runtime_error);
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("Check the syntax of your where clause.");
 
@@ -2658,8 +2646,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2686,8 +2673,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -2729,8 +2715,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -2760,8 +2745,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(", which does not exist.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2775,8 +2759,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(self.getIdent(data.module_name));
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2839,8 +2822,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" was not found in this Roc project.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2855,8 +2837,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" imported into this Roc file.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2885,8 +2866,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(nested_name);
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2905,8 +2885,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(parent_name);
             try report.headline.addReflowingText(", so it can't be named here.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addReflowingText("It describes how a builtin format tracks its own state while encoding or parsing, which is why it has no spelling in Roc code. To require that a type can be encoded or parsed, name the constraint instead, as in ");
             try report.document.addInlineCode(switch (data.kind) {
@@ -2943,8 +2922,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2963,8 +2941,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("map2");
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
 
             // Hint
@@ -2989,8 +2966,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_count);
             try report.headline.addReflowingText(" values, which exceeds the compiler limit.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3002,8 +2978,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("where");
             try report.headline.addReflowingText(" clause inside a type declaration.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" ");
@@ -3018,8 +2993,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Where Alias Constrains Another Type", "", .runtime_error);
             try report.headline.addReflowingText("A where alias constrains only its receiver, but this constraint is on a different type variable.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("Write this constraint against ");
             try report.document.addInlineCode(self.getIdent(data.receiver_name));
@@ -3035,8 +3009,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("..");
             try report.headline.addReflowingText(" inside a type declaration.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -3057,8 +3030,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addRecordField(owned_field_name);
             try report.headline.addReflowingText(" field depends on itself.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("A field default (");
@@ -3081,8 +3053,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(" instead.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3098,8 +3069,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(" default. Remove the default, or give the field a regular name if it should be filled when omitted.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3111,8 +3081,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records).");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -3131,8 +3100,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(") are only allowed on nominal type declarations at the top level of a module, not on type declarations inside a function or block.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -3151,8 +3119,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("_name");
             try report.headline.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -3195,8 +3162,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" (opaque nominal type)");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3250,8 +3216,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(") are just shorthand for another type and cannot define modules.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3274,8 +3239,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addInlineCode("main! = |arg| { ... }");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3302,8 +3266,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addInlineCode("main! = |arg| { ... }");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3320,8 +3283,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is a default app module and cannot be imported.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3353,8 +3315,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Make sure the type name matches the filename exactly (case-sensitive).");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3375,8 +3336,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" header and ensure your file defines a type that matches the filename.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -3400,8 +3360,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" to update the pin, or switch to the pinned version of the compiler.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -3431,8 +3390,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" from the exposing clause.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3462,8 +3420,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addInlineCode(owned_example);
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3479,8 +3436,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Choose a different name for this identifier.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3757,8 +3713,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_suffix = try report.addOwnedString(suffix);
             const owned_suggested = try report.addOwnedString(suggested);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("The ");
@@ -3779,8 +3734,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("a..=b");
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },

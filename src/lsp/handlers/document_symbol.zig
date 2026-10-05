@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const syntax = @import("../syntax.zig");
 
 /// Handler for `textDocument/documentSymbol` requests.
 pub fn handler(comptime ServerType: type) type {
@@ -49,44 +50,10 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Use the syntax checker to get the canonicalized module
-            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.BuiltinArtifactVersionMismatch,
-                error.Canceled,
-                error.CorruptArtifact,
-                error.CorruptBuiltinArtifact,
-                error.CorruptEmbeddedBuiltins,
-                error.DeviceBusy,
-                error.FileBusy,
-                error.FileNotFound,
-                error.FileSystem,
-                error.FileTooBig,
-                error.InputOutput,
-                error.IsDir,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.OperationUnsupported,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.StaleEmbeddedBuiltins,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.Unexpected,
-                error.UnrecognizedVolume,
-                error.WriteFailed,
-                => {
-                    try self.sendResponse(id, &[_]SymbolInformation{});
-                    return;
-                },
+            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| {
+                _ = try syntax.queryFailureName(err);
+                try self.sendResponse(id, &[_]SymbolInformation{});
+                return;
             };
             defer {
                 for (symbols) |*sym| {

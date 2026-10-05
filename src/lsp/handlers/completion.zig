@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const syntax = @import("../syntax.zig");
 const position_params = @import("position_params.zig");
 
 /// CompletionItemKind values as defined by the LSP specification.
@@ -56,50 +57,15 @@ pub fn handler(comptime ServerType: type) type {
                 text,
                 line,
                 character,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.BuiltinArtifactVersionMismatch,
-                error.Canceled,
-                error.CorruptArtifact,
-                error.CorruptBuiltinArtifact,
-                error.CorruptEmbeddedBuiltins,
-                error.DeviceBusy,
-                error.FileBusy,
-                error.FileNotFound,
-                error.FileSystem,
-                error.FileTooBig,
-                error.InputOutput,
-                error.IsDir,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.OperationUnsupported,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.StaleEmbeddedBuiltins,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.Unexpected,
-                error.UnrecognizedVolume,
-                error.WriteFailed,
-                => {
-                    std.log.err("completion failed: {s}", .{@errorName(err)});
-                    // Return empty completion list on error
-                    const CompletionResponse = struct {
-                        isIncomplete: bool = false,
-                        items: []const CompletionItem = &.{},
-                    };
-                    try self.sendResponse(id, CompletionResponse{});
-                    return;
-                },
+            ) catch |err| {
+                std.log.err("completion failed: {s}", .{try syntax.queryFailureName(err)});
+                // Return empty completion list on error
+                const CompletionResponse = struct {
+                    isIncomplete: bool = false,
+                    items: []const CompletionItem = &.{},
+                };
+                try self.sendResponse(id, CompletionResponse{});
+                return;
             };
 
             if (completion_result) |result| {

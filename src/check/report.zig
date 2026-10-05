@@ -296,15 +296,18 @@ pub const ReportBuilder = struct {
         try document.addSourceRegion(region_info, annotation, self.filename, self.source, self.module_env.getLineStarts());
     }
 
+    /// Appends the checked module's source excerpt for `region` to `document`.
+    fn addSourceRegionOf(self: *const Self, document: *Document, region: Region, annotation: reporting.Annotation) Allocator.Error!void {
+        try self.addSourceRegionTo(document, self.module_env.calcRegionInfo(region), annotation);
+    }
+
     fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(region));
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, try self.expressionHighlightRegion(region), .error_highlight);
     }
 
     /// Add source code warning highlighting for a region.
     fn addSourceWarningRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const region_info = self.module_env.calcRegionInfo(region);
-        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
+        try self.addSourceRegionOf(&report.document, region, .warning_highlight);
     }
 
     fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
@@ -976,9 +979,9 @@ pub const ReportBuilder = struct {
                     .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, ctx),
                     .nominal_constructor => |ctx| switch (ctx.backing_type) {
                         .tag => self.buildInvalidNominalTag(mismatch.types),
-                        .record => self.buildInvalidNominalRecord(mismatch.types),
-                        .tuple => self.buildInvalidNominalTuple(mismatch.types),
-                        .value => self.buildInvalidNominalValue(mismatch.types),
+                        .record => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", "The record I found is:"),
+                        .tuple => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", "The tuple I found is:"),
+                        .value => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Type", "I'm having trouble with this nominal type.", "The value I found has type:"),
                     },
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
@@ -2082,8 +2085,7 @@ pub const ReportBuilder = struct {
             null;
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2148,88 +2150,27 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for invalid nominal record (record fields don't match)
-    fn buildInvalidNominalRecord(
+    /// Build a report for a nominal type whose wrapped record, tuple, or value
+    /// does not match what the nominal type expects.
+    fn buildInvalidNominalBacking(
         self: *Self,
         types: TypePair,
+        title: []const u8,
+        headline: []const u8,
+        found_intro: []const u8,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", .runtime_error);
+        var report = try Report.init(self.gpa, title, headline, .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
         const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
-        try report.document.addText("The record I found is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
-    /// Build a report for invalid nominal tuple (tuple elements don't match)
-    fn buildInvalidNominalTuple(
-        self: *Self,
-        types: TypePair,
-    ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", .runtime_error);
-        errdefer report.deinit();
-
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
-            try report.document.addLineBreak();
-        }
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The tuple I found is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
-    /// Build a report for invalid nominal value (value type doesn't match)
-    fn buildInvalidNominalValue(
-        self: *Self,
-        types: TypePair,
-    ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Nominal Type", "I'm having trouble with this nominal type.", .runtime_error);
-        errdefer report.deinit();
-
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
-            try report.document.addLineBreak();
-        }
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The value I found has type:");
+        try report.document.addText(found_intro);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(actual_type);
@@ -2348,8 +2289,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         return report;
     }
@@ -2374,8 +2314,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2404,8 +2343,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2430,8 +2368,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2456,8 +2393,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2500,8 +2436,7 @@ pub const ReportBuilder = struct {
             D.bytes("method to it."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2542,8 +2477,7 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!void {
         const region: Region = owner_region orelse
             (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
-        const region_info = self.module_env.calcRegionInfo(region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, region, .error_highlight);
         try report.document.addLineBreak();
     }
 
@@ -2789,8 +2723,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting on the offending dispatch call (the
         // primary region).
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         // When the dispatch is hidden inside a helper, the call site (primary
@@ -2837,8 +2770,7 @@ pub const ReportBuilder = struct {
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -2976,8 +2908,7 @@ pub const ReportBuilder = struct {
 
         const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -3007,8 +2938,7 @@ pub const ReportBuilder = struct {
             D.bytes("access alone."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -3041,8 +2971,7 @@ pub const ReportBuilder = struct {
         const owned_message = try report.addOwnedString(message);
         try D.renderSliceInto(&.{D.bytes(owned_message)}, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         return report;
     }
@@ -3069,8 +2998,7 @@ pub const ReportBuilder = struct {
             D.bytes("instead."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         const hint: []const u8 = switch (data.kind) {
@@ -3500,8 +3428,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.");
 
@@ -3521,8 +3448,7 @@ pub const ReportBuilder = struct {
             D.bytes("field performs effects, but a field default must be pure."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A default is filled in by the compiler wherever construction omits the field, so running effects here would happen at unpredictable times. Compute the value with an effectful function first, then pass it explicitly.");
 
@@ -3542,8 +3468,7 @@ pub const ReportBuilder = struct {
             D.bytes("field constructs a record that eventually needs this same default again."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Every omitted defaulted field is filled in by the compiler. This chain of omitted fields comes back to the default it started from, so construction would never finish. Supply a field explicitly somewhere in the cycle or use a non-recursive default.");
 
@@ -3583,8 +3508,7 @@ pub const ReportBuilder = struct {
             D.bytes("field is always present, but it is being accessed as if it were optional."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("An optional access produces a ");
         try report.document.addAnnotated("Try", .inline_code);
@@ -3625,8 +3549,7 @@ pub const ReportBuilder = struct {
             },
         }
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         switch (data.reason) {
@@ -3702,8 +3625,7 @@ pub const ReportBuilder = struct {
             D.bytes("field is required, but it is being unset as if it were optional."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Unsetting a field selects the missing state of an optional field\u{2014}but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.");
 
@@ -3728,8 +3650,7 @@ pub const ReportBuilder = struct {
             D.bytes("field has a default value, but it is being unset as if it were optional."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.");
 
@@ -4036,8 +3957,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
         }
 
         try report.document.addLineBreak();
@@ -4063,8 +3983,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
         }
 
         try report.document.addLineBreak();
@@ -4453,8 +4372,7 @@ pub const ReportBuilder = struct {
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4498,8 +4416,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4588,8 +4505,7 @@ pub const ReportBuilder = struct {
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4622,8 +4538,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4787,126 +4702,82 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Hosted Function Requires Boxed Lambda", "Hosted functions cannot accept or return unboxed functions.", .runtime_error);
+    /// Build a report that highlights `region` and follows it with `details`.
+    fn buildHighlightedRegionReport(
+        self: *Self,
+        title: []const u8,
+        headline: []const u8,
+        severity: reporting.Severity,
+        region: Region,
+        details: []const D,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, title, headline, severity);
         errdefer report.deinit();
 
-        try self.addSourceHighlightRegion(&report, data.region);
+        try self.addSourceHighlightRegion(&report, region);
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try D.renderSlice(&.{
-            D.bytes("Wrap function types in"),
-            D.bytes("Box").withAnnotation(.inline_code),
-            D.bytes("when crossing the host boundary."),
-        }, self, &report);
+        try D.renderSlice(details, self, &report);
         return report;
     }
 
+    fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Hosted Function Requires Boxed Lambda", "Hosted functions cannot accept or return unboxed functions.", .runtime_error, data.region, &.{
+            D.bytes("Wrap function types in"),
+            D.bytes("Box").withAnnotation(.inline_code),
+            D.bytes("when crossing the host boundary."),
+        });
+    }
+
     fn buildHostedFunctionNotEffectfulReport(self: *Self, data: HostedFunctionNotEffectful) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error, data.region, &.{
             D.bytes("Every use of it crashes at runtime until it is declared with"),
             D.bytes("=>").withAnnotation(.inline_code),
             D.bytes("instead of"),
             D.bytes("->").withAnnotation(.inline_code),
             D.bytes("like every other hosted function."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildHostedTypeVariableNotBoxedReport(self: *Self, data: HostedTypeVariableNotBoxed) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error, data.region, &.{
             D.bytes("The host has one C signature for every use of this function, so it can only receive or return a value of an unknown type through a pointer. Wrap each type variable in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("so the host only ever sees that pointer."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildHostBoundaryOpenRowReport(self: *Self, data: HostBoundaryOpenRow) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Host Boundary Requires Closed Rows", "Host-bound types cannot contain open record or tag-union rows.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Host Boundary Requires Closed Rows", "Host-bound types cannot contain open record or tag-union rows.", .runtime_error, data.region, &.{
             D.bytes("Close every record and tag-union row in this type before it crosses the host boundary."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildHostBoundaryOptionalFieldReport(self: *Self, data: HostBoundaryOptionalField) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Host Boundary Forbids Optional Fields", "Host-bound types cannot contain `?:` record fields.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Host Boundary Forbids Optional Fields", "Host-bound types cannot contain `?:` record fields.", .runtime_error, data.region, &.{
             D.bytes("Replace each"),
             D.bytes("?:").withAnnotation(.inline_code),
             D.bytes("field with a required field whose value explicitly represents absence before it crosses the host boundary."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Top Level Value", "This top-level definition performs an effect while initializing.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Effectful Top Level Value", "This top-level definition performs an effect while initializing.", .runtime_error, data.region, &.{
             D.bytes("Move the effect into a function body so it runs when the function is called."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulComptimeExpressionReport(self: *Self, data: EffectfulComptimeExpression) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error, data.region, &.{
             D.bytes("Use a pure expression here, or run effectful code from a Roc application."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Expect", "This expect performs an effect while evaluating its condition.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Effectful Expect", "This expect performs an effect while evaluating its condition.", .runtime_error, data.region, &.{
             D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulFunctionNameReport(self: *Self, data: EffectfulFunctionName) Allocator.Error!Report {
@@ -4926,31 +4797,15 @@ pub const ReportBuilder = struct {
     }
 
     fn buildAnnotationOnlyValueReport(self: *Self, data: AnnotationOnlyValue) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning, data.region, &.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildAnnotationOnlyValueUseReport(self: *Self, data: AnnotationOnlyValueUse) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Reference Has No Value", "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Reference Has No Value", "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use.", .runtime_error, data.region, &.{
             D.bytes("Give that declaration a value body, or stop referring to it here."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildCapturingLocalTypeEscapeReport(self: *Self, data: CapturingLocalTypeEscape) Allocator.Error!Report {
@@ -5049,21 +4904,13 @@ pub const ReportBuilder = struct {
     /// Build a report for a mutable `var` whose annotation introduces an unbound
     /// type variable.
     fn buildPolymorphicVarAnnotationReport(self: *Self, data: PolymorphicVarAnnotation) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Polymorphic Var", "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Polymorphic Var", "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type.", .runtime_error, data.region, &.{
             D.bytes("Give it a concrete type, or replace the type variable with"),
             D.bytes("_").withAnnotation(.inline_code),
             D.bytes("to let the type be inferred from how the"),
             D.bytes("var").withAnnotation(.inline_code),
             D.bytes("is used."),
-        }, self, &report);
-        return report;
+        });
     }
 
     /// Format a compile-time failure's foreign origin (source inlined from
@@ -5090,8 +4937,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5124,8 +4970,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5158,8 +5003,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5203,8 +5047,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting - shows the expect expression with syntax highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         if (data.origin) |origin| {
@@ -5244,8 +5087,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -5427,8 +5269,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Unreachable Code", "This code is unreachable because an earlier expression always exits.", .warning);
         errdefer report.deinit();
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .warning_highlight);
 
         return report;
     }
@@ -5446,8 +5287,7 @@ pub const ReportBuilder = struct {
             D.bytes("was not taken during compile-time evaluation."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.branch_region);
-        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
+        try self.addSourceRegionOf(&report.document, data.branch_region, .warning_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -5480,8 +5320,7 @@ pub const ReportBuilder = struct {
             D.bytes(consequence),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try self.addSourceRegionTo(&report.document, region_info, .warning_highlight);
+        try self.addSourceRegionOf(&report.document, data.region, .warning_highlight);
 
         return report;
     }

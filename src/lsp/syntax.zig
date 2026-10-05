@@ -48,6 +48,47 @@ pub const SyntaxCheckError = SyntaxPrepareDocumentError || error{WriteFailed};
 /// Errors that can occur while answering syntax-backed LSP queries.
 pub const SyntaxQueryError = SyntaxPrepareDocumentError || error{WriteFailed};
 
+/// The name of a failed syntax query, for request handlers that log it and
+/// answer the client with an empty result. Allocation failure propagates instead.
+pub fn queryFailureName(err: SyntaxQueryError) Allocator.Error![]const u8 {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BuiltinArtifactVersionMismatch,
+        error.Canceled,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.OperationUnsupported,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.StaleEmbeddedBuiltins,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.UnrecognizedVolume,
+        error.WriteFailed,
+        => |other| @errorName(other),
+    };
+}
+
 const MethodOwnerLookup = struct {
     owner: CIR.Statement.Idx,
     type_ident: base.Ident.Idx,
