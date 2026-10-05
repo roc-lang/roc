@@ -6013,6 +6013,12 @@ test "diagnostic summaries support colored and plain output" {
 }
 
 test "diagnostic summary header has exact colors and bounded width" {
+    const rule = repeated: {
+        const pattern = "─";
+        var result: [pattern.len * 43]u8 = undefined;
+        for (0..43) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated result;
+    };
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
@@ -6021,7 +6027,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     plain_config.max_line_width = 80;
     try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
     try std.testing.expectEqualStrings(
-        "── 1 error and 1 warning " ++ (@as([43]u8, @splat('─'))) ++ " example.roc\n\n",
+        "── 1 error and 1 warning " ++ rule ++ " example.roc\n\n",
         output.written(),
     );
 
@@ -6033,7 +6039,7 @@ test "diagnostic summary header has exact colors and bounded width" {
         ansi_term.bright_black ++ "── " ++
             ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
             ansi_term.yellow ++ "1 warning" ++ ansi_term.bright_black ++ " " ++
-            (@as([43]u8, @splat('─'))) ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
+            rule ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
         output.written(),
     );
 

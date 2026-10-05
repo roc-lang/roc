@@ -139,6 +139,12 @@ fn buildDuplicateDefinitionReport(allocator: Allocator) Allocator.Error!Report {
 }
 
 test "terminal diagnostic layout has exact plain and ANSI output" {
+    const rule = repeated: {
+        const pattern = "─";
+        var result: [pattern.len * 38]u8 = undefined;
+        for (0..38) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated result;
+    };
     var report = try buildDuplicateDefinitionReport(testing.allocator);
     defer report.deinit();
 
@@ -150,7 +156,7 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
 
     try reporting.renderReportToPlain(&report, &writer.writer, config);
     try testing.expectEqualStrings(
-        "── ● duplicate definition " ++ (@as([38]u8, @splat('─'))) ++ " example.roc:2:1\n" ++
+        "── ● duplicate definition " ++ rule ++ " example.roc:2:1\n" ++
             "\n" ++
             "The name c is being redeclared here:\n" ++
             "\n" ++
@@ -172,7 +178,7 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
     const cyan = "\x1b[36m";
     const reset = "\x1b[0m";
     try testing.expectEqualStrings(
-        gray ++ "── " ++ yellow ++ "● duplicate definition " ++ gray ++ (@as([38]u8, @splat('─'))) ++ " " ++ cyan ++ "example.roc" ++ gray ++ ":2:1" ++ reset ++ "\n" ++
+        gray ++ "── " ++ yellow ++ "● duplicate definition " ++ gray ++ rule ++ " " ++ cyan ++ "example.roc" ++ gray ++ ":2:1" ++ reset ++ "\n" ++
             "\n" ++
             "The name " ++ cyan ++ "c" ++ reset ++ " is being redeclared here:\n" ++
             "\n" ++

@@ -476,13 +476,13 @@ const merged_stdout_payload = repeated: {
     const pattern = "stdout \u{2713} issue-10465\n";
     var result: [pattern.len * (256)]@TypeOf(pattern[0]) = undefined;
     for (0..(256)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
-    break :repeated &result;
+    break :repeated result;
 };
 const merged_stderr_payload = repeated: {
     const pattern = "stderr \u{2713} issue-10465\n";
     var result: [pattern.len * (256)]@TypeOf(pattern[0]) = undefined;
     for (0..(256)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
-    break :repeated &result;
+    break :repeated result;
 };
 
 test "issue 10465 merged standard streams preserve both buffered outputs" {
@@ -514,8 +514,8 @@ test "issue 10465 merged standard streams preserve both buffered outputs" {
     const combined = try tmp.dir.readFileAlloc(test_io, "combined.log", allocator, .limited(64 * 1024));
     defer allocator.free(combined);
 
-    try std.testing.expect(std.mem.find(u8, combined, merged_stderr_payload) != null);
-    try std.testing.expect(std.mem.find(u8, combined, merged_stdout_payload) != null);
+    try std.testing.expect(std.mem.find(u8, combined, &merged_stderr_payload) != null);
+    try std.testing.expect(std.mem.find(u8, combined, &merged_stdout_payload) != null);
 }
 
 test "CliCtx accumulates problems" {
