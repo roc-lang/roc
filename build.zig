@@ -4297,6 +4297,12 @@ pub fn build(b: *std.Build) void {
     run_test_zig_step.dependOn(run_guarded_list_violations_step);
 
     for (module_tests_result.tests) |module_test| {
+        // Standalone module tests have fresh roots, so display-version imports
+        // must be declared separately from the production LSP module.
+        if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
+            module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
+        }
+
         // Add compiled builtins to tests that canonicalize ordinary modules.
         if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
