@@ -117,3 +117,40 @@ test "offsetToPosition finds the line and column of an offset" {
     try std.testing.expectEqual(@as(u32, 0), start.line);
     try std.testing.expectEqual(@as(u32, 0), start.character);
 }
+
+test "a position converts back to the offset it came from" {
+    const allocator = std.testing.allocator;
+    // Lines holding characters that are one, two and four bytes of UTF-8 but
+    // one, one and two units of UTF-16, under both line endings.
+    const sources = [_][]const u8{ "abc\ndef", "aé😀x\nyz", "é\r\n😀b\r\n", "a\n", "one line", "\n\n" };
+    for (sources) |source| {
+        const table = try position.LineOffsets.init(allocator, source);
+        defer table.deinit();
+
+        for (table.offsets, 0..) |line_start, line| {
+            const text = position.lineText(source, table.offsets, @intCast(line)).?;
+            var column: usize = 0;
+            while (column <= text.len) {
+                const offset = line_start + @as(u32, @intCast(column));
+                const found = position.offsetToPosition(offset, &table);
+                try std.testing.expectEqual(@as(u32, @intCast(line)), found.line);
+                try std.testing.expectEqual(@as(?u32, offset), table.offsetAt(found.line, found.character));
+                if (column == text.len) break;
+                column += std.unicode.utf8ByteSequenceLength(text[column]) catch unreachable;
+            }
+        }
+    }
+}
+
+test "offsetAt counts columns in UTF-16 code units and clamps to the line" {
+    const allocator = std.testing.allocator;
+    const source = "aé😀x\nyz";
+    const table = try position.LineOffsets.init(allocator, source);
+    defer table.deinit();
+
+    // `x` follows one, one and two UTF-16 units but one, two and four bytes.
+    try std.testing.expectEqual(@as(?u32, 7), table.offsetAt(0, 4));
+    // A column past the line's text is the end of that line, not a later one.
+    try std.testing.expectEqual(@as(?u32, 8), table.offsetAt(0, 400));
+    try std.testing.expectEqual(@as(?u32, null), table.offsetAt(2, 0));
+}

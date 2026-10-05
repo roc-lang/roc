@@ -55,10 +55,11 @@ pub const LineOffsets = struct {
         return if (low > 0) @intCast(low - 1) else 0;
     }
 
-    /// The byte offset of a line/character position, or null past the last line.
+    /// The byte offset of a line/character position, or null past the last
+    /// line. `character` is a UTF-16 code unit count; one past the end of the
+    /// line's text means the end of the line.
     pub fn offsetAt(self: *const LineOffsets, line: u32, character: u32) ?u32 {
-        if (line >= self.offsets.len) return null;
-        return self.offsets[line] + character;
+        return offsetOnLine(self.source, self.offsets, line, character, .clamp_to_line_end);
     }
 };
 
@@ -202,17 +203,25 @@ pub fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) document_
     };
 }
 
-/// Convert an LSP line/character position to a byte offset in the module source.
-///
-/// `character` is a UTF-16 code unit count, as the protocol specifies and as
-/// the server advertises with `positionEncoding`.
-pub fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
-    const line_starts = module_env.getLineStartsAll();
-    if (line >= line_starts.len) return null;
+/// What a column past the end of its line's text converts to.
+const PastLineEnd = enum { reject, clamp_to_line_end };
 
-    const text = lineText(module_env.common.source, line_starts, line) orelse return null;
-    const column = utf16ColumnToByteOffset(text, character, .nearest) orelse return null;
+/// The byte offset of a line/character position in `source`, or null when the
+/// document has no such line. `character` is a UTF-16 code unit count, as the
+/// protocol specifies and as the server advertises with `positionEncoding`.
+fn offsetOnLine(source: []const u8, line_starts: []const u32, line: u32, character: u32, past_line_end: PastLineEnd) ?u32 {
+    const text = lineText(source, line_starts, line) orelse return null;
+    const column = utf16ColumnToByteOffset(text, character, .nearest) orelse switch (past_line_end) {
+        .reject => return null,
+        .clamp_to_line_end => text.len,
+    };
     return line_starts[line] + @as(u32, @intCast(column));
+}
+
+/// Convert an LSP line/character position to a byte offset in the module
+/// source, or null when the document has no such position.
+pub fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
+    return offsetOnLine(module_env.common.source, module_env.getLineStartsAll(), line, character, .reject);
 }
 
 /// The same conversion, clamping a position the document does not have rather
@@ -226,11 +235,7 @@ pub fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 
 /// only an edit, which would corrupt the document if it landed in the wrong
 /// place, insists on a position that exists.
 pub fn positionToOffsetClamped(module_env: *ModuleEnv, line: u32, character: u32) u32 {
-    const source_len: u32 = @intCast(module_env.common.source.len);
-    const line_starts = module_env.getLineStartsAll();
-    if (line >= line_starts.len) return source_len;
-
-    const text = lineText(module_env.common.source, line_starts, line) orelse return source_len;
-    const column = utf16ColumnToByteOffset(text, character, .nearest) orelse text.len;
-    return line_starts[line] + @as(u32, @intCast(column));
+    const source = module_env.common.source;
+    return offsetOnLine(source, module_env.getLineStartsAll(), line, character, .clamp_to_line_end) orelse
+        @intCast(source.len);
 }
