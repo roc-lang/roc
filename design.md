@@ -422,6 +422,11 @@ its exact runtime expression, never on its symbolic structure, so both fields
 are exact at any depth and reading them costs constant time. Substitution
 requires a substitutable value and admits it only when its expanded size is
 within an explicit code-growth limit; a larger value keeps its named binding.
+Making a value reusable is decided by substitutability alone, never by that
+limit: a substitutable value of any size is already reusable and is kept whole,
+so reuse never walks or copies its structure. A long interpolation binds one
+iterator value per part, each containing the previous one, so a walk there
+would cost time quadratic in the number of parts.
 Constructor-size arithmetic also detects overflow instead of turning it into an
 apparent exact size. When an inline argument's finite size cannot be proven,
 the inliner binds a plain clone of its source expression;
@@ -1170,7 +1175,13 @@ demands the slot at the proof call's return type, never at the read's own. A
 read whose type lifted the root's type takes the slot value as stored when the
 two types are one representation, or when they commit one layout and encode the
 value identically beneath an outer nominal; any other lifted read takes it
-through an explicit typed boundary from the root's type.
+through an explicit typed boundary from the root's type. Lambda Solved shares
+callable evidence beneath a lifted root-slot read while keeping the lifted
+type and every containing type distinct. Ordinary tag and callable unification
+writes the merged class before relating its children; a root-slot tag relation
+instead waits for its payload relations to establish whether they contain a
+lift, and joins only pairs without a lift. A deferred join uses the current
+class contents, never a saved pre-child merge.
 
 Deferred literal-root diagnostics own their originating rejection and crash
 message bytes for the entire finalization session. Recording a failure copies
@@ -13765,6 +13776,20 @@ operand once, schedules that working variable against the backing, and defers
 its link action. Nested backing relations reuse the isolated variable instead
 of recursively entering the unifier or cloning it again at each nominal layer.
 
+Unification never splits a class. A pair's deferred link runs after the pair's
+children are unified, and in a cyclic type those children can bring either
+endpoint into another class first; for example, each generated interpolation
+step function's type reaches the next step function's type through
+`Iter`'s step field. The deferred link is written only when both endpoints are
+still the roots the pair was processed with. Otherwise the pair unifies again
+with the current roots of both sides. Merged lambda sets, erased callables,
+and tag unions are written when their pair is processed, before their capture
+or payload pairs, so a nested unification extends the merged content instead
+of being overwritten by a merge computed from earlier contents. Lambda Mono
+specializes each member of a lambda set once per solved function-type class,
+so a split class multiplies specializations: N generated step functions
+sharing one lambda set across N classes produce N² specializations.
+
 Monotype may carry both the definition-private nominal view and the opaque
 interface view of one checked `TypeDef`. Lambda solving relates those views only
 when their complete definition identities and builtin owners agree. It unifies
@@ -17703,6 +17728,19 @@ ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
 A terminal crash or failed expectation observes only its explicit message
 operand; it does not implicitly use every live ownership place.
+
+The ownership-place query asks whether a path from a statement reaches a use
+of a root's place before a statement that rebinds the root. Its cost is linear
+in the procedure even when many roots share one place. The procedure's
+statements are grouped into strongly connected components numbered in
+topological order, and each component records, as a shared persistent set, the
+places used by everything it reaches. When no statement rebinding the root is
+in a component at or after the query's, no rebind can cut a path. The answer is
+then that shared set's answer for the place, or whether the query reaches a
+statement that uses every place. Only a query that can reach a rebind of its
+root (a loop, or a root rebound later) solves that root's own region. Residual
+field domains are likewise committed by looking up each frame local in the
+program-wide dismantle tables, never by scanning those tables per procedure.
 
 Each reachable `initialize_join_param` write defines a fresh container value.
 Dismantle analysis starts field-take flow at every such write's successor,
