@@ -1594,7 +1594,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "eval_time_worker", eval_time_worker);
     const compiler_version_git = getCompilerVersionGit(b);
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
-    const compiler_identity = compilerIdentityModule(b, dependency_source, optimize, &.{
+    const compiler_identity = compilerIdentityModule(b, dependency_source, flag_enable_tracy, &.{
         b.fmt("enable-tracy={}", .{flag_enable_tracy != null}),
         b.fmt("trace-eval={}", .{trace_eval}),
         b.fmt("trace-refcount={}", .{trace_refcount}),
@@ -1602,9 +1602,35 @@ pub fn build(b: *std.Build) void {
         b.fmt("debug-gpa-traces={}", .{debug_gpa_traces}),
     }) orelse return;
     build_options.contents.appendSlice(b.allocator,
-        \\pub const compiler_compatibility_hash = @import("compiler_identity").compiler_compatibility_hash;
-        \\pub const compiler_compatibility_id = @import("compiler_identity").compiler_compatibility_id;
-        \\pub const compiler_artifact_hash = compiler_compatibility_hash;
+        \\// One source/dependency identity is shared, but each executable's actual
+        \\// compile mode and target participate independently. Release artifacts
+        \\// remain correctly identified when the surrounding graph uses Debug.
+        \\pub const compiler_compatibility_hash: [32]u8 = identity: {
+        \\    @setEvalBranchQuota(1000000);
+        \\    const actual = @import("builtin");
+        \\    const std = @import("std");
+        \\    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        \\    hasher.update("roc-compiler-artifact-compatibility-v1");
+        \\    hasher.update(&@import("compiler_identity").compiler_compatibility_hash);
+        \\    hasher.update(std.fmt.comptimePrint(";mode={s};target={s}-{s}-{s};cpu={s};backend={s};", .{
+        \\        @tagName(actual.mode), @tagName(actual.cpu.arch), @tagName(actual.os.tag),
+        \\        @tagName(actual.abi), actual.cpu.model.name, @tagName(actual.zig_backend),
+        \\    }));
+        \\    hasher.update(std.fmt.comptimePrint(";os-range={any};object-format={s};", .{
+        \\        actual.os.versionRange(), @tagName(actual.object_format),
+        \\    }));
+        \\    for (0..std.Target.Cpu.Feature.Set.needed_bit_count) |index| {
+        \\        hasher.update(&.{@intFromBool(actual.cpu.features.isEnabled(@intCast(index)))});
+        \\    }
+        \\    var digest: [32]u8 = undefined;
+        \\    hasher.final(&digest);
+        \\    break :identity digest;
+        \\};
+        \\pub const compiler_compatibility_id: []const u8 = &@import("std").fmt.bytesToHex(compiler_compatibility_hash, .lower);
+        \\// Checked artifacts are target independent and are baked by a Debug host
+        \\// tool for consumers built in other modes. Their compiler input is the
+        \\// common source/dependency/semantic-options identity.
+        \\pub const compiler_artifact_hash = @import("compiler_identity").compiler_compatibility_hash;
         \\
     ) catch @panic("OOM");
     // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
@@ -7430,7 +7456,7 @@ fn runLlvmConfig(b: *std.Build, program: []const u8, argument: []const u8) []con
 
 /// Compiler application caches use content identity, including dirty sources.
 /// Compilation never deletes another compiler's application cache.
-fn compilerIdentityModule(b: *std.Build, source: DependencySource, optimize: OptimizeMode, semantic_options: []const []const u8) ?*std.Build.Module {
+fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?[]const u8, semantic_options: []const []const u8) ?*std.Build.Module {
     const tool = b.addExecutable(.{
         .name = "compiler_identity",
         .root_module = b.createModule(.{
@@ -7440,18 +7466,23 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, optimize: Opt
         }),
     });
     const inputs = b.addWriteFiles();
-    _ = inputs.addCopyDirectory(b.path("src"), "src", .{
-        .include_extensions = &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".tbd", ".json" },
-    });
+    stageCompilerIdentitySources(b, inputs, "src") catch |err|
+        std.debug.panic("cannot stage compiler identity sources: {t}", .{err});
     _ = inputs.addCopyDirectory(b.path("vendor"), "vendor", .{
         .include_extensions = &.{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".zon" },
     });
+    if (tracy_path) |path| {
+        if (!std.mem.startsWith(u8, path, "/nix/store/")) {
+            _ = inputs.addCopyDirectory(b.graph.cwdRelativePath(path).path(b, "public"), "dependencies/tracy/public", .{});
+        }
+    }
     // Zig's executable and version do not identify a locally modified standard
     // library. Staging the complete library also tracks added and removed files,
     // including an explicit --zig-lib-dir, without resolving LazyPaths early.
     _ = inputs.addCopyDirectory(std.Build.LazyPath.zig_lib, "toolchain/lib", .{});
     // Source dependency archives are pinned by this manifest; content of
     // repository-local dependencies above participates directly as well.
+    _ = inputs.addCopyFile(b.path("build.zig"), "build.zig");
     _ = inputs.addCopyFile(b.path("build.zig.zon"), "build.zig.zon");
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
@@ -7473,7 +7504,6 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, optimize: Opt
     run.addDirectoryArg(inputs.getDirectory());
     run.addArg("--zig-exe");
     run.addFileArg(std.Build.LazyPath.zig_exe);
-    run.addArgs(&.{ "--option", b.fmt("optimize={s}", .{@tagName(optimize)}) });
     for (semantic_options) |option| run.addArgs(&.{ "--option", option });
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
@@ -7481,7 +7511,65 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, optimize: Opt
         },
         .downloaded_bundle, .system_llvm => {},
     }
+    if (tracy_path) |path| {
+        if (std.mem.startsWith(u8, path, "/nix/store/")) run.addArgs(&.{ "--option", b.fmt("immutable-tracy={s}", .{path}) });
+    }
     run.addArg("--output");
     const output = run.addOutputFileArg("compiler_identity.zig");
     return b.createModule(.{ .root_source_file = output });
+}
+
+// These directories contain dedicated test sources. Imports from production
+// files are confined to test blocks and private test helpers. Keep this list
+// explicit: a new directory participates until its imports have been audited.
+const compiler_identity_test_directories = [_][]const u8{
+    "src/bump/test",
+    "src/canonicalize/test",
+    "src/check/test",
+    "src/cli/test",
+    "src/compile/test",
+    "src/eval/test",
+    "src/lsp/test",
+    "src/machine_code_shim/test",
+    "src/parse/test",
+    "src/types/test",
+};
+
+fn stageCompilerIdentitySources(b: *std.Build, files: *Step.WriteFile, path: []const u8) !void {
+    // Adding/removing/renaming a production import changes the configured graph.
+    // Editing its bytes only reruns WriteFiles and the identity tool at make time.
+    b.dependOnDirectoryContents(b.path(path));
+    var directory = try std.Io.Dir.cwd().openDir(b.graph.io, try b.root.joinString(b.allocator, path), .{ .iterate = true });
+    defer directory.close(b.graph.io);
+    var entries: std.ArrayList(std.Io.Dir.Entry) = .empty;
+    var iterator = directory.iterate();
+    while (try iterator.next(b.graph.io)) |entry| {
+        try entries.append(b.allocator, .{ .name = try b.allocator.dupe(u8, entry.name), .kind = entry.kind, .inode = entry.inode });
+    }
+    std.mem.sort(std.Io.Dir.Entry, entries.items, {}, struct {
+        fn less(_: void, left: std.Io.Dir.Entry, right: std.Io.Dir.Entry) bool {
+            return std.mem.lessThan(u8, left.name, right.name);
+        }
+    }.less);
+    for (entries.items) |entry| {
+        const child = b.pathJoin(&.{ path, entry.name });
+        switch (entry.kind) {
+            .directory => {
+                const excluded = for (compiler_identity_test_directories) |test_path| {
+                    if (std.mem.eql(u8, child, test_path)) break true;
+                } else false;
+                if (!excluded) try stageCompilerIdentitySources(b, files, child);
+            },
+            .file => {
+                const extension = std.fs.path.extension(child);
+                for ([_][]const u8{ ".zig", ".roc", ".c", ".cpp", ".h", ".S", ".s", ".tbd", ".json" }) |included| {
+                    if (std.mem.eql(u8, extension, included)) {
+                        _ = files.addCopyFile(b.path(child), child);
+                        break;
+                    }
+                }
+            },
+            else => return error.NonRegularCompilerSource,
+        }
+    }
 }

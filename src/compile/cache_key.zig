@@ -186,13 +186,13 @@ test "checked artifact cache key changes for semantic inputs" {
 }
 
 test "checked artifact cache key input has no target or layout ABI fields" {
-    const fields = @typeInfo(CacheKeyInput).@"struct".fields;
-    inline for (fields) |field| {
-        try std.testing.expect(!std.mem.eql(u8, field.name, "target"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "target_config"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "layout"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "layout_abi"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "backend"));
+    const field_names = @typeInfo(CacheKeyInput).@"struct".field_names;
+    inline for (field_names) |field_name| {
+        try std.testing.expect(!std.mem.eql(u8, field_name, "target"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "target_config"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "layout"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "layout_abi"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "backend"));
     }
 
     try std.testing.expectEqual(@as(usize, 4), fields.len);
@@ -260,15 +260,15 @@ test "canonicalized module cache key cannot be split differently by its variable
 }
 
 test "canonicalized module cache key input names nothing outside the module" {
-    const fields = @typeInfo(CanonicalizedCacheKeyInput).@"struct".fields;
-    inline for (fields) |field| {
-        try std.testing.expect(!std.mem.eql(u8, field.name, "package_name"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "path"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "module_name"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "qualified_module_name"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "imports"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "shorthands"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "root_module"));
+    const field_names = @typeInfo(CanonicalizedCacheKeyInput).@"struct".field_names;
+    inline for (field_names) |field_name| {
+        try std.testing.expect(!std.mem.eql(u8, field_name, "package_name"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "path"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "module_name"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "qualified_module_name"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "imports"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "shorthands"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "root_module"));
     }
 
     try std.testing.expectEqual(@as(usize, 7), fields.len);

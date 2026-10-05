@@ -436,7 +436,7 @@ fn tidyFile(
         tidyBannedIndexOf(file, errors);
         tidyBannedCoreCtxCreation(file, errors);
 
-        var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
+        var tree = try std.zig.Ast.parse(gpa, file.text, .{ .mode = .zig });
         defer tree.deinit(gpa);
 
         tidyDeadDeclarations(file, &tree, counter, errors);
@@ -1055,14 +1055,14 @@ fn tidyAst(
         const node: u32 = @intCast(node_usize);
         if (isBinOp(tag)) { // Forbid mixing bitops and arithmetics without parentheses.
             // In Zig 0.15, binary operations use node_and_node data layout
-            const data = tree.nodeData(@enumFromInt(node));
+            const data = tree.nodeData(@fromBackingInt(@intCast(node)));
             const children = data.node_and_node;
             inline for (children) |child| {
-                const child_tag = tags[@intFromEnum(child)];
+                const child_tag = tags[@backingInt(child)];
                 if ((isBinOpBitwise(tag) and isBinOpArithmetic(child_tag)) or
                     (isBinOpArithmetic(tag) and isBinOpBitwise(child_tag)))
                 {
-                    const token_opening = tree.nodeMainToken(@enumFromInt(node));
+                    const token_opening = tree.nodeMainToken(@fromBackingInt(@intCast(node)));
                     const line_opening = tree.tokenLocation(0, token_opening).line;
                     errors.addAmbiguousPrecedence(file, line_opening);
                 }
@@ -1099,7 +1099,7 @@ fn tidyInferredErrorUnion(file: SourceFile, tree: *const Ast, errors: *Errors) v
         // here (that would double-count).
         if (tag != .fn_proto and tag != .fn_proto_multi and tag != .fn_proto_one and tag != .fn_proto_simple) continue;
 
-        const node: Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_usize));
         const fn_proto = tree.fullFnProto(&buffer, node) orelse continue;
         const return_type = fn_proto.ast.return_type.unwrap() orelse continue;
 

@@ -4,7 +4,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 
 ## Recommended way
 
-[Download zig 0.16.0](https://ziglang.org/download/) and add it to your PATH.
+[Download Zig 0.17.0](https://ziglang.org/download/) and add it to your PATH.
 [Search "Setting up PATH"](https://ziglang.org/learn/getting-started/) for more details.
 
 Do a test run with
@@ -20,6 +20,49 @@ If you're familiar with nix and like using it, you can build the compiler like t
 nix develop ./src
 buildcmd
 ./zig-out/bin/roc version
+```
+
+## Local dependency bundles and caching
+
+A compatible roc-bootstrap bundle contains `include/` and `lib/` for the
+compiler's target, including LLVM 22, LLD, and Binaryen. Build against a local
+bundle with:
+
+```sh
+zig build roc -Droc-deps-path=/path/to/bundle
+```
+
+This option uses the same LLVM/LLD/Binaryen configuration as a downloaded
+bundle. It cannot be combined with `-Dllvm-path` or `-Dsystem-llvm`, which select
+legacy LLVM dependency modes. Bundle headers and libraries at mutable paths participate by content
+in the cache identity; immutable Nix store paths identify their contents.
+
+The displayed Git version is separate from application-cache compatibility.
+Compatibility tracks compiler/runtime/vendor sources, the build recipe and
+pinned dependency manifest, the exact Zig executable and library tree, semantic
+options, and each compiler executable's actual mode, target, and CPU features.
+Dirty production edits invalidate cached applications without changing `HEAD`.
+Ordinary compiler builds preserve other compiler builds' application caches.
+Generated compiler embedding assets live in Zig's cache.
+
+Dedicated audited `src/*/test/` directories are excluded from the production
+source identity. Inline tests, test helpers outside those directories, vendored
+tests, and Zig library tests remain conservatively included: editing them may
+invalidate application caches. Changes to `build.zig` also invalidate identity,
+even when an edit only affects a build comment or a test leaf.
+
+Runtime filters preserve the compiled test binary and select matching tests:
+
+```sh
+zig build run-test-zig-minici -- --test-filter "parseMiniArgs"
+```
+
+Use repeatable `-Dtest-filter="pattern"` options when the filter should also
+limit test compilation. The build-input identity regression check uses a small
+Debug test binary and checks production/test-only edits at unchanged `HEAD`:
+
+```sh
+python3 ci/test_build_identity.py /path/to/zig
 ```
 
 ## CPU requirements

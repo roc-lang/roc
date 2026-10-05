@@ -531,14 +531,15 @@ fn writeBuiltinIndicesZig(
     try out.print("pub const builtin_indices_layout_hash: u64 = 0x{x};\n\n", .{CIR.BUILTIN_INDICES_LAYOUT_HASH});
     try out.writeAll("pub const builtin_indices_raw = .{\n");
 
-    inline for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
-        const value = @field(indices, field.name);
-        if (field.type == CIR.Statement.Idx) {
-            try out.print("    .{s} = {d},\n", .{ field.name, @backingInt(value) });
-        } else if (field.type == base.Ident.Idx) {
-            try out.print("    .{s} = {d},\n", .{ field.name, @as(u32, @bitCast(value)) });
+    inline for (@typeInfo(BuiltinIndices).@"struct".field_names) |field_name| {
+        const FieldType = @FieldType(BuiltinIndices, field_name);
+        const value = @field(indices, field_name);
+        if (FieldType == CIR.Statement.Idx) {
+            try out.print("    .{s} = {d},\n", .{ field_name, @backingInt(value) });
+        } else if (FieldType == base.Ident.Idx) {
+            try out.print("    .{s} = {d},\n", .{ field_name, @as(u32, @bitCast(value)) });
         } else {
-            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(field.type));
+            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(FieldType));
         }
     }
 
@@ -549,13 +550,14 @@ fn writeBuiltinIndicesZig(
         \\    return .{
         \\
     );
-    inline for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
-        if (field.type == CIR.Statement.Idx) {
-            try out.print("        .{s} = @enumFromInt(builtin_indices_raw.{s}),\n", .{ field.name, field.name });
-        } else if (field.type == base.Ident.Idx) {
-            try out.print("        .{s} = @bitCast(@as(u32, builtin_indices_raw.{s})),\n", .{ field.name, field.name });
+    inline for (@typeInfo(BuiltinIndices).@"struct".field_names) |field_name| {
+        const FieldType = @FieldType(BuiltinIndices, field_name);
+        if (FieldType == CIR.Statement.Idx) {
+            try out.print("        .{s} = @enumFromInt(builtin_indices_raw.{s}),\n", .{ field_name, field_name });
+        } else if (FieldType == base.Ident.Idx) {
+            try out.print("        .{s} = @bitCast(@as(u32, builtin_indices_raw.{s})),\n", .{ field_name, field_name });
         } else {
-            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(field.type));
+            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(FieldType));
         }
     }
     try out.writeAll(
