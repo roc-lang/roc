@@ -1790,6 +1790,14 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;
             if (CheckedArithmetic.isFamily(assign.op)) self.shapes.checked_arithmetic = true;
+            if (assign.op == .simd_concat_shift_bytes) self.shapes.simd_concat_shift = true;
+            if (assign.op == .num_is_eq or assign.op == .num_is_lt or assign.op == .num_is_lte or assign.op == .num_is_gt or assign.op == .num_is_gte) {
+                const args = self.getLocalSpan(assign.args);
+                if (GuardedList.borrowLen(args) != 0) {
+                    const operand_layout = self.getLocal(GuardedList.at(args, 0)).layout_idx;
+                    if (operand_layout == .u8 or operand_layout == .u16 or operand_layout == .u32 or operand_layout == .u64) self.shapes.unsigned_compare = true;
+                }
+            }
         },
         .switch_stmt => self.shapes.switch_stmt = true,
         .assign_struct => self.shapes.struct_build = true,

@@ -1563,7 +1563,12 @@ pub const ProcShapes = packed struct(u16) {
     struct_build: bool = false,
     /// A tag construction.
     tag_build: bool = false,
-    _padding: u4 = 0,
+    /// An equality or ordering comparison of fixed-width unsigned integers of
+    /// at most 64 bits, the only comparison a value-range proof can decide.
+    unsigned_compare: bool = false,
+    /// A SIMD byte concat-shift, whose count a value-range proof can fix.
+    simd_concat_shift: bool = false,
+    _padding: u2 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
