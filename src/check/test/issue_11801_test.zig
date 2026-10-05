@@ -429,3 +429,34 @@ test "issue 11801: a type error in one whole-use replay leaves the uses sharing 
     try env.assertDefTypeOptions("second", "List(I64)", .{ .allow_type_errors = true });
     try env.assertDefTypeOptions("fourth", "List(I64)", .{ .allow_type_errors = true });
 }
+
+test "issue 11801: whole-use replay replays uses of an imported scheme" {
+    const library =
+        \\Lib := [L].{
+        \\    big = |a| a.map(|x| x + 1).map(|x| x + 2)
+        \\}
+    ;
+    var library_env = try TestEnv.init("Lib", library);
+    defer library_env.deinit();
+    try library_env.assertNoErrors();
+
+    const source =
+        \\import Lib
+        \\
+        \\first = Lib.big([1.I64])
+        \\
+        \\second = Lib.big([2.I64])
+        \\
+        \\third = Lib.big([3.I64])
+        \\
+        \\fourth = Lib.big([4.U8])
+    ;
+    var env = try TestEnv.initWithImport("Main", source, "Lib", &library_env);
+    defer env.deinit();
+    try env.assertNoErrors();
+    // `first` makes `big` replayable, `second` is the source, `third`
+    // replays it, and the `U8` use settles its own.
+    try std.testing.expectEqual(@as(usize, 1), useStateCount(&env, .replayed));
+    try env.assertDefType("third", "List(I64)");
+    try env.assertDefType("fourth", "List(U8)");
+}

@@ -38683,66 +38683,54 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
             try relations.append(self.gpa, .{ .source = source_part, .target = use_part });
         }
     }
+    // Of the use's own copies, only variables that carry relations are
+    // observed once it is replayed: through the checker's dispatch,
+    // ambiguity and literal registries. Its record names the source's
+    // restated substitution, its relations are skipped, and its other
+    // copies are reachable only from those.
     const all_pairs = self.cir.scheme_use_pairs.items.items;
     for (all_pairs[record.pairs_start..][0..record.pairs_len], all_pairs[source.pairs_start..][0..source.pairs_len]) |use_pair, frozen_pair| {
         if (use_pair.old_var != frozen_pair.old_var) return false;
+    }
+    for (all_pairs[record.pairs_start..][0..record.pairs_len], all_pairs[source.pairs_start..][0..source.pairs_len]) |use_pair, frozen_pair| {
+        switch (self.types.resolveVar(@enumFromInt(use_pair.fresh_var)).desc.content) {
+            .flex => |flex| if (flex.constraints.len() == 0) continue,
+            .rigid, .alias, .field_presence, .structure, .err => continue,
+        }
         try relations.append(self.gpa, .{ .source = @enumFromInt(frozen_pair.fresh_var), .target = @enumFromInt(use_pair.fresh_var) });
     }
 
     // Relations the unifications below queue belong to a replayed use and
     // are skipped.
     self.use_instances.items[use_idx].state = .replayed;
-    // Structures go first: relating them reaches most of the use's variables,
-    // whose own relations then find them already in the frozen class.
-    const variable_targets = try self.gpa.alloc(bool, relations.items.len);
-    defer self.gpa.free(variable_targets);
-    for (relations.items, variable_targets) |relation, *is_variable| {
-        is_variable.* = self.types.resolveVar(relation.target).desc.content == .flex;
-    }
-    for ([_]bool{ false, true }) |variables| {
-        for (relations.items, variable_targets) |relation, is_variable| {
-            if (is_variable != variables) continue;
-            if (self.types.resolveVar(relation.target).var_ == self.types.resolveVar(relation.source).var_) continue;
-            // The use's variable is passed second so it stays its class's
-            // checked representative; the class keeps the frozen descriptor.
-            const result = try self.unify(relation.source, relation.target, env);
-            if (!result.isEstablished()) {
-                std.debug.panic("whole-use replay could not relate a use's instance to its source's settled instance", .{});
-            }
+    for (relations.items) |relation| {
+        if (self.types.resolveVar(relation.target).var_ == self.types.resolveVar(relation.source).var_) continue;
+        // The use's variable is passed second so it stays its class's
+        // checked representative; the class keeps the frozen descriptor.
+        const result = try self.unify(relation.source, relation.target, env);
+        if (!result.isEstablished()) {
+            std.debug.panic("whole-use replay could not relate a use's instance to its source's settled instance", .{});
         }
     }
-    if (std.debug.runtime_safety) try self.verifyUseReplay(source.*, use_idx);
+    if (std.debug.runtime_safety) try self.verifyUseReplay(relations.items);
     const replayed = &self.cir.scheme_uses.items.items[use.record];
     replayed.pairs_start = source.pairs_start;
     replayed.pairs_len = source.pairs_len;
     return true;
 }
 
-/// Builds with runtime safety check that the parts of a replayed use's copy
-/// of the scheme root and every variable of its substitution now hold exactly
-/// the types at the same positions of its source's frozen instance.
-fn verifyUseReplay(self: *Self, source: UseReplaySource, use_idx: u32) Allocator.Error!void {
-    const use = self.use_instances.items[use_idx];
-    const record = self.cir.scheme_uses.items.items[use.record];
+/// Builds with runtime safety check that every variable a replay related to
+/// its source's frozen instance (the parts of the use's copy of the scheme
+/// root, and its copies that carry relations) now holds exactly the type at
+/// the same position of the frozen instance.
+fn verifyUseReplay(self: *Self, relations: []const DispatchReplayPair) Allocator.Error!void {
     var expected: std.ArrayListUnmanaged(u8) = .empty;
     defer expected.deinit(self.gpa);
     var actual: std.ArrayListUnmanaged(u8) = .empty;
     defer actual.deinit(self.gpa);
-    // The root's own node is not compared: whether a function root is
-    // effectful is decided where each use is, not by its relations.
-    var source_parts: std.ArrayListUnmanaged(Var) = .empty;
-    defer source_parts.deinit(self.gpa);
-    var use_parts: std.ArrayListUnmanaged(Var) = .empty;
-    defer use_parts.deinit(self.gpa);
-    try self.appendUseInstanceParts(source.frozen_root, &source_parts);
-    try self.appendUseInstanceParts(use.instance_root, &use_parts);
-    for (source_parts.items) |part| try self.appendReplayTree(part, &expected);
-    for (use_parts.items) |part| try self.appendReplayTree(part, &actual);
-    var pair_idx: u32 = 0;
-    while (pair_idx < record.pairs_len) : (pair_idx += 1) {
-        const pairs = self.cir.scheme_use_pairs.items.items;
-        try self.appendReplayTree(@enumFromInt(pairs[source.pairs_start + pair_idx].fresh_var), &expected);
-        try self.appendReplayTree(@enumFromInt(pairs[record.pairs_start + pair_idx].fresh_var), &actual);
+    for (relations) |relation| {
+        try self.appendReplayTree(relation.source, &expected);
+        try self.appendReplayTree(relation.target, &actual);
     }
     if (!replayShapeEql(expected.items, actual.items)) {
         std.debug.panic("whole-use replay left a use's instance different from its source's settled instance", .{});

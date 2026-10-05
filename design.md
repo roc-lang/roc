@@ -8545,13 +8545,15 @@ requirement its relations derived. Functions whose effect is still open may
 be frozen there, because those classes are reached only through relations no
 later relation revisits. The source's substitution and the dispatch-target
 records its relations wrote are restated over the copy. The replayed use
-then relates its root's parts and every variable of its own substitution to
-the frozen node at the same position, its own relations are skipped, and its
-scheme-use record names the source's restated substitution, so CheckedModule construction
-resolves that substitution's evidence once for every use that shares it.
-Builds with runtime safety check after every replay that the use's root and
-substitution hold exactly the source's frozen types, and before thawing that
-no frozen use instance changed.
+then relates its root's parts, and every variable of its own substitution
+that carries a relation, to the frozen node at the same position. Its own
+relations are skipped, and its scheme-use record names the source's restated
+substitution, so CheckedModule construction resolves that substitution's
+evidence once for every use that shares it. The use's other copies are
+reachable only from its skipped relations and its former substitution, so
+nothing observes them. Builds with runtime safety check after every replay
+that each variable it related holds exactly the source's frozen type, and
+before thawing that no frozen use instance changed.
 
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
@@ -9948,8 +9950,8 @@ Other solved-graph mutations:
   Schemes, above). It changes only the order in which queued relations are
   processed.
 - `replayUse`—mechanism: whole-use replay (above). A use whose shape equals a
-  settled source's relates its root and substitution to the source's frozen
-  instance by ordinary unification, skips its own relations, and names the
+  settled source's relates its root and the substitution variables that carry
+  relations to the source's frozen instance by ordinary unification, skips its own relations, and names the
   source's restated substitution in its scheme-use record; it writes exactly
   the instance and evidence settling its own relations would.
   `freezeUseReplaySource` writes descriptors only of the fresh classes it

@@ -598,13 +598,51 @@ fn fnEvidenceTargetEql(left: anytype, right: @TypeOf(left)) bool {
         if (!keyBytesEql(left_instantiation.view, right_instantiation.view)) return false;
         if (!keyBytesEql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
     } else if (right.instantiation != null) return false;
-    return std.meta.eql(left.nested, right.nested);
+    return valueEql(left.nested, right.nested);
 }
 
 /// Whether two digest keys hold the same bytes, compared as whole slices
 /// rather than element by element.
 fn keyBytesEql(left: anytype, right: @TypeOf(left)) bool {
     return std.mem.eql(u8, &left.bytes, &right.bytes);
+}
+
+/// `std.meta.eql`, except that byte arrays (the digests identity values
+/// carry) are compared as whole slices rather than one byte at a time.
+pub fn valueEql(left: anytype, right: @TypeOf(left)) bool {
+    const T = @TypeOf(left);
+    switch (@typeInfo(T)) {
+        .@"struct" => |info| {
+            inline for (info.fields) |field| {
+                if (!valueEql(@field(left, field.name), @field(right, field.name))) return false;
+            }
+            return true;
+        },
+        .@"union" => |info| {
+            if (info.tag_type == null) @compileError("valueEql needs a tagged union");
+            const left_tag = std.meta.activeTag(left);
+            if (left_tag != std.meta.activeTag(right)) return false;
+            inline for (info.fields) |field| {
+                if (@field(std.meta.Tag(T), field.name) == left_tag) {
+                    return valueEql(@field(left, field.name), @field(right, field.name));
+                }
+            }
+            unreachable;
+        },
+        .array => |info| {
+            if (info.child == u8) return std.mem.eql(u8, &left, &right);
+            for (left, right) |left_item, right_item| {
+                if (!valueEql(left_item, right_item)) return false;
+            }
+            return true;
+        },
+        .optional => {
+            const left_value = left orelse return right == null;
+            const right_value = right orelse return false;
+            return valueEql(left_value, right_value);
+        },
+        else => return std.meta.eql(left, right),
+    }
 }
 
 fn methodTargetIdentityEql(
@@ -615,7 +653,7 @@ fn methodTargetIdentityEql(
 ) bool {
     return left.module_idx == right.module_idx and
         left.def_idx == right.def_idx and
-        std.meta.eql(left.kind, right.kind) and
+        valueEql(left.kind, right.kind) and
         keyBytesEql(left_callable_key, right_callable_key);
 }
 

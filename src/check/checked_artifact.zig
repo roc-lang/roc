@@ -20827,6 +20827,15 @@ const EvidencePass = struct {
         subst: artifact_serialize.Span,
     };
 
+    /// Whether an evidence chain has no parameters in any of its frames, so
+    /// no resolution against it can depend on it.
+    fn evidenceChainIsEmpty(chain: []const []const EvidenceParam) bool {
+        for (chain) |frame| {
+            if (frame.len != 0) return false;
+        }
+        return true;
+    }
+
     const RecordSubstitutionKey = struct {
         scheme_root: u32,
         pairs_start: u32,
@@ -20846,7 +20855,7 @@ const EvidencePass = struct {
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
         // Resolution against an enclosing evidence chain depends on that
         // chain, so only chain-free resolutions are shared.
-        const key: ?RecordSubstitutionKey = if (self.current_chain.len == 0) .{
+        const key: ?RecordSubstitutionKey = if (evidenceChainIsEmpty(self.current_chain)) .{
             .scheme_root = record.scheme_root,
             .pairs_start = record.pairs_start,
             .pairs_len = record.pairs_len,
@@ -21228,7 +21237,7 @@ const EvidencePass = struct {
         // Records naming the same substitution of the same scheme (uses
         // checking replayed from one source) publish the same evidence, so
         // chain-free resolutions are shared.
-        const key: ?RecordSubstitutionKey = if (chain.len == 0) .{
+        const key: ?RecordSubstitutionKey = if (evidenceChainIsEmpty(chain)) .{
             .scheme_root = record.scheme_root,
             .pairs_start = record.pairs_start,
             .pairs_len = record.pairs_len,

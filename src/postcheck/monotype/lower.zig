@@ -2824,13 +2824,13 @@ fn specEvidenceShallowEql(
     return switch (a) {
         .target => |a_target| switch (b) {
             .target => |b_target| blk: {
-                if (!std.meta.eql(a_target.view.key, b_target.view.key)) break :blk false;
+                if (!Ast.valueEql(a_target.view.key, b_target.view.key)) break :blk false;
                 if (!specMethodTargetEql(a_target, b_target)) break :blk false;
                 if (a_target.local_proc_context != b_target.local_proc_context) break :blk false;
                 if (a_target.instantiation) |a_instantiation| {
                     const b_instantiation = b_target.instantiation orelse break :blk false;
-                    if (!std.meta.eql(a_instantiation.view.key, b_instantiation.view.key)) break :blk false;
-                    if (!std.meta.eql(
+                    if (!Ast.valueEql(a_instantiation.view.key, b_instantiation.view.key)) break :blk false;
+                    if (!Ast.valueEql(
                         a_instantiation.view.types.rootKey(a_instantiation.callable_ty),
                         b_instantiation.view.types.rootKey(b_instantiation.callable_ty),
                     )) break :blk false;
@@ -2893,8 +2893,8 @@ fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructural
 fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) bool {
     return left.target.module_idx == right.target.module_idx and
         left.target.def_idx == right.target.def_idx and
-        std.meta.eql(left.target.kind, right.target.kind) and
-        std.meta.eql(
+        Ast.valueEql(left.target.kind, right.target.kind) and
+        Ast.valueEql(
             left.view.types.rootKey(left.target.callable_ty),
             right.view.types.rootKey(right.target.callable_ty),
         );
