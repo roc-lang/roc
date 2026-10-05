@@ -7316,7 +7316,7 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
     const cwd = std.Io.Dir.cwd();
     const dot_git = b.root.joinString(b.allocator, ".git") catch @panic("OOM");
     const git_stat = cwd.statFile(io, dot_git, .{}) catch {
-        b.dependOnFileContents(b.graph.cwdRelativePath(dot_git));
+        dependOnExistingParentDirectory(b, dot_git);
         return "no-git";
     };
     const git_dir = if (git_stat.kind == .directory) dir: {
@@ -7346,9 +7346,37 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
 }
 
 fn readVersionFile(b: *std.Build, path: []const u8) ?[]const u8 {
+    const cwd = std.Io.Dir.cwd();
+    const stat = cwd.statFile(b.graph.io, path, .{}) catch {
+        dependOnExistingParentDirectory(b, path);
+        return null;
+    };
+    if (stat.kind != .file) {
+        dependOnExistingParentDirectory(b, path);
+        return null;
+    }
     b.dependOnFileContents(b.graph.cwdRelativePath(path));
-    const contents = std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(1024 * 1024)) catch return null;
+    const contents = cwd.readFileAlloc(b.graph.io, path, b.allocator, .limited(1024 * 1024)) catch return null;
     return std.mem.trim(u8, contents, " \n\r\t");
+}
+
+/// Zig 0.17 cannot record contents of a missing configure input. Watching its
+/// nearest existing directory detects creation without poisoning every build.
+fn dependOnExistingParentDirectory(b: *std.Build, path: []const u8) void {
+    const cwd = std.Io.Dir.cwd();
+    var parent = std.fs.path.dirname(path) orelse ".";
+    while (true) {
+        if (cwd.statFile(b.graph.io, parent, .{})) |stat| {
+            if (stat.kind == .directory) {
+                b.dependOnDirectoryMetadata(b.graph.cwdRelativePath(parent));
+                return;
+            }
+        } else |_| {}
+        parent = std.fs.path.dirname(parent) orelse {
+            b.dependOnDirectoryMetadata(b.path("."));
+            return;
+        };
+    }
 }
 
 fn shortCommit(commit: []const u8) []const u8 {
