@@ -10,8 +10,8 @@
 //! is known to deal with it. A direct call from Roc code is such a caller,
 //! because this pass sees it. The erased-call runtime is one too, and an
 //! erased-callable procedure learns at entry whether that is who called it.
-//! Anything else — a host calling a root, the runtime calling a dictionary
-//! worker, a procedure whose address is taken — is not, so those procedures
+//! Anything else, such as a host calling a root, the runtime calling a dictionary
+//! worker, a procedure whose address is taken, is not, so those procedures
 //! run their own pending calls.
 //!
 //! A statement hands its pending call up when nothing but reference-count
@@ -25,7 +25,6 @@ const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
-const GuardedList = LirStore.GuardedList;
 const Allocator = std.mem.Allocator;
 
 const DirectCall = struct {
@@ -69,21 +68,20 @@ pub fn run(
         while (work.pop()) |stmt_id| {
             if (seen.isSet(@intFromEnum(stmt_id))) continue;
             seen.set(@intFromEnum(stmt_id));
-            switch (store.getCFStmt(stmt_id)) {
-                .assign_call => |call| try direct_calls.append(allocator, .{
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_call) {
+                try direct_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
-                    .callee = @intFromEnum(call.proc),
+                    .callee = @intFromEnum(stmt.assign_call.proc),
                     .stmt = stmt_id,
-                }),
-                .assign_call_erased => |call| if (call.deferred) try deferred_calls.append(allocator, .{
+                });
+            } else if (stmt == .assign_call_erased) {
+                if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .stmt = stmt_id,
-                }),
-                .assign_literal => |literal| switch (literal.value) {
-                    .proc_ref => |proc_ref| outside.set(@intFromEnum(proc_ref)),
-                    else => {},
-                },
-                else => {},
+                });
+            } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
+                outside.set(@intFromEnum(stmt.assign_literal.value.proc_ref));
             }
             try body_clone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
         }
@@ -157,11 +155,18 @@ fn driveAfter(
 fn returnsUnchanged(store: *const LirStore, value: LIR.LocalId, start: LIR.CFStmtId) bool {
     var current = start;
     while (true) {
-        switch (store.getCFStmt(current)) {
-            .ret => |ret| return ret.value == value,
-            inline .incref, .decref, .decref_if_initialized, .free => |rc| current = rc.next,
-            else => return false,
-        }
+        const stmt = store.getCFStmt(current);
+        if (stmt == .ret) return stmt.ret.value == value;
+        current = if (stmt == .incref)
+            stmt.incref.next
+        else if (stmt == .decref)
+            stmt.decref.next
+        else if (stmt == .decref_if_initialized)
+            stmt.decref_if_initialized.next
+        else if (stmt == .free)
+            stmt.free.next
+        else
+            return false;
     }
 }
 

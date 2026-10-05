@@ -16527,6 +16527,49 @@ A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the
 entry outside every call cycle and reach it with an ordinary call.
 
+### Deferred Erased Calls
+
+A call through an erased function value cannot replace its caller's frame.
+The erased-call runtime sits between caller and callee, and an
+erased-callable procedure returns its result through a pointer where a
+Roc-ABI procedure returns it in registers, so neither side can return on the
+other's behalf. A cycle that passes through an erased call in tail position
+therefore gets constant stack another way.
+
+LIR construction proves the tail position of an erased call exactly as it
+does for a direct call, and ARC marks such a call `deferred` when its value is
+the procedure's whole result at the same layout, no descriptor comes back
+with it, and the callee does not repack the closure. A deferred call is not
+made. Everything else the frame owns is released first, the call is recorded
+as pending together with its packed arguments and one owned reference to its
+closure, and the procedure returns. Its target holds no value.
+
+Whoever awaits that procedure's result makes the pending call, releases the
+closure reference afterwards, and repeats while the call it made leaves
+another pending. The erased-call runtime does this after every erased call it
+makes, so an erased-callable procedure it invoked can simply return. Every
+other waiter is stated in LIR by the tail-drive pass (`src/lir/tail_drive.zig`),
+which runs after ARC and stamps a `PendingDrive` on each direct call whose
+callee can return with a call pending, and on each deferred call:
+
+- `none`: this procedure returns the value unchanged to a caller that makes
+  the pending call. Only reference-count statements may separate the call
+  from the return; a pending call owns its closure and every argument, so
+  running those statements first releases nothing it reads.
+- `always`: pending calls are made here. This is every use of the value other
+  than returning it, and every tail position in a procedure something other
+  than Roc code or the erased-call runtime can enter: a root, a dictionary
+  worker, a procedure whose address is taken.
+- `unless_caller_drives`: in an erased-callable procedure, which reads at
+  entry whether the erased-call runtime invoked it. A host that calls an
+  erased callable directly does not make pending calls, so then the
+  procedure makes them itself.
+
+Backends follow these marks and nothing else: a deferred call becomes a call
+to the runtime's record function, and a drive becomes a call to its drive
+function. The pending call is per-thread runtime state, held the same way the
+runtime holds its active-runtime selection.
+
 ### RC Planning and Materialization
 
 The ownership-summary dependency solver also owns planning. Every structured
