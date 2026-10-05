@@ -21096,7 +21096,7 @@ const EvidencePass = struct {
                 var rejected = false;
                 for (param.callable_contracts) |constraint| {
                     const root = self.types.resolveVar(constraint.fn_var).var_;
-                    const fresh = self.pairForResolved(pairs, root) orelse continue;
+                    const fresh = self.pairForResolved(pairs, root) orelse root;
                     if (self.types.varStaticDispatchRejected(fresh)) {
                         rejected = true;
                         break;
@@ -21132,9 +21132,10 @@ const EvidencePass = struct {
         const fn_root = self.types.resolveVar(param.constraint.fn_var).var_;
         // A monomorphic receiver can share its root while the callable's
         // encoding or result parameters are copied. Consume both recorded
-        // sides of the relation independently.
-        const fresh_fn: ?Var = self.pairForResolved(pairs, fn_root) orelse
-            if (param.source == .scheme_requirement) param.constraint.fn_var else null;
+        // sides of the relation independently. The instantiator pairs every
+        // callable it copies, so an unpaired callable is shared with the use,
+        // exactly like an unpaired receiver.
+        const fresh_fn = self.pairForResolved(pairs, fn_root) orelse param.constraint.fn_var;
         return try self.evidenceContext(param, fresh_dispatcher, fresh_fn);
     }
 
