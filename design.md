@@ -379,6 +379,11 @@ its exact runtime expression, never on its symbolic structure, so both fields
 are exact at any depth and reading them costs constant time. Substitution
 requires a substitutable value and admits it only when its expanded size is
 within an explicit code-growth limit; a larger value keeps its named binding.
+Making a value reusable is decided by substitutability alone, never by that
+limit: a substitutable value of any size is already reusable and is kept whole,
+so reuse never walks or copies its structure. A long interpolation binds one
+iterator value per part, each containing the previous one, so a walk there
+would cost time quadratic in the number of parts.
 Constructor-size arithmetic also detects overflow instead of turning it into an
 apparent exact size. When an inline argument's finite size cannot be proven,
 the inliner binds a plain clone of its source expression;
