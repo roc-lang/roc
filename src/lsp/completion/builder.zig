@@ -61,33 +61,6 @@ fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
     };
 }
 
-fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
-    return switch (statement) {
-        .s_decl => |decl| decl.pattern,
-        .s_var => |var_stmt| var_stmt.pattern_idx,
-        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => null,
-    };
-}
-
 fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
     return switch (statement) {
         .s_alias_decl => |alias| alias.header,
@@ -725,7 +698,7 @@ pub const CompletionBuilder = struct {
         self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -1072,7 +1045,7 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
                 const stmt = module_env.store.getSourceStatement(stmt_idx);
-                const pattern_idx = statementPattern(stmt) orelse continue;
+                const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
                 const pattern = module_env.store.getSourcePattern(pattern_idx);
                 const ident_idx = patternIdent(pattern) orelse continue;
@@ -1331,7 +1304,7 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -1369,7 +1342,7 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;

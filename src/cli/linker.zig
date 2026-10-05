@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const base = @import("base");
 const collections = @import("collections");
 const build_options = @import("build_options");
 const embedded_lld = @import("embedded_lld");
@@ -1052,40 +1053,9 @@ fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         return;
     }
 
-    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (err) {
-        error.OutOfMemory => return LinkError.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return LinkError.LinkFailed,
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (base.read_file_failure.kind(err)) {
+        .out_of_memory => return LinkError.OutOfMemory,
+        .file_not_found, .other => return LinkError.LinkFailed,
     };
     defer ctx.gpa.free(bytes);
 

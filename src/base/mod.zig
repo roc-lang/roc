@@ -56,6 +56,7 @@ pub const CommonEnv = @import("CommonEnv.zig");
 /// Exact Unicode bidi-control source policy and visible display helpers.
 pub const bidi = @import("bidi.zig");
 pub const source_utils = @import("source_utils.zig");
+pub const read_file_failure = @import("read_file_failure.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
 pub const roc_version = @import("roc_version.zig");

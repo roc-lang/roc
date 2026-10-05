@@ -253,15 +253,9 @@ pub const BuiltinIdents = struct {
     }
 };
 
-/// 1-based index for user-facing error messages.
-/// Provides ordinal formatting like "1st", "2nd", "3rd", etc.
+/// Position of an item in a user-facing error message, stored 0-based.
 pub const HumanIndex = struct {
     value: u32, // 0-based internally
-
-    /// Returns the 1-based index number
-    pub fn toHuman(self: HumanIndex) u32 {
-        return self.value + 1;
-    }
 };
 
 /// A pattern for exhaustiveness checking.

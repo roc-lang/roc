@@ -1862,9 +1862,36 @@ fn generatePlatformHostShim(
     );
 }
 
+/// Removes a cached executable, if one exists, so a fresh link can take its place.
+fn deleteExistingCacheFile(ctx: *CliCtx, exe_cache_path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.FileBusy,
+        error.FileSystem,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => std.log.debug("Could not delete existing cache file: {}", .{err}),
+    };
+}
+
 fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
+    return createDirPathIfMissing(std_io, path);
+}
+
+/// Creates `path` and any missing parents, treating an existing directory as success.
+fn createDirPathIfMissing(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         error.AccessDenied,
@@ -2823,8 +2850,8 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
     const version_dir = try install_store.versionDir(ctx.arena, root);
     const entry = try install_store.entryPaths(ctx.arena, version_dir, name);
 
-    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (err) {
-        error.FileNotFound => {
+    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => {
             var entry_dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, entry.entry_dir, .{}) catch {
                 return ctx.fail(.{ .unknown_shorthand = .{ .name = name } });
             };
@@ -2835,38 +2862,7 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
                 .reason = "its install.json manifest is missing",
             } });
         },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.OutOfMemory,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return ctx.fail(.{ .install_entry_corrupt = .{
+        .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -3350,24 +3346,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // After building, hardlink to cache for future runs
         // Force-hardlink (delete existing first) since hash collision means identical content
         std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-            error.FileNotFound => {}, // OK, doesn't exist
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.FileBusy,
-            error.FileSystem,
-            error.IsDir,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => std.log.debug("Could not delete existing cache file: {}", .{err}),
-        };
+        deleteExistingCacheFile(ctx, exe_cache_path);
         createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
             // If hardlinking fails, fall back to copying
             std.log.debug("Hardlink to cache failed, copying: {}", .{err});
@@ -3679,42 +3658,11 @@ fn stageDefaultApp(
     purpose: default_app.Purpose,
 ) (Allocator.Error || error{CliError})!?default_app.Staged {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
+    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .out_of_memory => return error.OutOfMemory,
         // Any other read failure (e.g. file not found) means this isn't a
         // default app to handle here; fall through to the normal path.
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return null,
+        .file_not_found, .other => return null,
     };
 
     defer ctx.gpa.free(source);
@@ -4027,24 +3975,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             } });
         };
 
-        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.FileBusy,
-            error.FileSystem,
-            error.IsDir,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => std.log.debug("Could not delete existing cache file: {}", .{err}),
-        };
+        deleteExistingCacheFile(ctx, exe_cache_path);
         createHardlink(ctx, exe_path, exe_cache_path) catch {
             std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
                 std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
@@ -7534,8 +7465,8 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
 
     // Same name + same URL is idempotent; same name + different URL fails
     // without touching the existing entry.
-    const existing_bytes: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (err) {
-        error.FileNotFound => existing: {
+    const existing_bytes: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => existing: {
             var entry_dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, entry.entry_dir, .{}) catch break :existing null;
             entry_dir.close(ctx.io.std_io);
             return ctx.fail(.{ .install_entry_corrupt = .{
@@ -7544,38 +7475,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
                 .reason = "its install.json manifest is missing",
             } });
         },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.OutOfMemory,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return ctx.fail(.{ .install_entry_corrupt = .{
+        .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = args.shorthand,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -13536,107 +13436,9 @@ fn runCompiledTestRoots(
             .speed,
         ),
         .interpreter => unreachable,
-    } catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidHostedFunctionSignature,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.PageSizeQueryFailed,
-        error.ParseError,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.TypeCheckError,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => {
+    } catch |err| switch (ReplSession.programFailureKind(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .type_check, .parse, .operational => {
             try appendCompilerErrorsForRuns(ctx, mode, err, root_runs, results, summary);
             return;
         },
@@ -13796,107 +13598,9 @@ fn runCompiledLoweredTestModulesOnce(
             event_callback,
         ),
         .interpreter => unreachable,
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidHostedFunctionSignature,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.PageSizeQueryFailed,
-        error.ParseError,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.TypeCheckError,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => {
+    }) catch |err| switch (ReplSession.programFailureKind(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .type_check, .parse, .operational => {
             for (lowered_modules) |*lowered_module| {
                 var results = std.ArrayList(CliTestResultItem).empty;
                 errdefer {
@@ -14696,40 +14400,10 @@ fn writeHotReloadWatchPathsFile(
 }
 
 fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const []const u8) WatchReadInputsError!WatchInputSet {
-    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (err) {
-        error.FileNotFound => return error.WatchInputsMissing,
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return error.WatchInputsReadFailed,
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => return error.WatchInputsMissing,
+        .out_of_memory => return error.OutOfMemory,
+        .other => return error.WatchInputsReadFailed,
     };
     defer ctx.gpa.free(bytes);
 
@@ -14801,40 +14475,10 @@ fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_path
 }
 
 fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFileState {
-    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (err) {
-        error.FileNotFound => return .missing,
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return .unreadable,
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => return .missing,
+        .out_of_memory => return error.OutOfMemory,
+        .other => return .unreadable,
     };
     defer ctx.gpa.free(bytes);
 
@@ -18979,40 +18623,9 @@ fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u
 
     // Read the file (10 MB cap per response).
     const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, ctx.gpa, .limited(10 * 1024 * 1024)) catch |err| {
-        switch (err) {
-            error.FileNotFound => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.ConnectionResetByPeer,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileTooBig,
-            error.InputOutput,
-            error.IsDir,
-            error.LockViolation,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotOpenForReading,
-            error.OutOfMemory,
-            error.PathAlreadyExists,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.SocketUnconnected,
-            error.StreamTooLong,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
+        switch (base.read_file_failure.kind(err)) {
+            .file_not_found => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
+            .out_of_memory, .other => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
         }
         return;
     };
@@ -19931,37 +19544,7 @@ fn generateDocs(
     try std.Io.Dir.cwd().deleteTree(ctx.io.std_io, base_output_dir);
 
     // Create output directory
-    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, base_output_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
+    try createDirPathIfMissing(ctx.io.std_io, base_output_dir);
 
     // Load the language reference articles when requested. They are read from
     // `docs/langref` (relative to the current working directory).

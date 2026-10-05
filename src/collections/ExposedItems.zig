@@ -180,12 +180,6 @@ pub const ExposedItems = struct {
         self.items.ensureSorted(allocator);
     }
 
-    /// Detect duplicate exposed items for error reporting
-    /// Returns the interned IDs of duplicates (caller must convert to strings)
-    pub fn detectDuplicates(self: *Self, allocator: Allocator) Allocator.Error![]IdentIdx {
-        return self.items.detectDuplicates(allocator);
-    }
-
     /// Relocate pointers after memory movement
     pub fn relocate(self: *Self, offset: isize) void {
         self.items.relocate(offset);
