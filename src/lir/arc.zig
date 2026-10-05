@@ -2416,7 +2416,14 @@ const Inserter = struct {
                 } }, origin);
             },
             .assign_call_erased => |assign| blk: {
-                if (!assign.reuse_closure) next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
+                if (step.replaces_frame) {
+                    const returned = self.store.getCFStmt(next);
+                    if (returned != .ret or returned.ret.value != assign.target) {
+                        arcInvariant("ARC deferred erased call was not immediately followed by the return of its result");
+                    }
+                } else if (!assign.reuse_closure) {
+                    next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
+                }
                 break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
@@ -2429,6 +2436,7 @@ const Inserter = struct {
                     .arg_plan = assign.arg_plan,
                     .reuse_closure = assign.reuse_closure,
                     .reuse_source = assign.reuse_source,
+                    .deferred = step.replaces_frame,
                     .next = next,
                 } }, origin);
             },
@@ -2957,10 +2965,20 @@ const Inserter = struct {
                     if (!assign.reuse_closure) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.closure, .reason = .closure_call_capture });
                     if (preserve_reuse_source) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.reuse_source.?, .reason = .reuse_source_preserved });
                     self.death_scratch.clearRetainingCapacity();
-                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
+                    if (self.erasedCallIsDeferred(assign)) {
+                        // The call is left pending and made after this frame
+                        // returns. It keeps the closure reference retained
+                        // above; everything else the frame owns ends first.
+                        try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
+                        try step.pre_release_extra.appendSlice(self.solve_allocator, self.death_scratch.items);
+                        step.pre_release_extra_reason = .tail_call_frame;
+                        step.replaces_frame = true;
+                    } else {
+                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
+                        try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.copyDeathScratchToStep(step);
+                    }
                     segment.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
@@ -3603,6 +3621,19 @@ const Inserter = struct {
         while (iter.next()) |bit| {
             try releases.append(self.solve_allocator, self.releaseDecisionFrom(bit, iter.entry));
         }
+    }
+
+    /// Whether an erased call is left pending for whoever awaits this
+    /// procedure's result: its value is the procedure's whole result at the
+    /// same layout, no descriptor comes back with it, and the callee does not
+    /// repack the closure's allocation.
+    fn erasedCallIsDeferred(self: *const Inserter, call: anytype) bool {
+        if (call.reuse_closure or call.out_desc != null) return false;
+        const next = self.store.getCFStmt(call.next);
+        if (next != .ret or next.ret.value != call.target) return false;
+        const caller = self.store.getProcSpec(self.current_proc);
+        return caller.hosted == null and caller.runtime_ret_desc == null and
+            self.store.getLocal(call.target).layout_idx == caller.ret_layout;
     }
 
     /// Whether the callee of a tail call can return on the current

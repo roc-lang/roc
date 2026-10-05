@@ -133,6 +133,7 @@ const Printer = struct {
                     if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
                     if (s.replaces_frame) try writer.writeAll(" replaces_frame");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
                     try writer.writeByte('\n');
                     current = s.next;
                 },
@@ -150,6 +151,8 @@ const Printer = struct {
                     if (s.reuse_source) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@intFromEnum(reuse_source)});
                     }
+                    if (s.deferred) try writer.writeAll(" deferred");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
                     try writer.writeByte('\n');
                     current = s.next;
                 },

@@ -66,11 +66,10 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
             try self.joins.put(join.id, join.body);
             self.next_join = @max(self.next_join, @intFromEnum(join.id) + 1);
         },
-        .assign_call => try self.calls.append(self.allocator, id),
+        .assign_call, .assign_call_erased => try self.calls.append(self.allocator, id),
         .init_uninitialized,
         .assign_ref,
         .assign_literal,
-        .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
@@ -117,9 +116,9 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
 /// Publish the exact tail sites after all producer fixups are complete.
 /// Self-tail sites are linked through the call nodes, so body-shard relocation
 /// carries the proof along with the calls without another store-wide side
-/// table. A proven tail call to any other procedure returns its value
-/// directly: its continuation is replaced by a `ret` of the call target, which
-/// is the form ARC's frame-replacement rule reads.
+/// table. A proven tail call to any other procedure, or through an erased
+/// function value, returns its value directly: its continuation is replaced
+/// by a `ret` of the call target, which is the form ARC's tail rules read.
 pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCalls {
     std.debug.assert(!self.published);
     const proc = self.proc.?;
@@ -127,6 +126,17 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
     var head: ?LIR.CFStmtId = null;
     for (self.calls.items) |id| {
         const stmt = store.getCFStmt(id);
+        if (stmt == .assign_call_erased) {
+            const erased = stmt.assign_call_erased;
+            if (erased.out_desc != null) continue;
+            if (store.getCFStmt(erased.next) == .ret) continue;
+            if (store.getLocal(erased.target).layout_idx != ret_layout) continue;
+            const returned = try self.returnedLocal(store, erased.next) orelse continue;
+            if (returned != erased.target) continue;
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = erased.target } }, store.stmtOrigin(id));
+            store.getCFStmtPtr(id).assign_call_erased.next = ret;
+            continue;
+        }
         // A producer can move a provisional call and retire its old node.
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;

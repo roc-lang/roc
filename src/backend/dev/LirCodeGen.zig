@@ -426,6 +426,9 @@ pub const BoxyBuiltinFn = enum {
     register_proc,
     register_erased_proc,
     call_erased,
+    defer_erased,
+    drive_pending,
+    caller_drives,
     list_concat,
     list_prepend,
     list_sublist,
@@ -480,6 +483,9 @@ pub const BoxyBuiltinFn = enum {
             .register_proc => "roc_boxy_register_proc",
             .register_erased_proc => "roc_boxy_register_erased_proc",
             .call_erased => "roc_boxy_call_erased",
+            .defer_erased => "roc_boxy_defer_erased",
+            .drive_pending => "roc_boxy_drive_pending",
+            .caller_drives => "roc_boxy_caller_drives",
             .list_concat => "roc_boxy_list_concat",
             .list_prepend => "roc_boxy_list_prepend",
             .list_sublist => "roc_boxy_list_sublist",
@@ -509,6 +515,7 @@ pub const BoxyBuiltinFn = enum {
         return switch (self) {
             .register_erased_proc => &.{ p, 4, 4, 4, 4, 4, 4, 4, 4 },
             .call_erased => &.{ p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
+            .defer_erased => &.{ p, p, p, p, p, p, 4, 4, 4, 4 },
             .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
             .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
@@ -546,6 +553,8 @@ pub const BoxyBuiltinFn = enum {
             .dynamic_frac_literal_ref,
             .materialize_call_result,
             .register_proc,
+            .drive_pending,
+            .caller_drives,
             => null,
         };
     }
@@ -1110,6 +1119,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Bytes of incoming argument block the proc being compiled owns and
         /// removes when it returns.
         current_proc_arg_pop: u32 = 0,
+
+        /// Where the erased-callable proc being compiled keeps whether the
+        /// erased-call runtime invoked it, when its body reads that.
+        caller_drives_slot: ?i32 = null,
 
         /// Stack of active loop continue targets.
         /// `loop_continue` lowers by jumping to the innermost active loop header.
@@ -16919,6 +16932,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_desc: ?lir.LIR.BoxyDescRef,
             out_desc: ?LocalId,
             reuse_closure: bool,
+            deferred: bool,
         ) Allocator.Error!ValueLocation {
             try self.spillAllVectorLocals();
             // Resolve the result descriptor first: descriptor resolution can
@@ -17022,6 +17036,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(fn_reg);
             }
 
+            if (deferred) {
+                // The runtime records the call; whoever awaits this
+                // procedure's result makes it. The statement's target holds
+                // no value until then, so its storage is left as allocated.
+                var defer_builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer defer_builder.deinit();
+                try defer_builder.addMemArg(frame_ptr, fn_ptr_slot);
+                try defer_builder.addMemArg(frame_ptr, closure_ptr_slot);
+                try defer_builder.addMemArg(frame_ptr, capture_stack_offset);
+                if (arg_refs.len == 0) {
+                    try defer_builder.addImmArg(0);
+                    try defer_builder.addImmArg(0);
+                } else {
+                    try defer_builder.addLeaArg(frame_ptr, args_slot);
+                    try defer_builder.addImmArg(@intCast(plan.size));
+                }
+                if (arg_desc_refs.len == 0)
+                    try defer_builder.addImmArg(0)
+                else
+                    try defer_builder.addLeaArg(frame_ptr, arg_descs_slot);
+                try defer_builder.addImmArg(arg_desc_keys.start);
+                try defer_builder.addImmArg(arg_desc_keys.len);
+                try defer_builder.addImmArg(arg_layouts_span.start);
+                try defer_builder.addImmArg(arg_layouts_span.len);
+                try self.callBoxyBuiltin(&defer_builder, .defer_erased);
+                return if (ret_size == 0)
+                    .{ .immediate_i64 = 0 }
+                else
+                    self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
+            }
+
             // The shared erased-call runtime reconciles the producer-owned
             // call-site argument layouts with the registered worker layouts,
             // then materializes the worker result into the expected layout.
@@ -17079,6 +17124,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitComptimeCallExit(self.comptime_hooks.?);
             }
             return result;
+        }
+
+        /// Run the erased calls a callee left pending, as the tail-drive pass
+        /// marked this statement. The statement's own result is replaced by
+        /// the last pending call's; with none pending it is unchanged.
+        fn emitDrivePending(
+            self: *Self,
+            drive: lir.LIR.PendingDrive,
+            value_loc: ValueLocation,
+            value_layout: layout.Idx,
+            result_desc: ?lir.LIR.BoxyDescRef,
+        ) Allocator.Error!ValueLocation {
+            if (drive == .none) return value_loc;
+            try self.spillAllVectorLocals();
+            const result_desc_slot: ?i32 = if (result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
+            const runtime_layout = self.runtimeRepresentationLayoutIdx(value_layout);
+            const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
+            const result_slot = if (size == 0) 0 else self.codegen.allocStackSlot(size);
+            if (size > 0) try self.copyBytesToStackOffset(result_slot, value_loc, size);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var skip_patch: ?usize = null;
+            if (drive == .unless_caller_drives) {
+                const flag_slot = self.caller_drives_slot orelse
+                    std.debug.panic("Dev/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
+                const flag_reg = try self.allocTempGeneral();
+                // The runtime returns one byte; the rest of the slot is unspecified.
+                try self.emitLoadW8(flag_reg, frame_ptr, flag_slot);
+                try self.emitCmpImm(flag_reg, 0);
+                self.codegen.freeGeneral(flag_reg);
+                skip_patch = try self.emitJumpIfNotEqual();
+            }
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            if (size == 0) {
+                try builder.addImmArg(0);
+            } else {
+                try builder.addLeaArg(frame_ptr, result_slot);
+            }
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            if (result_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(runtime_layout));
+            try self.callBoxyBuiltin(&builder, .drive_pending);
+            if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
+
+            return if (size == 0)
+                .{ .immediate_i64 = 0 }
+            else
+                self.stackLocationForLayout(runtime_layout, result_slot);
         }
 
         fn generatePackedErasedFn(
@@ -21168,6 +21262,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_runtime_ret_desc_local = self.runtime_ret_desc_local;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
             const saved_current_proc_arg_pop = self.current_proc_arg_pop;
+            const saved_caller_drives_slot = self.caller_drives_slot;
             const saved_tail_exit_patches_len = self.tail_exit_patches.items.len;
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_identity = self.current_proc_identity;
@@ -21210,6 +21305,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_local = proc.runtime_ret_desc;
             self.uses_caller_stack_arg_base = false;
             self.current_proc_arg_pop = 0;
+            self.caller_drives_slot = null;
             self.current_proc_name = proc.name;
             self.current_proc_identity = proc.identity;
             self.current_proc_frame_locals = proc.frame_locals;
@@ -21280,6 +21376,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
                 self.current_proc_arg_pop = saved_current_proc_arg_pop;
+                self.caller_drives_slot = saved_caller_drives_slot;
                 self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_identity = saved_current_proc_identity;
@@ -21318,6 +21415,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.generation_mode == .object_file or (self.fragment_mode and self.fragment_source_mode == .object_file)) try self.emitBoxyRuntimeInit();
                 }
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
+                if (proc.reads_caller_drives) {
+                    // Read before anything else can make an erased call: the
+                    // runtime's answer describes only this invocation.
+                    const slot = self.codegen.allocStackSlot(8);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try self.callBoxyBuiltin(&builder, .caller_drives);
+                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                    self.caller_drives_slot = slot;
+                }
             } else {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
@@ -21566,6 +21673,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = saved_free_float;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
             self.current_proc_arg_pop = saved_current_proc_arg_pop;
+            self.caller_drives_slot = saved_caller_drives_slot;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
             self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
@@ -23285,7 +23393,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .ret_layout = self.localLayout(assign.target),
                                 .out_desc = assign.out_desc,
                             });
-                            try self.bindAssignedLocal(assign.target, value_loc);
+                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc);
+                            try self.bindAssignedLocal(assign.target, driven_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
@@ -23301,8 +23410,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.result_desc,
                                 assign.out_desc,
                                 assign.reuse_closure,
+                                assign.deferred,
                             );
-                            try self.bindAssignedLocal(assign.target, value_loc);
+                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc);
+                            try self.bindAssignedLocal(assign.target, driven_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
 

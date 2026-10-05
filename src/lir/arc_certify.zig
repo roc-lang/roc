@@ -5156,7 +5156,10 @@ const Certifier = struct {
                     if (!LIR.erasedCallReuseFieldsMatch(assign)) {
                         return self.fail("erased call reuse flag and ownership source disagreed", .{});
                     }
-                    _ = try self.requireLive(&state, assign.closure);
+                    const closure_value = try self.requireLive(&state, assign.closure);
+                    // A deferred call keeps one reference to its closure
+                    // until whoever makes the call releases it.
+                    if (assign.deferred) try self.consumeUnit(&state, closure_value, assign.closure);
                     const reuse_value = if (assign.reuse_source) |reuse_source|
                         try self.requireLive(&state, reuse_source)
                     else

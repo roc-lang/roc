@@ -1027,6 +1027,25 @@ pub const ProcAbi = enum {
     erased_callable,
 };
 
+/// Where the erased calls a callee left pending are run. A tail call through
+/// an erased function value cannot replace its caller's frame, because the
+/// erased-call runtime sits between the two and the callee returns its result
+/// differently. Instead the call is recorded as pending and its procedure
+/// returns; whoever is waiting on that procedure's result then makes the
+/// pending call, and repeats while that call leaves another pending.
+pub const PendingDrive = enum(u8) {
+    /// Nothing is run here: either nothing can be pending, or this
+    /// procedure returns the result to a caller that runs it.
+    none,
+    /// Every pending call is run here, and the last one's result replaces
+    /// this statement's.
+    always,
+    /// In an erased-callable procedure: as `always` when the procedure was
+    /// entered by anything but the erased-call runtime, which runs pending
+    /// calls itself.
+    unless_caller_drives,
+};
+
 /// Identity shared by procedures that reach one another through
 /// frame-replacing calls. It names the group only; it is not a procedure id.
 pub const TailGroupId = enum(u32) { _ };
@@ -1127,6 +1146,9 @@ pub const CFStmt = union(enum) {
         /// frame owns nothing afterwards, so every backend must replace that
         /// frame with the callee's instead of growing the stack.
         replaces_frame: bool = false,
+        /// Set by the tail-drive pass on a call whose callee can return with
+        /// an erased call pending.
+        drive: PendingDrive = .none,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -1160,6 +1182,15 @@ pub const CFStmt = union(enum) {
         /// unit. Debug certification proves that allocation identity through
         /// the exact representation-transparent producer chain.
         reuse_source: ?LocalId = null,
+        /// Set by ARC emission on an erased call whose next statement returns
+        /// `target`: the call is left pending instead of made. The pending
+        /// call owns the reference to `closure` this statement was given,
+        /// and whoever runs it releases that reference afterwards. `target`
+        /// holds no value until a `drive` replaces it.
+        deferred: bool = false,
+        /// Set by the tail-drive pass: where calls pending after this
+        /// statement are run.
+        drive: PendingDrive = .none,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -1643,6 +1674,10 @@ pub const LirProcSpec = struct {
     external: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
+    /// Set by the tail-drive pass on an erased-callable procedure with an
+    /// `unless_caller_drives` statement: its entry records whether the
+    /// erased-call runtime made the call.
+    reads_caller_drives: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
     /// Set by ARC on every procedure that makes or receives a same-SCC tail

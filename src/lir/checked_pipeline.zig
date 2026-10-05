@@ -13,6 +13,7 @@ const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
+const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
@@ -1731,6 +1732,8 @@ fn finishLoweredOutput(
     });
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
+
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{ arc_roots.items, lowered.lir_result.boxy_worker_procs.items });
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.

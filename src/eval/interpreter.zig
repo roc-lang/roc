@@ -399,6 +399,12 @@ pub const Interpreter = struct {
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
+    /// An erased call a deferred tail call left for whoever awaits its
+    /// procedure's result. It owns one reference to its closure.
+    pending_erased: ?PendingErasedCall = null,
+    /// Set while an erased call is entering its callee, so that callee can
+    /// tell this caller, which makes pending calls, from any other.
+    erased_caller_drives: bool = false,
     /// Active proc call stack for the current evaluation.
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
@@ -505,6 +511,9 @@ pub const Interpreter = struct {
     const Frame = struct {
         proc_id: LirProcSpecId,
         ret_layout: layout_mod.Idx,
+        /// Whether an erased call made this activation, which then makes
+        /// whatever call the activation leaves pending.
+        caller_drives: bool = false,
         /// The proc's frame locals, sorted by id; `slots` is parallel to it.
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
         /// The proc's join points, sorted by id.
@@ -2448,6 +2457,8 @@ pub const Interpreter = struct {
 
         var frame = try self.initFrame(proc_id, proc_spec);
         defer self.releaseFrameSlots(frame.slots);
+        frame.caller_drives = self.erased_caller_drives;
+        self.erased_caller_drives = false;
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
@@ -2562,6 +2573,9 @@ pub const Interpreter = struct {
                 );
                 const raw_result = try self.getLocalChecked(&frame, ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
+                // A procedure that left a call pending returns no value; the
+                // pending call produces the result.
+                if (self.pending_erased != null) break :blk .{ .result = .{ .value = raw_result, .layout = raw_layout } };
                 const result_desc = if (proc_spec.runtime_ret_desc) |runtime_ret_desc|
                     try self.resolveBoxyDescRef(&frame, .{ .local = runtime_ret_desc })
                 else
@@ -2760,10 +2774,22 @@ pub const Interpreter = struct {
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                    var result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
+                    if (self.pending_erased != null) {
+                        if (!drivesHere(frame, assign.drive)) {
+                            // The pending call produces this statement's
+                            // value; this procedure returns to whoever makes
+                            // it without reading the value.
+                            frame.setLocal(assign.target, result.value);
+                            current = assign.next;
+                            continue;
+                        }
+                        const driven = (try self.drivePendingErasedCalls(frame, self.store.getLocal(assign.target).layout_idx)).?;
+                        result = .{ .value = driven.value, .layout = driven.layout, .desc = driven.desc };
+                    }
                     const materialized_result = self.materializeCallResultToLayout(
                         frame,
                         result.value,
@@ -2850,7 +2876,32 @@ pub const Interpreter = struct {
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalErasedCall(
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const result = if (assign.deferred) deferred: {
+                        if (self.pending_erased != null) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: deferred an erased call while another was pending",
+                                .{},
+                            );
+                        }
+                        self.pending_erased = .{
+                            .closure = try self.getLocalChecked(frame, assign.closure),
+                            .args = arg_values,
+                            .arg_layouts = arg_layouts,
+                            .arg_descs = arg_descs,
+                            .arg_desc_keys = arg_desc_keys,
+                            .arg_plan = assign.arg_plan,
+                        };
+                        if (!drivesHere(frame, assign.drive)) {
+                            frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
+                            current = assign.next;
+                            continue;
+                        }
+                        break :deferred (self.drivePendingErasedCalls(frame, target_layout) catch |err| {
+                            self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
+                            return err;
+                        }).?;
+                    } else self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
@@ -2858,7 +2909,7 @@ pub const Interpreter = struct {
                         arg_descs,
                         arg_desc_keys,
                         assign.arg_plan,
-                        self.store.getLocal(assign.target).layout_idx,
+                        target_layout,
                         assign.reuse_closure,
                     ) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
@@ -4039,6 +4090,40 @@ pub const Interpreter = struct {
         desc: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
+    const PendingErasedCall = struct {
+        closure: Value,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
+    };
+
+    /// Whether calls pending after a statement are made in this frame.
+    fn drivesHere(frame: *const Frame, drive: LIR.PendingDrive) bool {
+        return switch (drive) {
+            .none => false,
+            .always => true,
+            .unless_caller_drives => !frame.caller_drives,
+        };
+    }
+
+    /// Make every pending erased call in turn. Each delivers the result the
+    /// call that left it pending would have.
+    fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame, ret_layout: layout_mod.Idx) Error!?ErasedCallResult {
+        var result: ?ErasedCallResult = null;
+        while (self.pending_erased) |call| {
+            self.pending_erased = null;
+            result = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, ret_layout, false);
+            const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: pending erased call had a null closure",
+                .{},
+            );
+            builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
+        }
+        return result;
+    }
+
     fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!u64 {
         return self.boxy_runtime.readSwitchValue(value, layout_idx);
     }
@@ -4629,6 +4714,8 @@ pub const Interpreter = struct {
         return bindings;
     }
 
+    /// Make an erased call and then every call it leaves pending, as the
+    /// native erased-call runtime does.
     fn evalErasedCall(
         self: *LirInterpreter,
         frame: *Frame,
@@ -4642,19 +4729,34 @@ pub const Interpreter = struct {
         reuse_closure: bool,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
-        const closure_value = try self.getLocalChecked(frame, closure_local);
-        const closure_layout_val = self.layout_store.getLayout(closure_layout);
-        if (closure_layout_val.tag != .erased_callable) {
+        if (self.layout_store.getLayout(closure_layout).tag != .erased_callable) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased call closure local {d} does not have erased_callable layout",
                 .{@intFromEnum(closure_local)},
             );
         }
+        const closure_value = try self.getLocalChecked(frame, closure_local);
+        const first = try self.evalErasedCallOnce(frame, closure_value, closure_local, args, arg_layouts, arg_descs, arg_desc_keys, arg_plan, ret_layout, reuse_closure);
+        return try self.drivePendingErasedCalls(frame, ret_layout) orelse first;
+    }
 
+    fn evalErasedCallOnce(
+        self: *LirInterpreter,
+        frame: *Frame,
+        closure_value: Value,
+        closure_local: ?LocalId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
+        ret_layout: layout_mod.Idx,
+        reuse_closure: bool,
+    ) Error!ErasedCallResult {
         const closure_ptr = self.readBoxedDataPointer(closure_value) orelse {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased call closure local {d} has null payload",
-                .{@intFromEnum(closure_local)},
+                "LIR/interpreter invariant violated: erased call closure local {?d} has null payload",
+                .{if (closure_local) |local| @intFromEnum(local) else null},
             );
         };
 
@@ -4816,6 +4918,7 @@ pub const Interpreter = struct {
             proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_closure) @intFromPtr(closure_ptr) else 0);
             proc_arg_layouts[reuse_index] = self.store.getLocal(reuse_param).layout_idx;
 
+            self.erased_caller_drives = true;
             const proc_result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
             return .{
                 .value = proc_result.value,

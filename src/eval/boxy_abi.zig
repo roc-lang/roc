@@ -222,6 +222,151 @@ fn currentRuntime() ?*GlobalBoxyRuntime {
     return ActiveRuntimeSelection.get() orelse global;
 }
 
+/// An erased call a deferred tail call left for its caller to make. It owns
+/// the reference to `closure` the deferring statement was given.
+const PendingErasedCall = struct {
+    fn_ptr: *const anyopaque,
+    closure: [*]u8,
+    capture: ?[*]u8,
+    args_len: usize,
+    arg_desc_keys_start: u32,
+    arg_desc_keys_len: u32,
+    arg_layouts_start: u32,
+    arg_layouts_len: u32,
+};
+
+/// Per-thread state of the deferred-call protocol.
+const TailState = struct {
+    pending: ?PendingErasedCall = null,
+    /// Argument bytes and descriptors of `pending`. Whoever makes the call
+    /// takes these buffers for its duration, because the callee can defer
+    /// another call before it has finished reading them.
+    args: std.ArrayList(u8) = .empty,
+    arg_descs: std.ArrayList(?*const BoxyTypeDesc) = .empty,
+    /// True from the moment the erased-call runtime invokes a callable until
+    /// that callable reads it, so a Roc callee can tell this caller, which
+    /// makes pending calls, from any other.
+    caller_drives: bool = false,
+};
+
+/// Buffers outlive the calls that fill them and are reused by later ones.
+const tail_allocator = std.heap.page_allocator;
+
+const TailStateSelection = if (builtin.os.tag == .linux and !builtin.link_libc) struct {
+    const Entry = struct {
+        tid: std.os.linux.pid_t,
+        state: TailState,
+        next: ?*Entry,
+    };
+
+    var lock: std.atomic.Mutex = .unlocked;
+    var entries: ?*Entry = null;
+
+    fn get() *TailState {
+        const tid = std.os.linux.gettid();
+        while (!lock.tryLock()) std.atomic.spinLoopHint();
+        defer lock.unlock();
+        var current = entries;
+        while (current) |entry| : (current = entry.next) {
+            if (entry.tid == tid) return &entry.state;
+        }
+        const entry = tail_allocator.create(Entry) catch @panic("out of memory recording a deferred erased call");
+        entry.* = .{ .tid = tid, .state = .{}, .next = entries };
+        entries = entry;
+        return &entry.state;
+    }
+} else struct {
+    threadlocal var state: TailState = .{};
+
+    fn get() *TailState {
+        return &state;
+    }
+};
+
+fn tailOps() *RocOps {
+    return if (currentRuntime()) |g| g.runtime.roc_ops else builtins.in_process_host.ops();
+}
+
+/// Record an erased call instead of making it. The procedure that calls this
+/// returns immediately afterwards, and whoever awaits its result makes the
+/// call: the erased-call runtime when it invoked that procedure, otherwise
+/// the statement the tail-drive pass marked. `closure` carries one owned
+/// reference, released after the call is made.
+pub fn roc_boxy_defer_erased(
+    fn_ptr: ?*const anyopaque,
+    closure: ?[*]u8,
+    capture: ?[*]u8,
+    args: ?[*]const u8,
+    args_len: usize,
+    arg_descs: ?[*]const ?*const BoxyTypeDesc,
+    arg_desc_keys_start: u32,
+    arg_desc_keys_len: u32,
+    arg_layouts_start: u32,
+    arg_layouts_len: u32,
+) callconv(.c) void {
+    const tail = TailStateSelection.get();
+    if (tail.pending != null) @panic("boxy deferred an erased call while another was pending");
+    tail.args.clearRetainingCapacity();
+    if (args) |bytes| tail.args.appendSlice(tail_allocator, bytes[0..args_len]) catch @panic("out of memory recording a deferred erased call");
+    tail.arg_descs.clearRetainingCapacity();
+    if (arg_descs) |descs| tail.arg_descs.appendSlice(tail_allocator, descs[0..arg_desc_keys_len]) catch @panic("out of memory recording a deferred erased call");
+    tail.pending = .{
+        .fn_ptr = fn_ptr orelse @panic("boxy deferred an erased call with a null function pointer"),
+        .closure = closure orelse @panic("boxy deferred an erased call with a null closure"),
+        .capture = capture,
+        .args_len = args_len,
+        .arg_desc_keys_start = arg_desc_keys_start,
+        .arg_desc_keys_len = arg_desc_keys_len,
+        .arg_layouts_start = arg_layouts_start,
+        .arg_layouts_len = arg_layouts_len,
+    };
+}
+
+/// Make every pending erased call in turn, each delivering its result where
+/// the call that left it pending would have. Returns once none is pending.
+pub fn roc_boxy_drive_pending(
+    ret: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
+    result_desc: ?*const BoxyTypeDesc,
+    expected_layout: u32,
+) callconv(.c) void {
+    const tail = TailStateSelection.get();
+    while (tail.pending) |call| {
+        tail.pending = null;
+        var args = tail.args;
+        var arg_descs = tail.arg_descs;
+        tail.args = .empty;
+        tail.arg_descs = .empty;
+        callErasedOnce(
+            call.fn_ptr,
+            ret,
+            if (call.args_len == 0) null else args.items.ptr,
+            call.capture,
+            null,
+            out_desc,
+            result_desc,
+            expected_layout,
+            if (arg_descs.items.len == 0) null else arg_descs.items.ptr,
+            call.arg_desc_keys_start,
+            call.arg_desc_keys_len,
+            call.arg_layouts_start,
+            call.arg_layouts_len,
+        );
+        builtins.erased_callable.decref(call.closure, tailOps());
+        if (tail.args.capacity == 0) tail.args = args else args.deinit(tail_allocator);
+        if (tail.arg_descs.capacity == 0) tail.arg_descs = arg_descs else arg_descs.deinit(tail_allocator);
+    }
+}
+
+/// Whether the erased-call runtime invoked the erased-callable procedure
+/// that is starting. Reading it clears it.
+pub fn roc_boxy_caller_drives() callconv(.c) u8 {
+    const tail = TailStateSelection.get();
+    const drives = tail.caller_drives;
+    tail.caller_drives = false;
+    return @intFromBool(drives);
+}
+
 fn requireGlobal() *GlobalBoxyRuntime {
     return currentRuntime() orelse @panic("boxy ABI wrapper called before roc_boxy runtime initialization");
 }
@@ -1098,6 +1243,26 @@ pub fn roc_boxy_call_erased(
     arg_layouts_start: u32,
     arg_layouts_len: u32,
 ) callconv(.c) void {
+    callErasedOnce(fn_ptr, ret, args, capture, reuse, out_desc, result_desc, expected_layout, arg_descs, arg_desc_keys_start, arg_desc_keys_len, arg_layouts_start, arg_layouts_len);
+    // The callee may have deferred a tail call for this caller to make.
+    roc_boxy_drive_pending(ret, out_desc, result_desc, expected_layout);
+}
+
+fn callErasedOnce(
+    fn_ptr: ?*const anyopaque,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+    reuse: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
+    result_desc: ?*const BoxyTypeDesc,
+    expected_layout: u32,
+    arg_descs: ?[*]const ?*const BoxyTypeDesc,
+    arg_desc_keys_start: u32,
+    arg_desc_keys_len: u32,
+    arg_layouts_start: u32,
+    arg_layouts_len: u32,
+) void {
     const raw = fn_ptr orelse @panic("boxy erased call with null function pointer");
     const expected = layoutIdx(expected_layout);
 
@@ -1105,7 +1270,7 @@ pub fn roc_boxy_call_erased(
     // every erased result already uses the caller's exact layout.
     const g = currentRuntime() orelse {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
-        invokeErasedCallable(raw, builtins.in_process_host.ops(), ret, args, capture, reuse, &returned_desc);
+        invokeErasedCallableDriving(raw, builtins.in_process_host.ops(), ret, args, capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     };
@@ -1113,7 +1278,7 @@ pub fn roc_boxy_call_erased(
     const actual = g.erased_procs.get(@intFromPtr(raw));
     if (actual == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
-        invokeErasedCallable(raw, g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
+        invokeErasedCallableDriving(raw, g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1142,7 +1307,7 @@ pub fn roc_boxy_call_erased(
     );
     if (actual.?.ret_layout == expected and result_desc == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-        invokeErasedCallable(raw, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
+        invokeErasedCallableDriving(raw, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1151,7 +1316,10 @@ pub fn roc_boxy_call_erased(
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-    invokeErasedCallable(raw, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
+    invokeErasedCallableDriving(raw, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
+    // A callee that deferred a call returned no value; the pending call
+    // delivers the result in the caller's layout itself.
+    if (TailStateSelection.get().pending != null) return;
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
@@ -1177,6 +1345,23 @@ fn invokeErasedCallable(
 ) void {
     const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
     callable(ops, ret, args, capture, reuse, out_desc);
+}
+
+/// Invoke an erased callable on behalf of a caller that makes whatever call
+/// the callable leaves pending.
+fn invokeErasedCallableDriving(
+    raw: *const anyopaque,
+    ops: *RocOps,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+    reuse: ?[*]u8,
+    out_desc: *?*const anyopaque,
+) void {
+    const tail = TailStateSelection.get();
+    tail.caller_drives = true;
+    invokeErasedCallable(raw, ops, ret, args, capture, reuse, out_desc);
+    tail.caller_drives = false;
 }
 
 /// Box a payload into dynamic storage. Writes the boxed value through `out`

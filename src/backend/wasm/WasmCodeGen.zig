@@ -299,6 +299,9 @@ tail_drivers: std.ArrayList(TailDriver) = .empty,
 proc_return_local: u32 = 0,
 /// Erased-call ABI output pointer for the descriptor on the active return edge.
 erased_ret_desc_ptr_local: ?u32 = null,
+/// Where the erased-callable proc being compiled keeps whether the
+/// erased-call runtime invoked it, when its body reads that.
+caller_drives_local: ?u32 = null,
 /// CFStmt block nesting depth (for br targets in proc compilation).
 cf_depth: u32 = 0,
 /// Structured control depth used for loop-break branch depths.
@@ -8701,6 +8704,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.fp_local = 0;
     self.proc_return_local = 0;
     self.erased_ret_desc_ptr_local = null;
+    self.caller_drives_local = null;
     self.cf_depth = 0;
     self.in_proc = true;
 
@@ -8740,6 +8744,14 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     };
 
     if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
+    if (proc.reads_caller_drives) {
+        // Read before anything else can make an erased call: the runtime's
+        // answer describes only this invocation.
+        const flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitBoxyCall("roc_boxy_caller_drives");
+        try self.emitLocalSet(flag);
+        self.caller_drives_local = flag;
+    }
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict).
     // Erased-callable adapter parameter unpacking may already have allocated stack
@@ -9002,6 +9014,9 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_register_proc", &.{ .i32, .i32, .i32, .i64, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_call_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_drive_pending", &.{ .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_caller_drives", &.{}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_list_concat", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_prepend", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_sublist", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32 }, &.{});
@@ -9820,6 +9835,7 @@ const SavedState = struct {
     fp_local: u32,
     proc_return_local: u32,
     erased_ret_desc_ptr_local: ?u32,
+    caller_drives_local: ?u32,
     cf_depth: u32,
     in_proc: bool,
     current_proc_id: ?LIR.LirProcSpecId,
@@ -9839,6 +9855,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
         .fp_local = self.fp_local,
         .proc_return_local = self.proc_return_local,
         .erased_ret_desc_ptr_local = self.erased_ret_desc_ptr_local,
+        .caller_drives_local = self.caller_drives_local,
         .cf_depth = self.cf_depth,
         .in_proc = self.in_proc,
         .current_proc_id = self.current_proc_id,
@@ -9885,6 +9902,7 @@ fn restoreSavedFields(self: *Self, saved: SavedState) void {
     self.fp_local = saved.fp_local;
     self.proc_return_local = saved.proc_return_local;
     self.erased_ret_desc_ptr_local = saved.erased_ret_desc_ptr_local;
+    self.caller_drives_local = saved.caller_drives_local;
     self.cf_depth = saved.cf_depth;
     self.in_proc = saved.in_proc;
     self.current_proc_id = saved.current_proc_id;
@@ -10063,6 +10081,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
                 .out_desc = assign.out_desc,
             });
+            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -10078,7 +10097,9 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .result_desc = assign.result_desc,
                 .out_desc = assign.out_desc,
                 .reuse_closure = assign.reuse_closure,
+                .deferred = assign.deferred,
             });
+            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -11183,6 +11204,29 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 
     const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
     const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
+    if (c.deferred) {
+        // The runtime records the call; whoever awaits this procedure's
+        // result makes it, so the value pushed here is never read.
+        try self.emitLocalGet(fn_ptr);
+        try self.emitLocalGet(payload_ptr);
+        try self.emitLocalGet(capture_ptr);
+        if (args_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+        try self.emitI32Const(if (args_ptr != null) @intCast(plan.size) else 0);
+        if (arg_descs_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+        try self.emitI32Const(@intCast(c.arg_desc_keys.start));
+        try self.emitI32Const(@intCast(c.arg_desc_keys.len));
+        try self.emitI32Const(@intCast(c.arg_layouts.start));
+        try self.emitI32Const(@intCast(c.arg_layouts.len));
+        try self.emitBoxyCall("roc_boxy_defer_erased");
+        if (ret_size == 0) {
+            try self.emitZeroValue(try self.resolveValType(c.ret_layout));
+        } else if (try self.isCompositeLayout(c.ret_layout)) {
+            try self.emitFpOffset(ret_offset.?);
+        } else {
+            try self.emitZeroValue(try self.resolveValType(c.ret_layout));
+        }
+        return;
+    }
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGet(fn_ptr);
     if (ret_offset) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
@@ -11211,6 +11255,62 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
     } else {
         try self.emitFpOffset(ret_offset.?);
         try self.emitLoadOpSized(try self.resolveValType(c.ret_layout), ret_size, 0);
+    }
+}
+
+/// Run the erased calls a callee left pending, as the tail-drive pass marked
+/// this statement. Takes the statement's value from the operand stack and
+/// leaves the last pending call's result there, or the same value when none
+/// was pending.
+fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx, result_desc: ?LIR.BoxyDescRef) Allocator.Error!void {
+    if (drive == .none) return;
+    const runtime_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+    const ret_size = try self.layoutStorageByteSize(runtime_layout);
+    const val_type = try self.resolveValType(ret_layout);
+    const composite = try self.isCompositeLayout(ret_layout);
+
+    var slot_local: ?u32 = null;
+    if (ret_size == 0) {
+        self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+    } else if (composite) {
+        slot_local = try self.stabilizeCompositeResult(ret_size);
+    } else {
+        const value_local = self.storage.allocAnonymousLocal(val_type) catch return error.OutOfMemory;
+        try self.emitLocalSet(value_local);
+        const slot_offset = try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(ret_layout));
+        const slot = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(slot_offset);
+        try self.emitLocalSet(slot);
+        try self.emitLocalGet(value_local);
+        try self.emitStoreToMemSized(slot, 0, val_type, ret_size);
+        slot_local = slot;
+    }
+    const out_desc_ptr = try self.allocBoxyOutDescPtr();
+
+    if (drive == .unless_caller_drives) {
+        const flag = self.caller_drives_local orelse
+            wasmInvariantFmt("WASM/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
+        try self.emitLocalGet(flag);
+        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    }
+    if (slot_local) |slot| try self.emitLocalGet(slot) else try self.emitNullPtr();
+    try self.emitLocalGet(out_desc_ptr);
+    if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+    try self.emitI32Const(@intCast(@intFromEnum(runtime_layout)));
+    try self.emitBoxyCall("roc_boxy_drive_pending");
+    if (drive == .unless_caller_drives) {
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    }
+
+    if (ret_size == 0) {
+        try self.emitZeroValue(val_type);
+    } else if (composite) {
+        try self.emitLocalGet(slot_local.?);
+    } else {
+        try self.emitLocalGet(slot_local.?);
+        try self.emitLoadOpSized(val_type, ret_size, 0);
     }
 }
 

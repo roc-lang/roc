@@ -306,6 +306,9 @@ pub const MonoLlvmCodeGen = struct {
     /// The current fast body's group storage parameter, if its group has any.
     current_tail_scratch: ?LlvmBuilder.Value = null,
     current_tail_group: ?lir.LIR.TailGroupId = null,
+    /// Where the erased-callable procedure being compiled keeps whether the
+    /// erased-call runtime invoked it, when its body reads that.
+    caller_drives_flag: ?LlvmBuilder.Value = null,
     /// Group storage this function allocated to enter other groups, and the
     /// function those slots belong to.
     tail_scratch_slots: std.ArrayList(?LlvmBuilder.Value) = .empty,
@@ -2448,6 +2451,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_fast_ret_registers = self.fast_ret_registers;
         const outer_tail_scratch = self.current_tail_scratch;
         const outer_tail_group = self.current_tail_group;
+        const outer_caller_drives_flag = self.caller_drives_flag;
         // Procedure bodies are emitted serially by compileAllProcSpecs. Helper
         // emission saves/restores the active views without owning this storage.
         std.debug.assert(self.deferred_str_capture_count == 0);
@@ -2462,6 +2466,7 @@ pub const MonoLlvmCodeGen = struct {
             self.fast_ret_registers = outer_fast_ret_registers;
             self.current_tail_scratch = outer_tail_scratch;
             self.current_tail_group = outer_tail_group;
+            self.caller_drives_flag = outer_caller_drives_flag;
             self.ret_desc_ptr_arg = outer_ret_desc_ptr;
             self.current_runtime_ret_desc = outer_runtime_ret_desc;
             self.current_ret_layout = outer_ret_layout;
@@ -2531,6 +2536,15 @@ pub const MonoLlvmCodeGen = struct {
             if (sig.scratch_index) |index| wip.arg(index) else null
         else
             null;
+        self.caller_drives_flag = null;
+        if (proc.reads_caller_drives) {
+            // Read before anything else can make an erased call: the
+            // runtime's answer describes only this invocation.
+            const flag_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
+            const flag = try self.callBoxy("roc_boxy_caller_drives", .i8, &.{}, &.{});
+            _ = wip.store(.normal, flag, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+            self.caller_drives_flag = flag_ptr;
+        }
 
         if (proc.abi == .erased_callable) {
             // Parameter 0 is the public erased ABI's host pointer, unread.
@@ -3800,6 +3814,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitFrameReplacingCall(assign.proc, assign.args);
             } else {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
+                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
@@ -3814,7 +3829,9 @@ pub const MonoLlvmCodeGen = struct {
                     assign.result_desc,
                     assign.out_desc,
                     assign.reuse_closure,
+                    assign.deferred,
                 );
+                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
@@ -4751,6 +4768,7 @@ pub const MonoLlvmCodeGen = struct {
         result_desc: ?lir.LIR.BoxyDescRef,
         out_desc: ?LocalId,
         reuse_closure: bool,
+        deferred: bool,
     ) Error!void {
         try self.prepareLocalWrite(target);
         try self.materializeLocalIfDeferred(closure);
@@ -4810,6 +4828,29 @@ pub const MonoLlvmCodeGen = struct {
             }
             break :blk desc_buf;
         };
+        if (deferred) {
+            // The runtime records the call; whoever awaits this procedure's
+            // result makes it, so the target holds no value yet.
+            const usize_ty: LlvmBuilder.Type = if (self.targetWordSize() == 8) .i64 else .i32;
+            const args_len: u32 = if (arg_locals.len == 0) 0 else self.store.getErasedCallArgsPlan(arg_plan).size;
+            try self.callBoxyVoid(
+                "roc_boxy_defer_erased",
+                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, ptr_ty, .i32, .i32, .i32, .i32 },
+                &.{
+                    fn_ptr,
+                    closure_ptr,
+                    capture_ptr,
+                    args_buf,
+                    try self.boxyInt(usize_ty, args_len),
+                    arg_descs_ptr,
+                    try self.boxyInt(.i32, arg_desc_keys.start),
+                    try self.boxyInt(.i32, arg_desc_keys.len),
+                    try self.boxyInt(.i32, arg_layouts.start),
+                    try self.boxyInt(.i32, arg_layouts.len),
+                },
+            );
+            return;
+        }
         const ret_ptr = if (self.slot(target).size == 0)
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else
@@ -4838,6 +4879,53 @@ pub const MonoLlvmCodeGen = struct {
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr));
+        }
+    }
+
+    /// Run the erased calls a callee left pending, as the tail-drive pass
+    /// marked this statement. The last pending call's result replaces the
+    /// statement's; with none pending the target is unchanged.
+    fn emitDrivePending(
+        self: *MonoLlvmCodeGen,
+        drive: lir.LIR.PendingDrive,
+        target: LocalId,
+        result_desc: ?lir.LIR.BoxyDescRef,
+    ) Error!void {
+        if (drive == .none) return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const result_desc_ptr = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
+        const out_desc_ptr = try self.boxyOutDescPtr("boxy_driven_result_desc");
+
+        var done_block: ?LlvmBuilder.Function.Block.Index = null;
+        if (drive == .unless_caller_drives) {
+            const flag_ptr = self.caller_drives_flag orelse
+                llvmInvariantFmt("procedure reads a caller-drives flag it never recorded", .{});
+            const flag = wip.load(.normal, .i8, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+            const caller_drives = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
+            const drive_block = wip.block(0, "drive_pending") catch return error.OutOfMemory;
+            done_block = wip.block(0, "pending_done") catch return error.OutOfMemory;
+            _ = wip.brCond(caller_drives, done_block.?, drive_block, .none) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = drive_block };
+        }
+        const ret_ptr = if (self.slot(target).size == 0)
+            builder.nullValue(ptr_ty) catch return error.OutOfMemory
+        else
+            self.slot(target).ptr;
+        try self.callBoxyVoid(
+            "roc_boxy_drive_pending",
+            &.{ ptr_ty, ptr_ty, ptr_ty, .i32 },
+            &.{
+                ret_ptr,
+                out_desc_ptr,
+                result_desc_ptr,
+                try self.boxyInt(.i32, @intFromEnum(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
+            },
+        );
+        if (done_block) |block| {
+            _ = wip.br(block) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = block };
         }
     }
 
