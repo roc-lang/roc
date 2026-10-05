@@ -82,6 +82,8 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .boxy_tag_match,
@@ -133,7 +135,11 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (call.tail_call != null) continue;
         // A runtime result descriptor is another call output; forwarding the
         // value alone does not establish that descriptor's return contract.
-        if (call.out_desc != null) continue;
+        // A call writing the procedure's own returned descriptor establishes
+        // it: the loop's final iteration writes that local as it returns.
+        if (call.out_desc) |out_desc| {
+            if (store.getProcSpec(proc).runtime_ret_desc != out_desc) continue;
+        }
         if (try self.returnedLocal(store, call.next)) |returned| {
             if (returned != call.target) continue;
             store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
@@ -172,6 +178,8 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .boxy_tag_match,
@@ -249,6 +257,8 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,

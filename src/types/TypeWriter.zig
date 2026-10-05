@@ -64,6 +64,9 @@ count_frames: std.array_list.Managed(CountFrame),
 /// Children collected for the occurrence-counting frames in flight, one
 /// contiguous run per frame.
 count_pending: std.array_list.Managed(Var),
+/// While set, the occurrence count does not descend into this variable's own
+/// static-dispatch constraints (see `countVarOccurrencesOutsideOwnConstraints`).
+count_skips_own_constraints: bool = false,
 /// Extension vars already reached by the row collection currently running.
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
@@ -1098,24 +1101,29 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         // shared or constrained elsewhere in the type (where it
                         // carries real information).
                         const display: enum { hidden, anonymous, source_name, generated_name } = blk: {
-                            const implicit_openness = self.polarity == .pos and flex.payload.constraints.len() == 0;
+                            // A tail constrained only by the `is_eq` and
+                            // `to_hash` an open row's derivation gives it is
+                            // satisfied by the closed row an output stands
+                            // for, so it is implicit openness too.
+                            const implicit_openness = self.polarity == .pos and self.constraintsAreRowDerivations(flex.payload.constraints);
                             if (flex.payload.name) |ident_idx| {
                                 const name = self.getIdent(ident_idx);
                                 if (name.len > 0 and name[0] != '#') {
                                     // A name says nothing an anonymous
                                     // extension here would not: hide it too.
-                                    if (implicit_openness and (try self.countVarOccurrences(flex.var_, root_var)) <= 1) break :blk .hidden;
+                                    if (implicit_openness and (try self.countVarOccurrencesOutsideOwnConstraints(flex.var_, root_var)) <= 1) break :blk .hidden;
                                     break :blk .source_name;
                                 }
                                 // A compiler-internal name (#others from `..`)
                                 // is suppressed; the `..` itself is kept in
                                 // input positions.
-                                if (implicit_openness and (try self.countVarOccurrences(flex.var_, root_var)) <= 1) break :blk .hidden;
+                                if (implicit_openness and (try self.countVarOccurrencesOutsideOwnConstraints(flex.var_, root_var)) <= 1) break :blk .hidden;
                                 break :blk .anonymous;
                             }
-                            const occurrences = try self.countVarOccurrences(flex.var_, root_var);
-                            if (occurrences > 1) break :blk .generated_name;
-                            if (implicit_openness) break :blk .hidden;
+                            if (implicit_openness and (try self.countVarOccurrencesOutsideOwnConstraints(flex.var_, root_var)) <= 1) break :blk .hidden;
+                            // A shown tail's constraints name it in the
+                            // `where` clause, so it is named here too.
+                            if ((try self.countVarOccurrences(flex.var_, root_var)) > 1) break :blk .generated_name;
                             break :blk .anonymous;
                         };
 
@@ -1129,8 +1137,10 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                             }
                         }
 
-                        for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                            try self.appendStaticDispatchConstraint(flex.var_, constraint);
+                        if (display != .hidden) {
+                            for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                                try self.appendStaticDispatchConstraint(flex.var_, constraint);
+                            }
                         }
                     },
                     .rigid => |rigid| {
@@ -1441,6 +1451,15 @@ fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.me
     return count;
 }
 
+/// Occurrences of `search_var` under `root_var`, not counting the ones its
+/// own constraints' signatures contribute (`a.is_eq : a, a -> Bool` mentions
+/// `a` only to describe `a`).
+fn countVarOccurrencesOutsideOwnConstraints(self: *TypeWriter, search_var: Var, root_var: Var) std.mem.Allocator.Error!usize {
+    self.count_skips_own_constraints = true;
+    defer self.count_skips_own_constraints = false;
+    return self.countVarOccurrences(search_var, root_var);
+}
+
 /// Visit one var of the occurrence count: tally it, then either finish it
 /// outright (returning true) or push the frame that will visit its children
 /// (returning false).
@@ -1464,6 +1483,8 @@ fn countRequest(self: *TypeWriter, search_var: Var, current_var: Var, count: *us
     // Check if we've already seen this var on the path we are on
     // This avoids infinite recursion
     if (self.seen_count_set.contains(resolved.var_)) return true;
+
+    if (self.count_skips_own_constraints and resolved.var_ == search_var) return true;
 
     // Record that we've seen this var
     try self.pushSeenCount(resolved.var_);
@@ -1562,6 +1583,16 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
             try self.count_pending.append(tag_union.ext);
         },
     }
+}
+
+/// Whether every constraint in `range` is an `is_eq` or `to_hash`, the
+/// obligations deriving those methods over an open row gives its tail.
+fn constraintsAreRowDerivations(self: *const TypeWriter, range: types_mod.StaticDispatchConstraint.SafeList.Range) bool {
+    for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+        const name = self.idents.getText(constraint.fn_name);
+        if (!std.mem.eql(u8, name, "is_eq") and !std.mem.eql(u8, name, "to_hash")) return false;
+    }
+    return true;
 }
 
 /// Retrieves the text representation of an identifier by its index.

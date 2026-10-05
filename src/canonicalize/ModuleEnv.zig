@@ -767,6 +767,12 @@ pub const SchemeUseRecord = extern struct {
         /// or substitution of its own; an accompanying value/shared use owns
         /// those facts when the referenced scheme has quantified variables.
         recursive_reference,
+        /// A reference to a block-local value binding from inside that
+        /// binding's own value. Canonicalization rejects an eager
+        /// self-reference, so the reference is delayed through a function and
+        /// the binding is a recursive value. The record carries no evidence or
+        /// substitution.
+        recursive_value_reference,
         /// One body dispatch's per-use instantiation of its where-method
         /// signature. `slot_data` is the body's constraint callable and
         /// `scheme_root` is the pristine where-method signature callable.

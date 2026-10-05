@@ -1203,58 +1203,51 @@ pub const Interpreter = struct {
             return self.interp.resolveBoxyDictRef(frame, dict_ref);
         }
 
-        pub fn callInspectMethod(
+        fn activeFrame(self: BoxyFrameHooks, kind: boxy_runtime.DescriptorMethodKind) Error!*const Frame {
+            return self.frame orelse self.interp.invariantFailedError(
+                "LIR/interpreter invariant violated: {s} worker called without an active frame",
+                .{@tagName(kind)},
+            );
+        }
+
+        /// Call the `kind` method slot the first argument's descriptor
+        /// carries with the borrowed `args`.
+        pub fn callDescriptorMethod(
             self: BoxyFrameHooks,
+            kind: boxy_runtime.DescriptorMethodKind,
             method: LirProgram.BoxyMethodSlotId,
-            value: Value,
-            value_layout: layout_mod.Idx,
-            desc: *const LirProgram.BoxyTypeDesc,
-        ) Error!boxy_runtime.InspectCallResult {
-            const prepared = try self.interp.boxy_runtime.prepareInspectCall(
+            args: []const boxy_runtime.DictCallArg,
+        ) Error!boxy_runtime.DescriptorMethodCallResult {
+            const prepared = try self.interp.boxy_runtime.prepareDescriptorMethodCall(
                 self,
                 self.interp.arena.allocator(),
+                kind,
                 method,
-                .{ .value = value, .layout = value_layout, .source_desc = desc },
+                args,
             );
             const proc = self.interp.store.getProcSpec(prepared.proc);
-            if (prepared.arg_values.len == 0) {
+            if (prepared.arg_values.len < args.len) {
                 return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: to_inspect worker call had no explicit argument",
-                    .{},
+                    "LIR/interpreter invariant violated: {s} worker call had {d} explicit arguments for {d} values",
+                    .{ @tagName(kind), prepared.arg_values.len, args.len },
                 );
             }
-            const argument_is_borrowed = (prepared.borrowed_args & 1) != 0;
-            const worker_borrows_argument = (proc.rc_borrowed_params & 1) != 0;
-            if (argument_is_borrowed and !worker_borrows_argument) {
-                const frame = self.frame orelse return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: to_inspect worker called without an active frame",
-                    .{},
-                );
-                try self.interp.performBoxyLayoutDrop(
-                    frame,
-                    prepared.arg_values[0],
-                    prepared.arg_layouts[0],
-                    prepared.arg_descs[0],
-                    .incref,
-                    1,
-                    .atomic,
-                );
+            for (0..args.len) |index| {
+                const bit = @as(u64, 1) << @intCast(index);
+                const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
+                const worker_borrows_argument = (proc.rc_borrowed_params & bit) != 0;
+                if (argument_is_borrowed and !worker_borrows_argument) {
+                    try self.interp.performBoxyLayoutDrop(try self.activeFrame(kind), prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .incref, 1, .atomic);
+                }
             }
             const result = try self.interp.evalProcById(prepared.proc, prepared.arg_values, prepared.arg_layouts);
-            if (!argument_is_borrowed and worker_borrows_argument) {
-                const frame = self.frame orelse return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: to_inspect worker called without an active frame",
-                    .{},
-                );
-                try self.interp.performBoxyLayoutDrop(
-                    frame,
-                    prepared.arg_values[0],
-                    prepared.arg_layouts[0],
-                    prepared.arg_descs[0],
-                    .decref,
-                    1,
-                    .atomic,
-                );
+            for (0..args.len) |index| {
+                const bit = @as(u64, 1) << @intCast(index);
+                const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
+                const worker_borrows_argument = (proc.rc_borrowed_params & bit) != 0;
+                if (!argument_is_borrowed and worker_borrows_argument) {
+                    try self.interp.performBoxyLayoutDrop(try self.activeFrame(kind), prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .decref, 1, .atomic);
+                }
             }
             return .{
                 .value = result.value,
@@ -1762,14 +1755,19 @@ pub const Interpreter = struct {
                 );
             },
             .erased_callable => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
-                    proc_id,
-                    stmt_id,
-                    local_id,
-                    layout_idx,
-                    path_buf[0..path_len],
-                    "boxed erased callable had null payload pointer",
-                );
+                const data_ptr = self.readBoxedDataPointer(value) orelse {
+                    // A zero-filled box payload awaiting its value (a
+                    // recursive value's slot) holds null callables.
+                    if (allow_zeroed_box_payload_holes and path_len > 0) return;
+                    self.debugValueShapePanicAt(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        path_buf[0..path_len],
+                        "boxed erased callable had null payload pointer",
+                    );
+                };
                 _ = builtins.erased_callable.payloadPtr(data_ptr);
             },
             .list => {
@@ -2126,6 +2124,8 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2166,6 +2166,8 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox => |assign| assign.next,
                 .assign_boxy_adapt => |assign| assign.next,
                 .assign_boxy_inspect => |assign| assign.next,
+                .assign_boxy_eq => |assign| assign.next,
+                .assign_boxy_hash => |assign| assign.next,
                 .assign_boxy_tag => |assign| assign.next,
                 .assign_boxy_tag_payload => |assign| assign.next,
                 .assign_call_dict => |assign| assign.next,
@@ -3062,6 +3064,41 @@ pub const Interpreter = struct {
                     );
                     current = assign.next;
                 },
+                .assign_boxy_eq => |assign| {
+                    const desc = try self.resolveBoxyDescRef(frame, assign.desc);
+                    const value_layout = self.store.getLocal(assign.lhs).layout_idx;
+                    if (self.store.getLocal(assign.rhs).layout_idx != value_layout) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: boxy equality operands had layouts {d} and {d}",
+                            .{ @intFromEnum(value_layout), @intFromEnum(self.store.getLocal(assign.rhs).layout_idx) },
+                        );
+                    }
+                    const equal = try self.boxy_runtime.boxyEq(
+                        self.boxyFrameHooks(frame),
+                        try self.getLocalChecked(frame, assign.lhs),
+                        try self.getLocalChecked(frame, assign.rhs),
+                        value_layout,
+                        desc,
+                    );
+                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                    result.write(u8, if (equal) 1 else 0);
+                    try self.setLocalChecked(frame, current, assign.target, result, false);
+                    current = assign.next;
+                },
+                .assign_boxy_hash => |assign| {
+                    const desc = try self.resolveBoxyDescRef(frame, assign.desc);
+                    const state = try self.boxy_runtime.boxyHash(
+                        self.boxyFrameHooks(frame),
+                        try self.getLocalChecked(frame, assign.value),
+                        self.store.getLocal(assign.value).layout_idx,
+                        desc,
+                        (try self.getLocalChecked(frame, assign.hasher)).read(u64),
+                    );
+                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                    result.write(u64, state);
+                    try self.setLocalChecked(frame, current, assign.target, result, false);
+                    current = assign.next;
+                },
                 .assign_boxy_adapt => |assign| {
                     const source_desc = if (assign.source_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
                     const target_desc = if (assign.target_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
@@ -3615,6 +3652,8 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 => |assign| {

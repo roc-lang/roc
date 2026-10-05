@@ -2280,7 +2280,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..], _arg -> Error")
+			(text "[Blue, Red, ..d], _arg -> Error where [d.is_eq : d, d -> Bool]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2893,7 +2893,7 @@ EndOfFile,
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..d], _arg -> Error where [d.is_eq : d, d -> Bool]"))
 		(patt (type "List(Error) -> Try({}, _d)")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -2928,6 +2928,6 @@ EndOfFile,
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..d], _arg -> Error where [d.is_eq : d, d -> Bool]"))
 		(expr (type "List(Error) -> Try({}, _d)"))))
 ~~~

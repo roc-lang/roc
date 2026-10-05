@@ -704,9 +704,22 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// True when the dispatcher was a numeric literal that was defaulted to Dec
     /// because no type annotation was given. Used to add explanatory text in errors.
     defaulted_from_numeric_literal: bool = false,
+    /// Set when the dispatcher is a record's or tag union's `..` extension,
+    /// whose obligation came from deriving the method for that whole type.
+    row_extension_of: ?RowExtension = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
+
+    pub const RowExtension = struct {
+        /// The record or tag union the extension belongs to.
+        row_snapshot: SnapshotContentIdx,
+        /// The extension's written name; null for an anonymous `..`.
+        ext_name: ?Ident.Idx,
+        kind: Kind,
+
+        pub const Kind = enum { record, tag_union };
+    };
 };
 
 /// Error when an anonymous type (record, tuple, tag union) doesn't support equality

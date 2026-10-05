@@ -53,6 +53,7 @@ const PolarityVarBehavior = Instantiator.PolarityVarBehavior;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = snapshot_mod.Store;
+const SnapshotContentIdx = snapshot_mod.SnapshotContentIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 const Self = @This();
@@ -410,13 +411,21 @@ platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.Solu
 /// sequentially scoped), so this is always a single self/enclosing chain.
 local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
 
+/// Binder patterns of local block-statement (`s_decl`) value declarations
+/// whose RHS is currently being type-checked. Canonicalization rejects an eager
+/// self-reference, so a lookup that reaches one of these binders is delayed
+/// through a function in the value's own RHS. Checking records each such
+/// lookup as a recursive value reference, which publication turns into the
+/// declaration's explicit recursive-binding fact.
+local_value_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
+
 /// Every local binding root (`x = ..` / `var $x = ..` statement pattern)
 /// encountered while checking, in solve order. The settled-state occurs sweep
 /// checks these alongside the top-level defs: a local binding's cyclic type
 /// may never be reachable from the enclosing def's root type, and checking
 /// earlier would be premature because later constraints in the same statement
 /// can still determine the root's final graph.
-local_binding_roots: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
+local_binding_roots: std.ArrayListUnmanaged(LocalBindingRoot) = .empty,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
@@ -908,6 +917,22 @@ open_literal_vars: std.ArrayListUnmanaged(Var),
 /// a concrete number type, so range validation does not depend on flex content
 /// still being present in the union-find root.
 open_numeral_literals: std.ArrayListUnmanaged(OpenNumeralLiteral),
+/// The use that instantiated each generalized interpolation copy, keyed by the
+/// copy's constraint function var. The copy's parts are the use's
+/// instantiated types, so a rejected part fails at that use rather than at the
+/// interpolation inside the reusable definition.
+instantiated_interpolation_owners: std.ArrayListUnmanaged(InstantiatedInterpolationOwner),
+/// Each `is_eq`/`to_hash` obligation a derivation gave a row's extension, with
+/// the row whose extension it is, so a rejected one is reported as being about
+/// the tags or fields the extension stands for.
+row_extension_derivations: std.ArrayListUnmanaged(RowExtensionDerivation),
+/// Numeral literals interpolated into a still-open interpolation when literal
+/// defaulting began, each with a snapshot of its type at that point. Defaulting
+/// decides each literal independently, so such an interpolation can default to
+/// `Str` after its numeral part defaulted to `Dec`; a part rejected against
+/// `Str` is then reported with the type it had before defaulting, since the
+/// program never chose `Dec`.
+interpolation_part_numerals: std.ArrayListUnmanaged(InterpolationPartNumeral),
 /// Literal plans retired with an erroneous expression subtree. They are no
 /// longer publishable checked evidence, but later diagnostics in the same
 /// constraint pass still need their exact source regions. This list grows only
@@ -1753,6 +1778,16 @@ const HasProcessed = enum { processed, processing, not_processed };
 /// A local block-statement (`s_decl`) function def whose body is currently being
 /// checked. Block defs are `s_decl` statements (not `CIR.Def`), so there is no
 /// `Def.Idx`—only the name (for error context) and pattern are tracked.
+/// A local binding root and, when the root binds an initializer's value, the
+/// statement and initializer that a rejected root type poisons.
+const LocalBindingRoot = struct {
+    pattern: CIR.Pattern.Idx,
+    initialized: ?struct {
+        statement: CIR.Statement.Idx,
+        expr: CIR.Expr.Idx,
+    },
+};
+
 const LocalDefProcessed = struct {
     def_name: ?Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -3053,6 +3088,9 @@ fn initAssumePrepared(
         .default_materializations = .empty,
         .open_literal_vars = .empty,
         .open_numeral_literals = .empty,
+        .instantiated_interpolation_owners = .empty,
+        .row_extension_derivations = .empty,
+        .interpolation_part_numerals = .empty,
         .retired_literal_dispatch_plans = .empty,
         .pending_tuple_accesses = .empty,
         .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
@@ -3261,6 +3299,7 @@ pub fn deinit(self: *Self) void {
     }
     self.platform_requirement_solutions.deinit(self.gpa);
     self.local_processing_ptrns.deinit(self.gpa);
+    self.local_value_processing_ptrns.deinit(self.gpa);
     self.local_binding_roots.deinit(self.gpa);
     self.type_writer.deinit();
     self.instantiation_dispatchers.deinit(self.gpa);
@@ -3281,6 +3320,9 @@ pub fn deinit(self: *Self) void {
     self.scratch_evidence_pair_set.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
+    self.instantiated_interpolation_owners.deinit(self.gpa);
+    self.row_extension_derivations.deinit(self.gpa);
+    self.interpolation_part_numerals.deinit(self.gpa);
     self.retired_literal_dispatch_plans.deinit(self.gpa);
     self.conflicted_default_literal_vars.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
@@ -5445,6 +5487,26 @@ const OpenNumeralLiteral = struct {
     constraint: StaticDispatchConstraint,
 };
 
+const InstantiatedInterpolationOwner = struct {
+    fn_var: Var,
+    owner: CIR.Expr.Idx,
+};
+
+const InterpolationPartNumeral = struct {
+    var_: Var,
+    /// The numeral's type before literal defaulting.
+    snapshot: SnapshotContentIdx,
+    defaulted: bool,
+};
+
+const RowExtensionDerivation = struct {
+    /// The obligation's constraint function var.
+    fn_var: Var,
+    /// The record or tag union whose extension carries the obligation.
+    row: Var,
+    kind: problem.DispatcherDoesNotImplMethod.RowExtension.Kind,
+};
+
 const PendingTupleAccess = struct {
     tuple_var: Var,
     result_var: Var,
@@ -5786,7 +5848,8 @@ fn unifyNominalConstructorBacking(
 /// Runs at binding roots: top-level defs (`CIR.Def.Idx`, the settled-state
 /// sweep), local bindings (`CIR.Pattern.Idx`, when their statement finishes
 /// solving), and standalone checked expressions (`CIR.Expr.Idx`, REPL roots).
-fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Allocator.Error!void {
+/// Returns whether the root's type was rejected (and set to `.err`).
+fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5798,6 +5861,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
     switch (occurs_result) {
         .valid => {
             // This is fine - no cycle, or valid recursion through a nominal type
+            return false;
         },
         .recursive_anonymous => {
             // Anonymous recursion (a recursive type not routed through a
@@ -5816,6 +5880,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
                 .def_name = self.bindingRootName(Idx, idx),
             } });
             try self.types.setVarContent(var_, .err);
+            return true;
         },
         .infinite => {
             std.debug.assert(self.occurs_scratch.err_var != null);
@@ -5829,6 +5894,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
                 .def_name = self.bindingRootName(Idx, idx),
             } });
             try self.types.setVarContent(var_, .err);
+            return true;
         },
     }
 }
@@ -6416,12 +6482,20 @@ fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
     // from the enclosing top-level def's type, reporting (and poisoning) the
     // local binding attributes the error to the tighter root and suppresses a
     // duplicate report at the def.
-    for (self.local_binding_roots.items) |pattern_idx| {
-        try self.checkForInfiniteType(CIR.Pattern.Idx, pattern_idx);
+    //
+    // A rejected local root's initializer has the rejected type too, and the
+    // root's binders carry parts of it, so the statement and every use of its
+    // binders become runtime errors, as for a rejected pattern/RHS relation.
+    for (self.local_binding_roots.items) |root| {
+        if (!try self.checkForInfiniteType(CIR.Pattern.Idx, root.pattern)) continue;
+        const initialized = root.initialized orelse continue;
+        try self.erroneous_value_exprs.put(self.gpa, initialized.expr, {});
+        try self.erroneous_pattern_statements.put(self.gpa, initialized.statement, initialized.expr);
+        try self.poisonPatternBindings(root.pattern);
     }
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
+        _ = try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 }
 
@@ -8219,6 +8293,31 @@ fn recordSharedSchemeUse(
     try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, &.{});
 }
 
+/// Add or remove every binder of a local value declaration's pattern in
+/// `local_value_processing_ptrns`.
+fn setLocalValueBindersProcessing(self: *Self, pattern: CIR.Pattern.Idx, processing: bool) std.mem.Allocator.Error!void {
+    if (self.cir.store.getPattern(pattern) == .assign) {
+        if (processing) {
+            try self.local_value_processing_ptrns.put(self.gpa, pattern, {});
+        } else {
+            _ = self.local_value_processing_ptrns.remove(pattern);
+        }
+        return;
+    }
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.gpa);
+    var scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer scratch.deinit(self.gpa);
+    try DependencyGraph.appendPatternBinders(self.cir, pattern, &binders, &scratch, self.gpa);
+    for (binders.items) |binder| {
+        if (processing) {
+            try self.local_value_processing_ptrns.put(self.gpa, binder, {});
+        } else {
+            _ = self.local_value_processing_ptrns.remove(binder);
+        }
+    }
+}
+
 fn recordRecursiveReference(self: *Self, node_idx: u32, scheme_root: Var) std.mem.Allocator.Error!void {
     try self.recordSharedSchemeUse(node_idx, .recursive_reference, 0, scheme_root);
 }
@@ -8997,7 +9096,13 @@ fn recordOpenLiteralVar(
                         .constraint = occurrence_constraint,
                     });
                 },
-                .quote, .interpolation => {},
+                .interpolation => if (failure_expr) |owner| {
+                    try self.instantiated_interpolation_owners.append(self.gpa, .{
+                        .fn_var = constraint.fn_var,
+                        .owner = owner,
+                    });
+                },
+                .quote => {},
             },
             .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
         }
@@ -9944,6 +10049,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
+    try self.closeValueRowTailsCarryingDerivations(&env);
     try self.reportPolymorphicTopLevelValues();
 
     try self.checkPlatformHostedSection();
@@ -13554,14 +13660,14 @@ fn flatTypeHasUnresolvedStaticDispatchConstraints(
                     if (try self.varHasUnresolvedStaticDispatchConstraints(field_var, visited)) break :blk true;
                 }
             }
-            break :blk try self.varHasUnresolvedStaticDispatchConstraints(record.ext, visited);
+            break :blk try self.rowTailHasUnresolvedStaticDispatchConstraints(record.ext, visited, .all);
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |args| {
                 if (try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
             }
-            break :blk try self.varHasUnresolvedStaticDispatchConstraints(tag_union.ext, visited);
+            break :blk try self.rowTailHasUnresolvedStaticDispatchConstraints(tag_union.ext, visited, .all);
         },
         .empty_record, .empty_tag_union => false,
     };
@@ -13613,14 +13719,14 @@ fn flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(
                     if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(field_var, visited)) break :blk true;
                 }
             }
-            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(record.ext, visited);
+            break :blk try self.rowTailHasUnresolvedStaticDispatchConstraints(record.ext, visited, .non_literal);
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |args| {
                 if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
             }
-            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(tag_union.ext, visited);
+            break :blk try self.rowTailHasUnresolvedStaticDispatchConstraints(tag_union.ext, visited, .non_literal);
         },
         .empty_record, .empty_tag_union => false,
     };
@@ -14601,7 +14707,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check for infinite types, at the expression root and at every binding
     // root the expression contains
-    try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
+    _ = try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
 
@@ -17586,7 +17692,7 @@ fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Erro
             const tail = self.tagRowTail(entry.var_);
             const resolved = self.types.resolveVar(tail);
             if (resolved.desc.content != .flex) continue;
-            if (resolved.desc.content.flex.constraints.len() != 0) continue;
+            if (!self.rowDefaultDischargesConstraints(resolved.desc.content.flex.constraints)) continue;
             if (resolved.desc.rank == .generalized) continue;
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, entry.region);
             _ = try self.unify(tail, empty_tu_var, env);
@@ -22096,6 +22202,13 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 break :blk;
             }
 
+            // A local value referencing itself from a function in its own
+            // RHS. The value is mid-check, so its type is not generalized and
+            // the ordinary tail below shares its var monomorphically.
+            if (self.local_value_processing_ptrns.contains(lookup.pattern_idx)) {
+                try self.recordSharedSchemeUse(@intFromEnum(expr_idx), .recursive_value_reference, 0, pat_var);
+            }
+
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
@@ -22906,11 +23019,17 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
 
             const parts = self.cir.store.sliceExpr(interpolation.parts);
             std.debug.assert(parts.len % 2 == 0);
+            // The generated iterator yields each part as its item, so every
+            // part has the item type. A generalized interpolation's scheme
+            // therefore relates its parts to the conversion's item type.
             const item_var = try self.fresh(env, expr_region);
             var part_i: usize = 0;
             while (part_i < parts.len) : (part_i += 2) {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(parts[part_i], env, child_expected) or does_fx;
+                _ = try self.unifyInContext(item_var, ModuleEnv.varFrom(parts[part_i]), env, .{
+                    .interpolation_part = self.cir.store.getExprRegion(parts[part_i]),
+                });
 
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(parts[part_i + 1], env, child_expected) or does_fx;
@@ -24439,6 +24558,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                         .def_name = self.getPatternIdent(decl_stmt.pattern),
                         .pattern_idx = decl_stmt.pattern,
                     });
+                } else {
+                    try self.setLocalValueBindersProcessing(decl_stmt.pattern, true);
                 }
 
                 if (is_local_procedure_candidate) {
@@ -24487,7 +24608,11 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 else
                     try self.unify(decl_pattern_var, decl_expr_var, env);
 
-                if (decl_pattern_result.isProblem()) {
+                // An erroneous annotation types the RHS as an error without a
+                // unification problem of its own.
+                if (decl_pattern_result.isProblem() or
+                    self.types.resolveVar(decl_expr_var).desc.content == .err)
+                {
                     try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
                     try self.erroneous_pattern_statements.put(self.gpa, stmt_idx, decl_stmt.expr);
                     try self.poisonPatternBindings(decl_stmt.pattern);
@@ -24552,13 +24677,18 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 if (decl_is_fn) {
                     _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
                     _ = self.predeclared_local_annotations.remove(decl_stmt.pattern);
+                } else {
+                    try self.setLocalValueBindersProcessing(decl_stmt.pattern, false);
                 }
 
                 // This statement is a binding root whose type may never be
                 // reachable from the enclosing def's root type. Record it for
                 // the settled-state occurs sweep after this statement's
                 // constraints have fully determined the root graph.
-                try self.local_binding_roots.append(self.gpa, decl_stmt.pattern);
+                try self.local_binding_roots.append(self.gpa, .{
+                    .pattern = decl_stmt.pattern,
+                    .initialized = .{ .statement = stmt_idx, .expr = decl_stmt.expr },
+                });
             },
             .s_var => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
@@ -24605,7 +24735,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 // `var` statements are binding roots too (they never
                 // generalize, but their type can still be made cyclic).
-                try self.local_binding_roots.append(self.gpa, var_stmt.pattern_idx);
+                try self.local_binding_roots.append(self.gpa, .{
+                    .pattern = var_stmt.pattern_idx,
+                    .initialized = .{ .statement = stmt_idx, .expr = var_stmt.expr },
+                });
             },
             .s_var_uninitialized => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
@@ -24636,7 +24769,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // Uninitialized `var` statements are binding roots too; their
                 // type is determined by later reassignments rather than an
                 // initializer, but it can still become cyclic.
-                try self.local_binding_roots.append(self.gpa, var_stmt.pattern_idx);
+                try self.local_binding_roots.append(self.gpa, .{
+                    .pattern = var_stmt.pattern_idx,
+                    .initialized = null,
+                });
             },
             .s_reassign => |reassign| {
                 self.markCurrentHoistRuntimeDependency();
@@ -28318,6 +28454,8 @@ const Probe = struct {
     scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
+    instantiated_interpolation_owners_len: usize,
+    row_extension_derivations_len: usize,
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
@@ -28364,6 +28502,8 @@ const Probe = struct {
         // instantiation) reference vars the savepoint rollback just discarded.
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
+        self.check.instantiated_interpolation_owners.shrinkRetainingCapacity(self.instantiated_interpolation_owners_len);
+        self.check.row_extension_derivations.shrinkRetainingCapacity(self.row_extension_derivations_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
         // vars the savepoint rollback just discarded.
@@ -28433,6 +28573,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
+    const instantiated_interpolation_owners_len = self.instantiated_interpolation_owners.items.len;
+    const row_extension_derivations_len = self.row_extension_derivations.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
@@ -28467,6 +28609,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
+        .instantiated_interpolation_owners_len = instantiated_interpolation_owners_len,
+        .row_extension_derivations_len = row_extension_derivations_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
@@ -29111,7 +29255,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             // A shared use copies no vars (it shares the in-flight
             // definition's), so it has no fresh pairs to seed; the walk
             // reaches the shared body through the ordinary reference edge.
-            .shared_value_use, .recursive_dispatch_target, .recursive_reference => {},
+            .shared_value_use, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => {},
             // A where-method use carries a complete structural copy map, but
             // only to relate callable identities during checked-artifact construction.
             // It has no child dispatch requirements and is not an edge in the default walk.
@@ -30205,6 +30349,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             },
         }
         if (self.literal_defaulting_open_roots.items.len == 0) return;
+        try self.recordInterpolationPartNumerals();
 
         // --- 1b. Default unambiguous quote literals before ambiguous numerals. ---
         // A quote literal has exactly one possible type (Str), so committing it is
@@ -30533,6 +30678,9 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
 
         committed = true;
         commit_probe.commit();
+        for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
+            if (kind == .numeral) self.noteNumeralDefaulted(driver);
+        }
         return;
     }
 
@@ -30555,6 +30703,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
                     try self.recordConflictedDefaultLiteral(driver);
                 }
                 _ = try self.commitLiteralDefaultHead(driver, env);
+                self.noteNumeralDefaulted(driver);
             },
             .quote, .interpolation => {
                 if (self.rangeHasNonLiteralConstraint(range) and
@@ -32544,6 +32693,7 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                     }
                     if (comptime std.debug.runtime_safety) self.bench_probe_attempts += 1;
                     if (try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, component_fits, env)) |committed_var| {
+                        self.noteNumeralDefaulted(literal_var);
                         return committed_var;
                     }
                 }
@@ -32553,7 +32703,9 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                 // (see `conflicted_default_literal_vars`).
                 try self.recordConflictedDefaultLiteral(literal_var);
             }
-            return try self.commitLiteralDefaultHead(literal_var, env);
+            const default_var = try self.commitLiteralDefaultHead(literal_var, env);
+            self.noteNumeralDefaulted(literal_var);
+            return default_var;
         },
         // Str is the single candidate for string literals—a one-element
         // candidate list whose head is always committed (and no structural
@@ -32576,6 +32728,44 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
             return try self.commitQuoteDefault(literal_var, env);
         },
     }
+}
+
+/// For each open interpolation literal in `literal_defaulting_open_roots`,
+/// snapshot each of its parts that is an open numeral literal
+/// (`interpolation_part_numerals`).
+fn recordInterpolationPartNumerals(self: *Self) Allocator.Error!void {
+    for (self.literal_defaulting_open_roots.items) |root| {
+        if (self.varLiteralKind(root) != .interpolation) continue;
+        const flex = self.types.resolveVar(root).desc.content.flex;
+        for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+            if (constraint.origin.literalKind() != .interpolation) continue;
+            const parts = constraint.interpolation.interpolated_parts;
+            for (0..parts.len()) |part_i| {
+                const part_var = self.types.resolveVar(self.types.getInterpolationPartAt(parts, @intCast(part_i)).var_).var_;
+                if (self.varLiteralKind(part_var) != .numeral) continue;
+                if (self.interpolationPartNumeral(part_var) != null) continue;
+                try self.interpolation_part_numerals.append(self.gpa, .{
+                    .var_ = part_var,
+                    .snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, part_var),
+                    .defaulted = false,
+                });
+            }
+        }
+    }
+}
+
+fn interpolationPartNumeral(self: *Self, var_: Var) ?*InterpolationPartNumeral {
+    const root = self.types.resolveVar(var_).var_;
+    for (self.interpolation_part_numerals.items) |*entry| {
+        if (self.types.resolveVar(entry.var_).var_ == root) return entry;
+    }
+    return null;
+}
+
+/// Note that literal defaulting just committed `literal_var`'s default.
+fn noteNumeralDefaulted(self: *Self, literal_var: Var) void {
+    if (self.interpolation_part_numerals.items.len == 0) return;
+    if (self.interpolationPartNumeral(literal_var)) |entry| entry.defaulted = true;
 }
 
 /// Record a literal receiver whose documented head default is about to commit
@@ -32675,6 +32865,137 @@ fn varIsConflictedDefaultLiteral(self: *const Self, var_: Var) bool {
 
 /// Whether the constraint range carries any obligation besides literal-conversion
 /// provenance—i.e. whether defaulting must consult the candidate probe at all.
+/// Whether a record or tag row's tail leaves a constraint unresolved. A flex
+/// tail is closed by its row default, and the empty row derives `is_eq` and
+/// `to_hash`, so the derived obligations an open row's tail carries (see
+/// design.md "Derived Equality And Hashing Over Open Rows") are discharged by
+/// that closing.
+fn rowTailHasUnresolvedStaticDispatchConstraints(
+    self: *Self,
+    tail: Var,
+    visited: *std.AutoHashMap(Var, void),
+    which: enum { all, non_literal },
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(tail);
+    switch (resolved.desc.content) {
+        .flex => |flex| {
+            if (visited.contains(resolved.var_)) return false;
+            try visited.put(resolved.var_, {});
+            for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                if (self.rowDefaultDischargesConstraint(constraint)) continue;
+                switch (which) {
+                    .all => return true,
+                    .non_literal => if (constraint.origin != .from_literal) return true,
+                }
+            }
+            return false;
+        },
+        .rigid, .err, .field_presence, .alias, .structure => return switch (which) {
+            .all => try self.varHasUnresolvedStaticDispatchConstraints(tail, visited),
+            .non_literal => try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(tail, visited),
+        },
+    }
+}
+
+/// Whether closing a row satisfies every constraint in `range` on its tail
+/// (vacuously so when there are none).
+fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
+    for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+        if (!self.rowDefaultDischargesConstraint(constraint)) return false;
+    }
+    return true;
+}
+
+/// A top-level value is computed once, at one type. An open row in its data
+/// whose tail carries only the obligations deriving `is_eq` or `to_hash` gives
+/// it (design.md "Derived Equality And Hashing Over Open Rows") is grounded to
+/// the empty row once the module solves, as a value binding's implicit open row
+/// is; unifying the tail with the empty row discharges those obligations.
+fn closeValueRowTailsCarryingDerivations(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var tails = std.ArrayList(RowTail).empty;
+    defer tails.deinit(self.gpa);
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        const def = self.cir.store.getDef(def_idx);
+        if (self.erroneous_value_patterns.contains(def.pattern)) continue;
+        const def_var = ModuleEnv.varFrom(def_idx);
+        if (self.varIsFunctionType(def_var)) continue;
+        tails.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+        try self.collectDataRowTails(def_var, &visited, &tails);
+        for (tails.items) |tail| {
+            const resolved = self.types.resolveVar(tail.var_);
+            const flex = switch (resolved.desc.content) {
+                .flex => |flex| flex,
+                .rigid, .alias, .structure, .err, .field_presence => continue,
+            };
+            if (flex.constraints.len() == 0 or !self.rowDefaultDischargesConstraints(flex.constraints)) continue;
+            if (resolved.desc.rank == .generalized) continue;
+            const region = self.getRegionAt(resolved.var_);
+            const empty_row = try self.freshFromContent(.{ .structure = switch (tail.kind) {
+                .tag => .empty_tag_union,
+                .record => .empty_record,
+            } }, env, region);
+            _ = try self.unify(resolved.var_, empty_row, env);
+        }
+    }
+}
+
+const RowTail = struct { var_: Var, kind: enum { tag, record } };
+
+/// The row tails reachable through `var_`'s data positions (not function
+/// parameters or results), each with the kind of row it ends.
+fn collectDataRowTails(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void), out: *std.ArrayList(RowTail)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if ((try visited.getOrPut(resolved.var_)).found_existing) return;
+    switch (resolved.desc.content) {
+        .alias => |alias| try self.collectDataRowTails(self.types.getAliasBackingVar(alias), visited, out),
+        .structure => |flat| switch (flat) {
+            .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try self.collectDataRowTails(elem, visited, out),
+            .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try self.collectDataRowTails(arg, visited, out),
+            .fn_pure, .fn_effectful, .fn_unbound => {},
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| try self.collectDataRowTails(presence.typeVar(), visited, out);
+                try self.collectRowTail(record.ext, .record, visited, out);
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| try self.collectDataRowTails(arg, visited, out);
+                }
+                try self.collectRowTail(tag_union.ext, .tag, visited, out);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .field_presence, .err => {},
+    }
+}
+
+/// Record a row's tail, or keep walking a tail that is itself more row.
+fn collectRowTail(
+    self: *Self,
+    tail: Var,
+    kind: @FieldType(RowTail, "kind"),
+    visited: *std.AutoHashMap(Var, void),
+    out: *std.ArrayList(RowTail),
+) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(tail);
+    switch (resolved.desc.content) {
+        .flex => try out.append(self.gpa, .{ .var_ = resolved.var_, .kind = kind }),
+        .rigid, .field_presence, .err => {},
+        .alias, .structure => try self.collectDataRowTails(tail, visited, out),
+    }
+}
+
+/// Whether `constraint` on a row's tail is satisfied by closing the row: the
+/// empty row derives `is_eq` and `to_hash`.
+fn rowDefaultDischargesConstraint(self: *Self, constraint: StaticDispatchConstraint) bool {
+    return constraint.fn_name.eql(self.cir.idents.is_eq) or constraint.fn_name.eql(self.cir.idents.to_hash);
+}
+
 fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
         if (constraint.origin != .from_literal) return true;
@@ -35462,7 +35783,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                         }
                     }
                     if (constraint.origin.literalKind() == .interpolation) {
-                        try self.ensureCustomInterpolationPartsChecked(constraint, env);
+                        try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
                     }
 
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
@@ -35638,11 +35959,11 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                     }
                     if (constraint.origin.literalKind() == .interpolation) {
                         if (self.nominalIsBuiltinStrType(nominal_type)) {
-                            if (try self.satisfyBuiltinStrInterpolation(deferred_constraint.var_, constraint, env)) {
+                            if (try self.satisfyBuiltinStrInterpolation(deferred_constraint.var_, constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env)) {
                                 continue;
                             }
                         } else {
-                            try self.ensureCustomInterpolationPartsChecked(constraint, env);
+                            try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
                         }
                     }
                     const method_lookup = self.lookupStaticDispatchMethodBinding(
@@ -35985,7 +36306,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                         continue;
                     }
                     if (constraint.origin.literalKind() == .interpolation) {
-                        try self.ensureCustomInterpolationPartsChecked(constraint, env);
+                        try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
                     }
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         const method_lookup = self.lookupStaticDispatchMethodBinding(
@@ -36552,9 +36873,11 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
     }
 }
 
-fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, region: Region) Allocator.Error!void {
+/// `actual_before_default` is the actual type as it was before literal
+/// defaulting chose it (`interpolation_part_numerals`), when it was.
+fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, actual_before_default: ?SnapshotContentIdx, region: Region) Allocator.Error!void {
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+    const actual_snapshot = actual_before_default orelse try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
@@ -36623,7 +36946,11 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
     };
 
     if (!compatible) {
-        try self.recordInterpolationPartTypeMismatch(expected_str_var, part.var_, part.region);
+        const defaulted_numeral: ?SnapshotContentIdx = if (self.interpolationPartNumeral(part.var_)) |entry|
+            if (entry.defaulted) entry.snapshot else null
+        else
+            null;
+        try self.recordInterpolationPartTypeMismatch(expected_str_var, part.var_, defaulted_numeral, part.region);
         for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
             try self.markStaticDispatchRejected(constraint);
         }
@@ -36633,10 +36960,14 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
     return false;
 }
 
+/// `failure_expr` is the use site that instantiated this constraint, when it
+/// came from a generalized definition. A rejected part then poisons that use,
+/// leaving the definition and the use's own result type intact.
 fn satisfyBuiltinStrInterpolation(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!bool {
     const metadata = constraint.interpolation;
@@ -36655,16 +36986,32 @@ fn satisfyBuiltinStrInterpolation(
     }
 
     if (did_err) {
-        try self.markErroneous(dispatcher_var);
         try self.markStaticDispatchRejected(constraint);
-        try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
+        if (failure_expr orelse self.instantiatedInterpolationOwner(constraint)) |expr_idx| {
+            try self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
+        } else {
+            try self.markErroneous(dispatcher_var);
+            try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
+        }
     }
     return true;
 }
 
+/// The use that instantiated this generalized interpolation copy, if it is
+/// one (`instantiated_interpolation_owners`).
+fn instantiatedInterpolationOwner(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
+    const fn_root = self.types.resolveVar(constraint.fn_var).var_;
+    for (self.instantiated_interpolation_owners.items) |entry| {
+        if (self.types.resolveVar(entry.fn_var).var_ == fn_root) return entry.owner;
+    }
+    return null;
+}
+
+/// `failure_expr` is as in `satisfyBuiltinStrInterpolation`.
 fn ensureCustomInterpolationPartsChecked(
     self: *Self,
     constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!void {
     const metadata = constraint.interpolation;
@@ -36700,7 +37047,11 @@ fn ensureCustomInterpolationPartsChecked(
         // Interpolation constraints always retain their introducing expression
         // in provenance, so the function var is only a placeholder for the
         // dispatcher parameter that constraintSourceExpr does not consult.
-        try self.poisonConstraintSourceExpr(constraint.fn_var, constraint);
+        try self.poisonConstraintFailureSource(
+            constraint.fn_var,
+            constraint,
+            failure_expr orelse self.instantiatedInterpolationOwner(constraint),
+        );
     }
 }
 
@@ -36728,7 +37079,8 @@ fn typeSupportsStructuralDeriveInternal(
         // Empty types trivially qualify.
         .empty_record, .empty_tag_union => true,
 
-        // Records qualify if all field types qualify.
+        // Records qualify if all field types qualify, including the fields
+        // their extension row supplies.
         .record => |record| {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.presence)) |presence| {
@@ -36737,7 +37089,7 @@ fn typeSupportsStructuralDeriveInternal(
                     if (!try self.varSupportsStructuralDeriveInternal(field_var, derivation, visited)) return false;
                 }
             }
-            return true;
+            return try self.varSupportsStructuralDeriveInternal(record.ext, derivation, visited);
         },
 
         // Tuples qualify if all element types qualify.
@@ -36749,7 +37101,8 @@ fn typeSupportsStructuralDeriveInternal(
             return true;
         },
 
-        // Tag unions qualify if all payload types qualify.
+        // Tag unions qualify if all payload types qualify, including the tags
+        // their extension row supplies.
         .tag_union => |tag_union| {
             const tags_slice = self.types.getTagsSlice(tag_union.tags);
             for (tags_slice.items(.args)) |tag_args| {
@@ -36758,7 +37111,7 @@ fn typeSupportsStructuralDeriveInternal(
                     if (!try self.varSupportsStructuralDeriveInternal(arg_var, derivation, visited)) return false;
                 }
             }
-            return true;
+            return try self.varSupportsStructuralDeriveInternal(tag_union.ext, derivation, visited);
         },
 
         // Nominal types qualify if their args and their declaration's backing
@@ -37376,11 +37729,14 @@ fn varDeriveComponentObligations(
             .empty_record, .empty_tag_union => return,
             // Deriving a component obligation appends type variables, so each
             // component is read by index rather than through a held slice.
+            // An open row's extension is a component: the fields or tags it
+            // instantiates to are compared like the declared ones.
             .record => |record| {
                 for (0..record.fields.count) |offset| {
                     const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
                     try self.varDeriveComponentObligations(presence.typeVar(), derivation, visited, env, parent_constraint, admit_rigids);
                 }
+                try self.rowExtensionDeriveComponentObligations(resolved.var_, .record, record.ext, derivation, visited, env, parent_constraint, admit_rigids);
             },
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
@@ -37396,6 +37752,7 @@ fn varDeriveComponentObligations(
                         try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
                     }
                 }
+                try self.rowExtensionDeriveComponentObligations(resolved.var_, .tag_union, tag_union.ext, derivation, visited, env, parent_constraint, admit_rigids);
             },
             .nominal_type => |nominal| {
                 const method_lookup = self.nominalEqHashMethod(nominal, derivation) orelse return;
@@ -37403,7 +37760,7 @@ fn varDeriveComponentObligations(
                     if (admit_rigids) return;
                     // The nominal's own method is the component comparison:
                     // dispatch it exactly like a direct comparison would.
-                    try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
+                    _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
                     return;
                 }
                 if (self.nominalIsBoxType(nominal)) return;
@@ -37422,7 +37779,7 @@ fn varDeriveComponentObligations(
         },
         .flex, .rigid => {
             if (admit_rigids) return;
-            try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
+            _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
         },
         .alias => |alias| {
             try self.varDeriveComponentObligations(self.types.getAliasBackingVar(alias), derivation, visited, env, parent_constraint, admit_rigids);
@@ -37441,13 +37798,62 @@ fn varDeriveComponentObligations(
 /// discharges it against the receiver's where clauses (or reports a missing
 /// method), and a nominal component instantiates its method and checks that
 /// method's own where clause.
+/// An extension is a component like any other; a type-variable extension's
+/// obligation is also recorded against `row` (`row_extension_derivations`).
+fn rowExtensionDeriveComponentObligations(
+    self: *Self,
+    row: Var,
+    kind: problem.DispatcherDoesNotImplMethod.RowExtension.Kind,
+    ext: Var,
+    derivation: EqHashDerivation,
+    visited: *std.AutoHashMap(Var, void),
+    env: *Env,
+    parent_constraint: StaticDispatchConstraint,
+    admit_rigids: bool,
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(ext);
+    switch (resolved.desc.content) {
+        .flex, .rigid => {
+            if (visited.contains(resolved.var_)) return;
+            try visited.put(resolved.var_, {});
+            if (admit_rigids) return;
+            const fn_var = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
+            try self.row_extension_derivations.append(self.gpa, .{ .fn_var = fn_var, .row = row, .kind = kind });
+        },
+        .structure, .alias, .err, .field_presence => try self.varDeriveComponentObligations(ext, derivation, visited, env, parent_constraint, admit_rigids),
+    }
+}
+
+/// The name a row extension variable was written with, or null for an
+/// anonymous `..`.
+fn rowExtensionSourceName(self: *Self, ext: Var) ?Ident.Idx {
+    const name = switch (self.types.resolveVar(ext).desc.content) {
+        .rigid => |rigid| rigid.name,
+        .flex => |flex| flex.name orelse return null,
+        .structure, .alias, .err, .field_presence => return null,
+    };
+    if (name.eql(self.cir.idents.open_ext)) return null;
+    return name;
+}
+
+/// The row whose extension a derivation gave this obligation, if it did
+/// (`row_extension_derivations`).
+fn rowExtensionDerivation(self: *Self, constraint: StaticDispatchConstraint) ?RowExtensionDerivation {
+    const fn_root = self.types.resolveVar(constraint.fn_var).var_;
+    for (self.row_extension_derivations.items) |entry| {
+        if (self.types.resolveVar(entry.fn_var).var_ == fn_root) return entry;
+    }
+    return null;
+}
+
+/// Returns the new obligation's constraint function var.
 fn mkDerivedComponentConstraint(
     self: *Self,
     component_var: Var,
     derivation: EqHashDerivation,
     parent_constraint: StaticDispatchConstraint,
     env: *Env,
-) Allocator.Error!void {
+) Allocator.Error!Var {
     const method_name = switch (derivation) {
         .equality => self.cir.idents.is_eq,
         .hash => self.cir.idents.to_hash,
@@ -37495,6 +37901,7 @@ fn mkDerivedComponentConstraint(
     _ = try self.unify(constrained_var, component_var, env);
     try self.recordSchemeRequirementCandidate(component_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint));
+    return constraint_fn_var;
 }
 
 /// Check if a type variable supports is_eq. See
@@ -44668,6 +45075,11 @@ fn reportConstraintErrorAt(
                     // for quote literals defaulted to Str (e.g. `"a" > "b"`); those must
                     // NOT claim "this numeric literal was given the type Dec".
                     .defaulted_from_numeric_literal = is_numeric_default_pass and self.isDecNominal(dispatcher_var),
+                    .row_extension_of = if (self.rowExtensionDerivation(constraint)) |entry| .{
+                        .row_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, entry.row),
+                        .ext_name = self.rowExtensionSourceName(dispatcher_var),
+                        .kind = entry.kind,
+                    } else null,
                 },
             },
         },

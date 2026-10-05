@@ -2670,7 +2670,107 @@ pub const ReportBuilder = struct {
             };
         }
 
+        if (data.row_extension_of) |row_extension| return self.buildRowExtensionMissingMethod(data, row_extension);
+
         return self.buildStaticDispatchMissingMethod(data);
+    }
+
+    /// A derived `is_eq`/`to_hash` over a record or tag union whose `..`
+    /// extension does not have the method: the extension stands for arbitrary
+    /// other tags or fields, which need not have it.
+    fn buildRowExtensionMissingMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+        row_extension: DispatcherDoesNotImplMethod.RowExtension,
+    ) Allocator.Error!Report {
+        const is_eq = data.method_name.eql(self.can_ir.idents.is_eq);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
+        errdefer report.deinit();
+        const row_kind_text = switch (row_extension.kind) {
+            .tag_union => "a tag union with",
+            .record => "a record with",
+        };
+        try D.renderSliceInto(&.{
+            D.bytes(if (is_eq)
+                "This equality check can't compare these values, because their type is"
+            else
+                "These values can't be hashed, because their type is"),
+            D.bytes(row_kind_text),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("in it."),
+        }, self, &report, &report.headline);
+
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+
+        const row_str = try report.addOwnedString(self.getFormattedString(row_extension.row_snapshot));
+        try D.renderSlice(&.{
+            D.bytes(if (is_eq) "The values being compared have this type:" else "The values being hashed have this type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(row_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const ext_text = if (row_extension.ext_name) |name| blk: {
+            const text = try std.fmt.allocPrint(self.gpa, "..{s}", .{self.can_ir.getIdentText(name)});
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        } else "..";
+        const others = switch (row_extension.kind) {
+            .tag_union => "tag union may have arbitrary other tags in addition to the ones written here, and those other tags don't necessarily have",
+            .record => "record may have arbitrary other fields in addition to the ones written here, and those other fields don't necessarily have",
+        };
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes(ext_text).withAnnotation(.inline_code),
+            D.bytes("means this"),
+            D.bytes(others),
+            D.bytes("an"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const var_name = if (row_extension.ext_name) |name| self.can_ir.getIdentText(name) else "others";
+        const where_text = blk: {
+            const text = if (is_eq)
+                try std.fmt.allocPrint(self.gpa, "where [{s}.is_eq : {s}, {s} -> Bool]", .{ var_name, var_name, var_name })
+            else
+                try std.fmt.allocPrint(self.gpa, "where [{s}.to_hash : {s}, Hasher -> Hasher]", .{ var_name, var_name });
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        };
+        const verb = if (is_eq) "To compare them anyway," else "To hash them anyway,";
+        if (row_extension.ext_name != null) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes(verb),
+                D.bytes("require"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on"),
+                D.bytes(var_name).withAnnotation(.inline_code),
+                D.bytes("by adding this to the type annotation:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes(verb),
+                D.bytes("give the"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("a name in the type annotation (for example"),
+                D.bytes("..others").withAnnotation(.inline_code),
+                D.bytes(") and require").withNoPrecedingSpace(),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on it by adding this to the annotation:"),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(where_text);
+
+        return report;
     }
 
     fn buildStaticDispatchMissingMethod(

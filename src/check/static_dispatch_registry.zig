@@ -32,12 +32,12 @@ const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
 /// Shared policy for checked evidence publication and Boxy's dictionary
-/// inventory. Quote conversion evidence carries its method implementation even
-/// when the constraint originated at a literal.
+/// inventory. Quote and interpolation conversion evidence carries its method
+/// implementation even when the constraint originated at a literal.
 pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
     return if (origin.literalKind()) |kind| switch (kind) {
-        .numeral, .interpolation => false,
-        .quote => true,
+        .numeral => false,
+        .quote, .interpolation => true,
     } else true;
 }
 

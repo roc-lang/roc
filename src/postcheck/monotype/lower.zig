@@ -55515,7 +55515,9 @@ const BodyContext = struct {
             else
                 .none;
             const statement_start = lowered.len;
-            if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
+            if (!statement_diverges and try self.appendRecursiveDeclStatement(statement, &lowered)) {
+                // The recursive binding names every local the statement binds.
+            } else if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
                 const statement_result = try self.lowerStatement(statement, statement_diverges);
                 if (statement_result.stmt) |stmt| try lowered.append(self.allocator, stmt);
                 termination = statement_result.termination;
@@ -55573,6 +55575,110 @@ const BodyContext = struct {
             .none => true,
             .checked_control_transfer, .uninhabited => false,
         };
+    }
+
+    /// A declaration whose own binders are referenced from functions inside
+    /// its value is bound by a recursive `let`. A single binder is that
+    /// `let`'s local directly. A destructuring declaration, or one whose
+    /// control-flow value also reassigns `var`s, binds a tuple of every local
+    /// the statement brings into scope: the declaration's binders are bound to
+    /// the tuple's recursive locals while its value is lowered, the ordinary
+    /// statement lowering runs inside the tuple's initializer, and the
+    /// initializer ends with the locals that lowering bound.
+    fn appendRecursiveDeclStatement(
+        self: *BodyContext,
+        statement_id: checked.CheckedStatementId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!bool {
+        const statement = self.view.bodies.statement(statement_id);
+        const decl = switch (statement.data) {
+            .decl => |decl| decl,
+            .pending, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return false,
+        };
+        if (!decl.recursive or self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.current_region = statement.source_region;
+
+        const merge_binders: []MergeBinder = switch (self.view.bodies.expr(decl.expr).data) {
+            .if_, .match_, .for_ => try self.stateMergeBinders(decl.expr),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => try self.allocator.alloc(MergeBinder, 0),
+        };
+        defer self.allocator.free(merge_binders);
+        if (merge_binders.len == 0 and self.view.bodies.pattern(decl.pattern).data == .assign) {
+            try lowered.append(self.allocator, try self.addStmt(try self.lowerRecursiveValueStatement(decl.pattern, decl.expr)));
+            return true;
+        }
+
+        var pattern_binders = std.ArrayList(BinderRestore).empty;
+        defer pattern_binders.deinit(self.allocator);
+        try self.savePatternBinders(decl.pattern, &pattern_binders);
+        const binders = try self.allocator.alloc(checked.PatternBinderId, pattern_binders.items.len + merge_binders.len);
+        defer self.allocator.free(binders);
+        const recursive_locals = try self.allocator.alloc(DraftLocalId, binders.len);
+        defer self.allocator.free(recursive_locals);
+        for (pattern_binders.items, 0..) |item, index| {
+            const cell = DraftTypeCell.fromGraphNode(try self.instNode(checkedBinderType(self.view, item.binder)));
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, item.binder);
+            try self.bindLocalName(local, item.binder);
+            try self.binders.put(item.binder, local);
+            binders[index] = item.binder;
+            recursive_locals[index] = local;
+        }
+        // A reassigned `var` keeps its previous version while the value is
+        // lowered; only the statement's result version is recursive-bound.
+        for (merge_binders, pattern_binders.items.len..) |merge, index| {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.bindLocalName(local, merge.binder);
+            binders[index] = merge.binder;
+            recursive_locals[index] = local;
+        }
+
+        var initializer = LoweredStatements{
+            .items = try self.allocator.alloc(DraftStmtId, 0),
+            .len = 0,
+            .termination = .none,
+        };
+        defer self.allocator.free(initializer.items);
+        if (!try self.appendExpandedPatternStatement(statement_id, &initializer)) {
+            const statement_result = try self.lowerStatement(statement_id, false);
+            if (!statementTerminationIsNone(statement_result.termination)) {
+                Common.invariant("non-divergent recursive declaration terminated its block");
+            }
+            if (statement_result.stmt) |stmt| try initializer.append(self.allocator, stmt);
+        }
+
+        const item_nodes = try self.graph.arena().alloc(NodeId, binders.len);
+        const items = try self.allocator.alloc(DraftExprId, binders.len);
+        defer self.allocator.free(items);
+        const pats = try self.allocator.alloc(DraftPatId, binders.len);
+        defer self.allocator.free(pats);
+        for (binders, recursive_locals, 0..) |binder, recursive_local, index| {
+            const bound = self.binders.get(binder) orelse
+                Common.invariant("recursive declaration lowering did not bind one of its binders");
+            const bound_cell = self.localTypeCell(bound);
+            const recursive_cell = self.localTypeCell(recursive_local);
+            item_nodes[index] = try bound_cell.toGraphNode(self.graph);
+            try relateRequestComponent(self.graph, try recursive_cell.toGraphNode(self.graph), item_nodes[index]);
+            items[index] = try self.addExprWithTypeCell(bound_cell, .{ .local = bound });
+            pats[index] = try self.addPatWithTypeCell(recursive_cell, .{ .bind = recursive_local });
+            try self.binders.put(binder, recursive_local);
+        }
+        const tuple_cell = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .tuple = item_nodes }));
+        const tuple = try self.addExprWithTypeCell(tuple_cell, .{ .tuple = try self.addExprSpan(items) });
+        const value = try self.addExprWithTypeCell(tuple_cell, .{ .block = .{
+            .statements = try self.addStmtSpan(initializer.items[0..initializer.len]),
+            .final_expr = tuple,
+        } });
+        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+            .pat = try self.addPatWithTypeCell(tuple_cell, .{ .tuple = try self.addPatSpan(pats) }),
+            .value = value,
+            .recursive = true,
+        } }));
+        return true;
     }
 
     fn appendExpandedPatternStatement(
@@ -57403,6 +57509,46 @@ const BodyContext = struct {
         }
         const node = try self.lowerTypeNode(checked_pattern.ty);
         return try self.lowerShapeFreePatternAtCell(pattern, DraftTypeCell.fromGraphNode(node));
+    }
+
+    /// A recursive value declaration references its own binder from functions
+    /// inside its value, so the binder is bound before the value is lowered
+    /// and the value is bound by a recursive `let`.
+    fn lowerRecursiveValueStatement(
+        self: *BodyContext,
+        pattern: checked.CheckedPatternId,
+        expr: checked.CheckedExprId,
+    ) Allocator.Error!DraftStmt {
+        if (self.view.bodies.pattern(pattern).data != .assign) {
+            Common.invariant("recursive checked declaration did not bind one local directly");
+        }
+        const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(expr)) |ty|
+            .{ .sealed = ty }
+        else
+            DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
+        if (requested_cell == .graph_node) {
+            try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell);
+        }
+        const pat = try self.lowerShapeFreePatternAtCell(pattern, requested_cell);
+        const value = try self.lowerExprAtTypeCell(expr, requested_cell);
+        switch (requested_cell) {
+            .sealed => |requested_ty| switch (self.exprTypeCell(value)) {
+                .sealed => |produced_ty| if (!self.sameType(requested_ty, produced_ty)) {
+                    Common.invariant("recursive declaration value produced a different sealed type");
+                },
+                .graph_node => Common.invariant("recursive declaration value produced a graph-backed type for a sealed request"),
+            },
+            .graph_node => |requested_node| try relateRequestComponent(
+                self.graph,
+                requested_node,
+                try self.exprTypeCell(value).toGraphNode(self.graph),
+            ),
+        }
+        return .{ .let_ = .{
+            .pat = pat,
+            .value = value,
+            .recursive = true,
+        } };
     }
 
     fn lowerPatternStatement(

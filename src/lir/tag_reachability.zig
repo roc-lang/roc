@@ -259,7 +259,7 @@ const Pass = struct {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
@@ -459,6 +459,16 @@ const Pass = struct {
                 self.noteUse(s.source);
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);
             },
+            .assign_boxy_eq => |s| {
+                self.noteUse(s.lhs);
+                self.noteUse(s.rhs);
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_hash => |s| {
+                self.noteUse(s.value);
+                self.noteUse(s.hasher);
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+            },
             .assign_boxy_tag => |s| {
                 if (s.target_desc.localOrNull()) |local| self.noteUse(local);
                 if (s.payload) |payload| self.noteUse(payload);
@@ -636,6 +646,8 @@ const Pass = struct {
                 .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_inspect => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_eq => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_hash => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_tag => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_tag_payload => |*s| s.next = self.resolveRedirect(s.next),
                 .boxy_tag_match => |*s| {

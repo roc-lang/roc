@@ -168,7 +168,7 @@ main = build(1.U64, "not a number")
 								(e-literal (string "")))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 353)
+		(e-call (constraint-fn-var 351)
 			(e-lookup-local
 				(p-assign (ident "build")))
 			(e-typed-int (value "1") (type "U64"))
@@ -186,13 +186,13 @@ main = build(1.U64, "not a number")
 (inferred-types
 	(defs
 		(patt (type "Str, Iter((U64, Str)) -> Rendered"))
-		(patt (type "_arg, _arg2 -> List(a) where [a.from_interpolation : Str, Iter((b, Str)) -> a, a.from_interpolation : Str, Iter((b, Str)) -> a]"))
+		(patt (type "a, a -> List(b) where [b.from_interpolation : Str, Iter((a, Str)) -> b, b.from_interpolation : Str, Iter((a, Str)) -> b]"))
 		(patt (type "List(Rendered)")))
 	(type_decls
 		(nominal (type "Rendered")
 			(ty-header (name "Rendered"))))
 	(expressions
 		(expr (type "Str, Iter((U64, Str)) -> Rendered"))
-		(expr (type "_arg, _arg2 -> List(a) where [a.from_interpolation : Str, Iter((b, Str)) -> a, a.from_interpolation : Str, Iter((b, Str)) -> a]"))
+		(expr (type "a, a -> List(b) where [b.from_interpolation : Str, Iter((a, Str)) -> b, b.from_interpolation : Str, Iter((a, Str)) -> b]"))
 		(expr (type "List(Rendered)"))))
 ~~~

@@ -1509,9 +1509,26 @@ const Lowerer = struct {
         locals: *collections.DenseMap(Lifted.LocalId, void),
         capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
     ) std.mem.Allocator.Error!void {
-        const recursive_pat = lifted.getPat(pat_id);
-        if (recursive_pat.data != .bind) Common.invariant("recursive Monotype let statement must bind one local directly");
-        const local = recursive_pat.data.bind;
+        switch (lifted.getPat(pat_id).data) {
+            .bind => |local| try collectRecursiveValueBind(lifted, local, locals, capture_ids),
+            .tuple => |items| {
+                const item_pats = lifted.patSpan(items);
+                for (0..item_pats.len) |index| {
+                    const item = lifted.getPat(GuardedList.at(item_pats, index));
+                    if (item.data != .bind) Common.invariant("recursive Monotype let tuple must bind each item to one local directly");
+                    try collectRecursiveValueBind(lifted, item.data.bind, locals, capture_ids);
+                }
+            },
+            .wildcard, .as, .record, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => Common.invariant("recursive Monotype let statement must bind one local or a tuple of locals directly"),
+        }
+    }
+
+    fn collectRecursiveValueBind(
+        lifted: *const Lifted.Program,
+        local: Lifted.LocalId,
+        locals: *collections.DenseMap(Lifted.LocalId, void),
+        capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
+    ) std.mem.Allocator.Error!void {
         try locals.put(local, {});
         if (lifted.getLocal(local).capture_id) |capture_id| try capture_ids.put(capture_id, {});
     }
@@ -6666,61 +6683,131 @@ const Lowerer = struct {
         return try self.lowerExprIntoAtType(where, value_local, value, self.typeOfLocalOr(value_local, bind_ty), next);
     }
 
-    fn lowerRecursiveLetStmt(self: *Lowerer, where: LowerSite, let_: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const pattern = self.solved.lifted.getPat(let_.pat);
-        if (pattern.data != .bind) Common.invariant("recursive Monotype let statement must bind one local directly");
-        const local = pattern.data.bind;
-        const bind_ty = try self.lowerPatTy(let_.pat);
-        const binding = try self.bindRecursiveLocalForTyped(local, bind_ty);
-        const target = binding.slot;
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const target_content = self.result.layouts.getLayout(target_layout);
-        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
-        const payload_layout = target_content.getIdx();
+    /// A recursive local's zero-initialized boxed slot, reserved before its
+    /// initializer runs so the initializer's captures can close over it.
+    const RecursiveLetSlot = struct {
+        ty: Type.TypeId,
+        binding: RecursiveLocalBinding,
+        payload_layout: layout.Idx,
+    };
 
-        const value = try self.addTemp(bind_ty);
+    fn reserveRecursiveLetSlot(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Common.LowerError!RecursiveLetSlot {
+        const binding = try self.bindRecursiveLocalForTyped(local, ty);
+        const target_content = self.result.layouts.getLayout(self.result.store.getLocal(binding.slot).layout_idx);
+        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
+        return .{
+            .ty = ty,
+            .binding = binding,
+            .payload_layout = target_content.getIdx(),
+        };
+    }
+
+    /// Allocate the slot, then continue with `next`.
+    fn allocateRecursiveLetSlot(self: *Lowerer, where: LowerSite, slot: RecursiveLetSlot, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = slot.binding.slot,
+            .op = .box_alloc_zeroed,
+            .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
+            .args = LIR.LocalSpan.empty(),
+            .next = next,
+        } }, where.source());
+    }
+
+    /// Store the initialized `value` into the slot, then continue with `next`.
+    /// The store addresses the slot's Box itself, which keeps the slot alive
+    /// through the store even when nothing captured it.
+    fn storeRecursiveLetSlot(self: *Lowerer, where: LowerSite, slot: RecursiveLetSlot, value: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const value_layout = self.result.store.getLocal(value).layout_idx;
-        const payload = if (value_layout == payload_layout)
+        const payload = if (value_layout == slot.payload_layout)
             value
         else
-            try self.addLocalForLayout(payload_layout);
-        const ptr = try self.addLocalForLayout(.opaque_ptr);
+            try self.addLocalForLayout(slot.payload_layout);
         const unit = try self.addLocalForLayout(.zst);
 
         var after_store = next;
-        if (binding.forward_local) |forward_local| {
+        if (slot.binding.forward_local) |forward_local| {
             after_store = try self.assignTypedBoundary(
                 where,
                 forward_local,
-                self.typeOfLocalOr(forward_local, bind_ty),
-                target,
-                bind_ty,
+                self.typeOfLocalOr(forward_local, slot.ty),
+                slot.binding.slot,
+                slot.ty,
                 after_store,
             );
         }
 
-        const ptr_store_args = [_]LIR.LocalId{ ptr, payload };
-        const ptr_store_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+        const ptr_store_args = [_]LIR.LocalId{ slot.binding.slot, payload };
+        var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = unit,
             .op = .ptr_store,
             .rc_effect = LIR.LowLevel.ptr_store.rcEffect(),
             .args = try self.result.store.addLocalSpan(&ptr_store_args),
             .next = after_store,
         } }, where.source());
-        var current = ptr_store_stmt;
         if (payload != value) {
             current = try self.assignBoxBoundary(where, payload, value, value_layout, current);
         }
-        current = try self.lowerExprIntoAtType(where, value, let_.value, bind_ty, current);
-        const ptr_cast_stmt = try self.assignUnaryLowLevel(where, ptr, .ptr_cast, target, current);
-        const alloc_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .box_alloc_zeroed,
-            .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
-            .args = LIR.LocalSpan.empty(),
-            .next = ptr_cast_stmt,
-        } }, where.source());
-        return alloc_stmt;
+        return current;
+    }
+
+    /// A recursive `let` binds either one local or a tuple of locals. Every
+    /// bound local gets a zeroed boxed slot before the initializer runs; once
+    /// the initializer has produced its value, each slot receives its part.
+    fn lowerRecursiveLetStmt(self: *Lowerer, where: LowerSite, let_: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const pattern = self.solved.lifted.getPat(let_.pat);
+        const value_ty = try self.lowerPatTy(let_.pat);
+        switch (pattern.data) {
+            .bind => |local| {
+                const slot = try self.reserveRecursiveLetSlot(local, value_ty);
+                const value = try self.addTemp(value_ty);
+                var current = try self.storeRecursiveLetSlot(where, slot, value, next);
+                current = try self.lowerExprIntoAtType(where, value, let_.value, value_ty, current);
+                return try self.allocateRecursiveLetSlot(where, slot, current);
+            },
+            .tuple => |items| {
+                const item_pats = self.solved.lifted.patSpan(items);
+                const slots = try self.allocator.alloc(RecursiveLetSlot, item_pats.len);
+                defer self.allocator.free(slots);
+                for (0..item_pats.len) |index| {
+                    const item_pat = GuardedList.at(item_pats, index);
+                    const item = self.solved.lifted.getPat(item_pat);
+                    if (item.data != .bind) Common.invariant("recursive Monotype let tuple must bind each item to one local directly");
+                    slots[index] = try self.reserveRecursiveLetSlot(item.data.bind, try self.lowerPatTy(item_pat));
+                }
+
+                const value = try self.addTemp(value_ty);
+                const item_tys = self.tupleItemTypes(self.storageTypeOfLocalOr(value, value_ty));
+                if (item_tys.len != slots.len) Common.invariant("recursive tuple pattern arity differed from its value's tuple type");
+                var current = next;
+                var index = slots.len;
+                while (index > 0) {
+                    index -= 1;
+                    const item_ty = GuardedList.at(item_tys, index);
+                    const item_local = try self.addTemp(item_ty);
+                    current = try self.storeRecursiveLetSlot(where, slots[index], item_local, current);
+                    if (!self.isZstLocal(item_local)) {
+                        const field_index: u16 = @intCast(index);
+                        current = try self.assignTypedRefRead(
+                            where,
+                            item_local,
+                            item_ty,
+                            item_ty,
+                            self.localFieldLayout(value, field_index),
+                            .{ .field = .{ .source = value, .field_idx = field_index } },
+                            current,
+                        );
+                    }
+                }
+                current = try self.lowerExprIntoAtType(where, value, let_.value, value_ty, current);
+                index = slots.len;
+                while (index > 0) {
+                    index -= 1;
+                    current = try self.allocateRecursiveLetSlot(where, slots[index], current);
+                }
+                return current;
+            },
+            .wildcard, .as, .record, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => Common.invariant("recursive Monotype let statement must bind one local or a tuple of locals directly"),
+        }
     }
 
     fn lowerFnRefInto(

@@ -74,5 +74,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: a, name: _field } -> b where [a.to_str : a -> _ret, b.from_interpolation : Str, Iter((_field, Str)) -> b]"))
+(expr (type "{ age: a, name: b } -> c where [a.to_str : a -> b, c.from_interpolation : Str, Iter((b, Str)) -> c]"))
 ~~~

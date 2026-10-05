@@ -1225,6 +1225,28 @@ pub const CFStmt = union(enum) {
         source_mode: BoxyTransferMode = .borrow,
         next: CFStmtId,
     },
+    /// `target` (a Bool) is whether the borrowed `lhs` and `rhs`, both stored
+    /// as `desc` describes, are equal under derived `is_eq`: each component
+    /// whose type declares its own `is_eq` compares with that method, named
+    /// by the descriptor's equality method slot.
+    assign_boxy_eq: struct {
+        target: LocalId,
+        lhs: LocalId,
+        rhs: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    /// `target` (a Hasher) is `hasher` fed the borrowed `value`, stored as
+    /// `desc` describes, under derived `to_hash`: each component whose type
+    /// declares its own `to_hash` hashes with that method, named by the
+    /// descriptor's hash method slot.
+    assign_boxy_hash: struct {
+        target: LocalId,
+        value: LocalId,
+        hasher: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
     assign_boxy_tag: struct {
         target: LocalId,
         target_desc: BoxyDescRef,

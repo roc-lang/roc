@@ -2988,6 +2988,8 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -3121,6 +3123,8 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -3406,6 +3410,14 @@ pub const MonoLlvmCodeGen = struct {
             },
             .assign_boxy_inspect => |assign| {
                 try self.emitBoxyInspect(assign);
+                try work.append(wa, .{ .node = assign.next });
+            },
+            .assign_boxy_eq => |assign| {
+                try self.emitBoxyEq(assign);
+                try work.append(wa, .{ .node = assign.next });
+            },
+            .assign_boxy_hash => |assign| {
+                try self.emitBoxyHash(assign);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_boxy_tag => |assign| {
@@ -3886,6 +3898,38 @@ pub const MonoLlvmCodeGen = struct {
                 try self.boxyValuePtr(assign.source),
                 try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.source))),
                 try self.resolveBoxyDesc(assign.source_desc),
+            },
+        );
+    }
+
+    fn emitBoxyEq(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
+        try self.prepareLocalWrite(assign.target);
+        const ptr_ty = try self.ptrType();
+        try self.callBoxyVoid(
+            "roc_boxy_eq",
+            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty },
+            &.{
+                try self.boxyValuePtr(assign.target),
+                try self.boxyValuePtr(assign.lhs),
+                try self.boxyValuePtr(assign.rhs),
+                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.lhs))),
+                try self.resolveBoxyDesc(assign.desc),
+            },
+        );
+    }
+
+    fn emitBoxyHash(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
+        try self.prepareLocalWrite(assign.target);
+        const ptr_ty = try self.ptrType();
+        try self.callBoxyVoid(
+            "roc_boxy_hash",
+            &.{ ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty },
+            &.{
+                try self.boxyValuePtr(assign.target),
+                try self.boxyValuePtr(assign.value),
+                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.value))),
+                try self.resolveBoxyDesc(assign.desc),
+                try self.boxyValuePtr(assign.hasher),
             },
         );
     }
