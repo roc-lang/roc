@@ -48,6 +48,44 @@ and broader platform CI remain pending. The next evaluator run will use the
 complete bootstrap bundle with the corrected host triples. No performance
 comparison was repeated for this merge.
 
+## External source dependencies
+
+Kcov and Bytebox are fetched from immutable commits with Zig package hashes,
+instead of adding their source trees to Roc. The Nix dependency farm records
+the same package identities and the SHA-256 of each canonical cached archive.
+These pins participate in compiler compatibility identity through
+`build.zig.zon`; routine builds and cached consumers do not use the attestation
+API. Bytebox's MIT notice remains in `legal_details`, and both dependency
+packages retain their upstream licenses.
+
+The Nix fetch helper uses a private manifest and `zig fetch --save-exact` with
+an explicit package directory. This selects the actual package root when Zig
+0.17 recompresses wrapped source archives. Plain standalone fetch produced an
+extra directory layer and failed the existing fixed-output hash. The helper
+validates the declared package path and canonical archive before unpacking;
+Kcov, Bytebox, and the existing `stable_array` farm entries pass with unchanged
+archive hashes. A forced Kcov fetch rebuild also passes. When regenerating
+dependency entries, preserve these helpers and their explicit `packageHash`
+arguments.
+
+* [Kcov draft PR #3](https://github.com/roc-lang/zig-kcov/pull/3) uses commit
+  `4dc312bec352c449d90a79341614b2f341073a19`. Its native ReleaseSafe build,
+  two fixture tests, real Zig coverage, argument forwarding, and three hashed
+  consumers pass. The runtime build matches the previous vendored port.
+  Coverage remains lazy and separate from Roc. ARM64 helper compilation and
+  graph configuration pass locally; native ARM64 coverage CI is a separate gate.
+* [Bytebox fork commit](https://github.com/lukewilliamboswell/bytebox/commit/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87)
+  is based on Richard's `wide-if-continuations` branch at `6565220e5d16`.
+  The Zig runtime matches the previous vendored port, preserving 16-byte SIMD
+  storage and full-width continuation indices. The standalone build also keeps
+  generated WASM fixtures in declared cached outputs and aligns the C value
+  union to match Zig. ReleaseSafe validation passes all 26 steps, including
+  11 unit tests, memory64 execution, and C callbacks/invocation. ReleaseFast
+  with symbols passes four core regressions and executes all four benchmark
+  fixtures; no performance comparison is inferred. The spec runner compiles,
+  and fresh dependency-cache consumers pass. The user will submit the upstream
+  Bytebox PR separately.
+
 ## Source and compiler correctness
 
 The following module suites passed in ReleaseSafe on x86_64 Linux. Counts

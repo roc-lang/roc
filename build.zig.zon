@@ -92,7 +92,10 @@
         // `@Vector` in bytebox implements wasm's fixed-128-bit `v128` semantics,
         // which is already the natural SSE2 lowering. A lower `-Dcpu` costs it
         // nothing.
-        .bytebox = .{ .path = "vendor/bytebox" },
+        .bytebox = .{
+            .url = "https://github.com/lukewilliamboswell/bytebox/archive/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87.tar.gz",
+            .hash = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN",
+        },
         // Used for `roc bundle`, `roc unbundle`, and downloading .tar.zst bundles.
         //
         // zstd has runtime BMI2 dispatch, but it enables that dispatch only when
@@ -110,7 +113,11 @@
             .hash = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU",
         },
         // Coverage tooling only, and lazy, so it never reaches a release binary.
-        .kcov = .{ .path = "vendor/kcov", .lazy = true },
+        .kcov = .{
+            .url = "https://github.com/roc-lang/zig-kcov/archive/4dc312bec352c449d90a79341614b2f341073a19.tar.gz",
+            .hash = "kcov-42.0.1-EuAG4RCgCwAXgKvyR-26UJR6tVET7mPTBDDQDFWQO9Ra",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x9eea22a6c3bd0034,
     .paths = .{

@@ -194,6 +194,18 @@ jobs:
           python3 ci/test_compiler_artifact_identity.py zig \
             --work-dir "$RUNNER_TEMP/roc-compiler-artifact-identity"
 
+      # Two std-only test producers exercise report isolation and dynamic
+      # filtering without compiling Roc or linking a dependency bundle.
+      - name: Check independent unit-test reports
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/roc-test-report-deps/include" "$RUNNER_TEMP/roc-test-report-deps/lib"
+          python3 ci/test_unit_report_isolation.py zig \
+            --work-dir "$RUNNER_TEMP/roc-test-reports" -- \
+            "-Droc-deps-path=$RUNNER_TEMP/roc-test-report-deps" \
+            -j2 --cache-poison=disallowed
+
       - name: Install actionlint
         if: ${{ !cancelled() }}
         shell: bash
