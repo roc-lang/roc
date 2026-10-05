@@ -515,7 +515,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
                 .{ .name = try a.dupe(u8, "roc__hab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
                 .{
                     .name = try a.dupe(u8, "roc__hcd"),
-                    .bytes = try a.dupe(u8, @as([16]u8, @splat('\x00'))),
+                    .bytes = try a.dupe(u8, &@as([16]u8, @splat('\x00'))),
                     .alignment = 8,
                     .symbol_offset = 0,
                     .relocations = try a.dupe(ProcArtifact.DataRelocation, &.{
@@ -626,7 +626,7 @@ test "pack writes program-local constants and every reference to them under cont
                 .data = &.{
                     .{
                         .name = "roc__d1",
-                        .bytes = @as([8]u8, @splat('\x00')),
+                        .bytes = &@as([8]u8, @splat('\x00')),
                         .alignment = 8,
                         .symbol_offset = 0,
                         .relocations = &.{.{ .offset = 0, .name = "roc__d1_1", .addend = 16, .function = false }},

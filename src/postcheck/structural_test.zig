@@ -943,16 +943,16 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn addExpr(self: *BodyContext",
         "fn addFieldExprSpan(",
     );
-    try expectContains(producers, "expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof");
-    try expectContains(producers, "pat_impossibility_proofs.items[@intFromEnum(id)] = try self.patDataImpossibilityProof");
-    try expectContains(producers, "stmt_impossibility_proofs.items[@intFromEnum(id)] = try self.stmtDataImpossibilityProof(stmt)");
+    try expectContains(producers, "expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof");
+    try expectContains(producers, "pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof");
+    try expectContains(producers, "stmt_impossibility_proofs.items[@backingInt(id)] = try self.stmtDataImpossibilityProof(stmt)");
 
     const statement_frames = sourceSliceBetween(
         lower_source,
         "fn withStatementSuccessRuntimeDemandGuardFrame(",
         "fn runtimeDemandGuardFrameAddresses(",
     );
-    try expectContains(statement_frames, "runtimeDemandGuardFrameAddressRaw(@intFromEnum(statement_id), .statement_success)");
+    try expectContains(statement_frames, "runtimeDemandGuardFrameAddressRaw(@backingInt(statement_id), .statement_success)");
     try expectContains(statement_frames, "try pushRuntimeDemandGuardFrame(");
     try expectContains(lower_source, "body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames");
     try expectContains(lower_source, "runtimeDemandGuardFrameStackContains(self.draft, self.runtime_demand_guard_frames, address)");

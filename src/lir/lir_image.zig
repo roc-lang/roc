@@ -1184,6 +1184,7 @@ fn arrayListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usiz
     return .{
         .items = ptr[0..len],
         .capacity = capacity,
+        .pointer_stability = .{},
     };
 }
 
@@ -1200,10 +1201,7 @@ fn guardedListFromRef(
 fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(T) {
     const list = try arrayListFromRef(T, base_ptr, image_size, ref);
     return .{
-        .items = .{
-            .items = list.items,
-            .capacity = list.capacity,
-        },
+        .items = list,
     };
 }
 

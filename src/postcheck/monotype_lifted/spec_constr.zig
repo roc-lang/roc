@@ -16700,7 +16700,7 @@ test "call-pattern scans direct call and function reference capture operands" {
         .ty = unit_ty,
         .data = .{
             .fn_ref = .{
-                .fn_id = undefined, // not read by the call-pattern scanners under test
+                .fn_id = @fromBackingInt(@intCast(0)), // scanners only inspect the captures
                 .captures = captures,
             },
         },
@@ -16709,7 +16709,8 @@ test "call-pattern scans direct call and function reference capture operands" {
         .ty = unit_ty,
         .data = .{
             .call_proc = .{
-                .callee = undefined, // not read by the call-pattern scanners under test
+                // addExpr also records call shapes, which reads the callee tag.
+                .callee = .{ .lifted = @fromBackingInt(@intCast(0)) },
                 .args = Ast.Span(Ast.ExprId).empty(),
                 .captures = captures,
             },

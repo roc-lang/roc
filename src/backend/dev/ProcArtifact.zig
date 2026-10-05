@@ -1494,16 +1494,16 @@ test "constants are named by content across programs, through cycles, and never 
     // Program one: a cycle between the first two constants, a leaf, and a
     // host-visible export that points at the leaf.
     const one = [_]DataItem{
-        testItem("roc__d0", @as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
-        testItem("roc__d0_1", @as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0", &@as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", &@as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
         testItem("roc__d0_2", "leaf", &.{}, true),
-        testItem("roc__answer", @as([8]u8, @splat('\x00')), &.{testReloc(0, "roc__d0_2", 0)}, false),
+        testItem("roc__answer", &@as([8]u8, @splat('\x00')), &.{testReloc(0, "roc__d0_2", 0)}, false),
     };
     // Program two: the same graph under other names and another order.
     const two = [_]DataItem{
         testItem("roc__d7_2", "leaf", &.{}, true),
-        testItem("roc__d7", @as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d7_1", 0)}, true),
-        testItem("roc__d7_1", @as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
+        testItem("roc__d7", &@as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d7_1", 0)}, true),
+        testItem("roc__d7_1", &@as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
     };
 
     var storage_one: [1]Artifact = undefined;
@@ -1529,8 +1529,8 @@ test "constants are named by content across programs, through cycles, and never 
 
     // A different leaf changes every name that reaches it.
     const three = [_]DataItem{
-        testItem("roc__d0", @as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
-        testItem("roc__d0_1", @as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0", &@as([16]u8, @splat('\x00')), &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", &@as([16]u8, @splat('\x00')), &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
         testItem("roc__d0_2", "LEAF", &.{}, true),
     };
     var storage_three: [1]Artifact = undefined;
