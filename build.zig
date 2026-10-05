@@ -474,6 +474,8 @@ fn addSha256Floor(query: *std.Target.Query) void {
 const TestsSummaryStep = struct {
     step: *Step,
     run: *Step.Run,
+    mutable_reports: std.Build.LazyPath,
+    producers: std.StringHashMapUnmanaged(void) = .empty,
     serialize_runs: bool = false,
     last_run: ?*Step = null,
 
@@ -483,7 +485,9 @@ const TestsSummaryStep = struct {
         run.addArg(b.fmt("{d}", .{forced_passes}));
         run.addArg(b.fmt("{d}", .{test_filters.len}));
         run.addArgs(test_filters);
-        self.* = .{ .step = &run.step, .run = run };
+        const mutable_reports = b.addWriteFiles();
+        mutable_reports.mode = .tmp;
+        self.* = .{ .step = &run.step, .run = run, .mutable_reports = mutable_reports.getDirectory() };
         return self;
     }
 
@@ -493,13 +497,22 @@ const TestsSummaryStep = struct {
 
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
-        // Dynamic passthrough deliberately keeps tests runnable on every
-        // invocation. Zig 0.17 uses the argument hash for those output paths,
-        // so the basename must also distinguish unrelated test producers.
-        const report = run.addPrefixedOutputFileArg(
-            "--roc-test-report=",
-            run.step.owner.fmt("{s}.tsv", .{run.producer.?.name}),
-        );
+        const b = run.step.owner;
+        const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
+        if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
+        const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
+        // Test runs always execute because they accept dynamic passthrough.
+        // Each summary owns a temporary destination so concurrent invocations
+        // never mutate the same report. Retain an immutable copy only after
+        // the test writer succeeds, before the summary reads its contents.
+        run.addDirectoryArg2(self.mutable_reports, .{
+            .prefix = "--roc-test-report-dir=",
+            .make_absolute = true,
+        });
+        run.addArg(b.fmt("--roc-test-report-name={s}", .{basename}));
+        const retained_reports = b.addWriteFiles();
+        const report = retained_reports.addCopyFile(self.mutable_reports.path(b, basename), basename);
+        retained_reports.step.dependOn(run_step);
         self.run.addArg(run.producer.?.name);
         self.run.addFileArg(report);
         if (self.serialize_runs) {

@@ -16,6 +16,8 @@ pub const std_options: std.Options = .{
 
 var log_err_count: usize = 0;
 var report_path: ?[]const u8 = null;
+var report_directory: ?[]const u8 = null;
+var report_name: ?[]const u8 = null;
 var report_status: []u8 = &.{};
 var selected_tests: []usize = &.{};
 var selected_count: usize = 0;
@@ -30,8 +32,14 @@ fn matchesFilter(name: []const u8) bool {
 }
 
 fn writeReport() void {
-    const path = report_path orelse return;
-    const file = Io.Dir.cwd().createFile(runner_threaded_io, path, .{}) catch |err|
+    const path = report_name orelse report_path orelse return;
+    const directory = if (report_directory) |dir|
+        Io.Dir.cwd().openDir(runner_threaded_io, dir, .{}) catch |err|
+            panic("cannot open test report directory: {t}", .{err})
+    else
+        Io.Dir.cwd();
+    defer if (report_directory != null) directory.close(runner_threaded_io);
+    const file = directory.createFile(runner_threaded_io, path, .{}) catch |err|
         panic("cannot create test report: {t}", .{err});
     defer file.close(runner_threaded_io);
     var buffer: [4096]u8 = undefined;
@@ -98,9 +106,23 @@ pub fn main(init: std.process.Init.Minimal) void {
             filters.append(std.heap.page_allocator, arg["--test-filter=".len..]) catch @panic("test filter allocation failed");
         } else if (std.mem.startsWith(u8, arg, "--roc-test-report=")) {
             report_path = arg["--roc-test-report=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-report-dir=")) {
+            report_directory = arg["--roc-test-report-dir=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-report-name=")) {
+            report_name = arg["--roc-test-report-name=".len..];
         } else {
             panic("unrecognized command line argument: {s}", .{arg});
         }
+    }
+
+    if (report_directory != null) {
+        const name = report_name orelse @panic("--roc-test-report-dir requires --roc-test-report-name");
+        if (report_path != null) @panic("conflicting test report destinations");
+        if (name.len == 0 or !std.mem.eql(u8, name, Io.Dir.path.basename(name)) or
+            std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, ".."))
+            @panic("test report name must be a basename");
+    } else if (report_name != null) {
+        @panic("--roc-test-report-name requires --roc-test-report-dir");
     }
 
     for (builtin.test_functions, 0..) |test_fn, index| {
