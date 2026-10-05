@@ -36,7 +36,6 @@ pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, _: ?usize) noreturn {
     (startup_ops orelse builtins.in_process_host.ops()).crash(msg);
-    unreachable;
 }
 
 /// Whether this root is the evaluator Wasm flavor, which receives its host
@@ -212,6 +211,7 @@ comptime {
         "roc_boxy_inspect",
         "roc_boxy_box",
         "roc_boxy_unbox",
+        "roc_boxy_record_update",
         "roc_boxy_adapt",
         "roc_boxy_tag",
         "roc_boxy_tag_payload",

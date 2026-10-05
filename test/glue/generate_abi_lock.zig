@@ -21,6 +21,15 @@ fn scalar(comptime T: type, comptime lang: Language) []const u8 {
     };
 }
 
+/// A callback's return type. Rust spells a non-optional pointer result as
+/// `NonNull`, so a host that could return null fails to type-check.
+fn returnType(comptime T: type, comptime lang: Language) []const u8 {
+    if (lang == .rust and @typeInfo(T) == .pointer and !@typeInfo(T).pointer.is_const) {
+        return "core::ptr::NonNull<" ++ scalar(@typeInfo(T).pointer.child, lang) ++ ">";
+    }
+    return scalar(T, lang);
+}
+
 fn declaration(comptime T: type, comptime name: []const u8, comptime lang: Language) []const u8 {
     if (@typeInfo(T) == .optional) return declaration(@typeInfo(T).optional.child, name, lang);
     if (@typeInfo(T) == .pointer and @typeInfo(@typeInfo(T).pointer.child) == .@"fn") {
@@ -34,9 +43,9 @@ fn declaration(comptime T: type, comptime name: []const u8, comptime lang: Langu
         }
         if (lang == .c and args.len == 0) args = "void";
         return if (lang == .c)
-            scalar(f.return_type.?, lang) ++ " (*" ++ name ++ ")(" ++ args ++ ")"
+            returnType(f.return_type.?, lang) ++ " (*" ++ name ++ ")(" ++ args ++ ")"
         else
-            name ++ ": extern \"C\" fn(" ++ args ++ ") -> " ++ scalar(f.return_type.?, lang);
+            name ++ ": extern \"C\" fn(" ++ args ++ ") -> " ++ returnType(f.return_type.?, lang);
     }
     return if (lang == .c) scalar(T, lang) ++ " " ++ name else name ++ ": " ++ scalar(T, lang);
 }
@@ -97,6 +106,10 @@ fn output(comptime lang: Language) []const u8 {
         lock(builtins.list.RocList, if (lang == .c) "RocList" else "RocList<u8>", "CanonicalList", &.{ "elements", "length", "capacity_or_alloc_ptr" }, lang);
     if (lang == .c) {
         result = result ++ lock(builtins.erased_callable.Payload, "RocErasedCallablePayload", "CanonicalCallablePayload", &.{ "callable_fn_ptr", "on_drop" }, lang);
+        for (@typeInfo(builtins.host_abi.ExternHostFns).@"struct".decls) |decl| {
+            const T = @field(builtins.host_abi.ExternHostFns, decl.name);
+            result = result ++ "ROC_STATIC_ASSERT(__builtin_types_compatible_p(__typeof__(&" ++ decl.name ++ "), " ++ declaration(T, "", lang) ++ "), \"runtime symbol signature mismatch\");\n";
+        }
     }
     if (lang == .rust) {
         // RocHost is the explicit helper-only prefix. Hosted dispatch is not a

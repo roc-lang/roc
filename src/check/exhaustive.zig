@@ -203,6 +203,16 @@ pub const BuiltinIdents = struct {
     f32: Ident.Idx,
     f64: Ident.Idx,
     dec: Ident.Idx,
+    /// List type identifiers (unqualified and Builtin-qualified)
+    list: Ident.Idx,
+    builtin_list: Ident.Idx,
+
+    /// Check if a nominal type is the builtin List type.
+    pub fn isBuiltinListType(self: BuiltinIdents, nominal: types.NominalType) bool {
+        if (!nominal.originIsBuiltin()) return false;
+        const ident = nominal.ident.ident_idx;
+        return ident.eql(self.list) or ident.eql(self.builtin_list);
+    }
 
     /// Check if a nominal type is a builtin numeric type.
     /// Numeric types have [] as backing but are inhabited primitives.
@@ -2319,7 +2329,7 @@ fn isSketchedPatternInhabited(
                     if (l.arity.minLen() == 0) continue;
 
                     // Check if element type is inhabited
-                    const elem_type = getListElemType(type_store, at.type_var) orelse continue;
+                    const elem_type = try getListElemType(type_store, builtin_idents, at.type_var);
                     if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, elem_type, known_empty_vars)) return false;
                 },
             },
@@ -2562,24 +2572,23 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
     }
 }
 
-/// Get the element type from a List type.
-fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
+/// Get the element type of a column matched by list patterns.
+///
+/// Returns error.TypeError when the column's type is not the builtin List,
+/// which means the list patterns did not type-check against the scrutinee.
+fn getListElemType(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) PatternResolveError!Var {
     var current = type_var;
     while (true) {
         const content = type_store.resolveVar(current).desc.content;
-
-        // List is a nominal type with one type argument (the element type)
         if (content.unwrapNominalType()) |nominal| {
+            if (!builtin_idents.isBuiltinListType(nominal)) return error.TypeError;
             const args = type_store.sliceNominalArgs(nominal);
-            if (args.len == 1) {
-                return args[0];
-            }
+            if (args.len != 1) return error.TypeError;
+            return args[0];
         }
-
-        // Follow aliases
         switch (content) {
             .alias => |alias| current = type_store.getAliasBackingVar(alias),
-            .flex, .rigid, .field_presence, .structure, .err => return null,
+            .flex, .rigid, .field_presence, .structure, .err => return error.TypeError,
         }
     }
 }
@@ -2702,17 +2711,14 @@ pub const ColumnTypes = struct {
         return .{ .types = self.types[1..], .type_store = self.type_store, .builtin_idents = self.builtin_idents };
     }
 
-    /// Expand for list specialization
+    /// Expand the first column (a list of `elem_type`) into `elem_count` element columns.
     pub fn specializeForList(
         self: ColumnTypes,
         allocator: std.mem.Allocator,
+        elem_type: Var,
         elem_count: usize,
     ) Allocator.Error!ColumnTypes {
-        if (self.types.len == 0) {
-            return .{ .types = &[_]Var{}, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
-        }
-
-        const elem_type = getListElemType(self.type_store, self.types[0]) orelse self.types[0];
+        std.debug.assert(self.types.len > 0);
 
         const new_types = try allocator.alloc(Var, elem_count + self.types.len - 1);
         for (0..elem_count) |i| {
@@ -2735,7 +2741,8 @@ fn buildListCtorsForChecking(
     // Find the maximum lengths we need to consider
     var max_exact_len: usize = 0;
     var has_slice = false;
-    var max_slice_min: usize = 0;
+    var max_prefix: usize = 0;
+    var max_suffix: usize = 0;
 
     for (pattern_arities) |arity| {
         switch (arity) {
@@ -2744,7 +2751,8 @@ fn buildListCtorsForChecking(
             },
             .slice => |s| {
                 has_slice = true;
-                max_slice_min = @max(max_slice_min, s.prefix + s.suffix);
+                max_prefix = @max(max_prefix, s.prefix);
+                max_suffix = @max(max_suffix, s.suffix);
             },
         }
     }
@@ -2758,9 +2766,16 @@ fn buildListCtorsForChecking(
         return try result.toOwnedSlice(allocator);
     }
 
-    // Has slice patterns - check each length from 0 to the point where slices take over
+    // Has slice patterns - check each length from 0 to the point where slices take over.
+    //
+    // The final slice stands for every list of at least `check_until` elements.
+    // Its element columns must be the same positions at every such length, so
+    // its prefix holds every pattern's prefix and its suffix holds every
+    // pattern's suffix without the two overlapping. That requires
+    // `check_until >= max_prefix + max_suffix`; with any less, a prefix element
+    // of one pattern and a suffix element of another would share a column.
     var result: std.ArrayList(ListArity) = .empty;
-    const check_until = @max(max_exact_len + 1, max_slice_min);
+    const check_until = @max(max_exact_len + 1, max_prefix + max_suffix);
 
     for (0..check_until) |len| {
         try result.append(allocator, .{ .exact = len });
@@ -2768,8 +2783,8 @@ fn buildListCtorsForChecking(
 
     // Add one slice pattern to cover all remaining lengths
     try result.append(allocator, .{ .slice = .{
-        .prefix = check_until,
-        .suffix = 0,
+        .prefix = check_until - max_suffix,
+        .suffix = max_suffix,
     } });
 
     return try result.toOwnedSlice(allocator);
@@ -3181,6 +3196,38 @@ fn collectFlexExtVars(
     }
 }
 
+/// A missing row reported by `checkExhaustiveSketched`, split back into the
+/// columns its first column was specialized into and the columns after it.
+const SplitMissingRow = struct {
+    /// Patterns for the sub-columns of the first column (constructor
+    /// arguments or list elements).
+    head_args: []const Pattern,
+    /// Patterns for the remaining columns after the first.
+    rest: []const Pattern,
+};
+
+/// Split the missing row of a matrix whose first column was specialized into
+/// `head_arity` sub-columns. `column_count` is the column count before
+/// specialization. A missing row holds exactly one pattern per column, so the
+/// specialized row has `head_arity + column_count - 1` patterns.
+fn splitMissingRow(specialized_missing: []const Pattern, head_arity: usize, column_count: usize) SplitMissingRow {
+    std.debug.assert(column_count > 0);
+    std.debug.assert(specialized_missing.len == head_arity + column_count - 1);
+    return .{
+        .head_args = specialized_missing[0..head_arity],
+        .rest = specialized_missing[head_arity..],
+    };
+}
+
+/// Build a missing row from the pattern for its first column and the patterns
+/// for the remaining columns.
+fn missingRowWithHead(allocator: std.mem.Allocator, head: Pattern, rest: []const Pattern) error{OutOfMemory}![]const Pattern {
+    const row = try allocator.alloc(Pattern, 1 + rest.len);
+    row[0] = head;
+    @memcpy(row[1..], rest);
+    return row;
+}
+
 /// The state every step of one exhaustiveness check shares.
 const ExhaustiveCtx = struct {
     allocator: std.mem.Allocator,
@@ -3232,6 +3279,7 @@ const ExhaustiveListsFrame = struct {
     matrix: SketchedMatrix,
     column_types: ColumnTypes,
     ctors_to_check: []const ListArity,
+    elem_type: Var,
     elem_inhabited: bool,
     index: usize = 0,
     list_arity: ListArity = undefined,
@@ -3428,29 +3476,27 @@ fn exhaustiveEnter(
             const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
 
             // Check if list elements are inhabited. If not, only the empty list exists.
-            const elem_type = if (column_types.types.len > 0)
-                getListElemType(type_store, column_types.types[0])
-            else
-                null;
-            const elem_inhabited = if (elem_type) |et|
-                try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, et, ctx.payload_vars_to_close.items)
-            else
-                true; // No type info, assume inhabited
+            const elem_type = try getListElemType(type_store, builtin_idents, column_types.types[0]);
+            const elem_inhabited = try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, elem_type, ctx.payload_vars_to_close.items);
 
             try frames.append(allocator, .{ .lists = .{
                 .matrix = matrix,
                 .column_types = column_types,
                 .ctors_to_check = ctors_to_check,
+                .elem_type = elem_type,
                 .elem_inhabited = elem_inhabited,
             } });
             return .pushed;
         },
 
         .literals => {
-            const result = try allocator.alloc(Pattern, 1);
-            const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
-            result[0] = .{ .anything = first_type };
-            return .{ .done = result };
+            // Literal domains are infinite, so a value outside the listed literals
+            // reaches no row; every column of that value is unconstrained.
+            const missing = try allocator.alloc(Pattern, column_types.types.len);
+            for (column_types.types, 0..) |col_type, col_index| {
+                missing[col_index] = .{ .anything = col_type };
+            }
+            return .{ .done = missing };
         },
     }
 }
@@ -3482,32 +3528,21 @@ fn exhaustiveResume(
                 const alt = ctors.alt;
                 switch (ctors.mode) {
                     .all => if (missing.len > 0) {
-                        const args = try allocator.alloc(Pattern, alt.arity);
-                        for (0..alt.arity) |i| {
-                            if (i < missing.len) {
-                                args[i] = missing[i];
-                            } else {
-                                const arg_type = if (i < ctors.specialized_types.types.len) ctors.specialized_types.types[i] else null;
-                                args[i] = .{ .anything = arg_type };
-                            }
-                        }
-
+                        const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
                         const missing_pattern = Pattern{ .ctor = .{
                             .union_info = ctors.union_info,
                             .tag_id = alt.tag_id,
-                            .args = args,
+                            .args = split.head_args,
                         } };
 
                         if (try missing_pattern.isInhabitedWithKnownEmpty(ctors.column_types.type_store, ctors.column_types.builtin_idents, ctx.payload_vars_to_close.items)) {
-                            const result = try allocator.alloc(Pattern, 1);
-                            result[0] = missing_pattern;
-                            return .{ .done = result };
+                            return .{ .done = try missingRowWithHead(allocator, missing_pattern, split.rest) };
                         }
                     },
                     .missing => {
-                        // For arity-0 constructors with no matching rows, the specialized matrix
-                        // is empty with 0 columns, which returns empty inner_missing. But we still
-                        // need to report the constructor as missing.
+                        // For arity-0 constructors in the last column with no matching rows, the
+                        // specialized matrix is empty with 0 columns, which returns empty
+                        // inner_missing. But we still need to report the constructor as missing.
                         // The #Open synthetic tag (arity-0 with no name) represents "possibly more
                         // constructors". For flex extensions, it's skipped because the union will be
                         // closed. For rigid extensions (from annotations), #Open represents real
@@ -3516,15 +3551,14 @@ fn exhaustiveResume(
                         const skip_open = is_open_synthetic and (ctors.union_info.has_flex_extension or ctors.close_open_extension);
                         const is_missing = missing.len > 0 or (alt.arity == 0 and ctors.specialized.isEmpty() and !skip_open);
                         if (is_missing) {
+                            const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
                             const missing_pattern = Pattern{ .ctor = .{
                                 .union_info = ctors.union_info,
                                 .tag_id = alt.tag_id,
-                                .args = missing,
+                                .args = split.head_args,
                             } };
                             if (try missing_pattern.isInhabitedWithKnownEmpty(ctors.column_types.type_store, ctors.column_types.builtin_idents, ctx.payload_vars_to_close.items)) {
-                                const result = try allocator.alloc(Pattern, 1);
-                                result[0] = missing_pattern;
-                                return .{ .done = result };
+                                return .{ .done = try missingRowWithHead(allocator, missing_pattern, split.rest) };
                             }
                         }
                     },
@@ -3569,27 +3603,16 @@ fn exhaustiveResume(
         .lists => |*lists| {
             if (input) |missing| {
                 const min_len = lists.list_arity.minLen();
-                // For length-0 lists (empty list) with no matching rows, the specialized matrix
-                // is empty with 0 columns, which returns empty missing. But we still
-                // need to report the empty list as missing.
+                // For length-0 lists (empty list) in the last column with no matching rows,
+                // the specialized matrix is empty with 0 columns, which returns empty
+                // missing. But we still need to report the empty list as missing.
                 const is_missing = missing.len > 0 or (min_len == 0 and lists.specialized.isEmpty());
                 if (is_missing) {
-                    const elements = try allocator.alloc(Pattern, min_len);
-                    for (0..min_len) |i| {
-                        if (i < missing.len) {
-                            elements[i] = missing[i];
-                        } else {
-                            const elem_type_for_pat = if (i < lists.specialized_types.types.len) lists.specialized_types.types[i] else null;
-                            elements[i] = .{ .anything = elem_type_for_pat };
-                        }
-                    }
-
-                    const result = try allocator.alloc(Pattern, 1);
-                    result[0] = .{ .list = .{
+                    const split = splitMissingRow(missing, min_len, lists.column_types.len());
+                    return .{ .done = try missingRowWithHead(allocator, .{ .list = .{
                         .arity = lists.list_arity,
-                        .elements = elements,
-                    } };
-                    return .{ .done = result };
+                        .elements = split.head_args,
+                    } }, split.rest) };
                 }
             }
 
@@ -3605,7 +3628,7 @@ fn exhaustiveResume(
 
                 lists.list_arity = list_arity;
                 lists.specialized = try specializeByListAritySketched(allocator, lists.matrix, list_arity);
-                lists.specialized_types = try lists.column_types.specializeForList(allocator, min_len);
+                lists.specialized_types = try lists.column_types.specializeForList(allocator, lists.elem_type, min_len);
                 return .{ .call = .{ .matrix = lists.specialized, .column_types = lists.specialized_types, .close_open_extension = false } };
             }
             return .{ .done = &[_]Pattern{} };
@@ -3634,9 +3657,9 @@ const UsefulFrame = struct {
         /// constructor, its arguments wildcards.
         ctors: struct { union_info: Union, tag_ids: TagIdsByName },
         /// A wildcard against list patterns: every list arity to check.
-        lists: struct { arities: []const ListArity, elem_inhabited: bool },
+        lists: struct { arities: []const ListArity, elem_type: Var, elem_inhabited: bool },
         /// A slice pattern: every arity it covers.
-        slice: struct { arities: []const ListArity, elements: []const UnresolvedPattern, arity: ListArity, slice: ListArity.Slice },
+        slice: struct { arities: []const ListArity, elements: []const UnresolvedPattern, arity: ListArity, slice: ListArity.Slice, elem_type: Var },
     },
 };
 
@@ -3746,7 +3769,7 @@ fn usefulNext(
             }
 
             const specialized = try specializeByListAritySketched(allocator, frame.matrix, list_arity);
-            const specialized_types = try frame.column_types.specializeForList(allocator, min_len);
+            const specialized_types = try frame.column_types.specializeForList(allocator, lists.elem_type, min_len);
 
             const extended = try allocator.alloc(UnresolvedPattern, min_len + rest.len);
             for (0..min_len) |i| {
@@ -3765,7 +3788,7 @@ fn usefulNext(
             const s = slice.slice;
 
             const specialized = try specializeByListAritySketched(allocator, frame.matrix, check_arity);
-            const specialized_types = try frame.column_types.specializeForList(allocator, len);
+            const specialized_types = try frame.column_types.specializeForList(allocator, slice.elem_type, len);
 
             const extended_row = try allocator.alloc(UnresolvedPattern, len + rest.len);
             @memcpy(extended_row[0..s.prefix], slice.elements[0..s.prefix]);
@@ -4028,21 +4051,15 @@ fn usefulEnter(
                     const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
 
                     // Check if list elements are inhabited. If not, only the empty list exists.
-                    const elem_type = if (column_types.types.len > 0)
-                        getListElemType(type_store, column_types.types[0])
-                    else
-                        null;
-                    const elem_inhabited = if (elem_type) |et|
-                        try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, et, payload_vars_to_close.items)
-                    else
-                        true; // No type info, assume inhabited
+                    const elem_type = try getListElemType(type_store, builtin_idents, column_types.types[0]);
+                    const elem_inhabited = try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, elem_type, payload_vars_to_close.items);
 
                     try frames.append(allocator, .{
                         .matrix = existing_matrix,
                         .rest = rest,
                         .column_types = column_types,
                         .first_col_type = first_col_type,
-                        .kind = .{ .lists = .{ .arities = ctors_to_check, .elem_inhabited = elem_inhabited } },
+                        .kind = .{ .lists = .{ .arities = ctors_to_check, .elem_type = elem_type, .elem_inhabited = elem_inhabited } },
                     });
                     return .pushed;
                 },
@@ -4093,14 +4110,8 @@ fn usefulEnter(
 
         .list => |l| {
             // Check if list elements are inhabited. If not, only the empty list exists.
-            const elem_type = if (column_types.types.len > 0)
-                getListElemType(type_store, column_types.types[0])
-            else
-                null;
-            const elem_inhabited = if (elem_type) |et|
-                try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, et, payload_vars_to_close.items)
-            else
-                true; // No type info, assume inhabited
+            const elem_type = try getListElemType(type_store, builtin_idents, column_types.types[0]);
+            const elem_inhabited = try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, elem_type, payload_vars_to_close.items);
 
             switch (l.arity) {
                 .exact => {
@@ -4111,7 +4122,7 @@ fn usefulEnter(
                     }
 
                     const specialized = try specializeByListAritySketched(allocator, existing_matrix, l.arity);
-                    const specialized_types = try column_types.specializeForList(allocator, l.elements.len);
+                    const specialized_types = try column_types.specializeForList(allocator, elem_type, l.elements.len);
 
                     const extended_row = try allocator.alloc(UnresolvedPattern, l.elements.len + rest.len);
                     @memcpy(extended_row[0..l.elements.len], l.elements);
@@ -4142,7 +4153,7 @@ fn usefulEnter(
                         .rest = rest,
                         .column_types = column_types,
                         .first_col_type = first_col_type,
-                        .kind = .{ .slice = .{ .arities = check_arities, .elements = l.elements, .arity = l.arity, .slice = s } },
+                        .kind = .{ .slice = .{ .arities = check_arities, .elements = l.elements, .arity = l.arity, .slice = s, .elem_type = elem_type } },
                     });
                     return .pushed;
                 },

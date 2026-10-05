@@ -1207,6 +1207,20 @@ pub const CFStmt = union(enum) {
         payload_mode: BoxyTransferMode = .move,
         next: CFStmtId,
     },
+    /// Box a copy of the record `base`, whose layout only `base_desc`
+    /// knows, in which every field `fields_desc` names takes its value from
+    /// the `fields` record payload instead. A record update never changes a
+    /// field's type, so the result has `base`'s exact runtime representation
+    /// and descriptor. `base` is borrowed and `fields` is consumed.
+    assign_boxy_record_update: struct {
+        target: LocalId,
+        base: LocalId,
+        base_desc: BoxyDescRef,
+        fields: LocalId,
+        fields_layout: layout.Idx,
+        fields_desc: BoxyDescRef,
+        next: CFStmtId,
+    },
     assign_boxy_reuse_box: struct {
         target: LocalId,
         source: LocalId,
@@ -1496,6 +1510,10 @@ pub const CFStmt = union(enum) {
         /// compile-time evaluation reports the literal's own diagnostic with
         /// `msg`, the conversion's error message.
         literal_rejection: ?LiteralRejectionSite = null,
+        /// Set when this crash is code checking rejected and already
+        /// reported: compile-time evaluation that reaches it discards the
+        /// result instead of reporting the problem a second time.
+        checked_error: bool = false,
     },
 };
 
@@ -1640,6 +1658,12 @@ pub const LirProcSpec = struct {
     rc_ret_unique: bool = false,
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The inline plan inlines this proc's body at its direct calls, so it has
+    /// a procedure only where a call could not inline it or it is a value. A
+    /// program that takes a cache hit for it before inlining (a pack program
+    /// takes hits during specialization) could not inline it, so the object
+    /// cache never offers it.
+    inlined_at_calls: bool = false,
     /// Set by ARC on a solved base proc when a call to it may demand an
     /// ownership variant emitted from its body (an owned field take, outcome
     /// restitution, a same-SCC tail transfer, or, under mode specialization,

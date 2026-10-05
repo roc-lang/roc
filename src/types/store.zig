@@ -107,6 +107,50 @@ const NominalDeclIndexEntry = struct {
     }
 };
 
+/// Watched class descriptors. A write to one advances `generation` and drops
+/// every watch, so each memo that recorded the generation it read under sees
+/// the change, whichever owner registered the written class.
+const ClassWatch = struct {
+    watched: std.DynamicBitSetUnmanaged = .{},
+    watched_list: std.ArrayListUnmanaged(u32) = .empty,
+    generation: u64 = 0,
+    /// Whether the watches belong to an earlier generation.
+    stale: bool = false,
+
+    fn deinit(self: *ClassWatch, gpa: Allocator) void {
+        self.watched.deinit(gpa);
+        self.watched_list.deinit(gpa);
+    }
+
+    fn watch(self: *ClassWatch, gpa: Allocator, desc_idx: DescStore.Idx) Allocator.Error!void {
+        if (self.stale) {
+            for (self.watched_list.items) |index| self.watched.unset(index);
+            self.watched_list.clearRetainingCapacity();
+            self.stale = false;
+        }
+        const index: u32 = @intFromEnum(desc_idx);
+        if (index >= self.watched.bit_length) try self.watched.resize(gpa, @max(index + 1, self.watched.bit_length * 2), false);
+        if (self.watched.isSet(index)) return;
+        try self.watched_list.append(gpa, index);
+        self.watched.set(index);
+    }
+
+    fn noteWrite(self: *ClassWatch, desc_idx: DescStore.Idx) void {
+        if (self.stale) return;
+        const index: u32 = @intFromEnum(desc_idx);
+        if (index < self.watched.bit_length and self.watched.isSet(index)) self.advance();
+    }
+
+    fn noteRollback(self: *ClassWatch) void {
+        if (!self.stale and self.watched_list.items.len != 0) self.advance();
+    }
+
+    fn advance(self: *ClassWatch) void {
+        self.generation += 1;
+        self.stale = true;
+    }
+};
+
 /// Reperents either type data *or* a symlink to another type variable
 pub const Slot = union(enum) {
     root: DescStore.Idx,
@@ -186,6 +230,10 @@ pub const Store = struct {
     /// this anchor before detaching the member. Runtime-only: frozen classes
     /// are thawed before a store is serialized or cloned.
     frozen_anchors: std.AutoHashMapUnmanaged(u32, Var) = .empty,
+
+    /// Classes callers' memos depend on. Runtime-only: never serialized,
+    /// cloned, or relocated.
+    class_watch: ClassWatch = .{},
 
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
@@ -288,6 +336,7 @@ pub const Store = struct {
 
         // instantiation worklist scratch
         self.instantiate_scratch.deinit(self.gpa);
+        self.class_watch.deinit(self.gpa);
 
         // speculation undo trail
         self.slot_trail.deinit(self.gpa);
@@ -492,6 +541,7 @@ pub const Store = struct {
 
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
+        self.class_watch.noteRollback();
         // Replay journaled in-place writes in reverse so each pre-existing entry
         // lands back on its original value.
         var di = self.desc_trail.items.len;
@@ -581,6 +631,14 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_slots) {
             try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
         }
+        switch (self.slots.get(idx)) {
+            .root => |desc_idx| self.class_watch.noteWrite(desc_idx),
+            .redirect => {},
+        }
+        switch (val) {
+            .root => |desc_idx| self.class_watch.noteWrite(desc_idx),
+            .redirect => {},
+        }
         self.slots.set(idx, val);
         self.slot_generation += 1;
     }
@@ -598,6 +656,7 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
+        self.class_watch.noteWrite(idx);
         self.descs.set(idx, val);
     }
 
@@ -606,7 +665,22 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.root_meta_trail.append(self.gpa, .{ .idx = idx, .old = self.getRootMeta(idx) });
         }
+        self.class_watch.noteWrite(idx);
         self.root_metas.set(rootMetaIdx(idx), val);
+    }
+
+    /// Watch the class `var_` resolves to: any later write to its descriptor,
+    /// its checked representative, or which storage slot roots it, and any
+    /// rollback, advances `classWatchGeneration`.
+    pub fn watchClass(self: *Self, var_: Var) Allocator.Error!void {
+        try self.class_watch.watch(self.gpa, self.resolveVar(var_).desc_idx);
+    }
+
+    /// Advances whenever a watched class may have changed. A memo whose
+    /// classes were all watched under one generation is unchanged while the
+    /// generation is.
+    pub fn classWatchGeneration(self: *const Self) u64 {
+        return self.class_watch.generation;
     }
 
     fn setUnionRank(self: *Self, storage_var: Var, rank: u8) Allocator.Error!void {
@@ -890,6 +964,29 @@ pub const Store = struct {
         return self.resolveVar(target_var).desc.flags.static_dispatch_rejected;
     }
 
+    /// Record that the vars in `[start, end)`, minted by opening a nominal
+    /// declaration's backing as `opened`, are that backing's declared
+    /// structure below its root. The root itself is related to a constructor
+    /// operand by the nominal constructor backing relation, which owns that
+    /// pair. A minted var whose class is rooted outside the range was linked
+    /// to a var that predates the opening, such as a substituted arg, and
+    /// keeps that var's provenance.
+    pub fn markNominalBackingStructure(self: *Self, opened: Var, start: u32, end: u32) Allocator.Error!void {
+        std.debug.assert(start <= end and end <= self.len());
+        const opened_root = self.resolveVar(opened).var_;
+        var minted = start;
+        while (minted < end) : (minted += 1) {
+            const resolved = self.resolveVar(@enumFromInt(minted));
+            if (resolved.var_ == opened_root) continue;
+            const root: u32 = @intFromEnum(resolved.var_);
+            if (root < start or root >= end) continue;
+            if (resolved.desc.flags.nominal_backing_structure) continue;
+            var desc = resolved.desc;
+            desc.flags.nominal_backing_structure = true;
+            try self.setDesc(resolved.desc_idx, desc);
+        }
+    }
+
     /// Record definition-site annotation openness (design.md "Derived Parser
     /// Tag-Row Closure"). Provenance travels with the flex equivalence class.
     pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {
@@ -898,6 +995,24 @@ pub const Store = struct {
         std.debug.assert(resolved.desc.content == .flex);
         var desc = resolved.desc;
         desc.flags.annotation_tag_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Bound an annotated definition's implicitly opened row (design.md
+    /// "Polarity"). The bound travels with the row's equivalence class.
+    pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// End the bound on a row every use shares: a weak value binding's row is
+    /// bounded only while its own right-hand side is checked.
+    pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = false;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -1693,6 +1808,7 @@ pub const Store = struct {
         var merged_desc = new_desc;
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
             (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
+        merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
@@ -1712,6 +1828,10 @@ pub const Store = struct {
         // either side was rejected.
         merged_desc.flags.static_dispatch_rejected = a_data.desc.flags.static_dispatch_rejected or
             b_data.desc.flags.static_dispatch_rejected;
+        // Declared backing structure stays declared: a class that merged with
+        // an opened nominal backing component is that component.
+        merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
+            b_data.desc.flags.nominal_backing_structure;
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);

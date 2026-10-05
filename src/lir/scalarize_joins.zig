@@ -37,6 +37,7 @@ const std = @import("std");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const erased_owner = @import("erased_owner.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -115,6 +116,15 @@ const StructCascade = struct {
     inherited: std.ArrayList(LIR.CFStmtId),
 };
 
+/// A single-variant tag build that was the payload of a tag eliminated this
+/// round. The eliminated tag's payload reads now alias it (`inherited`), so
+/// they are its reads.
+const TagCascade = struct {
+    local: LIR.LocalId,
+    payload_uses: u32,
+    inherited: std.ArrayList(LIR.CFStmtId),
+};
+
 const BuildSite = struct {
     stmt: LIR.CFStmtId,
     fields: LIR.LocalSpan,
@@ -124,6 +134,11 @@ const TagBuild = struct {
     builds: std.ArrayList(TagBuildSite),
     uses: u32,
     init_uses: u32,
+    /// Whole-value uses: every use that is neither a single-variant read, a
+    /// transparent alias, nor an `initialize_join_param` value.
+    whole_uses: u32 = 0,
+    /// Whole-value uses as another tag build's payload.
+    payload_uses: u32 = 0,
 };
 
 const TagBuildSite = struct {
@@ -253,6 +268,7 @@ const Pass = struct {
     new_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Operand builds pending elimination behind a build eliminated this round.
     struct_cascade: std.ArrayList(StructCascade) = .empty,
+    tag_cascade: std.ArrayList(TagCascade) = .empty,
     /// Statements that join rewrites committed this round mutate or delete,
     /// and the joins whose parameter spans they rewrite. A later rewrite
     /// planned against the same analysis commits only when it touches none
@@ -294,11 +310,17 @@ const Pass = struct {
 
     /// Every round that changes the procedure rewrites at least one
     /// parameter or build out of existence, so the rounds reach a fixed point.
+    /// Field reads that become aliases change which allocation an owned
+    /// erased call's closure resolves to, so a changed procedure's reuse
+    /// sources are resolved again afterward.
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ScalarizeError!void {
+        var changed = false;
         while (true) {
             const body = rewritableProcBody(self.store, proc_id) orelse break;
             if (!try self.scalarizeProc(proc_id, body)) break;
+            changed = true;
         }
+        if (changed) try erased_owner.resolveProcReuseSources(self.allocator, self.store, self.layouts, proc_id);
     }
 
     fn deinit(self: *Pass) void {
@@ -326,6 +348,8 @@ const Pass = struct {
         self.new_locals.deinit(self.allocator);
         for (self.struct_cascade.items) |*item| item.inherited.deinit(self.allocator);
         self.struct_cascade.deinit(self.allocator);
+        for (self.tag_cascade.items) |*item| item.inherited.deinit(self.allocator);
+        self.tag_cascade.deinit(self.allocator);
     }
 
     fn clearLists(self: *Pass) void {
@@ -380,7 +404,10 @@ const Pass = struct {
             build.uses += 1;
             build.whole_uses += 1;
         }
-        if (self.tag_builds.getPtr(local)) |build| build.uses += 1;
+        if (self.tag_builds.getPtr(local)) |build| {
+            build.uses += 1;
+            build.whole_uses += 1;
+        }
     }
 
     fn noteDescUse(self: *Pass, desc: LIR.BoxyDescRef) ScalarizeError!void {
@@ -673,7 +700,7 @@ const Pass = struct {
                         try self.stack.append(self.allocator, s.on_match);
                         try self.stack.append(self.allocator, s.on_miss);
                     },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                         try self.stack.append(self.allocator, s.next);
                     },
                     .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -992,10 +1019,45 @@ const Pass = struct {
     }
 
     fn tryEliminateLocalTag(self: *Pass, local: LIR.LocalId, build: TagBuild) ScalarizeError!bool {
-        if (self.join_params.contains(local) or self.write_other.contains(local) or self.use_other.contains(local) or self.alias_defs.contains(local)) return false;
+        if (!try self.eliminateTag(local, build, 0, &.{})) return false;
+        // Nested single-variant wrappers dissolve here rather than one layer
+        // per round: each eliminated tag hands its payload build the reads
+        // that now alias it.
+        while (self.tag_cascade.pop()) |item| {
+            var cascade = item;
+            defer cascade.inherited.deinit(self.allocator);
+            const payload_build = self.tag_builds.get(cascade.local).?;
+            _ = try self.eliminateTag(cascade.local, payload_build, cascade.payload_uses, cascade.inherited.items);
+        }
+        return true;
+    }
+
+    /// Whether `alias` (an eliminated tag's payload read, now `alias =
+    /// ref.local payload`) is a single-definition local observed only through
+    /// single-variant reads and transparent aliases, as `resolveAliases` would
+    /// have found it had the read been an alias when collected.
+    fn inheritedTagAliasIsTransparent(self: *const Pass, alias: LIR.LocalId) bool {
+        return (self.write_other.get(alias) orelse 0) == 1 and
+            !self.use_other.contains(alias) and
+            !self.join_params.contains(alias) and
+            !self.init_writes.contains(alias) and
+            !self.alias_defs.contains(alias) and
+            !self.struct_builds.contains(alias) and
+            !self.tag_builds.contains(alias);
+    }
+
+    /// Eliminates `local`'s single-variant tag build when its only uses are
+    /// single-variant reads, direct, through transparent aliases, or through
+    /// `inherited` aliases left by the tag it was the payload of, plus
+    /// `payload_uses` whole-value uses as that tag's payload.
+    fn eliminateTag(self: *Pass, local: LIR.LocalId, build: TagBuild, payload_uses: u32, inherited: []const LIR.CFStmtId) ScalarizeError!bool {
+        const other_uses = self.use_other.contains(local) and
+            !(payload_uses != 0 and build.whole_uses == payload_uses and build.payload_uses == payload_uses);
+        if (self.join_params.contains(local) or self.write_other.contains(local) or other_uses or self.alias_defs.contains(local)) return false;
         if (build.builds.items.len != 1) return false;
         const payload_layout = self.singleVariantPayloadLayout(local) orelse return false;
         const site = build.builds.items[0];
+        if (self.removed.contains(site.stmt)) return false;
         const payload = site.payload orelse return false;
         if (site.variant_index != 0 or site.discriminant != 0) return false;
         const assign = self.store.getCFStmt(site.stmt).assign_tag;
@@ -1003,6 +1065,23 @@ const Pass = struct {
 
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
+        for (inherited) |alias_stmt| {
+            const alias = self.store.getCFStmt(alias_stmt).assign_ref.target;
+            if (!self.inheritedTagAliasIsTransparent(alias)) return false;
+            try closure.stmts.append(self.allocator, alias_stmt);
+            if (self.field_reads.getPtr(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads.items);
+            if (self.tag_reads.getPtr(alias)) |reads| try closure.tag_reads.appendSlice(self.allocator, reads.items);
+            if (self.tag_forward_writes.getPtr(alias)) |writes| try closure.tag_forwards.appendSlice(self.allocator, writes.items);
+            if (self.struct_forward_writes.getPtr(alias)) |writes| try closure.struct_forwards.appendSlice(self.allocator, writes.items);
+            var alias_closure = try self.aliasClosureOf(alias);
+            defer alias_closure.deinit(self.allocator);
+            try closure.stmts.appendSlice(self.allocator, alias_closure.stmts.items);
+            try closure.reads.appendSlice(self.allocator, alias_closure.reads.items);
+            try closure.tag_reads.appendSlice(self.allocator, alias_closure.tag_reads.items);
+            try closure.tag_forwards.appendSlice(self.allocator, alias_closure.tag_forwards.items);
+            try closure.struct_forwards.appendSlice(self.allocator, alias_closure.struct_forwards.items);
+        }
+        if (closure.struct_forwards.items.len != 0) return false;
         const direct_fields: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
         if (direct_fields.len != 0 or closure.reads.items.len != 0) return false;
         const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(local)) |writes| writes.items else &.{};
@@ -1011,6 +1090,19 @@ const Pass = struct {
         if (direct_reads.len == 0 and closure.tag_reads.items.len == 0) return false;
         if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
 
+        // A payload that is itself a single-variant build inherits the payload
+        // reads, which the rewrite below turns into aliases of it.
+        if (self.tag_builds.contains(payload) and self.singleVariantPayloadLayout(payload) != null) {
+            var item: TagCascade = .{ .local = payload, .payload_uses = 1, .inherited = .empty };
+            errdefer item.inherited.deinit(self.allocator);
+            for ([_][]const LIR.CFStmtId{ direct_reads, closure.tag_reads.items }) |reads| for (reads) |read_stmt| {
+                switch (self.store.getCFStmt(read_stmt).assign_ref.op) {
+                    .tag_payload, .tag_payload_struct => try item.inherited.append(self.allocator, read_stmt),
+                    .discriminant, .local, .field, .list_reinterpret, .nominal => {},
+                }
+            };
+            try self.tag_cascade.append(self.allocator, item);
+        }
         try self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload, payload_layout);
         try self.removeAliasClosure(&closure);
         try self.removed.put(site.stmt, assign.next);
@@ -1749,7 +1841,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, j.body);
                     try self.stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
                     s.next = self.resolveRemoved(s.next);
                     try self.stack.append(self.allocator, s.next);
                 },
@@ -1831,7 +1923,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
                     try self.stack.append(self.allocator, a.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1958,6 +2050,14 @@ const Pass = struct {
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
+                .assign_boxy_record_update => |assign| {
+                    try self.noteUse(assign.base);
+                    try self.noteUse(assign.fields);
+                    try self.noteDescUse(assign.base_desc);
+                    try self.noteDescUse(assign.fields_desc);
+                    try self.noteWrite(assign.target);
+                    try self.stack.append(self.allocator, assign.next);
+                },
                 .assign_boxy_reuse_box => |assign| {
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.desc);
@@ -2038,7 +2138,10 @@ const Pass = struct {
                 },
                 .assign_tag => |assign| {
                     if (assign.target_desc) |target_desc| try self.noteDescUse(target_desc);
-                    if (assign.payload) |payload| try self.noteUse(payload);
+                    if (assign.payload) |payload| {
+                        try self.noteUse(payload);
+                        if (self.tag_builds.getPtr(payload)) |build| build.payload_uses += 1;
+                    }
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .store_struct => |assign| {

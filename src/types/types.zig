@@ -118,7 +118,18 @@ pub const DescriptorFlags = packed struct(u8) {
     /// never changes while checking: merges keep it, and writes aimed at a
     /// member detach that member instead.
     frozen: bool = false,
-    _unused: u4 = 0,
+    /// This class is structure written below the root of a nominal
+    /// declaration's backing, reached by opening that declaration rather than
+    /// by substituting one of its formals. The declaration fixes this
+    /// structure, so a nominal value never lifts into it. See design.md's
+    /// "Declared Backing Structure" section.
+    nominal_backing_structure: bool = false,
+    /// An implicitly opened row of an annotated definition: the annotation
+    /// bounds the definition, so the class may close or stay open but never
+    /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
+    /// uses of the definition widen freely.
+    bounded_row_ext: bool = false,
+    _unused: u2 = 0,
 };
 
 /// A type descriptor

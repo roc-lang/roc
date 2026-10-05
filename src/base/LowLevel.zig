@@ -59,6 +59,16 @@ pub const LowLevel = enum(u16) {
     list_len,
     list_capacity,
     list_get_unsafe,
+    /// `List.prefetched`: the same list, with a hint that the item at an
+    /// index is about to be read or written. LIR lowering splits it into
+    /// `list_prefetch` on the list and an alias of the list, so no later
+    /// stage sees this operation.
+    list_prefetched,
+    /// The hint half of `list_prefetched`, created only by LIR lowering. It
+    /// reads nothing and changes nothing; a backend with no prefetch
+    /// instruction emits no code for it, and an index outside the list is
+    /// harmless.
+    list_prefetch,
     list_append_unsafe,
     list_concat,
     list_append_range_within,
@@ -864,7 +874,7 @@ pub const LowLevel = enum(u16) {
     /// operands retain their ordinary allocation-lifetime requirements.
     /// Kept as static operation data rather than widening every LIR statement.
     pub fn representationArgs(self: LowLevel) u64 {
-        if (self == .list_len or self == .list_capacity) return argMask(&.{0});
+        if (self == .list_len or self == .list_capacity or self == .list_prefetch) return argMask(&.{0});
         return 0;
     }
 
@@ -882,6 +892,7 @@ pub const LowLevel = enum(u16) {
     pub fn procedureKeyedByLayout(self: LowLevel) bool {
         return switch (self) {
             .list_len,
+            .list_prefetch,
             .list_capacity,
             .list_get_unsafe,
             .list_append_unsafe,
@@ -907,6 +918,7 @@ pub const LowLevel = enum(u16) {
             .box_unbox,
             => true,
 
+            .list_prefetched,
             .str_is_eq,
             .str_is_eq_static_small,
             .str_static_small_word_eq,
@@ -1482,6 +1494,11 @@ pub const LowLevel = enum(u16) {
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
+            // Valid UTF-8 retains and shares the borrowed list allocation;
+            // invalid UTF-8 allocates replacement bytes. Neither path consumes
+            // the list, and a shared result is not born unique.
+            .str_from_utf8_lossy => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
+
             .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .list_drop_at,
@@ -1529,6 +1546,10 @@ pub const LowLevel = enum(u16) {
             // reuse query, forcing ARC to preserve every later use first.
             // List.map, List.update, and loop promotion use this transfer.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
+
+            // The same list; LIR lowering replaces it with an alias, so this
+            // describes the source-level operation only.
+            .list_prefetched => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
 
             // Reads the prepared list's refcount (and slice bit) without
             // changing it. List.map additionally gates this result on item
@@ -1580,7 +1601,6 @@ pub const LowLevel = enum(u16) {
             .str_split_on => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_repeat,
-            .str_from_utf8_lossy,
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,
@@ -1650,6 +1670,7 @@ pub const LowLevel = enum(u16) {
             .str_get_utf8_byte_unsafe,
             .list_len,
             .list_capacity,
+            .list_prefetch,
             .list_slack_unique,
             .bool_not,
             .bool_likely,
@@ -2071,9 +2092,17 @@ pub const LowLevel = enum(u16) {
         // the solved graph. Emission may still select the borrowing variant
         // when the box lender survives, but an owned variant must not leave
         // the payload's unit keyed to the consumed box allocation.
-        if (self == .box_unbox) return declared;
-        const borrowed = self.arcBorrowedResultVariant() orelse return declared;
-        return borrowed.rcEffect();
+        if (!self.arcOwnedResultConsumesLender()) return declared;
+        return self.arcBorrowedResultVariant().?.rcEffect();
+    }
+
+    /// Whether ARC solves this operation through its borrowed-result variant
+    /// and materializes the ordinary operation, which consumes the lender
+    /// argument, exactly when the result is owned. An ownership demand on such
+    /// a result is therefore a demand on its lender's unit.
+    pub fn arcOwnedResultConsumesLender(self: LowLevel) bool {
+        if (self == .box_unbox) return false;
+        return self.arcBorrowedResultVariant() != null;
     }
 
     /// Whether this primitive can consume borrowed string views directly,

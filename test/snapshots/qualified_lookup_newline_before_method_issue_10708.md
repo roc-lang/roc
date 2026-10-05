@@ -93,7 +93,7 @@ expect 5 ==
 			(lhs
 				(e-num (value "5")))
 			(rhs
-				(e-call (constraint-fn-var 239)
+				(e-call (constraint-fn-var 243)
 					(e-lookup-local
 						(p-assign (ident "Blub.go")))))))
 	(s-expect
@@ -101,7 +101,7 @@ expect 5 ==
 			(lhs
 				(e-num (value "5")))
 			(rhs
-				(e-call (constraint-fn-var 259)
+				(e-call (constraint-fn-var 263)
 					(e-lookup-local
 						(p-assign (ident "Blub.go"))))))))
 ~~~

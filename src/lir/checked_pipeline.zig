@@ -972,7 +972,7 @@ pub const Consumer = struct {
     roots: ConsumerRoots,
     /// Target pointer width this continuation commits layouts for.
     target_usize: base.target.TargetUsize,
-    /// This consumer's answer to the shared `inline_expects_enabled` input.
+    /// Whether this consumer runs or omits inline expects.
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
     completed_scalar_values: ?*const CompletedScalarValues = null,

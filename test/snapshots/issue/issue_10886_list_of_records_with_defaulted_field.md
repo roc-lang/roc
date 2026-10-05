@@ -455,7 +455,7 @@ nominal = Nominal.{
 		(e-lambda
 			(args
 				(p-assign (ident "foos")))
-			(e-call (constraint-fn-var 506)
+			(e-call (constraint-fn-var 510)
 				(e-lookup-external
 					(builtin))
 				(e-lookup-local
@@ -470,7 +470,7 @@ nominal = Nominal.{
 		(e-lambda
 			(args
 				(p-assign (ident "wrapped")))
-			(e-call (constraint-fn-var 521)
+			(e-call (constraint-fn-var 525)
 				(e-lookup-external
 					(builtin))
 				(e-field-access
@@ -488,7 +488,7 @@ nominal = Nominal.{
 		(e-lambda
 			(args
 				(p-assign (ident "pair")))
-			(e-call (constraint-fn-var 534)
+			(e-call (constraint-fn-var 538)
 				(e-lookup-external
 					(builtin))
 				(e-tuple-access (index "0")
@@ -514,7 +514,7 @@ nominal = Nominal.{
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call (constraint-fn-var 549)
+								(e-call (constraint-fn-var 553)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -554,7 +554,7 @@ nominal = Nominal.{
 				(ty-lookup (name "Wrapped") (local)))))
 	(d-let
 		(p-assign (ident "direct"))
-		(e-call (constraint-fn-var 713)
+		(e-call (constraint-fn-var 717)
 			(e-lookup-local
 				(p-assign (ident "count")))
 			(e-list
@@ -573,7 +573,7 @@ nominal = Nominal.{
 									(e-num (value "789"))))))))))
 	(d-let
 		(p-assign (ident "nested_record"))
-		(e-call (constraint-fn-var 796)
+		(e-call (constraint-fn-var 798)
 			(e-lookup-local
 				(p-assign (ident "count_wrapped")))
 			(e-record
@@ -617,7 +617,7 @@ nominal = Nominal.{
 					(e-num (value "0"))))))
 	(d-let
 		(p-assign (ident "nested_tag"))
-		(e-call (constraint-fn-var 976)
+		(e-call (constraint-fn-var 974)
 			(e-lookup-local
 				(p-assign (ident "count_choice")))
 			(e-tag (name "Items")
@@ -638,7 +638,7 @@ nominal = Nominal.{
 											(e-num (value "789"))))))))))))
 	(d-let
 		(p-assign (ident "nested_branch"))
-		(e-call (constraint-fn-var 1126)
+		(e-call (constraint-fn-var 1124)
 			(e-lookup-local
 				(p-assign (ident "count")))
 			(e-if
@@ -678,7 +678,7 @@ nominal = Nominal.{
 												(e-num (value "789")))))))))))))
 	(d-let
 		(p-assign (ident "updated_record"))
-		(e-call (constraint-fn-var 1140)
+		(e-call (constraint-fn-var 1138)
 			(e-lookup-local
 				(p-assign (ident "replace_items")))
 			(e-record

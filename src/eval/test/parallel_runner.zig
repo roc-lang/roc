@@ -122,6 +122,10 @@ pub const TestCase = struct {
     /// stage whose native call depth grows with source nesting or sequence
     /// length fails deterministically instead of only past some large depth.
     stack_bytes: ?usize = null,
+    /// Memory stress cases run one at a time, after ordinary parallel cases.
+    serial: bool = false,
+    /// Index in the filtered list reconstructed by re-executed workers.
+    worker_index: usize = 0,
     /// How post-check lowering specializes the program.
     specialization_strategy: base.SpecializationStrategy = .lss,
 
@@ -176,6 +180,7 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
         .tuple,
         .record,
         .crash,
+        .checked_error,
         .tag,
         .nominal,
         .fn_value,
@@ -194,6 +199,7 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstLis
         .tuple,
         .record,
         .crash,
+        .checked_error,
         .tag,
         .nominal,
         .fn_value,
@@ -1745,6 +1751,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .invalid_num_literal,
         .empty_tuple,
         .ident_already_in_scope,
+        .duplicate_pattern_binder,
         .ident_not_in_scope,
         .read_uninitialized_var,
         .self_referential_definition,
@@ -1815,6 +1822,8 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .break_outside_loop,
         .infinite_loop_never_exits,
         .return_outside_fn,
+        .control_flow_in_expect,
+        .var_reassigned_in_expect,
         .mutually_recursive_type_aliases,
         => true,
     };
@@ -1985,10 +1994,10 @@ fn onTestStarted(tc: TestCase) void {
 /// once per backend with `--worker-backend <name>` so we can pin down which
 /// backend was responsible.
 fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
-    skip.interpreter = !std.mem.eql(u8, name, "interpreter");
-    skip.dev = !std.mem.eql(u8, name, "dev");
-    skip.wasm = !std.mem.eql(u8, name, "wasm");
-    skip.llvm = !std.mem.eql(u8, name, "llvm");
+    skip.interpreter = skip.interpreter or !std.mem.eql(u8, name, "interpreter");
+    skip.dev = skip.dev or !std.mem.eql(u8, name, "dev");
+    skip.wasm = skip.wasm or !std.mem.eql(u8, name, "wasm");
+    skip.llvm = skip.llvm or !std.mem.eql(u8, name, "llvm");
 }
 
 /// Phase-2 retry: re-run each failing/crashing/timed-out test once per
@@ -2002,10 +2011,11 @@ fn retryFailedForAttribution(
     io: std.Io,
     gpa: std.mem.Allocator,
     results: []TestResult,
+    tests: []const TestCase,
     worker_argv_template: []const []const u8,
     hang_timeout_ms: u64,
 ) void {
-    for (results, 0..) |*r, idx| {
+    for (results, tests, 0..) |*r, tc, idx| {
         const needs_retry = r.status == .fail or r.status == .crash or r.status == .timeout;
         if (!needs_retry) continue;
 
@@ -2016,7 +2026,12 @@ fn retryFailedForAttribution(
             for (&attributed) |*b| b.* = .{ .status = .fail };
         }
 
+        const skips = [NUM_BACKENDS]bool{ tc.skip.interpreter, tc.skip.dev, tc.skip.wasm, tc.skip.llvm };
         for (BACKEND_NAMES, 0..) |name, bi| {
+            if (skips[bi]) {
+                attributed[bi] = .{ .status = .skip };
+                continue;
+            }
             // Skip backends that aren't implemented at compile time—no
             // point retrying. (When Phase-1 set has_backend_details=true,
             // these rows are already populated correctly; when it didn't,
@@ -2153,6 +2168,10 @@ const timeout_result: TestResult = .{
     .backends = undefined,
 };
 
+fn getWorkerIndex(tc: TestCase) usize {
+    return tc.worker_index;
+}
+
 const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .runTest = &runTestForPool,
     .serialize = &serializeResultForPool,
@@ -2162,6 +2181,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .timeout_result = timeout_result,
     .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
+    .getWorkerIndex = getWorkerIndex,
     // Backend children enforce the real backend timeout. The outer worker gets
     // enough extra time for the LLVM-only budget plus a short cleanup/reporting
     // window, so it can serialize the backend row that timed out instead of
@@ -2705,7 +2725,23 @@ pub fn main(init: std.process.Init) RunnerError!void {
     }
     trace_worker.stamp("filter pass");
 
-    const tests = filtered_buf.items;
+    // Keep worker indices stable across both pools and re-executed workers.
+    const ordered = try gpa.alloc(TestCase, filtered_buf.items.len);
+    defer gpa.free(ordered);
+    var parallel_count: usize = 0;
+    for (filtered_buf.items) |tc| {
+        if (tc.serial) continue;
+        ordered[parallel_count] = tc;
+        parallel_count += 1;
+    }
+    var next = parallel_count;
+    for (filtered_buf.items) |tc| {
+        if (!tc.serial) continue;
+        ordered[next] = tc;
+        next += 1;
+    }
+    for (ordered, 0..) |*tc, index| tc.worker_index = index;
+    const tests = ordered;
     if (tests.len == 0) {
         if (cli.filters.len == 0) {
             std.debug.print("No eval tests found.\n", .{});
@@ -2714,7 +2750,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
+    const max_children: usize = effectiveMaxChildren(cli, cpu_count, @max(parallel_count, 1));
     llvm_eval_slot_count = max_children;
 
     // Worker modes: on Windows the harness pool spawned this process with
@@ -2789,7 +2825,16 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // unused (fork path doesn't re-exec) but we build it uniformly.
     const worker_argv_template = try harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
-    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
+    Pool.runWithSpans(io, tests[0..parallel_count], results[0..parallel_count], spans[0..parallel_count], max_children, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
+    const serial_start = wall_timer.read();
+    Pool.runWithSpans(io, tests[parallel_count..], results[parallel_count..], spans[parallel_count..], 1, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
+    for (spans[parallel_count..]) |*maybe_span| {
+        if (maybe_span.*) |*span| {
+            span.test_index += parallel_count;
+            span.start_ns += serial_start;
+            span.end_ns += serial_start;
+        }
+    }
 
     // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
     // whole worker before per-backend details land in the wire payload. For
@@ -2798,7 +2843,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // pays zero retry cost. Skipped on POSIX where forkAndEval already
     // attributes crashes per-backend within the worker.
     if (builtin.os.tag == .windows) {
-        retryFailedForAttribution(io, gpa, results, worker_argv_template, hang_timeout_ms);
+        retryFailedForAttribution(io, gpa, results, tests, worker_argv_template, hang_timeout_ms);
     }
 
     const wall_elapsed = wall_timer.read();

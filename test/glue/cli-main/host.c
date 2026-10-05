@@ -91,28 +91,35 @@ static int check_canaries(const Allocation *allocation) {
     return 0;
 }
 
+/* roc_alloc and roc_realloc must not return to Roc without an allocation,
+   so an allocation failure ends the program with its report. */
+static _Noreturn void abort_allocation(void) {
+    fprintf(stderr, "%s\n", report[0] == '\0' ? "allocation failed" : report);
+    exit(1);
+}
+
 static void *contract_alloc(size_t length, size_t alignment) {
     if (!is_power_of_two(alignment)) {
         record_allocator_failure("invalid alignment %zu", alignment);
-        return NULL;
+        abort_allocation();
     }
     if (length > SIZE_MAX - CANARY_SIZE - CANARY_SIZE - alignment) {
         record_allocator_failure("allocation size overflow length=%zu alignment=%zu", length, alignment);
-        return NULL;
+        abort_allocation();
     }
 
     const size_t total = CANARY_SIZE + alignment - 1u + length + CANARY_SIZE;
     uint8_t *raw = malloc(total == 0 ? 1 : total);
     if (raw == NULL) {
         record_allocator_failure("malloc failed length=%zu alignment=%zu", length, alignment);
-        return NULL;
+        abort_allocation();
     }
 
     uint8_t *user = (uint8_t *)align_forward((uintptr_t)(raw + CANARY_SIZE), alignment);
     if (((uintptr_t)user % alignment) != 0) {
         free(raw);
         record_allocator_failure("returned pointer is not aligned to %zu", alignment);
-        return NULL;
+        abort_allocation();
     }
 
     Allocation *slot = NULL;
@@ -125,7 +132,7 @@ static void *contract_alloc(size_t length, size_t alignment) {
     if (slot == NULL) {
         free(raw);
         record_allocator_failure("allocation table exhausted");
-        return NULL;
+        abort_allocation();
     }
 
     memset(user - CANARY_SIZE, CANARY_BYTE, CANARY_SIZE);
@@ -172,22 +179,19 @@ static void *contract_realloc(void *ptr, size_t new_length, size_t alignment) {
     Allocation *old = find_allocation(ptr);
     if (old == NULL) {
         record_allocator_failure("realloc unknown pointer %p", ptr);
-        return NULL;
+        abort_allocation();
     }
     if (old->alignment != alignment) {
         record_allocator_failure("realloc alignment mismatch allocated=%zu requested=%zu", old->alignment, alignment);
-        return NULL;
+        abort_allocation();
     }
     if (check_canaries(old) != 0) {
-        return NULL;
+        abort_allocation();
     }
 
     const size_t old_length = old->length;
     const size_t copy_length = old_length < new_length ? old_length : new_length;
     void *new_ptr = contract_alloc(new_length, alignment);
-    if (new_ptr == NULL) {
-        return NULL;
-    }
     memcpy(new_ptr, ptr, copy_length);
     if (memcmp(new_ptr, ptr, copy_length) != 0) {
         record_allocator_failure("realloc did not preserve old bytes");
@@ -328,9 +332,6 @@ static RocList make_args(void) {
     const size_t header_bytes = 2 * sizeof(size_t);
     const size_t total = header_bytes + length * sizeof(RocStr);
     uint8_t *base = roc_alloc(total, ROC_ALIGNOF(size_t));
-    if (base == NULL) {
-        return (RocList){0};
-    }
     RocStr *items = (RocStr *)(base + header_bytes);
     ((size_t *)items)[-2] = length;
     ((intptr_t *)items)[-1] = 1;

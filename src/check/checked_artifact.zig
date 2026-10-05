@@ -212,7 +212,6 @@ pub const ModuleIdentity = struct {
     module_idx: u32,
     module_name: canonical.ModuleNameId,
     display_module_name: canonical.ModuleNameId,
-    qualified_module_name: canonical.ModuleNameId,
     kind: ModuleEnv.ModuleKind,
 };
 
@@ -9295,13 +9294,11 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
 
     const module_name_id = try names.internModuleName(module_env.module_name);
     const display_module_name = try names.internModuleIdent(module.identStoreConst(), module_env.display_module_name_idx);
-    const qualified_module_name = try names.internModuleIdent(module.identStoreConst(), module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module.moduleIndex(),
         .module_name = module_name_id,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
@@ -10160,7 +10157,6 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .module_idx = 1,
         .module_name = builtin_module_name,
         .display_module_name = builtin_module_name,
-        .qualified_module_name = builtin_module_name,
         .kind = builtin_env.module_kind,
     };
 
@@ -10598,11 +10594,10 @@ pub const CheckedStrPatternStep = struct {
 };
 
 /// Ordered mutation identities for a loop body, published from checked
-/// assignments and explicit dispatch operands. Both ranges use the body's
-/// pattern-binder pool; expect-only identities are disjoint from always.
+/// assignments and explicit dispatch operands, as a range of the body's
+/// pattern-binder pool.
 pub const CheckedLoopMutations = struct {
-    always: CheckedBodyRange,
-    expect_only: CheckedBodyRange,
+    binders: CheckedBodyRange,
 };
 
 /// Dense identity in a checked body's loop mutation table.
@@ -12147,12 +12142,10 @@ const CheckedSourceNodes = struct {
 /// Publish loop mutation summaries once; nested loops reuse their published
 /// ranges instead of revisiting bodies for each enclosing loop.
 const CheckedLoopMutationPublisher = struct {
-    const Mutation = struct { binder: PatternBinderId, expect_only: bool };
-
     allocator: Allocator,
     store: *CheckedBodyStore,
     dispatch_operands: []const []const CheckedExprId,
-    scratch: std.ArrayList(Mutation) = .empty,
+    scratch: std.ArrayList(PatternBinderId) = .empty,
     work: std.ArrayList(Work) = .empty,
     positions: []usize = &.{},
 
@@ -12161,12 +12154,12 @@ const CheckedLoopMutationPublisher = struct {
         if (store.pattern_binder_id_pool.items.len == 0) {
             var empty_plan: ?LoopMutationPlanId = null;
             for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
-                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                 expr.data.for_.mutations = empty_plan;
             };
             for (store.stored_statements.items) |*stmt| switch (stmt.data) {
                 inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| {
-                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                     loop_.mutations = empty_plan;
                 },
                 .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
@@ -12206,15 +12199,15 @@ const CheckedLoopMutationPublisher = struct {
     /// becomes native call depth. Children are pushed in reverse so they are
     /// collected in source order.
     const Work = union(enum) {
-        expr: struct { id: CheckedExprId, expect_only: bool },
-        statement: struct { id: CheckedStatementId, expect_only: bool },
+        expr: CheckedExprId,
+        statement: CheckedStatementId,
         /// A loop reached from an enclosing loop's body.
-        nested_loop: struct { loop: LoopRef, expect_only: bool },
+        nested_loop: LoopRef,
         /// Deduplicate and publish a loop whose mutations were collected
         /// above `scratch_start`; a nested loop then contributes its plan to
         /// the enclosing loop.
-        finish_loop: struct { loop: LoopRef, scratch_start: usize, enclosing_expect_only: ?bool },
-        append_ranges: struct { mutations: CheckedLoopMutations, expect_only: bool },
+        finish_loop: struct { loop: LoopRef, scratch_start: usize, nested: bool },
+        append_binders: CheckedLoopMutations,
     };
 
     fn loopFields(self: *@This(), ref: LoopRef) LoopFields {
@@ -12237,49 +12230,49 @@ const CheckedLoopMutationPublisher = struct {
 
     fn publishLoop(self: *@This(), ref: LoopRef) Allocator.Error!void {
         if (self.loopFields(ref).mutations.* != null) return;
-        try self.beginLoop(ref, null);
+        try self.beginLoop(ref, false);
         while (self.work.pop()) |work| switch (work) {
-            .expr => |item| try self.visitExpr(item.id, item.expect_only),
-            .statement => |item| try self.visitStatement(item.id, item.expect_only),
-            .nested_loop => |item| {
-                const fields = self.loopFields(item.loop);
+            .expr => |id| try self.visitExpr(id),
+            .statement => |id| try self.visitStatement(id),
+            .nested_loop => |loop| {
+                const fields = self.loopFields(loop);
                 if (fields.mutations.*) |published| {
-                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable, item.expect_only);
+                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable);
                 } else {
-                    try self.beginLoop(item.loop, item.expect_only);
+                    try self.beginLoop(loop, true);
                 }
             },
             .finish_loop => |item| {
                 const mutations = try self.finishLoop(item.loop, item.scratch_start);
-                if (item.enclosing_expect_only) |expect_only| {
-                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable, expect_only);
+                if (item.nested) {
+                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable);
                 }
             },
-            .append_ranges => |item| {
-                try self.appendRange(item.mutations.always, item.expect_only);
-                try self.appendRange(item.mutations.expect_only, true);
+            .append_binders => |mutations| {
+                const range = mutations.binders;
+                try self.scratch.appendSlice(self.allocator, self.store.pattern_binder_id_pool.items[range.start..][0..range.len]);
             },
         };
     }
 
     /// Collect an unpublished loop's condition and body into a fresh scratch
     /// region, then finish it.
-    fn beginLoop(self: *@This(), ref: LoopRef, enclosing_expect_only: ?bool) Allocator.Error!void {
+    fn beginLoop(self: *@This(), ref: LoopRef, nested: bool) Allocator.Error!void {
         if (self.positions.len == 0) {
             self.positions = try self.allocator.alloc(usize, self.store.pattern_binders.items.len);
             @memset(self.positions, std.math.maxInt(usize));
         }
         const fields = self.loopFields(ref);
-        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .enclosing_expect_only = enclosing_expect_only } });
-        try self.push(.{ .expr = .{ .id = fields.body, .expect_only = false } });
-        if (fields.cond) |cond| try self.push(.{ .expr = .{ .id = cond, .expect_only = false } });
+        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .nested = nested } });
+        try self.push(.{ .expr = fields.body });
+        if (fields.cond) |cond| try self.push(.{ .expr = cond });
     }
 
     /// An enclosing loop sees a nested `for` loop's iterable in its own
     /// context, then the nested loop's published mutations.
-    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId, expect_only: bool) Allocator.Error!void {
-        try self.push(.{ .append_ranges = .{ .mutations = mutations, .expect_only = expect_only } });
-        if (iterable) |expr| try self.push(.{ .expr = .{ .id = expr, .expect_only = expect_only } });
+    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId) Allocator.Error!void {
+        try self.push(.{ .append_binders = mutations });
+        if (iterable) |expr| try self.push(.{ .expr = expr });
     }
 
     fn finishLoop(self: *@This(), ref: LoopRef, start: usize) Allocator.Error!CheckedLoopMutations {
@@ -12290,39 +12283,24 @@ const CheckedLoopMutationPublisher = struct {
         var end = start;
         const count = self.scratch.items.len;
         for (start..count) |i| {
-            const mutation = self.scratch.items[i];
-            const position = &self.positions[@intFromEnum(mutation.binder)];
+            const binder = self.scratch.items[i];
+            const position = &self.positions[@intFromEnum(binder)];
             if (position.* == std.math.maxInt(usize)) {
                 position.* = end;
-                self.scratch.items[end] = mutation;
+                self.scratch.items[end] = binder;
                 end += 1;
-            } else {
-                self.scratch.items[position.*].expect_only = self.scratch.items[position.*].expect_only and mutation.expect_only;
             }
         }
-        defer for (self.scratch.items[start..end]) |mutation| {
-            self.positions[@intFromEnum(mutation.binder)] = std.math.maxInt(usize);
+        defer for (self.scratch.items[start..end]) |binder| {
+            self.positions[@intFromEnum(binder)] = std.math.maxInt(usize);
         };
-        const always_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (!mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
-        const expect_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
+        const binders_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
+        try self.store.pattern_binder_id_pool.appendSlice(self.allocator, self.scratch.items[start..end]);
         const result: CheckedLoopMutations = .{
-            .always = .{ .start = always_start, .len = expect_start - always_start },
-            .expect_only = .{ .start = expect_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - expect_start },
+            .binders = .{ .start = binders_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - binders_start },
         };
         self.loopFields(ref).mutations.* = try self.store.appendLoopMutations(self.allocator, result);
         return result;
-    }
-
-    fn appendRange(self: *@This(), range: CheckedBodyRange, expect_only: bool) Allocator.Error!void {
-        for (self.store.pattern_binder_id_pool.items[range.start..][0..range.len]) |binder| {
-            try self.scratch.append(self.allocator, .{ .binder = binder, .expect_only = expect_only });
-        }
     }
 
     /// Children are pushed in source order between `beginChildren` and
@@ -12335,71 +12313,74 @@ const CheckedLoopMutationPublisher = struct {
         std.mem.reverse(Work, self.work.items[start..]);
     }
 
-    fn pushExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
-        try self.push(.{ .expr = .{ .id = id, .expect_only = expect_only } });
+    fn pushExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
+        try self.push(.{ .expr = id });
     }
 
-    fn visitExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+    fn visitExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
         const data = self.store.expr(id).data;
         const children = self.beginChildren();
         defer self.endChildren(children);
         switch (data) {
-            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item, expect_only),
+            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item),
             .match_ => |match| {
-                try self.pushExpr(match.cond, expect_only);
+                try self.pushExpr(match.cond);
                 for (match.branches) |branch| {
-                    if (branch.guard) |guard| try self.pushExpr(guard, expect_only);
-                    try self.pushExpr(branch.value, expect_only);
+                    if (branch.guard) |guard| try self.pushExpr(guard);
+                    try self.pushExpr(branch.value);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.pushExpr(branch.cond, expect_only);
-                    try self.pushExpr(branch.body, expect_only);
+                    try self.pushExpr(branch.cond);
+                    try self.pushExpr(branch.body);
                 }
-                try self.pushExpr(if_.final_else, expect_only);
+                try self.pushExpr(if_.final_else);
             },
             .call => |call| {
-                try self.pushExpr(call.func, expect_only);
-                for (call.args) |arg| try self.pushExpr(arg, expect_only);
+                try self.pushExpr(call.func);
+                for (call.args) |arg| try self.pushExpr(arg);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.pushExpr(ext, expect_only);
-                for (record.fields) |field| try self.pushExpr(field.value, expect_only);
+                if (record.ext) |ext| try self.pushExpr(ext);
+                for (record.fields) |field| try self.pushExpr(field.value);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.push(.{ .statement = .{ .id = statement, .expect_only = expect_only } });
-                try self.pushExpr(block.final_expr, expect_only);
+                for (block.statements) |statement| try self.push(.{ .statement = statement });
+                try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg, expect_only),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, expect_only),
+            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
             .binop => |binop| {
-                try self.pushExpr(binop.lhs, expect_only);
-                try self.pushExpr(binop.rhs, expect_only);
+                try self.pushExpr(binop.lhs);
+                try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child, expect_only),
-            .expect => |child| try self.pushExpr(child, true),
-            .expect_err => |child| try self.pushExpr(child.expr, expect_only),
-            .field_access => |field| try self.pushExpr(field.receiver, expect_only),
+            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child),
+            // An expect body can only reassign vars declared inside it
+            // (canonicalization rejects the rest), so it carries no state
+            // through an enclosing loop.
+            .expect => {},
+            .expect_err => |child| try self.pushExpr(child.expr),
+            .field_access => |field| try self.pushExpr(field.receiver),
             .structural_eq => |eq| {
-                try self.pushExpr(eq.lhs, expect_only);
-                try self.pushExpr(eq.rhs, expect_only);
+                try self.pushExpr(eq.lhs);
+                try self.pushExpr(eq.rhs);
             },
             .structural_hash => |hash| {
-                try self.pushExpr(hash.value, expect_only);
-                try self.pushExpr(hash.hasher, expect_only);
+                try self.pushExpr(hash.value);
+                try self.pushExpr(hash.hasher);
             },
             .interpolation => |interpolation| {
-                try self.pushExpr(interpolation.first, expect_only);
+                try self.pushExpr(interpolation.first);
                 for (interpolation.parts) |part| {
-                    try self.pushExpr(part.value, expect_only);
-                    try self.pushExpr(part.following_segment, expect_only);
+                    try self.pushExpr(part.value);
+                    try self.pushExpr(part.following_segment);
                 }
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple, expect_only),
-            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
-            .for_ => try self.push(.{ .nested_loop = .{ .loop = .{ .expr = id }, .expect_only = expect_only } }),
-            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg, expect_only),
+            .tuple_access => |access| try self.pushExpr(access.tuple),
+            .return_ => |ret| try self.pushExpr(ret.expr),
+            .for_ => try self.push(.{ .nested_loop = .{ .expr = id } }),
+            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -12421,27 +12402,24 @@ const CheckedLoopMutationPublisher = struct {
             .break_,
             => {},
             .dispatch_call, .method_eq, .type_dispatch_call => {
-                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand, expect_only);
+                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand);
             },
             .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
         }
     }
 
-    fn visitStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
+    fn visitStatement(self: *@This(), id: CheckedStatementId) Allocator.Error!void {
         switch (self.store.statement(id).data) {
-            .decl => |decl| try self.pushExpr(decl.expr, expect_only),
-            .var_ => |decl| try self.pushExpr(decl.expr, expect_only),
+            .decl => |decl| try self.pushExpr(decl.expr),
+            .var_ => |decl| try self.pushExpr(decl.expr),
             .reassign => |reassign| {
-                for (reassign.reassigned_binders) |binder| try self.scratch.append(self.allocator, .{
-                    .binder = binder,
-                    .expect_only = expect_only,
-                });
-                try self.pushExpr(reassign.expr, expect_only);
+                try self.scratch.appendSlice(self.allocator, reassign.reassigned_binders);
+                try self.pushExpr(reassign.expr);
             },
-            .dbg, .expr => |child| try self.pushExpr(child, expect_only),
-            .expect => |child| try self.pushExpr(child, true),
-            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .loop = .{ .statement = id }, .expect_only = expect_only } }),
-            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
+            .dbg, .expr => |child| try self.pushExpr(child),
+            .expect => {},
+            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .statement = id } }),
+            .return_ => |ret| try self.pushExpr(ret.expr),
             .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
         }
@@ -16335,10 +16313,8 @@ fn verifyCheckedExprDataComplete(
         .for_ => |for_| {
             std.debug.assert(for_.plan != null);
             std.debug.assert(for_.mutations != null);
-            const mutations = checked_bodies.loopMutations(for_.mutations.?);
-            for ([_]CheckedBodyRange{ mutations.always, mutations.expect_only }) |range| {
-                std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
-            }
+            const range = checked_bodies.loopMutations(for_.mutations.?).binders;
+            std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
         },
         .field_access => |field_access| {
             if (field_access.segments.len == 0) {
@@ -18311,17 +18287,6 @@ const TemplateIteratorRefs = struct {
     default_scheme_uses: artifact_serialize.Span = .{},
     default_scope_sites: artifact_serialize.Span = .{},
 
-    /// Extend the per-template spans for `count` templates appended after
-    /// sealing whose bodies have no iterator plans, instantiation sites, or
-    /// nested-procedure construction sites.
-    fn appendEmptyTemplates(self: *TemplateIteratorRefs, allocator: Allocator, count: usize) Allocator.Error!void {
-        inline for (.{ "spans", "scheme_use_spans", "scope_site_spans" }) |field| {
-            const old_len = @field(self, field).len;
-            @field(self, field) = try allocator.realloc(@field(self, field), old_len + count);
-            @memset(@field(self, field)[old_len..], .{});
-        }
-    }
-
     fn deinit(self: *TemplateIteratorRefs, allocator: Allocator) void {
         allocator.free(self.spans);
         allocator.free(self.pool);
@@ -18699,8 +18664,23 @@ const EvidencePass = struct {
         vars: artifact_serialize.Span,
         params: artifact_serialize.Span,
     };
+    /// Each dispatcher root's params within one schema, in param order.
+    /// Composite scheme requirements are matched by their exact relation
+    /// instead, so they are not indexed.
+    const DispatcherParams = std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32));
+    const no_dispatcher_params: DispatcherParams = .{};
+    /// One level of an evidence chain: a schema's params and their index.
+    const ChainLevel = struct {
+        params: []const EvidenceParam,
+        by_dispatcher: *const DispatcherParams,
+
+        const empty: ChainLevel = .{ .params = &.{}, .by_dispatcher = &no_dispatcher_params };
+    };
     const SchemeSchema = struct {
         params: []EvidenceParam,
+        by_dispatcher: *const DispatcherParams,
+        /// The nodes `params` name their paths by.
+        path_nodes: []const static_dispatch.EvidencePathNode,
         identity_vars: []const Var,
         published: ?PublishedScheme = null,
     };
@@ -18781,7 +18761,10 @@ const EvidencePass = struct {
     callable_contract_buckets: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(artifact_serialize.Span)) = .{},
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
-    evidence_param_paths: std.ArrayList(static_dispatch.EvidencePathStep),
+    evidence_path_nodes: std.ArrayList(static_dispatch.EvidencePathNode),
+    /// Scheme path node -> published path node, for the scheme being published.
+    published_path_nodes: std.ArrayList(u32),
+    published_path_chain: std.ArrayList(u32),
     evidence_param_callables: std.ArrayList(CheckedTypeId),
     scheme_vars_pool: std.ArrayList(CheckedTypeId),
     site_substitutions: std.ArrayList(CheckedTypeId),
@@ -18795,7 +18778,7 @@ const EvidencePass = struct {
     /// vector, so consumers cannot retain aliases into `enum_scratch`.
     enumerated_path_arena: std.heap.ArenaAllocator,
     /// Scratch backing for the chain currently being resolved against.
-    chain_scratch: std.ArrayList([]const EvidenceParam),
+    chain_scratch: std.ArrayList(ChainLevel),
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
     /// templates (const body + entry wrapper) resolves once, and the final
     /// sweep resolves whatever no template reached (chain-free).
@@ -18813,7 +18796,7 @@ const EvidencePass = struct {
     /// The param chain in scope while resolving a site's evidence entries, so
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
-    current_chain: []const []const EvidenceParam = &.{},
+    current_chain: []const ChainLevel = &.{},
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
 
@@ -18877,7 +18860,9 @@ const EvidencePass = struct {
             .evidence_refs = .empty,
             .site_evidence = .empty,
             .evidence_params_pool = .empty,
-            .evidence_param_paths = .empty,
+            .evidence_path_nodes = .empty,
+            .published_path_nodes = .empty,
+            .published_path_chain = .empty,
             .evidence_param_callables = .empty,
             .scheme_vars_pool = .empty,
             .site_substitutions = .empty,
@@ -18918,7 +18903,9 @@ const EvidencePass = struct {
         self.record_spans_by_substitution.deinit(self.allocator);
         self.procedure_value_spans_by_substitution.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
-        self.evidence_param_paths.deinit(self.allocator);
+        self.evidence_path_nodes.deinit(self.allocator);
+        self.published_path_nodes.deinit(self.allocator);
+        self.published_path_chain.deinit(self.allocator);
         self.evidence_param_callables.deinit(self.allocator);
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
@@ -18974,44 +18961,44 @@ const EvidencePass = struct {
             scope.evidence_params = schema.params;
         }
         self.templates.evidence_params_pool = try self.evidence_params_pool.toOwnedSlice(self.allocator);
-        self.templates.evidence_param_paths = try self.evidence_param_paths.toOwnedSlice(self.allocator);
+        self.templates.evidence_path_nodes = try self.evidence_path_nodes.toOwnedSlice(self.allocator);
         self.templates.evidence_param_callables = try self.evidence_param_callables.toOwnedSlice(self.allocator);
         self.templates.scheme_vars_pool = try self.scheme_vars_pool.toOwnedSlice(self.allocator);
 
         for (self.templates.templates.items, 0..) |*template, template_index| {
-            try self.enumerateTemplateParams(template.*, &template_defs, &params);
+            const template_level = try self.templateChainLevel(template.*, &template_defs);
 
             const plan_start = template.static_dispatch_plans.start;
             const plan_refs = self.plan_table.template_refs[plan_start .. plan_start + template.static_dispatch_plans.len];
             for (plan_refs, 0..) |plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_start + i], template_level);
                 try self.resolvePlan(plan_id, chain, false);
             }
 
             const iter_span = self.template_iterator_refs.spans[template_index];
             for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], template_level);
                 try self.resolveIteratorPlan(iter_plan_id, chain, false);
             }
 
             const value_ref_start = template.resolved_value_refs.start;
             const value_refs = self.resolved_value_refs.template_refs[value_ref_start .. value_ref_start + template.resolved_value_refs.len];
             for (value_refs, 0..) |ref_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_ref_start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_ref_start + i], template_level);
                 try self.emitSiteEvidence(ref_id, chain);
             }
 
             const scheme_use_span = self.template_iterator_refs.scheme_use_spans[template_index];
             const scheme_use_sites = self.template_iterator_refs.scheme_use_sites[scheme_use_span.start .. scheme_use_span.start + scheme_use_span.len];
             for (scheme_use_sites, 0..) |site, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], template_level);
                 try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
             }
 
             const scope_site_span = self.template_iterator_refs.scope_site_spans[template_index];
             const scope_sites = self.template_iterator_refs.scope_sites[scope_site_span.start .. scope_site_span.start + scope_site_span.len];
             for (scope_sites) |site| {
-                try self.emitScopeConstructionEvidence(site, params.items);
+                try self.emitScopeConstructionEvidence(site, template_level);
             }
         }
 
@@ -19025,31 +19012,31 @@ const EvidencePass = struct {
         {
             const plan_span = self.template_iterator_refs.default_plan_refs;
             for (self.plan_table.template_refs[plan_span.start .. plan_span.start + plan_span.len], 0..) |plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_span.start + i], .empty);
                 try self.resolvePlan(plan_id, chain, false);
             }
 
             const iter_span = self.template_iterator_refs.default_iterator_refs;
             for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], .empty);
                 try self.resolveIteratorPlan(iter_plan_id, chain, false);
             }
 
             const value_span = self.template_iterator_refs.default_value_refs;
             for (self.resolved_value_refs.template_refs[value_span.start .. value_span.start + value_span.len], 0..) |ref_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_span.start + i], .empty);
                 try self.emitSiteEvidence(ref_id, chain);
             }
 
             const scheme_span = self.template_iterator_refs.default_scheme_uses;
             for (self.template_iterator_refs.scheme_use_sites[scheme_span.start .. scheme_span.start + scheme_span.len], 0..) |site, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_span.start + i], .empty);
                 try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
             }
 
             const scope_span = self.template_iterator_refs.default_scope_sites;
             for (self.template_iterator_refs.scope_sites[scope_span.start .. scope_span.start + scope_span.len]) |site| {
-                try self.emitScopeConstructionEvidence(site, &.{});
+                try self.emitScopeConstructionEvidence(site, .empty);
             }
         }
 
@@ -19254,7 +19241,7 @@ const EvidencePass = struct {
         if (schema.published) |published| return published;
         const published = PublishedScheme{
             .vars = try self.appendSchemeVars(scheme_root),
-            .params = try self.appendEvidenceParams(schema.params),
+            .params = try self.appendEvidenceParams(schema.params, schema.path_nodes),
         };
         for (schema.params, 0..) |*param, index| param.published_index = published.params.start + @as(u32, @intCast(index));
         self.schemas_by_root.getPtr(self.schemeOwner(scheme_root)).?.published = published;
@@ -19313,6 +19300,17 @@ const EvidencePass = struct {
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
         };
+    }
+
+    /// The template's own params as the outermost evidence chain level.
+    fn templateChainLevel(
+        self: *EvidencePass,
+        template: CheckedProcedureTemplate,
+        template_defs: *const std.AutoHashMap(u32, Var),
+    ) Allocator.Error!ChainLevel {
+        const scheme_var = self.templateEvidenceSchemeVar(template, template_defs) orelse return .empty;
+        const schema = try self.schemeSchema(scheme_var);
+        return .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher };
     }
 
     fn enumerateTemplateParams(
@@ -19663,13 +19661,22 @@ const EvidencePass = struct {
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| {
-            param.path = try arena.dupe(static_dispatch.EvidencePathStep, param.path);
             param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
         }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
+        const by_dispatcher = try arena.create(DispatcherParams);
+        by_dispatcher.* = .{};
+        for (params.items, 0..) |param, index| {
+            if (param.source == .scheme_requirement) continue;
+            const entry = try by_dispatcher.getOrPut(arena, self.types.resolveVar(param.dispatcher_var).var_);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(arena, @intCast(index));
+        }
         const schema = SchemeSchema{
             .params = try arena.dupe(EvidenceParam, params.items),
+            .by_dispatcher = by_dispatcher,
+            .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.enum_scratch.paramPathNodes()),
             .identity_vars = identity_vars,
         };
         try self.schemas_by_root.put(owner, schema);
@@ -19683,7 +19690,7 @@ const EvidencePass = struct {
     /// The param chain at `scope_id`: the scope's own params first (depth 0),
     /// each enclosing local scope outward, then the template's params. The
     /// returned slice aliases `chain_scratch` and is valid until the next call.
-    fn chainFor(self: *EvidencePass, scope_ref: DispatchScope, template_params: []const EvidenceParam) Allocator.Error![]const []const EvidenceParam {
+    fn chainFor(self: *EvidencePass, scope_ref: DispatchScope, template_level: ChainLevel) Allocator.Error![]const ChainLevel {
         self.chain_scratch.clearRetainingCapacity();
         var current: ?DispatchScopeId = switch (scope_ref) {
             .root => null,
@@ -19691,10 +19698,11 @@ const EvidencePass = struct {
         };
         while (current) |id| {
             const scope = self.template_iterator_refs.scopes[@intFromEnum(id)];
-            try self.chain_scratch.append(self.allocator, try self.paramsForScope(id, scope.scheme_var));
+            const schema = try self.schemeSchema(scope.scheme_var);
+            try self.chain_scratch.append(self.allocator, .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher });
             current = scope.parent;
         }
-        try self.chain_scratch.append(self.allocator, template_params);
+        try self.chain_scratch.append(self.allocator, template_level);
         return self.chain_scratch.items;
     }
 
@@ -19702,12 +19710,18 @@ const EvidencePass = struct {
         return (try self.schemeSchema(scheme_var)).params;
     }
 
-    fn appendEvidenceParams(self: *EvidencePass, params: []const EvidenceParam) Allocator.Error!artifact_serialize.Span {
+    fn appendEvidenceParams(
+        self: *EvidencePass,
+        params: []const EvidenceParam,
+        path_nodes: []const static_dispatch.EvidencePathNode,
+    ) Allocator.Error!artifact_serialize.Span {
         const idents = self.module.identStoreConst();
         const pool_start: u32 = @intCast(self.evidence_params_pool.items.len);
+        self.published_path_nodes.clearRetainingCapacity();
+        try self.published_path_nodes.appendNTimes(self.allocator, static_dispatch.no_evidence_path_node, path_nodes.len);
         for (params) |param| {
             const source: static_dispatch.EvidenceParamSource = switch (param.source) {
-                .scheme_callable => if (param.path.len == 0) explicit: {
+                .scheme_callable => if (param.path_len == 0) explicit: {
                     if (self.pathlessDefaultPhaseForParam(param)) |phase| break :explicit .{ .explicit_default = phase };
                     break :explicit .scheme_callable;
                 } else .scheme_callable,
@@ -19730,28 +19744,13 @@ const EvidencePass = struct {
                 .erased_row_remainder => .erased_row_remainder,
                 .scheme_requirement => .scheme_requirement,
             };
-            const published_path: []const static_dispatch.EvidencePathStep = switch (source) {
-                .scheme_callable, .constraint_callable => param.path,
-                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
+            const published_path: static_dispatch.EvidencePath = switch (source) {
+                .scheme_callable, .constraint_callable => .{
+                    .last = try self.publishPathNode(path_nodes, param.path_node),
+                    .len = param.path_len,
+                },
+                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => .{},
             };
-            const path_start: u32 = @intCast(self.evidence_param_paths.items.len);
-            for (published_path) |path_step| {
-                var converted = path_step;
-                switch (path_step.stepKind()) {
-                    .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(path_step.data))),
-                    .tag_payload_tag => converted.data = @intFromEnum(try self.names.internTagIdent(idents, @bitCast(path_step.data))),
-                    .fn_arg,
-                    .fn_ret,
-                    .alias_arg,
-                    .alias_backing,
-                    .nominal_arg,
-                    .nominal_backing,
-                    .tuple_elem,
-                    .tag_payload_index,
-                    => {},
-                }
-                try self.evidence_param_paths.append(self.allocator, converted);
-            }
             const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
             for (param.callable_contracts) |contract| {
                 try self.evidence_param_callables.append(self.allocator, self.checked_types.rootForSourceVar(self.module, contract.fn_var) orelse
@@ -19768,10 +19767,55 @@ const EvidencePass = struct {
                 .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
-                .path = .{ .start = path_start, .len = @intCast(published_path.len) },
+                .path = published_path,
             });
         }
         return .{ .start = pool_start, .len = @intCast(params.len) };
+    }
+
+    /// Publish the scheme path ending at `scheme_node` in canonical names,
+    /// sharing the prefixes this scheme already published, and return its
+    /// published last node.
+    fn publishPathNode(
+        self: *EvidencePass,
+        path_nodes: []const static_dispatch.EvidencePathNode,
+        scheme_node: u32,
+    ) Allocator.Error!u32 {
+        const no_node = static_dispatch.no_evidence_path_node;
+        if (scheme_node == no_node) return no_node;
+        const idents = self.module.identStoreConst();
+        const published = self.published_path_nodes.items;
+        self.published_path_chain.clearRetainingCapacity();
+        var node = scheme_node;
+        while (node != no_node and published[node] == no_node) {
+            try self.published_path_chain.append(self.allocator, node);
+            node = path_nodes[node].parent;
+        }
+        var parent = if (node == no_node) no_node else published[node];
+        var i = self.published_path_chain.items.len;
+        while (i > 0) {
+            i -= 1;
+            const next = self.published_path_chain.items[i];
+            var converted = path_nodes[next].step;
+            switch (converted.stepKind()) {
+                .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(converted.data))),
+                .tag_payload_tag => converted.data = @intFromEnum(try self.names.internTagIdent(idents, @bitCast(converted.data))),
+                .fn_arg,
+                .fn_ret,
+                .alias_arg,
+                .alias_backing,
+                .nominal_arg,
+                .nominal_backing,
+                .tuple_elem,
+                .tag_payload_index,
+                => {},
+            }
+            const published_node: u32 = @intCast(self.evidence_path_nodes.items.len);
+            try self.evidence_path_nodes.append(self.allocator, .{ .parent = parent, .step = converted });
+            published[next] = published_node;
+            parent = published_node;
+        }
+        return published[scheme_node];
     }
 
     fn pathlessDefaultPhaseForParam(self: *EvidencePass, param: EvidenceParam) ?NumericDefaultPhase {
@@ -19826,7 +19870,7 @@ const EvidencePass = struct {
     /// the target slot, while their checked plans retain the per-call shape.
     fn chainParamIndex(
         self: *EvidencePass,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         dispatcher_root: Var,
         method: canonical.MethodNameId,
         constraint_fn_var: ?Var,
@@ -19835,8 +19879,8 @@ const EvidencePass = struct {
         callable_relation: CallableRelation,
         callable_contract: ?u32 = null,
     } {
-        for (chain, 0..) |params, depth| {
-            if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
+        for (chain, 0..) |level, depth| {
+            if (try self.paramIndexFor(level, dispatcher_root, method, constraint_fn_var)) |match| {
                 return .{
                     .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
                     .callable_relation = match.callable_relation,
@@ -19914,7 +19958,7 @@ const EvidencePass = struct {
     /// The canonical param index of one dispatch obligation.
     fn paramIndexFor(
         self: *EvidencePass,
-        params: []const EvidenceParam,
+        level: ChainLevel,
         dispatcher_root: Var,
         method: canonical.MethodNameId,
         constraint_fn_var: ?Var,
@@ -19928,12 +19972,14 @@ const EvidencePass = struct {
             self.types.resolveVar(fn_var).var_
         else
             null;
+        const params = level.params;
+        // Composite requirements are matched by their exact scheme relation
+        // before structural dispatch, so the index omits them. A shared
+        // receiver/method is insufficient.
+        const candidates = level.by_dispatcher.get(dispatcher_root) orelse return null;
         var same_method_fallback: ?u32 = null;
-        for (params, 0..) |param, k| {
-            // Composite requirements are matched by their exact scheme relation
-            // before structural dispatch. A shared receiver/method is insufficient.
-            if (param.source == .scheme_requirement) continue;
-            if (self.types.resolveVar(param.dispatcher_var).var_ != dispatcher_root) continue;
+        for (candidates.items) |k| {
+            const param = params[k];
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
@@ -19987,7 +20033,7 @@ const EvidencePass = struct {
         return .independent_per_use;
     }
 
-    fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
+    fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const ChainLevel, commit_unpinned: bool) Allocator.Error!void {
         const raw = @intFromEnum(plan_id);
         const plan = &self.plan_table.plans[raw];
         if (self.plan_resolved[raw]) return;
@@ -20040,7 +20086,7 @@ const EvidencePass = struct {
         }
     }
 
-    fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
+    fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const ChainLevel, commit_unpinned: bool) Allocator.Error!void {
         const raw = @intFromEnum(plan_id);
         const plan = &self.plan_table.iterator_for_plans[raw];
         if (self.iterator_plan_resolved[raw]) return;
@@ -20084,7 +20130,7 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, chain, commit_unpinned)) {
@@ -20115,7 +20161,7 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var_in: ?Var,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         commit_unpinned_in: bool,
     ) Allocator.Error!ObligationStep {
         var dispatcher_var = dispatcher_var_in;
@@ -20133,8 +20179,8 @@ const EvidencePass = struct {
             // A structural receiver may still own a generic codec requirement.
             // Its exact scheme relation takes precedence over its current shape.
             if (structural_kind == .parser or structural_kind == .encoder) if (constraint_fn_var) |fn_var| {
-                for (chain, 0..) |params, depth| {
-                    for (params, 0..) |param, index| {
+                for (chain, 0..) |level, depth| {
+                    for (level.params, 0..) |param, index| {
                         if (param.source != .scheme_requirement) continue;
                         if (self.types.resolveVar(param.constraint.fn_var).var_ != self.types.resolveVar(fn_var).var_) continue;
                         if (try self.names.internMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
@@ -20257,12 +20303,12 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         commit_unpinned: bool,
     ) Allocator.Error!ObligationStep {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
             const independent_callable = match.callable_relation != .exact;
-            const owner = chain[match.index.depth][match.index.index].published_index orelse
+            const owner = chain[match.index.depth].params[match.index.index].published_index orelse
                 checkedArtifactInvariant("forwarded evidence owner was not published", .{});
             const schema = self.templates.evidence_params_pool[owner];
             return .{ .resolved = .{ .evidence_dependent = .{
@@ -20487,14 +20533,7 @@ const EvidencePass = struct {
         table: *const CheckedProcedureTemplateTable,
         template: *const CheckedProcedureTemplate,
     ) ProcedureEvidenceSchema {
-        return procedureEvidenceSchemaFromSlices(table.evidenceParams(template), table.evidence_param_paths);
-    }
-
-    fn procedureEvidenceSchemaFromSlices(
-        params: []const static_dispatch.EvidenceParamRecord,
-        paths: []const static_dispatch.EvidencePathStep,
-    ) ProcedureEvidenceSchema {
-        return static_dispatch.procedureEvidenceSchema(params, paths);
+        return static_dispatch.procedureEvidenceSchema(table.evidenceParams(template));
     }
 
     fn procedureEvidenceSchema(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceSchema {
@@ -20834,9 +20873,9 @@ const EvidencePass = struct {
 
     /// Whether an evidence chain has no parameters in any of its frames, so
     /// no resolution against it can depend on it.
-    fn evidenceChainIsEmpty(chain: []const []const EvidenceParam) bool {
-        for (chain) |frame| {
-            if (frame.len != 0) return false;
+    fn evidenceChainIsEmpty(chain: []const ChainLevel) bool {
+        for (chain) |level| {
+            if (level.params.len != 0) return false;
         }
         return true;
     }
@@ -21131,7 +21170,7 @@ const EvidencePass = struct {
     /// Publish site evidence for one value reference within the current
     /// template: how each of the referenced scheme's obligations was
     /// satisfied at that use.
-    fn emitSiteEvidence(self: *EvidencePass, ref_id: ResolvedValueRefId, chain: []const []const EvidenceParam) Allocator.Error!void {
+    fn emitSiteEvidence(self: *EvidencePass, ref_id: ResolvedValueRefId, chain: []const ChainLevel) Allocator.Error!void {
         const rec = self.resolved_value_refs.records[@intFromEnum(ref_id)];
         const site_key = @intFromEnum(rec.expr);
         if (self.site_seen.contains(site_key)) return;
@@ -21229,7 +21268,7 @@ const EvidencePass = struct {
         self: *EvidencePass,
         record_idx: u32,
         site_key: u32,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
@@ -21271,7 +21310,7 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity(evidence);
                 continue;
             }
-            if (param.path.len == 0 or param.source == .constraint_callable) {
+            if (param.path_len == 0 or param.source == .constraint_callable) {
                 entries.appendAssumeCapacity((try self.evidenceForRecordParam(pairs, param, true)).?);
                 continue;
             }
@@ -21303,7 +21342,7 @@ const EvidencePass = struct {
         self: *EvidencePass,
         record_idx: u32,
         site_key: u32,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
@@ -21359,7 +21398,7 @@ const EvidencePass = struct {
     fn emitScopeConstructionEvidence(
         self: *EvidencePass,
         site: CollectedScopeConstructionSite,
-        template_params: []const EvidenceParam,
+        template_level: ChainLevel,
     ) Allocator.Error!void {
         const site_key = @intFromEnum(site.checked_expr);
         if (self.site_seen.contains(site_key)) return;
@@ -21377,7 +21416,7 @@ const EvidencePass = struct {
             .{ .generalized = parent }
         else
             .root;
-        self.current_chain = try self.chainFor(parent_scope, template_params);
+        self.current_chain = try self.chainFor(parent_scope, template_level);
         defer self.current_chain = &.{};
 
         const scope_params = try self.paramsForScope(site.scope, scope.scheme_var);
@@ -21385,7 +21424,7 @@ const EvidencePass = struct {
         defer entries.deinit(self.allocator);
         try entries.ensureTotalCapacity(self.allocator, scope_params.len);
         for (scope_params) |param| {
-            if ((param.path.len > 0 and param.source != .constraint_callable) or param.source == .scheme_requirement) {
+            if ((param.path_len > 0 and param.source != .constraint_callable) or param.source == .scheme_requirement) {
                 const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
@@ -21432,20 +21471,18 @@ const EvidencePass = struct {
 };
 
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
-    var path_steps = [_]static_dispatch.EvidencePathStep{ undefined, undefined };
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .callable_ty = @enumFromInt(3), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
-        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .callable_ty = @enumFromInt(4), .slot = 1, .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
+        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .callable_ty = @enumFromInt(3), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .last = 0, .len = 1 } },
+        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .callable_ty = @enumFromInt(4), .slot = 1, .runtime_dictionary = true, .path = .{ .last = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
-        .evidence_param_paths = path_steps[0..],
     };
     var template: CheckedProcedureTemplate = undefined;
     template.evidence_params = .{ .start = 0, .len = 2 };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_callable,
-        EvidencePass.procedureEvidenceSchemaFromSlices(table.evidenceParams(&template), table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(table.evidenceParams(&template)),
     );
 
     var pathless_params = params;
@@ -21453,11 +21490,10 @@ test "procedure evidence schema positively classifies callable paths and pathles
     pathless_params[1].source = .erased_row_remainder;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = pathless_params[0..],
-        .evidence_param_paths = path_steps[0..],
     };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        EvidencePass.procedureEvidenceSchemaFromSlices(pathless_table.evidenceParams(&template), pathless_table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(pathless_table.evidenceParams(&template)),
     );
 
     var target_params = [_]static_dispatch.EvidenceParamRecord{params[0]};
@@ -21465,13 +21501,13 @@ test "procedure evidence schema positively classifies callable paths and pathles
     target_params[0].path = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_target,
-        EvidencePass.procedureEvidenceSchemaFromSlices(&target_params, &.{}),
+        static_dispatch.procedureEvidenceSchema(&target_params),
     );
 
-    target_params[0].path = .{ .start = 0, .len = 1 };
+    target_params[0].path = .{ .last = 0, .len = 1 };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        EvidencePass.procedureEvidenceSchemaFromSlices(&target_params, path_steps[0..1]),
+        static_dispatch.procedureEvidenceSchema(&target_params),
     );
 
     var mixed_params = [_]static_dispatch.EvidenceParamRecord{ params[0], params[1] };
@@ -21479,24 +21515,23 @@ test "procedure evidence schema positively classifies callable paths and pathles
     mixed_params[1].path = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        EvidencePass.procedureEvidenceSchemaFromSlices(&mixed_params, path_steps[0..1]),
+        static_dispatch.procedureEvidenceSchema(&mixed_params),
     );
 
     var defaulted_pathless_params = pathless_params;
     defaulted_pathless_params[1].source = .{ .explicit_default = .mono_specialization };
     const defaulted_pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = defaulted_pathless_params[0..],
-        .evidence_param_paths = path_steps[0..],
     };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_callable,
-        EvidencePass.procedureEvidenceSchemaFromSlices(defaulted_pathless_table.evidenceParams(&template), defaulted_pathless_table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(defaulted_pathless_table.evidenceParams(&template)),
     );
 
     template.evidence_params = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.none,
-        EvidencePass.procedureEvidenceSchemaFromSlices(table.evidenceParams(&template), table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(table.evidenceParams(&template)),
     );
 }
 
@@ -22739,8 +22774,9 @@ pub const CheckedProcedureTemplateTable = struct {
     promoted: []PromotedProcedureTemplateEntry = &.{},
     /// Flat pool backing each template's `evidence_params` span.
     evidence_params_pool: []static_dispatch.EvidenceParamRecord = &.{},
-    /// Flat pool backing each evidence param's `path` span.
-    evidence_param_paths: []static_dispatch.EvidencePathStep = &.{},
+    /// Nodes of every evidence param's `path`; a parent precedes its
+    /// children, and the paths of one published param vector share prefixes.
+    evidence_path_nodes: []static_dispatch.EvidencePathNode = &.{},
     evidence_param_callables: []CheckedTypeId = &.{},
     /// Flat pool backing template and scope `scheme_vars` ranges.
     scheme_vars_pool: []CheckedTypeId = &.{},
@@ -22756,17 +22792,19 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
-    /// Templates whose evaluation can reach code checking replaced with a
-    /// runtime error, in ascending id order. Empty for a module whose checked
-    /// bodies and imports contain no such code.
-    checked_error_templates: []canonical.CheckedProcedureTemplateId = &.{},
+    /// Templates no other module can call and whose module's source calls
+    /// them at exactly one site and never uses them as a value, in ascending
+    /// id order. Every program that specializes such a template finds its
+    /// calls at that one site, so an inline decision based on it is the same
+    /// in every program (`SingleSourceCalls`).
+    single_source_call_templates: []canonical.CheckedProcedureTemplateId = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
         by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
         promoted: SerializedSlice(PromotedProcedureTemplateEntry) = .{},
         evidence_params_pool: SerializedSlice(static_dispatch.EvidenceParamRecord) = .{},
-        evidence_param_paths: SerializedSlice(static_dispatch.EvidencePathStep) = .{},
+        evidence_path_nodes: SerializedSlice(static_dispatch.EvidencePathNode) = .{},
         evidence_param_callables: SerializedSlice(CheckedTypeId) = .{},
         scheme_vars_pool: SerializedSlice(CheckedTypeId) = .{},
         dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
@@ -22774,7 +22812,7 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
-        checked_error_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
+        single_source_call_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -22795,7 +22833,7 @@ pub const CheckedProcedureTemplateTable = struct {
         var by_def = std.ArrayList(static_dispatch.ProcedureTemplateLookupEntry).empty;
         errdefer by_def.deinit(allocator);
 
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
@@ -22917,7 +22955,7 @@ pub const CheckedProcedureTemplateTable = struct {
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!void {
         if (promoted_local_procedures.len == 0) return;
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
         const entries = try allocator.alloc(PromotedProcedureTemplateEntry, promoted_local_procedures.len);
         errdefer allocator.free(entries);
         try self.templates.ensureUnusedCapacity(allocator, promoted_local_procedures.len);
@@ -23000,7 +23038,7 @@ pub const CheckedProcedureTemplateTable = struct {
         try self.templates.ensureTotalCapacityPrecise(allocator, self.templates.items.len + roots.len);
         try entry_wrappers.wrappers.ensureTotalCapacityPrecise(allocator, entry_wrappers.wrappers.items.len + roots.len);
 
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
 
         for (roots) |root| {
             const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
@@ -23072,6 +23110,7 @@ pub const CheckedProcedureTemplateTable = struct {
         return .{
             .module_idx = module_idx,
             .by_def = self.by_def,
+            .promoted = self.promoted,
         };
     }
 
@@ -23080,7 +23119,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.promoted);
         self.templates.deinit(allocator);
         allocator.free(self.evidence_params_pool);
-        allocator.free(self.evidence_param_paths);
+        allocator.free(self.evidence_path_nodes);
         allocator.free(self.evidence_param_callables);
         allocator.free(self.scheme_vars_pool);
         allocator.free(self.dispatch_ref_scopes);
@@ -23088,23 +23127,14 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.dispatch_scopes);
         allocator.free(self.specialization_interface_relations);
         allocator.free(self.specialization_interface_types);
-        allocator.free(self.checked_error_templates);
+        allocator.free(self.single_source_call_templates);
         self.* = .{};
     }
 
-    /// Whether evaluating this template can reach code checking replaced with
-    /// a runtime error.
-    pub fn templateReachesCheckedError(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) bool {
-        const target = @intFromEnum(id);
-        var lo: usize = 0;
-        var hi = self.checked_error_templates.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            const candidate = @intFromEnum(self.checked_error_templates[mid]);
-            if (candidate == target) return true;
-            if (candidate < target) lo = mid + 1 else hi = mid;
-        }
-        return false;
+    /// Whether this template is called at exactly one site of its module's
+    /// source and cannot be called from elsewhere.
+    pub fn templateHasSingleSourceCall(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) bool {
+        return sortedTemplateIdsContain(self.single_source_call_templates, id);
     }
 
     /// The quantified variables of a template's scheme, in slot order.
@@ -23123,10 +23153,17 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.evidence_params_pool[template.evidence_params.start .. template.evidence_params.start + template.evidence_params.len];
     }
 
-    /// The param's dispatcher path over the scheme callable (empty =
-    /// pathless).
-    pub fn evidenceParamPath(self: *const CheckedProcedureTemplateTable, param: static_dispatch.EvidenceParamRecord) []const static_dispatch.EvidencePathStep {
-        return self.evidence_param_paths[param.path.start .. param.path.start + param.path.len];
+    /// Replace `out`'s contents with the param's dispatcher path over the
+    /// scheme callable, root first (empty = pathless).
+    pub fn evidenceParamPath(
+        self: *const CheckedProcedureTemplateTable,
+        allocator: Allocator,
+        param: static_dispatch.EvidenceParamRecord,
+        out: *std.ArrayListUnmanaged(static_dispatch.EvidencePathStep),
+    ) Allocator.Error![]const static_dispatch.EvidencePathStep {
+        out.clearRetainingCapacity();
+        try dispatch_evidence.appendPathSteps(allocator, self.evidence_path_nodes, param.path.last, param.path.len, out);
+        return out.items;
     }
 
     pub fn specializationRelations(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SpecializationInterfaceRelation {
@@ -23141,10 +23178,20 @@ pub const CheckedProcedureTemplateTable = struct {
 
 /// A promoted local procedure's template and the binding pattern whose
 /// generalized scheme it publishes.
-pub const PromotedProcedureTemplateEntry = struct {
-    pattern: CIR.Pattern.Idx,
-    template: canonical.ProcedureTemplateRef,
-};
+pub const PromotedProcedureTemplateEntry = static_dispatch.PromotedProcedureTemplateEntry;
+
+fn sortedTemplateIdsContain(ids: []const canonical.CheckedProcedureTemplateId, id: canonical.CheckedProcedureTemplateId) bool {
+    const target = @intFromEnum(id);
+    var lo: usize = 0;
+    var hi = ids.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = @intFromEnum(ids[mid]);
+        if (candidate == target) return true;
+        if (candidate < target) lo = mid + 1 else hi = mid;
+    }
+    return false;
+}
 
 /// Public `CheckedProcedureTemplateTableView` declaration.
 pub const CheckedProcedureTemplateTableView = struct {
@@ -25821,7 +25868,6 @@ fn publishLiteralConversionRoots(
     roots: *CompileTimeRootTable,
     wrappers: *EntryWrapperTable,
     templates: *CheckedProcedureTemplateTable,
-    template_refs: *TemplateIteratorRefs,
 ) Allocator.Error!void {
     const first_root = roots.roots.len;
     var root_list = std.ArrayList(CompileTimeRoot).empty;
@@ -25909,7 +25955,6 @@ fn publishLiteralConversionRoots(
     @memcpy(added, root_list.items);
     for (added, first_root..) |*root, index| root.id = @enumFromInt(@as(u32, @intCast(index)));
     try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added);
-    excludeErroneousCompileTimeRootRequests(bodies, added);
 
     const first_template = templates.templates.items.len;
     try templates.appendEntryWrappersForRoots(allocator, module, names, owner_artifact, &checked_types.store, wrappers, added);
@@ -25925,7 +25970,6 @@ fn publishLiteralConversionRoots(
     templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
     const root_evidence = try allocator.realloc(@constCast(plans.template_root_evidence), templates.templates.items.len);
     plans.template_root_evidence = root_evidence;
-    try template_refs.appendEmptyTemplates(allocator, added.len);
     for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
         const plan_id = switch (bodies.expr(root.expr).data) {
             .numeral => |numeral| numeral.plan.?,
@@ -28507,454 +28551,137 @@ fn publishCompileTimeRootRequestEligibility(
     }
 }
 
-/// The checker already owns the diagnostic for an erroneous root; evaluating it
-/// would only add a secondary compile-time crash for its replacement node.
-/// Solved root types are unchanged by diagnostic publication, so this only
-/// removes erroneous requests and never repeats the context-free traversal.
-fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, roots: []CompileTimeRoot) void {
-    for (roots) |*root| {
-        if (compileTimeRootRequestIsEligible(root.*) and bodies.exprContainsDiagnosticError(root.expr)) {
-            root.request_eligibility = .ineligible;
-        }
-    }
-}
-
-/// A compile-time root whose evaluation can call into code checking replaced
-/// with a runtime error would report that already-reported problem a second
-/// time as a compile-time crash, so it is not requested. This includes expect
-/// roots, which are counted as compiler errors without execution. Reachability
-/// follows every call edge checking recorded for a procedure template, local and
-/// imported: procedure and constant references, direct dispatch targets, the
-/// method calls inside generated codec derivations, and the evidence each
-/// instantiation site and direct target carries. The result is
-/// recorded per template so importing modules consume it directly; a module
-/// whose bodies and imports contain no checked error records nothing and
-/// performs no traversal.
-const CheckedErrorReachability = struct {
+/// Finds the procedure templates whose every call, in every program, comes
+/// from one site of their module's source: a template that is private (a
+/// promoted local, or a source definition the module neither exposes nor
+/// registers as a method another module could dispatch to), that no dispatch
+/// plan targets, and that the module's source references exactly once, as
+/// the function of a call. Dev builds inline such a template by this fact
+/// rather than by how many callers one program has, so the decision is the
+/// same in every program that links the code (design.md "Object cache").
+const SingleSourceCalls = struct {
+    module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
-    imports: CheckedImportViews,
+    exported_defs: []const CIR.Def.Idx,
     checked_bodies: *const CheckedBodyStore,
     templates: *CheckedProcedureTemplateTable,
-    entry_wrappers: *const EntryWrapperTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-    compile_time_roots: *const CompileTimeRootTable,
-    hoisted_constants: *const HoistedConstTable,
-    const_templates: *const ConstTemplateTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    template_refs: *const TemplateIteratorRefs,
 
-    const Target = union(enum) {
-        none,
-        reaches,
-        local: canonical.CheckedProcedureTemplateId,
-    };
-
-    /// The template whose outgoing edges are being recorded, with the shared
-    /// reachability state those edges feed.
-    const Recorder = struct {
-        allocator: Allocator,
-        reaches: []bool,
-        dependents: []std.ArrayList(canonical.CheckedProcedureTemplateId),
-        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
-        owner: canonical.CheckedProcedureTemplateId,
-
-        fn record(self: Recorder, target: Target) Allocator.Error!void {
-            try recordTarget(self.allocator, self.reaches, self.dependents, self.work, self.owner, target);
-        }
-    };
-
-    /// Evidence still to expand for the current owner, with the evidence nodes
-    /// and generated-codec derivations already queued for it. A recursive
-    /// type's codec derivation names itself, and a shared evidence node can
-    /// appear under several sites.
-    const EvidenceVisits = struct {
-        nodes: std.DynamicBitSetUnmanaged,
-        derivations: std.DynamicBitSetUnmanaged,
-        touched_nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
-        touched_derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
-        pending: std.ArrayList(Item) = .empty,
-
-        const Item = union(enum) {
-            /// Range into `StaticDispatchPlanTable.evidence_refs`.
-            evidence: artifact_serialize.Span,
-            node: static_dispatch.EvidenceNodeId,
-            derivation: static_dispatch.GeneratedCodecDerivationId,
-        };
-
-        fn init(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable) Allocator.Error!EvidenceVisits {
-            var nodes = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.evidence_nodes.len);
-            errdefer nodes.deinit(allocator);
-            return .{
-                .nodes = nodes,
-                .derivations = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.generated_codec_derivations.len),
-            };
-        }
-
-        fn deinit(self: *EvidenceVisits, allocator: Allocator) void {
-            self.nodes.deinit(allocator);
-            self.derivations.deinit(allocator);
-            self.touched_nodes.deinit(allocator);
-            self.touched_derivations.deinit(allocator);
-            self.pending.deinit(allocator);
-        }
-
-        fn reset(self: *EvidenceVisits) void {
-            for (self.touched_nodes.items) |id| self.nodes.unset(@intFromEnum(id));
-            for (self.touched_derivations.items) |id| self.derivations.unset(@intFromEnum(id));
-            self.touched_nodes.clearRetainingCapacity();
-            self.touched_derivations.clearRetainingCapacity();
-        }
-
-        fn pushNode(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.EvidenceNodeId) Allocator.Error!void {
-            if (self.nodes.isSet(@intFromEnum(id))) return;
-            self.nodes.set(@intFromEnum(id));
-            try self.touched_nodes.append(allocator, id);
-            try self.pending.append(allocator, .{ .node = id });
-        }
-
-        fn pushDerivation(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
-            if (self.derivations.isSet(@intFromEnum(id))) return;
-            self.derivations.set(@intFromEnum(id));
-            try self.touched_derivations.append(allocator, id);
-            try self.pending.append(allocator, .{ .derivation = id });
-        }
-    };
-
-    fn publish(
-        self: CheckedErrorReachability,
-        allocator: Allocator,
-        any_local_diagnostic_error: bool,
-        roots: []CompileTimeRoot,
-    ) Allocator.Error!void {
-        if (!any_local_diagnostic_error and !self.importsReachCheckedError()) return;
-
+    fn publish(self: SingleSourceCalls, allocator: Allocator) Allocator.Error!void {
         const count = self.templates.templates.items.len;
-        const reaches = try allocator.alloc(bool, count);
-        defer allocator.free(reaches);
-        @memset(reaches, false);
-        const dependents = try allocator.alloc(std.ArrayList(canonical.CheckedProcedureTemplateId), count);
-        for (dependents) |*items| items.* = .empty;
-        defer {
-            for (dependents) |*items| items.deinit(allocator);
-            allocator.free(dependents);
-        }
-        var work = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
-        defer work.deinit(allocator);
-        var visits = try EvidenceVisits.init(allocator, self.static_dispatch_plans);
-        defer visits.deinit(allocator);
+        const eligible = try allocator.alloc(bool, count);
+        defer allocator.free(eligible);
+        @memset(eligible, false);
+        const references = try allocator.alloc(u32, count);
+        defer allocator.free(references);
+        @memset(references, 0);
+        const calls = try allocator.alloc(u32, count);
+        defer allocator.free(calls);
+        @memset(calls, 0);
 
-        const plans = self.static_dispatch_plans;
-        const refs = self.template_refs;
-        for (self.templates.templates.items, 0..) |template, raw| {
-            const id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(raw)));
-            if (self.bodyContainsDiagnosticError(template.body)) {
-                try markReached(allocator, reaches, &work, id);
-            }
-            const recorder = Recorder{
-                .allocator = allocator,
-                .reaches = reaches,
-                .dependents = dependents,
-                .work = &work,
-                .owner = id,
-            };
-            visits.reset();
-            const refs_end = template.resolved_value_refs.start + template.resolved_value_refs.len;
-            for (self.resolved_value_refs.template_refs[template.resolved_value_refs.start..refs_end]) |ref_id| {
-                const record = self.resolved_value_refs.records[@intFromEnum(ref_id)];
-                try recorder.record(self.resolvedRefTarget(record.ref));
-                try self.recordSiteEvidence(&visits, recorder, record.expr);
-            }
-            const scheme_uses = refs.scheme_use_spans[raw];
-            for (refs.scheme_use_sites[scheme_uses.start..][0..scheme_uses.len]) |site| {
-                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
-            }
-            const scope_sites = refs.scope_site_spans[raw];
-            for (refs.scope_sites[scope_sites.start..][0..scope_sites.len]) |site| {
-                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
-            }
-            const direct = template.direct_dispatch_plans;
-            for (plans.direct_template_refs[direct.start..][0..direct.len]) |plan_id| {
-                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
-            }
-            const relations = template.dispatch_relations;
-            for (plans.dispatch_relation_refs[relations.start..][0..relations.len]) |plan_id| {
-                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
-            }
+        // Private templates: promoted locals, and source definitions that are
+        // neither exposed nor methods.
+        const module_env = self.module.moduleEnvConst();
+        var public_defs = std.AutoHashMap(CIR.Def.Idx, void).init(allocator);
+        defer public_defs.deinit();
+        for (self.exported_defs) |def| try public_defs.put(def, {});
+        for (module_env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
+        for (self.templates.by_def) |entry| {
+            const id = self.localTemplate(entry.template) orelse continue;
+            if (!public_defs.contains(entry.def)) eligible[@intFromEnum(id)] = true;
+        }
+        for (self.templates.promoted) |entry| {
+            const id = self.localTemplate(entry.template) orelse continue;
+            eligible[@intFromEnum(id)] = true;
+        }
+        for (self.templates.templates.items, eligible) |template, *is_eligible| {
+            if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
         }
 
-        while (work.pop()) |reached| {
-            for (dependents[@intFromEnum(reached)].items) |dependent| {
-                try markReached(allocator, reaches, &work, dependent);
-            }
+        // A dispatch target can be reached without a reference.
+        for (self.static_dispatch_plans.direct_template_refs) |plan_id| {
+            const id = self.dispatchTemplate(self.static_dispatch_plans.plans[@intFromEnum(plan_id)]) orelse continue;
+            eligible[@intFromEnum(id)] = false;
+        }
+
+        const callees = try allocator.alloc(bool, self.checked_bodies.exprCount());
+        defer allocator.free(callees);
+        @memset(callees, false);
+        for (0..self.checked_bodies.exprCount()) |raw| {
+            const expr = self.checked_bodies.expr(@enumFromInt(@as(u32, @intCast(raw))));
+            if (expr.data == .call) callees[@intFromEnum(expr.data.call.func)] = true;
+        }
+        for (self.resolved_value_refs.records) |record| {
+            const id = self.referencedTemplate(record.ref) orelse continue;
+            references[@intFromEnum(id)] += 1;
+            if (callees[@intFromEnum(record.expr)]) calls[@intFromEnum(id)] += 1;
         }
 
         var published = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
         errdefer published.deinit(allocator);
-        for (reaches, 0..) |reached, raw| {
-            if (reached) try published.append(allocator, @enumFromInt(@as(u32, @intCast(raw))));
+        for (eligible, references, calls, 0..) |is_eligible, reference_count, call_count, raw| {
+            if (is_eligible and reference_count == 1 and call_count == 1) {
+                try published.append(allocator, @enumFromInt(@as(u32, @intCast(raw))));
+            }
         }
-        allocator.free(self.templates.checked_error_templates);
-        self.templates.checked_error_templates = try published.toOwnedSlice(allocator);
-
-        for (roots) |*root| {
-            if (!compileTimeRootRequestIsEligible(root.*)) continue;
-            const wrapper = self.entry_wrappers.lookupByRoot(root.id) orelse continue;
-            if (reaches[@intFromEnum(wrapper.template.template)]) root.request_eligibility = .ineligible;
-        }
+        allocator.free(self.templates.single_source_call_templates);
+        self.templates.single_source_call_templates = try published.toOwnedSlice(allocator);
     }
 
-    fn markReached(
-        allocator: Allocator,
-        reaches: []bool,
-        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
-        id: canonical.CheckedProcedureTemplateId,
-    ) Allocator.Error!void {
-        if (reaches[@intFromEnum(id)]) return;
-        reaches[@intFromEnum(id)] = true;
-        try work.append(allocator, id);
+    fn localTemplate(self: SingleSourceCalls, template: canonical.ProcedureTemplateRef) ?canonical.CheckedProcedureTemplateId {
+        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template.artifact), self.artifact_key)) return null;
+        return template.template;
     }
 
-    fn recordTarget(
-        allocator: Allocator,
-        reaches: []bool,
-        dependents: []std.ArrayList(canonical.CheckedProcedureTemplateId),
-        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
-        owner: canonical.CheckedProcedureTemplateId,
-        target: Target,
-    ) Allocator.Error!void {
-        switch (target) {
-            .none => {},
-            .reaches => try markReached(allocator, reaches, work, owner),
-            .local => |callee| try dependents[@intFromEnum(callee)].append(allocator, owner),
-        }
-    }
-
-    fn importsReachCheckedError(self: CheckedErrorReachability) bool {
-        for (self.imports.direct) |import| {
-            if (import.view.checked_procedure_templates.checked_error_templates.len != 0) return true;
-        }
-        for (self.imports.available) |available| {
-            if (available.checked_procedure_templates.checked_error_templates.len != 0) return true;
-        }
-        for (self.imports.relations) |relation| {
-            if (relation.checked_procedure_templates.checked_error_templates.len != 0) return true;
-        }
-        return false;
-    }
-
-    fn bodyContainsDiagnosticError(self: CheckedErrorReachability, body: CheckedProcedureBody) bool {
-        return switch (body) {
-            .checked_body => |body_id| self.checked_bodies.exprContainsDiagnosticError(self.checked_bodies.body(body_id).root_expr),
-            .entry_wrapper => |wrapper_id| self.checked_bodies.exprContainsDiagnosticError(self.entry_wrappers.get(wrapper_id).body_expr),
-            .intrinsic_wrapper, .unimplemented => false,
-        };
-    }
-
-    fn importedView(self: CheckedErrorReachability, key: CheckedModuleArtifactKey) ImportedModuleView {
-        return importedViewForKey(self.imports, key) orelse
-            checkedArtifactInvariant("checked-error reachability referenced an artifact outside the import views", .{});
-    }
-
-    fn isLocal(self: CheckedErrorReachability, key: CheckedModuleArtifactKey) bool {
-        return checkedArtifactKeyEql(key, self.artifact_key);
-    }
-
-    fn resolvedRefTarget(self: CheckedErrorReachability, ref: ResolvedValueRef) Target {
-        return switch (ref) {
-            .top_level_const, .imported_const => |use| self.constTarget(use.const_ref),
-            .selected_hoisted_const => |selected| self.constTarget(selected.const_use.const_ref),
-            .platform_required_const => |required| self.constTarget(required.const_use.const_ref),
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| self.procedureTarget(procedure),
-            .platform_required_proc => |required| self.procedureTarget(required.procedure),
-            .platform_required_checked_error => .reaches,
+    /// The local template a value reference names, if any. Only a reference
+    /// through this module's own top-level binding can name one.
+    fn referencedTemplate(self: SingleSourceCalls, ref: ResolvedValueRef) ?canonical.CheckedProcedureTemplateId {
+        const procedure = switch (ref) {
+            .top_level_proc, .promoted_top_level_proc => |procedure| procedure,
+            .platform_required_proc => |required| required.procedure,
             .local_param,
             .local_value,
             .local_mutable_version,
             .pattern_binder,
             .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
-            => .none,
+            .platform_required_checked_error,
+            .platform_required_const,
+            => return null,
+        };
+        const binding = switch (procedure.binding) {
+            .top_level => |binding| binding,
+            .platform_required => |required| ArtifactTopLevelProcedureBindingRef{ .artifact = required.artifact, .binding = required.procedure_binding },
+            .imported, .hosted => return null,
+        };
+        if (!checkedArtifactKeyEql(binding.artifact, self.artifact_key)) return null;
+        return switch (self.top_level_procedure_bindings.get(binding.binding).body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.localTemplate(template),
+                .lifted, .synthetic => null,
+            },
+            .callable_eval_template, .checked_error => null,
         };
     }
 
-    fn procedureTarget(self: CheckedErrorReachability, procedure: ProcedureUseTemplate) Target {
-        return switch (procedure.binding) {
-            .top_level => |binding| self.topLevelBindingTarget(binding.artifact, binding.binding),
-            .platform_required => |required| self.topLevelBindingTarget(required.artifact, required.procedure_binding),
-            .imported => |binding| blk: {
-                const imported = self.importedView(binding.artifact);
-                const row = importedProcedureBindingForDef(imported, binding.def) orelse
-                    checkedArtifactInvariant("checked-error reachability referenced an unexported imported procedure", .{});
-                break :blk switch (row.body) {
-                    .direct_template => |direct| self.callableTemplateTarget(direct.template),
-                    .callable_eval_template => |id| self.importedRootTarget(imported, imported.callable_eval_templates.templates[@intFromEnum(id)].root),
-                    .checked_error => .reaches,
-                };
-            },
-            .hosted => .none,
+    fn dispatchTemplate(self: SingleSourceCalls, plan: static_dispatch.StaticDispatchCallPlan) ?canonical.CheckedProcedureTemplateId {
+        const direct = switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
         };
-    }
-
-    fn topLevelBindingTarget(
-        self: CheckedErrorReachability,
-        artifact: CheckedModuleArtifactKey,
-        binding: TopLevelProcedureBindingRef,
-    ) Target {
-        if (self.isLocal(artifact)) {
-            return switch (self.top_level_procedure_bindings.get(binding).body) {
-                .direct_template => |direct| self.callableTemplateTarget(direct.template),
-                .callable_eval_template => |id| self.localRootTarget(self.callable_eval_templates.get(id).root),
-                .checked_error => .reaches,
-            };
-        }
-        const imported = self.importedView(artifact);
-        return switch (imported.top_level_procedure_bindings.get(binding).body) {
-            .direct_template => |direct| self.callableTemplateTarget(direct.template),
-            .callable_eval_template => |id| self.importedRootTarget(imported, imported.callable_eval_templates.templates[@intFromEnum(id)].root),
-            .checked_error => .reaches,
-        };
-    }
-
-    fn callableTemplateTarget(self: CheckedErrorReachability, template: canonical.CallableProcedureTemplateRef) Target {
-        return switch (template) {
-            .checked => |checked_template| self.templateTarget(checked_template),
-            .lifted,
-            .synthetic,
-            => checkedArtifactInvariant("checked-error reachability referenced a post-check template", .{}),
-        };
-    }
-
-    fn templateTarget(self: CheckedErrorReachability, template: canonical.ProcedureTemplateRef) Target {
-        const key = checkedArtifactKeyFromArtifactRef(template.artifact);
-        if (self.isLocal(key)) return .{ .local = template.template };
-        return if (self.importedView(key).checked_procedure_templates.templateReachesCheckedError(template.template)) .reaches else .none;
-    }
-
-    fn localRootTarget(self: CheckedErrorReachability, root: ComptimeRootId) Target {
-        const wrapper = self.entry_wrappers.lookupByRoot(root) orelse return .none;
-        return self.templateTarget(wrapper.template);
-    }
-
-    fn importedRootTarget(self: CheckedErrorReachability, imported: ImportedModuleView, root: ComptimeRootId) Target {
-        const wrapper = imported.entry_wrappers.lookupByRoot(root) orelse return .none;
-        return self.templateTarget(wrapper.template);
-    }
-
-    fn constTarget(self: CheckedErrorReachability, const_ref: ConstRef) Target {
-        if (self.isLocal(const_ref.artifact)) {
-            if (self.const_templates.get(const_ref).state == .unimplemented) return .none;
-            const root = switch (const_ref.owner) {
-                .top_level_binding => |top_level| self.compile_time_roots.lookupIdByPattern(top_level.pattern),
-                .hoisted_expr => |hoisted| if (self.hoisted_constants.lookupByExpr(hoisted.expr)) |entry| entry.root else null,
-            } orelse return .none;
-            return self.localRootTarget(root);
-        }
-        const imported = self.importedView(const_ref.artifact);
-        if (imported.const_templates.get(const_ref).state == .unimplemented) return .none;
-        const root = switch (const_ref.owner) {
-            .top_level_binding => |top_level| imported.compile_time_roots.lookupIdByPattern(top_level.pattern),
-            .hoisted_expr => |hoisted| if (imported.hoisted_constants.lookupByExpr(hoisted.expr)) |entry| entry.root else null,
-        } orelse return .none;
-        return self.importedRootTarget(imported, root);
-    }
-
-    fn recordDispatchPlan(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        plan: static_dispatch.StaticDispatchCallPlan,
-    ) Allocator.Error!void {
-        switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| {
-                if (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind == .structural) {
-                    checkedArtifactInvariant("direct checked call targeted a structural derivation", .{});
-                }
-                try visits.pushNode(recorder.allocator, direct.evidence);
+        return switch (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .procedure => self.localTemplate(procedure.template),
+                .low_level, .intrinsic, .graph_participating => null,
             },
-            .structural => if (plan.generated_codec_derivation) |derivation| {
-                try visits.pushDerivation(recorder.allocator, derivation);
-            },
-            .checked_error => try recorder.record(.reaches),
-            // The enclosing callable's evidence supplies this target, so the
-            // edge belongs to the instantiation site that supplies it.
-            .evidence_dependent, .@"unreachable" => {},
-            .direct_pending => checkedArtifactInvariant("checked-error reachability read an unfinalized direct call", .{}),
-        }
-        try self.drainEvidence(visits, recorder);
-    }
-
-    fn recordSiteEvidence(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        expr: CheckedExprId,
-    ) Allocator.Error!void {
-        const span = self.static_dispatch_plans.siteEvidenceSpan(expr) orelse return;
-        try visits.pending.append(recorder.allocator, .{ .evidence = span });
-        try self.drainEvidence(visits, recorder);
-    }
-
-    /// Record every template the pending evidence reaches. The traversal keeps
-    /// an explicit stack because nested evidence follows the depth of the
-    /// dispatched types.
-    fn drainEvidence(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-    ) Allocator.Error!void {
-        const plans = self.static_dispatch_plans;
-        while (visits.pending.pop()) |item| switch (item) {
-            .evidence => |span| for (plans.evidence_refs[span.start..][0..span.len]) |evidence| {
-                switch (evidence.resolution) {
-                    .direct => |node| try visits.pushNode(recorder.allocator, node),
-                    .structural => |structural| if (structural.generated_codec_derivation) |derivation| {
-                        try visits.pushDerivation(recorder.allocator, derivation);
-                    },
-                    .checked_error => try recorder.record(.reaches),
-                    // Forwarded obligations are supplied by an enclosing
-                    // instantiation site, and an unreachable obligation lowers
-                    // to a crash, never a call.
-                    .constraint, .from_callable, .from_scheme, .unreachable_value => {},
-                }
-                if (evidence.callable_contracts.len != 0) {
-                    try visits.pending.append(recorder.allocator, .{ .evidence = evidence.callable_contracts });
-                }
-            },
-            .node => |id| {
-                const node = plans.evidenceNode(id);
-                switch (node.target.kind) {
-                    .procedure => |procedure| switch (procedure.runtime_target) {
-                        .procedure => try recorder.record(self.templateTarget(procedure.template)),
-                        .low_level, .intrinsic, .graph_participating => {},
-                    },
-                    // A local procedure's body belongs to the template that declares it.
-                    .local_proc => {},
-                    // A structural target's body is the derivation it names below.
-                    .structural => {},
-                }
-                if (node.generated_codec_derivation) |derivation| {
-                    try visits.pushDerivation(recorder.allocator, derivation);
-                }
-                switch (node.nested) {
-                    .resolved => |nested| if (nested.len != 0) {
-                        try visits.pending.append(recorder.allocator, .{ .evidence = nested });
-                    },
-                    // Checking recorded no per-edge evidence entries for this target.
-                    .from_callable => {},
-                }
-            },
-            .derivation => |id| {
-                const derivation = plans.generated_codec_derivations[@intFromEnum(id)];
-                for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
-                    .callable => |node| try visits.pushNode(recorder.allocator, node),
-                    .structural => |nested| try visits.pushDerivation(recorder.allocator, nested),
-                    .checked_error => try recorder.record(.reaches),
-                    .pending => checkedArtifactInvariant("checked-error reachability read an unlinked generated codec call", .{}),
-                };
-            },
+            .local_proc, .structural => null,
         };
     }
 };
@@ -33774,17 +33501,6 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
-    /// Whether a compile-time root's evaluation can reach code checking
-    /// reported and replaced with a runtime error, in its own body or through
-    /// the procedures and constants it references. Such a root is never
-    /// requested. An expect that reaches a checked error is counted as a
-    /// compiler error without running its replacement crash.
-    pub fn compileTimeRootReachesCheckedError(self: *const CheckedModuleArtifact, root: CompileTimeRoot) bool {
-        if (self.checked_bodies.exprContainsDiagnosticError(root.expr)) return true;
-        const wrapper = self.entry_wrappers.lookupByRoot(root.id) orelse return false;
-        return self.checked_procedure_templates.templateReachesCheckedError(wrapper.template.template);
-    }
-
     /// A platform with declared app requirements is runtime-lowerable only
     /// after checking has published its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {
@@ -33824,7 +33540,6 @@ pub const CheckedModuleArtifact = struct {
         module_idx: u32,
         module_name: canonical.ModuleNameId,
         display_module_name: canonical.ModuleNameId,
-        qualified_module_name: canonical.ModuleNameId,
         kind: ModuleEnv.ModuleKind.Serialized,
 
         pub fn encode(identity: ModuleIdentity) ModuleIdentitySerialized {
@@ -33833,7 +33548,6 @@ pub const CheckedModuleArtifact = struct {
                 .module_idx = identity.module_idx,
                 .module_name = identity.module_name,
                 .display_module_name = identity.display_module_name,
-                .qualified_module_name = identity.qualified_module_name,
                 .kind = ModuleEnv.ModuleKind.Serialized.encode(identity.kind),
             };
         }
@@ -33844,7 +33558,6 @@ pub const CheckedModuleArtifact = struct {
                 .module_idx = self.module_idx,
                 .module_name = self.module_name,
                 .display_module_name = self.display_module_name,
-                .qualified_module_name = self.qualified_module_name,
                 .kind = self.kind.decode(),
             };
         }
@@ -33929,9 +33642,10 @@ pub const CheckedModuleArtifact = struct {
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
-            // byte pool add two explicit relocation pointers, and the
-            // checked-error template list one more. Loop mutation plans add one.
-            // Promoted local procedure templates and callable contract types add one each.
+            // byte pool add two explicit relocation pointers. Loop mutation
+            // plans add one. Promoted local procedure templates and callable
+            // contract types add one each, and the single-source-call template
+            // list one more.
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
         }
 
@@ -34481,25 +34195,22 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
-    fn evidencePathGrammarFailure(path: []const static_dispatch.EvidencePathStep) ?DispatchEvidenceFailure.Kind {
-        var path_index: usize = 0;
-        while (path_index < path.len) {
-            const path_step = path[path_index];
-            const kind = path_step.kindOrNull() orelse return .evidence_param_path_invalid_kind;
-            path_index += 1;
-            switch (kind) {
-                .fn_ret, .alias_backing, .nominal_backing => {
-                    if (path_step.data != 0) return .evidence_param_path_invalid_shape;
-                },
-                .tag_payload_tag => {
-                    if (path_index >= path.len) return .evidence_param_path_invalid_shape;
-                    const payload_kind = path[path_index].kindOrNull() orelse return .evidence_param_path_invalid_kind;
-                    if (payload_kind != .tag_payload_index) return .evidence_param_path_invalid_shape;
-                    path_index += 1;
-                },
-                .tag_payload_index => return .evidence_param_path_invalid_shape,
-                .fn_arg, .alias_arg, .nominal_arg, .tuple_elem, .record_field => {},
-            }
+    /// Check one published path node: a known step kind with its fixed data,
+    /// a parent earlier in the pool, and a tag label paired with exactly a
+    /// payload-index step.
+    fn evidencePathNodeFailure(nodes: []const static_dispatch.EvidencePathNode, index: usize) ?DispatchEvidenceFailure.Kind {
+        const node = nodes[index];
+        const kind = node.step.kindOrNull() orelse return .evidence_param_path_invalid_kind;
+        const parent_kind: ?static_dispatch.EvidencePathStep.Kind = if (node.parent == static_dispatch.no_evidence_path_node)
+            null
+        else if (node.parent < index)
+            nodes[node.parent].step.kindOrNull() orelse return .evidence_param_path_invalid_kind
+        else
+            return .evidence_param_path_out_of_bounds;
+        if ((kind == .tag_payload_index) != (parent_kind == .tag_payload_tag)) return .evidence_param_path_invalid_shape;
+        switch (kind) {
+            .fn_ret, .alias_backing, .nominal_backing => if (node.step.data != 0) return .evidence_param_path_invalid_shape,
+            .fn_arg, .alias_arg, .nominal_arg, .tuple_elem, .record_field, .tag_payload_tag, .tag_payload_index => {},
         }
         return null;
     }
@@ -34584,82 +34295,89 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
-    /// Verify that a normalized path selects a real component of the
-    /// template's published checked callable. This mirrors Monotype's path
-    /// vocabulary while resolving row labels across complete logical rows.
-    fn checkedEvidencePathResolves(
-        self: *const CheckedModuleArtifact,
-        start_ty: CheckedTypeId,
-        path: []const static_dispatch.EvidencePathStep,
-    ) bool {
-        const view = self.checked_types.view();
-        var ty = start_ty;
-        var path_index: usize = 0;
-        while (path_index < path.len) {
-            const path_step = path[path_index];
-            const kind = path_step.kindOrNull() orelse return false;
-            path_index += 1;
-            const payload = checkedPayloadOrNull(view, ty) orelse return false;
-            switch (kind) {
-                .fn_arg => {
-                    if (payload != .function) return false;
-                    if (path_step.data >= payload.function.args.len) return false;
-                    ty = payload.function.args[path_step.data];
-                },
-                .fn_ret => {
-                    if (payload != .function) return false;
-                    ty = payload.function.ret;
-                },
-                .alias_arg => {
-                    if (payload != .alias) return false;
-                    if (path_step.data >= payload.alias.args.len) return false;
-                    ty = payload.alias.args[path_step.data];
-                },
-                .alias_backing => {
-                    if (payload != .alias) return false;
-                    ty = payload.alias.backing;
-                },
-                .nominal_arg => {
-                    if (payload != .nominal) return false;
-                    if (path_step.data >= payload.nominal.args.len) return false;
-                    ty = payload.nominal.args[path_step.data];
-                },
-                .nominal_backing => {
-                    if (payload != .nominal) return false;
-                    ty = view.nominalBackingTemplateForPayload(payload.nominal) orelse return false;
-                },
-                .tuple_elem => {
-                    if (payload != .tuple) return false;
-                    if (path_step.data >= payload.tuple.len) return false;
-                    ty = payload.tuple[path_step.data];
-                },
-                .record_field => {
-                    if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return false;
-                    ty = checkedEvidenceRecordFieldChild(
-                        view,
-                        &self.canonical_names,
-                        ty,
-                        @enumFromInt(path_step.data),
-                    ) orelse return false;
-                },
-                .tag_payload_tag => {
-                    if (path_index >= path.len) return false;
-                    const payload_step = path[path_index];
-                    if (payload_step.kindOrNull() != .tag_payload_index) return false;
-                    path_index += 1;
-                    if (path_step.data >= self.canonical_names.tagLabelCount()) return false;
-                    ty = checkedEvidenceTagPayloadChild(
-                        view,
-                        &self.canonical_names,
-                        ty,
-                        @enumFromInt(path_step.data),
-                        payload_step.data,
-                    ) orelse return false;
-                },
-                .tag_payload_index => return false,
-            }
+    /// Applies one published path node to the checked type its parent selects.
+    /// This mirrors Monotype's path vocabulary while resolving row labels
+    /// across complete logical rows.
+    const CheckedEvidencePathStepper = struct {
+        artifact: *const CheckedModuleArtifact,
+
+        pub fn apply(
+            self: CheckedEvidencePathStepper,
+            ty: CheckedTypeId,
+            nodes: []const static_dispatch.EvidencePathNode,
+            node: u32,
+        ) Allocator.Error!?CheckedTypeId {
+            return self.artifact.checkedEvidencePathNodeType(ty, nodes, node);
         }
-        return true;
+    };
+
+    fn checkedEvidencePathNodeType(
+        self: *const CheckedModuleArtifact,
+        ty: CheckedTypeId,
+        nodes: []const static_dispatch.EvidencePathNode,
+        node: u32,
+    ) ?CheckedTypeId {
+        const view = self.checked_types.view();
+        const path_step = nodes[node].step;
+        const kind = path_step.kindOrNull() orelse return null;
+        switch (kind) {
+            .fn_arg => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .function) return null;
+                if (path_step.data >= payload.function.args.len) return null;
+                return payload.function.args[path_step.data];
+            },
+            .fn_ret => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .function) return null;
+                return payload.function.ret;
+            },
+            .alias_arg => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .alias) return null;
+                if (path_step.data >= payload.alias.args.len) return null;
+                return payload.alias.args[path_step.data];
+            },
+            .alias_backing => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .alias) return null;
+                return payload.alias.backing;
+            },
+            .nominal_arg => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .nominal) return null;
+                if (path_step.data >= payload.nominal.args.len) return null;
+                return payload.nominal.args[path_step.data];
+            },
+            .nominal_backing => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .nominal) return null;
+                return view.nominalBackingTemplateForPayload(payload.nominal);
+            },
+            .tuple_elem => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .tuple) return null;
+                if (path_step.data >= payload.tuple.len) return null;
+                return payload.tuple[path_step.data];
+            },
+            .record_field => {
+                if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return null;
+                return checkedEvidenceRecordFieldChild(view, &self.canonical_names, ty, @enumFromInt(path_step.data));
+            },
+            // The tag label selects nothing until its payload index does.
+            .tag_payload_tag => {
+                _ = checkedPayloadOrNull(view, ty) orelse return null;
+                return ty;
+            },
+            .tag_payload_index => {
+                const parent = nodes[node].parent;
+                if (parent == static_dispatch.no_evidence_path_node) return null;
+                const tag_step = nodes[parent].step;
+                if (tag_step.kindOrNull() != .tag_payload_tag) return null;
+                if (tag_step.data >= self.canonical_names.tagLabelCount()) return null;
+                return checkedEvidenceTagPayloadChild(view, &self.canonical_names, ty, @enumFromInt(tag_step.data), path_step.data);
+            },
+        }
     }
 
     /// Public `validateDispatchEvidence` function.
@@ -34672,7 +34390,7 @@ pub const CheckedModuleArtifact = struct {
     /// reported here at the boundary (in debug builds, where `verifyComplete`
     /// runs)—not a lowering panic. Returns the first failure found, or
     /// null when the artifact is total.
-    pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) ?DispatchEvidenceFailure {
+    pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) Allocator.Error!?DispatchEvidenceFailure {
         const table = &self.static_dispatch_plans;
         const type_view = self.checked_types.view();
 
@@ -35260,35 +34978,50 @@ pub const CheckedModuleArtifact = struct {
             if (@intFromEnum(callable) >= self.checked_types.payloads.items.len)
                 return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
         }
+        const path_nodes = templates.evidence_path_nodes;
+        for (0..path_nodes.len) |i| {
+            if (evidencePathNodeFailure(path_nodes, i)) |kind| return .{ .kind = kind, .index = @intCast(i) };
+        }
+        const allocator = self.owningAllocator();
+        const path_depths = try allocator.alloc(u32, path_nodes.len);
+        defer allocator.free(path_depths);
+        for (path_nodes, 0..) |node, i| {
+            path_depths[i] = if (node.parent == static_dispatch.no_evidence_path_node) 1 else path_depths[node.parent] + 1;
+        }
         for (templates.evidence_params_pool, 0..) |param, i| {
             if (@as(u64, param.callable_contracts.start) + param.callable_contracts.len > templates.evidence_param_callables.len)
                 return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
-            if (@as(u64, param.path.start) + param.path.len > templates.evidence_param_paths.len) {
+            const path_in_bounds = if (param.path.len == 0)
+                param.path.last == static_dispatch.no_evidence_path_node
+            else
+                param.path.last < path_nodes.len and path_depths[param.path.last] == param.path.len;
+            if (!path_in_bounds) {
                 return .{ .kind = .evidence_param_path_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
             if (@intFromEnum(param.callable_ty) >= self.checked_types.payloads.items.len) {
                 return .{ .kind = .evidence_param_callable_type_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
-            const path = templates.evidenceParamPath(param);
-            if (evidencePathGrammarFailure(path)) |kind| {
-                return .{ .kind = kind, .index = @intCast(i), .method = param.method };
+            if (param.path.len != 0 and path_nodes[param.path.last].step.kindOrNull() == .tag_payload_tag) {
+                return .{ .kind = .evidence_param_path_invalid_shape, .index = @intCast(i), .method = param.method };
             }
         }
+        var path_memo: dispatch_evidence.PathMemo(CheckedTypeId) = .{};
+        defer path_memo.deinit(allocator);
+        const path_stepper = CheckedEvidencePathStepper{ .artifact = self };
         for (templates.templates.items) |template| {
             const params = templates.evidenceParams(&template);
             for (params, 0..) |param, param_offset| {
-                const path = templates.evidenceParamPath(param);
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
                     .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
-                        if (path.len != 0) {
+                        if (param.path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         }
                         continue;
                     },
                 };
-                if (!self.checkedEvidencePathResolves(source_root, path)) {
+                if (try path_memo.resolve(allocator, path_nodes, param.path.last, @intFromEnum(source_root), source_root, path_stepper) == null) {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = template.evidence_params.start + @as(u32, @intCast(param_offset)),
@@ -35303,16 +35036,15 @@ pub const CheckedModuleArtifact = struct {
             }
             const params = templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
             for (params, 0..) |param, param_offset| {
-                const path = templates.evidenceParamPath(param);
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
                     .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
-                        if (path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
+                        if (param.path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;
                     },
                 };
-                if (!self.checkedEvidencePathResolves(source_root, path)) {
+                if (try path_memo.resolve(allocator, path_nodes, param.path.last, @intFromEnum(source_root), source_root, path_stepper) == null) {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)),
@@ -35428,7 +35160,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        if (self.validateDispatchEvidence()) |failure| {
+        if (try self.validateDispatchEvidence()) |failure| {
             const expr_idx: ?u32 = if (failure.expr) |expr| @intFromEnum(expr) else null;
             const method_text: []const u8 = if (failure.method) |method| self.canonical_names.methodNameText(method) else "<none>";
             std.debug.panic(
@@ -37221,6 +36953,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_unused_variable,
             .diag_used_underscore_variable,
             .diag_duplicate_record_field,
+            .diag_duplicate_pattern_binder,
             .diag_duplicate_tag,
             .diag_crash_expects_string,
             .diag_f64_pattern_literal,
@@ -37234,6 +36967,8 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_infinite_loop_never_exits,
             .diag_trailing_try_suffix,
             .diag_return_outside_fn,
+            .diag_control_flow_in_expect,
+            .diag_var_reassigned_in_expect,
             .diag_mutually_recursive_type_aliases,
             .diag_deprecated_number_suffix,
             .diag_range_op_chained,
@@ -37328,13 +37063,11 @@ pub fn checkedModuleKeyFromTypedModule(
     defer canonical_names.deinit();
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
-    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module_idx,
         .module_name = module_name,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
 
@@ -37375,13 +37108,11 @@ pub fn publishFromTypedModule(
     errdefer canonical_names.deinit();
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
-    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module_idx,
         .module_name = module_name,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
     // Intern this module's content identity up front so later publication
@@ -37675,8 +37406,7 @@ pub fn publishFromTypedModule(
     const dispatch_operands = try checkedDispatchOperands(allocator, checked_bodies.exprCount(), &static_dispatch_plans, null);
     defer freeCheckedDispatchOperands(allocator, dispatch_operands);
     try CheckedLoopMutationPublisher.publish(allocator, checked_bodies, dispatch_operands);
-    var any_diagnostic_error = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
-    excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
+    _ = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -37752,7 +37482,6 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         &entry_wrappers,
         &checked_procedure_templates,
-        &template_iterator_refs,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
@@ -37760,29 +37489,23 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
     );
     if (rejected_dispatches) {
-        any_diagnostic_error = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, .{
+        _ = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, .{
             .module = artifact_key,
             .refs = &resolved_value_refs,
             .roots = &compile_time_roots,
             .const_templates = &const_templates,
         });
-        excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
     }
-    try (CheckedErrorReachability{
+    try (SingleSourceCalls{
+        .module = module,
         .artifact_key = artifact_key,
-        .imports = .{ .current_owner = artifact_key, .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
+        .exported_defs = exports,
         .checked_bodies = checked_bodies,
         .templates = &checked_procedure_templates,
-        .entry_wrappers = &entry_wrappers,
         .resolved_value_refs = &resolved_value_refs,
         .top_level_procedure_bindings = &top_level_procedure_bindings,
-        .callable_eval_templates = &callable_eval_templates,
-        .compile_time_roots = &compile_time_roots,
-        .hoisted_constants = &hoisted_constants,
-        .const_templates = &const_templates,
         .static_dispatch_plans = &static_dispatch_plans,
-        .template_refs = &template_iterator_refs,
-    }).publish(allocator, any_diagnostic_error, compile_time_roots.roots);
+    }).publish(allocator);
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
@@ -38127,7 +37850,6 @@ fn expectProvidedExportKind(
         .module_idx = builtin_module.moduleIndex(),
         .module_name = builtin_module_name,
         .display_module_name = builtin_module_name,
-        .qualified_module_name = builtin_module_name,
         .kind = builtin_env.module_kind,
     };
     const builtin_key = CheckedModuleArtifactKey.compute(
@@ -38248,13 +37970,11 @@ fn expectProvidedExportKind(
 
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.display_module_name_idx);
-    const qualified_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.qualified_module_ident);
     const module_identity = ModuleIdentity{
         .stable_hash = computeStableModuleIdentityHash(module_env),
         .module_idx = module.moduleIndex(),
         .module_name = module_name,
         .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
 
@@ -39099,7 +38819,6 @@ test "relation projection preserves anonymous row identity and provenance" {
             .module_idx = 1,
             .module_name = module_name,
             .display_module_name = module_name,
-            .qualified_module_name = module_name,
             .kind = .app,
         },
         .checking_context_identity = .{},
@@ -39350,7 +39069,6 @@ test "artifact views are read-only projections" {
             .module_idx = 0,
             .module_name = test_module,
             .display_module_name = test_module,
-            .qualified_module_name = test_module,
             .kind = .package,
         },
         .checking_context_identity = .{},
@@ -39503,7 +39221,6 @@ fn testVisibilityImportedView(
             // Method-scope collection reads only the stable identity hash.
             .module_name = undefined,
             .display_module_name = undefined,
-            .qualified_module_name = undefined,
             .kind = .package,
         },
         .public_api_dependencies = public_api_dependencies,
@@ -39578,7 +39295,6 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
         // Method-scope collection reads only the stable identity hash.
         .module_name = undefined,
         .display_module_name = undefined,
-        .qualified_module_name = undefined,
         .kind = .package,
     };
     var scope = try collectMethodLookupScope(gpa, current, current_identity, &available, &relations, &direct);
@@ -40066,8 +39782,8 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b1}, pool[plan.expect_only.start..][0..plan.expect_only.len]);
+            // b1 is reassigned only inside an expect, which never carries loop state.
+            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.binders.start..][0..plan.binders.len]);
         }
         const condition_plans = [_]CheckedLoopMutations{
             body.loopMutations(body.statement(@enumFromInt(7)).data.while_.mutations.?),
@@ -40075,8 +39791,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (condition_plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqual(@as(u32, 0), plan.expect_only.len);
+            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.binders.start..][0..plan.binders.len]);
         }
     }
 }
@@ -40240,7 +39955,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .module_idx = 9,
         .module_name = @enumFromInt(1),
         .display_module_name = @enumFromInt(2),
-        .qualified_module_name = @enumFromInt(3),
         .kind = .module,
     };
     var key = CheckedModuleArtifactKey{};
@@ -40517,8 +40231,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xC0, 0x08, 0xC0, 0x6E, 0x82, 0xAF, 0xF8, 0x70, 0x5D, 0xE9, 0xBE, 0xEE, 0x4D, 0x96, 0xCE, 0xE1,
-        0x85, 0xB4, 0x51, 0x78, 0xA8, 0x60, 0x93, 0x56, 0x2D, 0xDF, 0x0F, 0x83, 0xC8, 0x02, 0x40, 0x60,
+        0xDC, 0x02, 0x5A, 0xE0, 0x70, 0x4B, 0x6B, 0x6F, 0x61, 0xFE, 0x92, 0xED, 0xC0, 0xBE, 0x14, 0x37,
+        0x99, 0xA5, 0x3D, 0x7F, 0x80, 0xAB, 0x1D, 0x1A, 0xCB, 0xEB, 0x1F, 0xA3, 0xCA, 0x70, 0x75, 0x7E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

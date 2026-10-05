@@ -8730,6 +8730,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_dict_copy", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_box", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_unbox", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_record_update", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_adapt", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_inspect", &.{ .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
@@ -9001,6 +9002,24 @@ fn generateBoxyBox(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitI32Const(@intCast(@intFromEnum(assign.payload_mode)));
     try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
     try self.emitBoxyCall("roc_boxy_box");
+    try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
+    try self.emitBoxyOutValue(target_layout, out_ptr);
+}
+
+fn generateBoxyRecordUpdate(self: *Self, assign: anytype) Allocator.Error!void {
+    const target_layout = self.procLocalLayoutIdx(assign.target);
+    const out_ptr = try self.allocBoxyOutPtr(target_layout);
+    const out_desc_ptr = try self.allocBoxyOutDescPtr();
+    try self.emitLocalGet(out_ptr);
+    try self.emitLocalGet(out_desc_ptr);
+    try self.emitBoxyValuePtr(assign.base);
+    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.base))));
+    try self.resolveBoxyDesc(assign.base_desc);
+    try self.emitBoxyValuePtr(assign.fields);
+    try self.emitI32Const(@intCast(@intFromEnum(assign.fields_layout)));
+    try self.resolveBoxyDesc(assign.fields_desc);
+    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
+    try self.emitBoxyCall("roc_boxy_record_update");
     try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
 }
@@ -9828,6 +9847,11 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .assign_boxy_box => |assign| {
             try self.generateBoxyBox(assign);
+            try self.bindAssignedLocal(assign.target);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .assign_boxy_record_update => |assign| {
+            try self.generateBoxyRecordUpdate(assign);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -12104,6 +12128,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .simd_clmul_hi => return self.emitSimdLowLevel(.simd_clmul_hi, ll, args),
 
         .num_plus, .num_minus, .num_times => unreachable,
+        // LIR lowering splits this into an alias and `list_prefetch`.
+        .list_prefetched => unreachable,
         // Numeric operations (arithmetic, comparisons, shifts)
         .num_int_add_wrap,
         .num_int_add_crash_on_overflow,
@@ -12590,6 +12616,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // List operations
+        // A hint only: WebAssembly has no prefetch, so the result is the
+        // empty value and nothing else is emitted.
+        .list_prefetch => {
+            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        },
         .list_len => {
             // Load length from RocList struct (offset 4)
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -15826,6 +15858,8 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_len,
         .list_capacity,
         .list_get_unsafe,
+        .list_prefetch,
+        .list_prefetched,
         .list_append_unsafe,
         .list_concat,
         .list_with_capacity,
@@ -17886,10 +17920,9 @@ fn emitStrFromUtf8Lossy(self: *Self, list_arg: ProcLocalId) Allocator.Error!void
         try self.emitLoadOp(.i32, 0);
         try self.emitLocalSet(data_ptr);
 
-        // `str_from_utf8_lossy` is an allocating primitive in LIR. Keep the
-        // Wasm lowering faithful to that contract instead of reinterpreting
-        // the input List allocation as the returned Str. ARC releases the
-        // input independently after this operation.
+        // This lowering copies the borrowed input into an owned result.
+        // The operation permits allocation or sharing; ARC releases the input
+        // independently after this operation.
         try self.emitHeapAllocWithRefcount(len, 1, false);
         const result_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLocalSet(result_data);

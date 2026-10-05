@@ -4470,12 +4470,10 @@ test "findModuleByQualifiedNameInPackage strictly preserves shorthand identity a
     try pkg_app.shorthands.put(try gpa.dupe(u8, "dep"), try gpa.dupe(u8, "dep_pkg"));
 
     // App also has a hierarchical module named "dep.Missing"
-    try pkg_app.modules.append(gpa, coordinator_mod.ModuleState.init(try gpa.dupe(u8, "dep.Missing"), try gpa.dupe(u8, "/workspace/dep_Missing.roc")));
-    try pkg_app.module_names.put(pkg_app.modules.items[0].name, 0);
+    _ = try pkg_app.ensureModule(gpa, "dep.Missing", "/workspace/dep_Missing.roc");
 
     // dep_pkg has module "RealModule" (but not "Missing")
-    try pkg_dep.modules.append(gpa, coordinator_mod.ModuleState.init(try gpa.dupe(u8, "RealModule"), try gpa.dupe(u8, "/workspace/dep/RealModule.roc")));
-    try pkg_dep.module_names.put(pkg_dep.modules.items[0].name, 0);
+    _ = try pkg_dep.ensureModule(gpa, "RealModule", "/workspace/dep/RealModule.roc");
 
     try coord.packages.put("app", &pkg_app);
     try coord.packages.put("dep_pkg", &pkg_dep);
@@ -4497,8 +4495,7 @@ test "findModuleByQualifiedNameInPackage strictly preserves shorthand identity a
     // 3. Dotted name with undeclared qualifier does NOT resolve against foreign canonical packages
     var pkg_other = coordinator_mod.PackageState.init(gpa, try gpa.dupe(u8, "foreign"), try gpa.dupe(u8, "/workspace/foreign"), null);
     defer pkg_other.deinit(gpa);
-    try pkg_other.modules.append(gpa, coordinator_mod.ModuleState.init(try gpa.dupe(u8, "Mod"), try gpa.dupe(u8, "/workspace/foreign/Mod.roc")));
-    try pkg_other.module_names.put(pkg_other.modules.items[0].name, 0);
+    _ = try pkg_other.ensureModule(gpa, "Mod", "/workspace/foreign/Mod.roc");
     try coord.packages.put("foreign", &pkg_other);
 
     const foreign_res = env.findModuleByQualifiedNameInPackage(&pkg_app, "foreign.Mod");

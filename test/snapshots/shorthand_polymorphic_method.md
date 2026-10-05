@@ -114,7 +114,7 @@ main = {
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 251)
+			(e-dispatch-call (method "len") (constraint-fn-var 255)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -133,7 +133,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "int_list"))
-				(e-call (constraint-fn-var 292)
+				(e-call (constraint-fn-var 296)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list
@@ -143,7 +143,7 @@ main = {
 							(e-num (value "3"))))))
 			(s-let
 				(p-assign (ident "string_list"))
-				(e-call (constraint-fn-var 324)
+				(e-call (constraint-fn-var 328)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list

@@ -201,9 +201,6 @@ pub const FieldPlace = struct {
 pub const PayloadView = struct {
     view: LIR.LocalId,
     tag_discriminant: u32,
-    /// Scratch layout for the residual dispatch, borrowed from the
-    /// container's single-definition discriminant read.
-    discriminant_layout: layout_mod.Idx,
 };
 
 /// Committed field-place domain for one dismantlable container. Residual
@@ -400,7 +397,6 @@ const UnionRoot = struct {
     view: u32 = no_index,
     variant_index: u32 = 0,
     tag_discriminant: u32 = 0,
-    discriminant_layout: ?layout_mod.Idx = null,
 };
 
 const ambiguous_view: u32 = no_index - 1;
@@ -655,12 +651,6 @@ const Analysis = struct {
         const root_index = self.unionRootOf(local) orelse return;
         const entry = try self.unionEntryOf(root_index);
         entry.disqualified = true;
-    }
-
-    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
-        const root_index = self.unionRootOf(source) orelse return;
-        const entry = try self.unionEntryOf(root_index);
-        if (entry.discriminant_layout == null) entry.discriminant_layout = self.store.getLocal(target).layout_idx;
     }
 
     /// A borrowed payload view of a union root that owns every refcounted
@@ -940,6 +930,7 @@ const FutureFields = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -1041,6 +1032,7 @@ fn fieldObservedAfter(
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -1898,9 +1890,7 @@ pub fn compute(
                     },
                     .discriminant => |op| {
                         // The tag word is disjoint from every stored unit, so
-                        // reading it is no use of a tag union beyond lending
-                        // its layout to the residual dispatch.
-                        try analysis.noteDiscriminantRead(op.source, stmt.target);
+                        // reading it is no use of a tag union.
                         analysis.disqualify(op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
@@ -1975,6 +1965,13 @@ pub fn compute(
             },
             .assign_boxy_box => |stmt| {
                 try analysis.useWhole(current, stmt.payload);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_record_update => |stmt| {
+                try analysis.useWhole(current, stmt.base);
+                try analysis.useWhole(current, stmt.fields);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2342,7 +2339,6 @@ pub fn compute(
         const union_root: ?*UnionRoot = if (analysis.view_root[@intFromEnum(local)] != no_index) blk: {
             const root_entry = analysis.union_roots.getPtr(analysis.view_root[@intFromEnum(local)]) orelse continue :candidates;
             if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @intFromEnum(local)) continue :candidates;
-            if (root_entry.discriminant_layout == null) continue :candidates;
             break :blk root_entry;
         } else null;
 
@@ -2360,6 +2356,7 @@ pub fn compute(
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2600,7 +2597,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2727,6 +2724,12 @@ pub fn compute(
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
                 try result.owned_only_takes.put(gpa, read.stmt, take);
+                // A target solved owned holds its own unit in every emission;
+                // the take only spares its retain. Only a target solved
+                // borrowed needs its binding overridden to owned, and a
+                // borrowed binding has exactly one defining read, so exactly
+                // one parameter root authorizes the override.
+                if (!solution.isBorrowed(read.target)) continue;
                 const target_index = @intFromEnum(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
                 if (prior != no_index and prior != @intFromEnum(activation_root)) {
@@ -2766,7 +2769,6 @@ pub fn compute(
                 .payload_view = .{
                     .view = local,
                     .tag_discriminant = view_root_entry.tag_discriminant,
-                    .discriminant_layout = view_root_entry.discriminant_layout.?,
                 },
             });
         } else if (owned_only) {

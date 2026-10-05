@@ -44,13 +44,10 @@ pub const TestProcessDirs = struct {
     /// Persistent-install root, exported as ROC_INSTALL_DIR; see
     /// IsolatedCacheDirs.install_dir.
     install_dir: []u8,
-    /// Per-job temp dir, exported as TEMP/TMP/TMPDIR to the roc subprocess. Roc
-    /// derives its runtime-host scratch dir (`<temp>/roc/<version>/...`) from
-    /// these and runs a background cleanup thread that iterates and deletes
-    /// entries under it. Without per-job isolation every concurrent roc process
-    /// shares the system temp dir, so those cleanup threads race the filesystem
-    /// across processes (one deletes a dir another is writing/iterating),
-    /// producing non-deterministic access violations. See putIsolatedTempEnv.
+    /// Per-job temp dir, exported as TEMP/TMP/TMPDIR to the roc subprocess so
+    /// anything it or its tools write to the system temp dir stays isolated
+    /// per job. Roc's own scratch dirs live under `roc_cache_dir`, so they are
+    /// already per job. See putIsolatedTempEnv.
     temp_dir: []u8,
     work_dir: []u8,
 
@@ -63,10 +60,9 @@ pub const TestProcessDirs = struct {
     }
 };
 
-/// Export TEMP/TMP (Windows) and TMPDIR (POSIX) so a roc subprocess writes its
-/// runtime-host scratch artifacts under `temp_dir` instead of the shared system
-/// temp dir. This keeps each concurrent roc process's temp tree disjoint, so
-/// roc's background temp-cleanup thread can never race another process's files.
+/// Export TEMP/TMP (Windows) and TMPDIR (POSIX) so whatever a roc subprocess
+/// writes to the system temp dir lands under `temp_dir` instead of the shared
+/// one, keeping concurrent test jobs' temp files disjoint.
 pub fn putIsolatedTempEnv(env_map: *std.process.Environ.Map, temp_dir: []const u8) std.mem.Allocator.Error!void {
     if (builtin.os.tag == .windows) {
         try env_map.put("TEMP", temp_dir);

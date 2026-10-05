@@ -16,29 +16,53 @@ const depth = 5000;
 const depth_str = std.fmt.comptimePrint("{d}", .{depth});
 const stack_bytes = 4 * 1024 * 1024;
 
-/// Shapes whose compilation does work superlinear in their depth nest less
-/// deeply, on a stack still far smaller than that depth times any per-level
-/// recursion cost.
-const shallow_depth = 1000;
-const shallow_depth_str = std.fmt.comptimePrint("{d}", .{shallow_depth});
+/// Shapes whose compilation still does work superlinear in their depth nest
+/// less deeply, on a stack still far smaller than that depth times any
+/// per-level recursion cost.
 const shallow_stack_bytes = 2 * 1024 * 1024;
 
-/// A deep equality's case fusion, a curried lambda chain's instantiated
-/// types, and a method-dispatch chain's waiting dispatch constraints cost the
-/// square of their depth.
+/// A curried lambda chain instantiates each level's whole remaining function
+/// type, so it costs the square of its depth.
 const shallower_depth = 500;
-const shallower_depth_str = std.fmt.comptimePrint("{d}", .{shallower_depth});
 
-/// A loop nest's liveness facts grow with the product of its size and its
-/// depth.
+/// Each loop of a loop nest keeps a set of every enclosing loop's iteration
+/// state, so its ownership facts cost the square of its depth.
 const loop_depth = 300;
 
 /// Lowering a custom-parser chain for compile-time evaluation relates each
-/// level's codec contract and layout to every level inside it.
+/// level's codec contract type, which holds every level inside it.
 const codec_chain_depth = 100;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
+}
+
+/// `format` printed with `args(i)` for each `i` below `n`, written into one
+/// buffer sized up front so building it stays linear in `n`.
+fn numberedLines(
+    comptime n: usize,
+    comptime format: []const u8,
+    comptime Args: type,
+    comptime args: fn (usize) Args,
+) []const u8 {
+    @setEvalBranchQuota(100_000_000);
+    comptime {
+        var len: usize = 0;
+        for (0..n) |i| len += std.fmt.count(format, args(i));
+        var buf: [len]u8 = undefined;
+        var at: usize = 0;
+        for (0..n) |i| at += (std.fmt.bufPrint(buf[at..], format, args(i)) catch unreachable).len;
+        const lines = buf;
+        return &lines;
+    }
+}
+
+fn callChainArgs(i: usize) struct { usize, usize, usize } {
+    return .{ i, i, i + 1 };
+}
+
+fn methodChainArgs(i: usize) struct { usize, usize, usize, usize, usize, usize } {
+    return .{ i, i, i, i, i + 1, i + 1 };
 }
 
 /// A custom parser whose where-clause asks for its argument's parser, applied
@@ -108,14 +132,20 @@ const codec_chain_prelude =
 
 fn codecChain(comptime n: usize) []const u8 {
     return codec_chain_prelude ++
-        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError])\n" ++
+        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError, MissingRequiredField(Str)])\n" ++
         "probe = |input| parse(input)\n\n" ++
         "main = match probe(State.Done) {\n    Ok(_) => \"ok\"\n    Err(_) => \"err\"\n}\n";
 }
 
 /// Deep-nesting eval cases, each run on a small stack under both
 /// specialization strategies.
-pub const tests = cases ++ boxyVariants(&cases) ++ boxy_cases;
+pub const tests = memoryStressCases(cases ++ boxyVariants(&cases) ++ boxy_cases);
+
+fn memoryStressCases(comptime input: anytype) @TypeOf(input) {
+    var out = input;
+    for (&out) |*case| case.serial = true;
+    return out;
+}
 
 fn nestedRecord(comptime n: usize) []const u8 {
     return repeat("{ a: ", n) ++ "1.U64" ++ repeat(" }", n);
@@ -127,7 +157,7 @@ fn boxyCase(comptime name: []const u8, comptime source: []const u8, comptime exp
         .source_kind = .module,
         .source = source,
         .expected = .{ .inspect_str = expected },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
         .specialization_strategy = .boxy,
         .skip = .{ .wasm = true },
     };
@@ -136,12 +166,12 @@ fn boxyCase(comptime name: []const u8, comptime source: []const u8, comptime exp
 /// Deep types flowing through generic code, whose runtime descriptors and
 /// dictionaries Boxy builds from the type's structure.
 const boxy_cases = [_]TestCase{
-    boxyCase("deep record through a generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(shallow_depth) ++ ")" ++ repeat(".a", shallow_depth) ++ "\n", "1"),
-    boxyCase("deep record inspected", "main = Str.inspect(" ++ nestedRecord(shallow_depth) ++ ")\n", "\"" ++ repeat("{ a: ", shallow_depth) ++ "1" ++ repeat(" }", shallow_depth) ++ "\""),
-    boxyCase("deep record equality", "main = " ++ nestedRecord(shallow_depth) ++ " == " ++ nestedRecord(shallow_depth) ++ "\n", "True"),
-    boxyCase("deep record through generic equality", "eq = |x, y| x == y\nmain = eq(" ++ nestedRecord(shallow_depth) ++ ", " ++ nestedRecord(shallow_depth) ++ ")\n", "True"),
-    boxyCase("deep record through generic inspect", "show = |x| Str.inspect(x)\nmain = show(" ++ nestedRecord(shallow_depth) ++ ")\n", "\"" ++ repeat("{ a: ", shallow_depth) ++ "1" ++ repeat(" }", shallow_depth) ++ "\""),
-    boxyCase("deep record in a generic list", "wrap = |x| [x, x]\nmain = wrap(" ++ nestedRecord(shallow_depth) ++ ").len()\n", "2"),
+    boxyCase("deep record through a generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(depth) ++ ")" ++ repeat(".a", depth) ++ "\n", "1"),
+    boxyCase("deep record inspected", "main = Str.inspect(" ++ nestedRecord(depth) ++ ")\n", "\"" ++ repeat("{ a: ", depth) ++ "1" ++ repeat(" }", depth) ++ "\""),
+    boxyCase("deep record equality", "main = " ++ nestedRecord(depth) ++ " == " ++ nestedRecord(depth) ++ "\n", "True"),
+    boxyCase("deep record through generic equality", "eq = |x, y| x == y\nmain = eq(" ++ nestedRecord(depth) ++ ", " ++ nestedRecord(depth) ++ ")\n", "True"),
+    boxyCase("deep record through generic inspect", "show = |x| Str.inspect(x)\nmain = show(" ++ nestedRecord(depth) ++ ")\n", "\"" ++ repeat("{ a: ", depth) ++ "1" ++ repeat(" }", depth) ++ "\""),
+    boxyCase("deep record in a generic list", "wrap = |x| [x, x]\nmain = wrap(" ++ nestedRecord(depth) ++ ").len()\n", "2"),
 };
 
 /// Each case again, lowered without specialization (`--specialize=no`).
@@ -176,9 +206,9 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: nested tuples",
         .source_kind = .module,
-        .source = "main = " ++ repeat("(", shallow_depth) ++ "1.U64" ++ repeat(", 2)", shallow_depth) ++ repeat(".0", shallow_depth) ++ "\n",
+        .source = "main = " ++ repeat("(", depth) ++ "1.U64" ++ repeat(", 2)", depth) ++ repeat(".0", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested tags",
@@ -186,10 +216,10 @@ const cases = [_]TestCase{
         // Rendering the value would recurse once per level at runtime, which
         // is the program's own depth; the untaken branch still compiles the
         // rendering of the deep type.
-        .source = "nested = " ++ repeat("Ok(", shallow_depth) ++ "1.U64" ++ repeat(")", shallow_depth) ++
+        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
             "\nrender = |n| if n == 0 { 1.U64 } else { Str.count_utf8_bytes(Str.inspect(nested)) }\nmain = render(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested blocks",
@@ -220,9 +250,9 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: deep list pattern",
         .source_kind = .module,
-        .source = "f = |l| match l { " ++ repeat("[", shallow_depth) ++ "x" ++ repeat("]", shallow_depth) ++ " => x, _ => 0.U64 }\nmain = f(" ++ repeat("[", shallow_depth) ++ "1.U64" ++ repeat("]", shallow_depth) ++ ")\n",
+        .source = "f = |l| match l { " ++ repeat("[", depth) ++ "x" ++ repeat("]", depth) ++ " => x, _ => 0.U64 }\nmain = f(" ++ repeat("[", depth) ++ "1.U64" ++ repeat("]", depth) ++ ")\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: curried lambdas",
@@ -237,10 +267,10 @@ const cases = [_]TestCase{
         // Comparing the values would recurse once per level at runtime, which
         // is the program's own depth; the untaken branch still compiles the
         // equality of the deep type.
-        .source = "nested = " ++ repeat("Ok(", shallower_depth) ++ "1.U64" ++ repeat(")", shallower_depth) ++
+        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
             "\ncompare = |n| if n == 0 { 1.U64 } else if nested == nested { 2.U64 } else { 3.U64 }\nmain = compare(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: long call chain",
@@ -248,28 +278,20 @@ const cases = [_]TestCase{
         // Running the chain would recurse once per function at runtime, which
         // is the program's own depth; the untaken branch still compiles every
         // function in the chain.
-        .source = blk: {
-            @setEvalBranchQuota(10_000_000);
-            var out: []const u8 = "";
-            for (0..shallow_depth) |i| out = out ++ std.fmt.comptimePrint("f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", .{ i, i, i + 1 });
-            break :blk out;
-        } ++ "f" ++ shallow_depth_str ++ " : U64 -> U64\nf" ++ shallow_depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
+        .source = numberedLines(depth, "f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", struct { usize, usize, usize }, callChainArgs) ++
+            "f" ++ depth_str ++ " : U64 -> U64\nf" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: method dispatch chain",
         .source_kind = .module,
         // Each method's body dispatches on the next type's value, whose
         // method checking resolves on demand.
-        .source = blk: {
-            @setEvalBranchQuota(10_000_000);
-            var out: []const u8 = "";
-            for (0..shallower_depth) |i| out = out ++ std.fmt.comptimePrint("T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", .{ i, i, i, i, i + 1, i + 1 });
-            break :blk out;
-        } ++ "T" ++ shallower_depth_str ++ " := [V" ++ shallower_depth_str ++ "(U64)].{\n    step = |T" ++ shallower_depth_str ++ ".V" ++ shallower_depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
+        .source = numberedLines(depth, "T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", struct { usize, usize, usize, usize, usize, usize }, methodChainArgs) ++
+            "T" ++ depth_str ++ " := [V" ++ depth_str ++ "(U64)].{\n    step = |T" ++ depth_str ++ ".V" ++ depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested for loops",
@@ -288,23 +310,23 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: nested while loops",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("while $total < 1 {\n", loop_depth) ++ "$total = $total + 1\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("while $total < 1 {\n", depth) ++ "$total = $total + 1\n" ++ repeat("}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested stateful ifs",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("if $total == 0 {\n", shallow_depth) ++ "$total = $total + 1\n" ++ repeat("} else {}\n", shallow_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("if $total == 0 {\n", depth) ++ "$total = $total + 1\n" ++ repeat("} else {}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested stateful matches",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("match $total {\n0 => {\n", shallow_depth) ++ "$total = $total + 1\n" ++ repeat("}\n_ => {}\n}\n", shallow_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("match $total {\n0 => {\n", depth) ++ "$total = $total + 1\n" ++ repeat("}\n_ => {}\n}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested divergent blocks",
@@ -365,9 +387,9 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: nested field access receivers",
         .source_kind = .module,
-        .source = "main = " ++ repeat("{ a: ", shallow_depth) ++ "1.U64" ++ repeat(" }.a", shallow_depth) ++ "\n",
+        .source = "main = " ++ repeat("{ a: ", depth) ++ "1.U64" ++ repeat(" }.a", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: deeply nested constant",
@@ -379,23 +401,23 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: lambdas nested as call arguments",
         .source_kind = .module,
-        .source = "apply = |f, x| f(x)\nmain = " ++ repeat("apply(|_| ", shallow_depth) ++ "1.U64" ++ repeat(", 0.U64)", shallow_depth) ++ "\n",
+        .source = "apply = |f, x| f(x)\nmain = " ++ repeat("apply(|_| ", depth) ++ "1.U64" ++ repeat(", 0.U64)", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: closures nested as call arguments",
         .source_kind = .module,
-        .source = "apply = |f, x| f(x)\nmain = {\n    a = 1.U64\n    " ++ repeat("apply(|_| ", shallow_depth) ++ "a" ++ repeat(", 0.U64)", shallow_depth) ++ "\n}\n",
+        .source = "apply = |f, x| f(x)\nmain = {\n    a = 1.U64\n    " ++ repeat("apply(|_| ", depth) ++ "a" ++ repeat(", 0.U64)", depth) ++ "\n}\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: lambdas nested as method arguments",
         .source_kind = .module,
-        .source = "main = " ++ repeat("[1.U64].map(|_| ", shallow_depth) ++ "1.U64" ++ repeat(").len()", shallow_depth) ++ "\n",
+        .source = "main = " ++ repeat("[1.U64].map(|_| ", depth) ++ "1.U64" ++ repeat(").len()", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: custom parsers nesting derived record parsers",

@@ -260,6 +260,7 @@ pub const ProgramView = struct {
     comptime_sites: []const ComptimeSite,
     /// See `Mono.ProgramBuilder.lowering_modules`.
     lowering_modules: []const check.CheckedModule.ModuleId,
+    platform_requirement_filling: ?Common.PlatformRequirementFilling,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
@@ -531,6 +532,11 @@ pub const Program = struct {
     /// Checked modules of this lowering's input, moved from Monotype and
     /// addressed by `Common.LoweringModuleId`.
     lowering_modules: ProgramList(check.CheckedModule.ModuleId, "lowering_modules") = .empty,
+    /// See `Common.PlatformRequirementFilling` (moved from Monotype).
+    platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
+    /// Functions whose code reaches a platform requirement, computed on first
+    /// use by `fnReachesPlatformRequirement`.
+    requirement_reaching_fns: ?std.DynamicBitSetUnmanaged = null,
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
@@ -576,6 +582,8 @@ pub const Program = struct {
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
         result.current_inline_scope = self.current_inline_scope;
+        result.platform_requirement_filling = self.platform_requirement_filling;
+        result.requirement_reaching_fns = null;
         return result;
     }
 
@@ -772,6 +780,7 @@ pub const Program = struct {
         }
         self.source_files.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
+        if (self.requirement_reaching_fns) |*reaching| reaching.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
         }
@@ -845,6 +854,7 @@ pub const Program = struct {
             .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
             .lowering_modules = self.loweringModules(),
+            .platform_requirement_filling = self.platform_requirement_filling,
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
             .expr_regions = self.expr_regions.unsafeRawItemsForView(),
@@ -1099,7 +1109,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -1165,7 +1175,7 @@ pub const Program = struct {
     pub fn noteStmtShapes(self: *Program, stmt_: Stmt) void {
         switch (stmt_) {
             .return_ => self.shapes.contains_return = true,
-            .uninitialized, .let_, .expr, .expect, .dbg, .crash => {},
+            .uninitialized, .let_, .expr, .expect, .dbg, .crash, .checked_error => {},
         }
     }
 
@@ -1311,7 +1321,114 @@ pub const Program = struct {
             writeIdentityBytes(&hasher, "source");
         }
         writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
+        // The app procedure a platform requirement resolves to is chosen by
+        // the app, not by this function's source or types.
+        if (self.fnReachesPlatformRequirement(fn_id)) {
+            writeIdentityBytes(&hasher, "platform-requirement");
+            hasher.update(&self.platform_requirement_filling.?.relation);
+        }
         return hasher.finalResult();
+    }
+
+    /// Whether a function's code reaches a value filling a platform
+    /// requirement: it references a function of the filling app from outside
+    /// the app, which only a requirement can, or it references a function
+    /// that reaches one. A function of the app itself does not, since its
+    /// source identity already names the app.
+    pub fn fnReachesPlatformRequirement(self: *Program, fn_id: FnId) bool {
+        const filling = self.platform_requirement_filling orelse return false;
+        if (self.requirement_reaching_fns) |*reaching| {
+            // Functions added since the last computation have no bit yet.
+            if (reaching.bit_length != self.fnCount()) {
+                reaching.deinit(self.allocator);
+                self.requirement_reaching_fns = null;
+            }
+        }
+        if (self.requirement_reaching_fns == null) {
+            self.requirement_reaching_fns = self.computeRequirementReachingFns(filling) catch
+                Common.compilerBug("platform requirement reachability allocation failed");
+        }
+        return self.requirement_reaching_fns.?.isSet(@intFromEnum(fn_id));
+    }
+
+    fn fnIsInApp(self: *const Program, fn_id: FnId, filling: Common.PlatformRequirementFilling) bool {
+        const template = self.getFn(fn_id).source orelse return false;
+        const proc_template = switch (template.fn_def) {
+            .local_template, .imported_template, .checked_generated => |proc_template| proc_template,
+            .nested => |nested| nested.owner,
+            .local_hosted, .imported_hosted => |hosted_fn| hosted_fn.template,
+            .parser_runtime => |runtime| runtime.owner,
+            .encoder_for_runtime => |runtime| runtime.owner,
+        };
+        return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_module);
+    }
+
+    fn computeRequirementReachingFns(self: *Program, filling: Common.PlatformRequirementFilling) std.mem.Allocator.Error!std.DynamicBitSetUnmanaged {
+        const fn_count = self.fnCount();
+        var reaching = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, fn_count);
+        errdefer reaching.deinit(self.allocator);
+
+        // Every function each function references, in one flat list.
+        const edge_starts = try self.allocator.alloc(u32, fn_count + 1);
+        defer self.allocator.free(edge_starts);
+        var edges = std.ArrayList(FnId).empty;
+        defer edges.deinit(self.allocator);
+        const Collector = struct {
+            program: *const Program,
+            allocator: std.mem.Allocator,
+            edges: *std.ArrayList(FnId),
+
+            pub fn enterExpr(collector: @This(), expr_id: ExprId) std.mem.Allocator.Error!ExprWalk {
+                const data = collector.program.getExpr(expr_id).data;
+                if (data == .fn_ref) try collector.edges.append(collector.allocator, data.fn_ref.fn_id);
+                if (data == .call_proc) switch (data.call_proc.callee) {
+                    .lifted => |callee| try collector.edges.append(collector.allocator, callee),
+                    .func => Common.invariant("unlifted call target reached Monotype Lifted requirement reachability"),
+                };
+                return .descend;
+            }
+
+            pub fn exitExpr(_: @This(), _: ExprId) std.mem.Allocator.Error!void {}
+        };
+        for (0..fn_count) |raw| {
+            edge_starts[raw] = @intCast(edges.items.len);
+            const fn_id: FnId = @enumFromInt(@as(u32, @intCast(raw)));
+            switch (self.getFn(fn_id).body) {
+                .roc => |body_expr| try walkExprs(self.allocator, self, .{ .expr = body_expr }, Collector{ .program = self, .allocator = self.allocator, .edges = &edges }),
+                .hosted => {},
+            }
+        }
+        edge_starts[fn_count] = @intCast(edges.items.len);
+
+        // Seed with direct references into the app from outside it, then
+        // propagate to every function referencing a reaching one.
+        for (0..fn_count) |raw| {
+            const fn_id: FnId = @enumFromInt(@as(u32, @intCast(raw)));
+            if (self.fnIsInApp(fn_id, filling)) continue;
+            for (edges.items[edge_starts[raw]..edge_starts[raw + 1]]) |callee| {
+                if (self.fnIsInApp(callee, filling)) {
+                    reaching.set(raw);
+                    break;
+                }
+            }
+        }
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (0..fn_count) |raw| {
+                if (reaching.isSet(raw)) continue;
+                const fn_id: FnId = @enumFromInt(@as(u32, @intCast(raw)));
+                if (self.fnIsInApp(fn_id, filling)) continue;
+                for (edges.items[edge_starts[raw]..edge_starts[raw + 1]]) |callee| {
+                    if (reaching.isSet(@intFromEnum(callee))) {
+                        reaching.set(raw);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        return reaching;
     }
 
     /// Checked source identity of a function whose template is keyed by
@@ -1885,10 +2002,10 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
-        .inline_expects_enabled,
         .def_ref,
         => {},
         .fn_ref => |fn_ref| try sink.captures(fn_ref.captures),
@@ -1994,7 +2111,7 @@ pub fn appendStmtChildren(allocator: std.mem.Allocator, program: *const Program,
         .let_ => |let_| try out.append(allocator, .{ .expr = let_.value }),
         .expr, .expect, .dbg => |expr| try out.append(allocator, .{ .expr = expr }),
         .return_ => |ret| try out.append(allocator, .{ .expr = ret.value }),
-        .uninitialized, .crash => {},
+        .uninitialized, .crash, .checked_error => {},
     }
 }
 

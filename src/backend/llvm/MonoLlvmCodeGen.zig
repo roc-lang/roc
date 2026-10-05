@@ -1690,14 +1690,10 @@ pub const MonoLlvmCodeGen = struct {
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         try attrs.addFnAttr(.cold, builder);
         try attrs.addFnAttr(.@"noinline", builder);
-        // Linux AArch64 eval tests return from crash callbacks to avoid
-        // longjmping through LLVM-generated frames. Every other target lowers
-        // `emitCrashBytes` to `unreachable`, so tell LLVM this cold helper does
-        // not return; otherwise the hot caller must conservatively preserve
-        // state for a control-flow edge that cannot happen.
-        if (!(self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux)) {
-            try attrs.addFnAttr(.noreturn, builder);
-        }
+        // The helper ends in `emitCrashTerminator`, so it never returns; saying
+        // so keeps the hot caller from preserving state for an edge that
+        // cannot happen.
+        try attrs.addFnAttr(.noreturn, builder);
         func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
 
         self.runtime_error_func = func;
@@ -3049,6 +3045,7 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3182,6 +3179,7 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3475,6 +3473,10 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitBoxyBox(assign);
                 try work.append(wa, .{ .node = assign.next });
             },
+            .assign_boxy_record_update => |assign| {
+                try self.emitBoxyRecordUpdate(assign);
+                try work.append(wa, .{ .node = assign.next });
+            },
             .assign_boxy_reuse_box => |assign| {
                 try self.copyLocal(assign.target, assign.source);
                 try work.append(wa, .{ .node = assign.next });
@@ -3576,8 +3578,14 @@ pub const MonoLlvmCodeGen = struct {
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| switch (crash_stmt.msg) {
-                .literal => |literal| try self.emitCrashBytes(self.store.getString(literal)),
-                .local => |local| try self.emitCrashLocal(local),
+                .literal => |literal| if (crash_stmt.checked_error)
+                    try self.emitCheckedErrorCrashBytes(self.store.getString(literal))
+                else
+                    try self.emitCrashBytes(self.store.getString(literal)),
+                .local => |local| if (crash_stmt.checked_error)
+                    try self.emitCheckedErrorCrashLocal(local)
+                else
+                    try self.emitCrashLocal(local),
             },
             .expect_err => |expect_err_stmt| {
                 try self.materializeLocalIfDeferred(expect_err_stmt.message);
@@ -3911,6 +3919,28 @@ pub const MonoLlvmCodeGen = struct {
                 if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
                 try self.resolveBoxyDesc(payload_desc_ref),
                 try self.boxyInt(.i8, @intFromEnum(assign.payload_mode)),
+                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.target))),
+            },
+        );
+        try self.storeBoxyOutDesc(assign.target, out_desc);
+    }
+
+    fn emitBoxyRecordUpdate(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
+        try self.prepareLocalWrite(assign.target);
+        const ptr_ty = try self.ptrType();
+        const out_desc = try self.boxyOutDescPtr("boxy_record_update_desc");
+        try self.callBoxyVoid(
+            "roc_boxy_record_update",
+            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty, .i32, ptr_ty, .i32 },
+            &.{
+                try self.boxyValuePtr(assign.target),
+                out_desc,
+                try self.boxyValuePtr(assign.base),
+                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.base))),
+                try self.resolveBoxyDesc(assign.base_desc),
+                try self.boxyValuePtr(assign.fields),
+                try self.boxyInt(.i32, @intFromEnum(assign.fields_layout)),
+                try self.resolveBoxyDesc(assign.fields_desc),
                 try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.target))),
             },
         );
@@ -4733,6 +4763,8 @@ pub const MonoLlvmCodeGen = struct {
         }
         switch (op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_sort_with => try self.emitListSortWith(target, arg_locals, unique_args),
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
@@ -4859,6 +4891,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
             .list_capacity => try self.emitListCapacity(target, GuardedList.at(arg_locals, 0)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
+            .list_prefetch => try self.emitListPrefetch(arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
             .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
@@ -8415,24 +8448,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = ok_block };
     }
 
-    /// Linux AArch64 evaluation reports crashes to the host and returns instead
-    /// of longjmping through LLVM frames. The host discards the failed result,
-    /// but the return must still satisfy the active function's ABI, including
-    /// fastcc scalar and aggregate results. Helpers may have a different return
-    /// type from the enclosing Roc procedure, so consume the function signature.
+    /// End the block after a call that hands a crash to the host. The host
+    /// never returns from `roc_crashed`; the trap makes a host that returns
+    /// anyway terminate the process here, since `unreachable` alone emits no
+    /// instruction and execution would run into whatever code follows.
     fn emitCrashTerminator(self: *MonoLlvmCodeGen) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-            const ret_ty = wip.function.typeOf(builder).functionReturn(builder);
-            if (ret_ty == .void) {
-                _ = wip.retVoid() catch return error.OutOfMemory;
-            } else {
-                _ = wip.ret(builder.zeroInitValue(ret_ty) catch return error.OutOfMemory) catch return error.OutOfMemory;
-            }
-        } else {
-            _ = wip.@"unreachable"() catch return error.OutOfMemory;
-        }
+        _ = wip.callIntrinsic(.normal, .none, .trap, &.{}, &.{}, "") catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
     }
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
@@ -8442,6 +8465,37 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
         )) {
             try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
+        try self.emitCrashTerminator();
+    }
+
+    /// Crash at code checking rejected, through the builtin that records the
+    /// fact before crashing.
+    fn emitCheckedErrorCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const msg_ptr = try self.staticBytes(msg);
+        const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg_ptr, msg_len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.checked_error_crashed),
+                &.{ try self.ptrType(), self.ptrSizedIntType() },
+                &.{ msg_ptr, msg_len },
+            );
+        }
+        try self.emitCrashTerminator();
+    }
+
+    /// Crash at code checking rejected with a runtime message, through the
+    /// builtin that records the fact before crashing.
+    fn emitCheckedErrorCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(message);
+        const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.checked_error_crash_str),
+                &.{try self.ptrType()},
+                &.{self.slot(message).ptr},
+            );
         }
         try self.emitCrashTerminator();
     }
@@ -10139,6 +10193,35 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
+    /// Hint that the item at an index is about to be read or written. The
+    /// address is computed without an in-bounds claim, since the index need
+    /// not lie inside the list and the hint never touches memory.
+    fn emitListPrefetch(self: *MonoLlvmCodeGen, args: anytype) Error!void {
+        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        if (abi.elem_size == 0) return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
+        const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+        const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const addr = wip.gep(.normal, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
+        // Arguments after the address: prepare for a write, keep in every
+        // cache level, data cache.
+        _ = wip.callIntrinsic(
+            .normal,
+            .none,
+            .prefetch,
+            &.{try self.ptrType()},
+            &.{
+                addr,
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+                builder.intValue(.i32, 3) catch return error.OutOfMemory,
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
     fn emitListGetUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const list_layout = self.localLayout(GuardedList.at(args, 0));
         const abi = self.boxyAwareBuiltinListAbi(list_layout);
@@ -10423,7 +10506,9 @@ pub const MonoLlvmCodeGen = struct {
             const tag = wip.bin(.@"and", cap, one, "") catch return error.OutOfMemory;
             const is_plain = wip.icmp(.eq, tag, zero, "") catch return error.OutOfMemory;
             const needed = wip.bin(.add, len, eight, "") catch return error.OutOfMemory;
-            const fits = wip.icmp(.uge, cap, needed, "") catch return error.OutOfMemory;
+            const capacity_shift = builder.intValue(word, builtins.list.RocList.capacity_shift) catch return error.OutOfMemory;
+            const capacity = wip.bin(.lshr, cap, capacity_shift, "") catch return error.OutOfMemory;
+            const fits = wip.icmp(.uge, capacity, needed, "") catch return error.OutOfMemory;
             const take_fast = wip.bin(.@"and", is_plain, fits, "") catch return error.OutOfMemory;
             const fast = wip.block(0, "append_le_bytes_fast") catch return error.OutOfMemory;
             const slow = wip.block(0, "append_le_bytes_slow") catch return error.OutOfMemory;
@@ -13742,7 +13827,7 @@ test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
 }
 
-test "LLVM crash exits respect fastcc result types" {
+test "LLVM crash exits trap on every target and result type" {
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
@@ -13750,7 +13835,7 @@ test "LLVM crash exits respect fastcc result types" {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
         var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
         defer codegen.deinit();
-        var builder = try codegen.createBuilder("crash_returns");
+        var builder = try codegen.createBuilder("crash_exits");
         defer builder.deinit();
         codegen.builder = &builder;
         defer codegen.builder = null;
@@ -13787,18 +13872,16 @@ test "LLVM crash exits respect fastcc result types" {
                 }
                 const instructions = entry.ptrConst(&wip).instructions.items;
                 const terminal = wip.instructions.get(@intFromEnum(instructions[instructions.len - 1]));
-                if (arch != .aarch64) {
-                    try std.testing.expectEqual(.@"unreachable", terminal.tag);
-                } else if (ret_ty == .void) {
-                    try std.testing.expectEqual(.@"ret void", terminal.tag);
-                } else {
-                    try std.testing.expectEqual(.ret, terminal.tag);
-                    const value: LlvmBuilder.Value = @enumFromInt(terminal.data);
-                    try std.testing.expectEqual(ret_ty, value.typeOfWip(&wip));
-                }
+                try std.testing.expectEqual(.@"unreachable", terminal.tag);
                 try codegen.finishCurrentWipFunction();
             }
         }
+        // A host that returns from `roc_crashed` must hit a trap rather than
+        // run into whatever code follows: every crash exit calls it.
+        var ir: std.Io.Writer.Allocating = .init(allocator);
+        defer ir.deinit();
+        try builder.print(&ir.writer);
+        try std.testing.expectEqual(result_types.len * 2, std.mem.count(u8, ir.written(), "call void @llvm.trap()"));
     }
 }
 

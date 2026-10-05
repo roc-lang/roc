@@ -824,7 +824,7 @@ pub const tests = [_]TestCase{
         .name = "inspect: tag union payload matching inside function cross module",
         .source_kind = .module,
         .source =
-        \\import MyTag exposing [MyTag]
+        \\import MyTag
         \\
         \\lookup = |items, idx| {
         \\    match List.get(items, idx) {

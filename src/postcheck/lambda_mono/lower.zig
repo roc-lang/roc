@@ -139,6 +139,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .comptime_sites = lifted.comptime_sites,
             .comptime_value_roots = lifted.comptime_value_roots,
             .lowering_modules = lifted.lowering_modules,
+            .platform_requirement_filling = lifted.platform_requirement_filling,
             .source_files = moved.source_files.unsafeRawItemsForView(),
             .expr_locs = lifted.expr_locs,
             .expr_regions = lifted.expr_regions,
@@ -861,10 +862,10 @@ const Lowerer = struct {
             .dec_lit,
             .str_lit,
             .bytes_lit,
-            .inline_expects_enabled,
             .@"unreachable",
             .uninitialized,
             .crash,
+            .checked_error,
             => {},
             .comptime_value => |value| plan.add(.{ .expr = value.initializer }),
             .static_data_candidate => |candidate| plan.add(.{ .expr = candidate.runtime_expr }),
@@ -988,7 +989,6 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .bytes_lit => |value| .{ .bytes_lit = value },
-            .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
                 .root = value.root,
                 .initializer = parts[0].get(.expr),
@@ -1121,6 +1121,7 @@ const Lowerer = struct {
             } },
             .return_ => .{ .return_ = parts[0].get(.expr) },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = parts[0].get(.comptime_site),
                 .branch_index = taken.branch_index,
@@ -1172,7 +1173,7 @@ const Lowerer = struct {
                 .expr, .dbg => |expr| task.plan.add(.{ .expr = expr }),
                 .expect => |expr| if (self.inline_expects != .omit) task.plan.add(.{ .expr = expr }),
                 .return_ => |ret| task.plan.add(.{ .expr = ret.value }),
-                .crash => {},
+                .crash, .checked_error => {},
             }
             frame.cursor = 1;
             if (try self.nextPart(&task.parts, task.plan.slice(), null)) |step| return step;
@@ -1194,6 +1195,7 @@ const Lowerer = struct {
             .dbg => .{ .dbg = parts[0].get(.expr) },
             .return_ => .{ .return_ = parts[0].get(.expr) },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
         };
         const lowered = try self.program.addStmt(lowered_stmt);
         self.stmt_map[index] = lowered;

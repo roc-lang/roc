@@ -1371,9 +1371,11 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 const idx = std.fmt.parseInt(usize, line, 10) catch continue;
                 if (idx >= specs.len) continue;
 
-                _ = arena.reset(.retain_capacity);
                 const result = cfg.runTest(io, arena.allocator(), specs[idx], timeoutForSpec(specs[idx], timeout_ms));
                 cfg.serializeStreamed(stdout_handle, result);
+                // Result bytes have reached the parent. Idle workers must not
+                // retain a previous test's potentially multi-GiB arena.
+                _ = arena.reset(.free_all);
             }
         }
 

@@ -3151,11 +3151,11 @@ Builtin :: [].{
 						Unknown => Unknown
 					},
 					||
-					# Once `remaining_first` is exhausted it is kept (not swapped
-					# for `range_done()`) so `make`'s inner-iterator argument keeps
-					# a single monomorphic type for the whole chain. An exhausted
-					# iterator reports length 0 and its `next` stays `Done`, so this
-					# is length- and result-equivalent.
+						# Once `remaining_first` is exhausted it is kept (not swapped
+						# for `range_done()`) so `make`'s inner-iterator argument keeps
+						# a single monomorphic type for the whole chain. An exhausted
+						# iterator reports length 0 and its `next` stays `Done`, so this
+						# is length- and result-equivalent.
 						match Iter.next(remaining_first) {
 							Done =>
 								match Iter.next(remaining_second) {
@@ -4257,6 +4257,27 @@ Builtin :: [].{
 		} else {
 			Try.Err(OutOfBounds)
 		}
+
+		## Returns the list unchanged, hinting to the processor that the item
+		## at the given index is about to be read or written so it can start
+		## bringing that memory into its cache.
+		##
+		## This is a no-op as far as the program's results go: it reads
+		## nothing, changes nothing, and an index past the end of the list is
+		## fine. Its only possible effect is on speed, and that effect can go
+		## either way. A hint for memory that was about to be loaded anyway,
+		## or that is never used, costs time; a hint issued too late does
+		## nothing. Only use it together with careful measurement, and keep it
+		## only where the measurement shows it helping.
+		##
+		## It tends to pay off when the index is unpredictable, the list is
+		## much larger than the cache, and the index is known some steps
+		## before the item is used, as with a hash table's next bucket.
+		## ```roc
+		## expect List.prefetched([10.U64, 20, 30], 1) == [10, 20, 30]
+		## ```
+		prefetched : List(item), U64 -> List(item)
+		prefetched = |list, index| list_prefetched(list, index)
 
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
@@ -5382,10 +5403,6 @@ Builtin :: [].{
 		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
-		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
-		}
 
 		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool
@@ -6862,7 +6879,6 @@ Builtin :: [].{
 			## expect U8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U8, U8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7589,7 +7605,6 @@ Builtin :: [].{
 			## expect I8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I8, I8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8435,7 +8450,6 @@ Builtin :: [].{
 			## expect U16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U16, U16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9221,7 +9235,6 @@ Builtin :: [].{
 			## expect I16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I16, I16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10108,7 +10121,6 @@ Builtin :: [].{
 			## expect U32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U32, U32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10926,7 +10938,6 @@ Builtin :: [].{
 			## expect I32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I32, I32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11830,7 +11841,6 @@ Builtin :: [].{
 			## expect U64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U64, U64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12710,7 +12720,6 @@ Builtin :: [].{
 			## expect I64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I64, I64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13637,7 +13646,6 @@ Builtin :: [].{
 			## expect U128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U128, U128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14530,7 +14538,6 @@ Builtin :: [].{
 			## expect I128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I128, I128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -15545,7 +15552,6 @@ Builtin :: [].{
 			## expect Dec.order_relative_to(3.0, 2.0) == After
 			## ```
 			order_relative_to : Dec, Dec -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -19218,14 +19224,14 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-					# Compare the index against a limit rather than subtracting from it.
-					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-					# reads repeatedly hoists them out and keeps just the one comparison of
-					# `start` against a precomputed bound. Subtracting the other way round --
-					# `len - start < 16` -- reads the same but depends on `start`, so all of it
-					# stays in the loop.
-					#
-					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						# Compare the index against a limit rather than subtracting from it.
+						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+						# reads repeatedly hoists them out and keeps just the one comparison of
+						# `start` against a precomputed bound. Subtracting the other way round --
+						# `len - start < 16` -- reads the same but depends on `start`, so all of it
+						# stays in the loop.
+						#
+						# Wrapping is safe because the first check has already ruled out `len < 16`.
 						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
@@ -24014,8 +24020,6 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 		value.rem_by(divisor) == zero
 	}
 
-numeric_compare : item, item -> [Before, Same, After]
-
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
 	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
 range_with_step = |lower, upper, step, upper_bound, direction|
@@ -24621,6 +24625,11 @@ list_get_unsafe : List(item), U64 -> item
 # Implemented by the compiler: the same Bool, marking the branch it decides as
 # the one taken in the common case, so the other branch is laid out cold.
 bool_likely : Bool -> Bool
+
+# Implemented by the compiler: the same list, with a hint that the item at this
+# index is about to be used. It reads nothing, and an index outside the list
+# is harmless.
+list_prefetched : List(item), U64 -> List(item)
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)

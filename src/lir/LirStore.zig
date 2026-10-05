@@ -318,6 +318,7 @@ pub const BodyPrefix = struct {
     source_file_ends: u32,
     source_file_qualified_bytes: u32,
     source_file_qualified_ends: u32,
+    source_file_identities: u32,
 };
 
 /// A body-owned suffix of a private store. The store must outlive this view and
@@ -456,6 +457,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .source_file_ends = @intCast(self.source_file_ends.len()),
         .source_file_qualified_bytes = @intCast(self.source_file_qualified_bytes.len()),
         .source_file_qualified_ends = @intCast(self.source_file_qualified_ends.len()),
+        .source_file_identities = @intCast(self.source_file_identities.len()),
     };
 }
 
@@ -482,7 +484,8 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
             self.source_file_bytes.len() != 0 or
             self.source_file_ends.len() != 0 or
             self.source_file_qualified_bytes.len() != 0 or
-            self.source_file_qualified_ends.len() != 0)
+            self.source_file_qualified_ends.len() != 0 or
+            self.source_file_identities.len() != 0)
         {
             return error.UnsupportedShardMetadata;
         }
@@ -509,7 +512,8 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.source_file_bytes > self.source_file_bytes.len() or
         prefix.source_file_ends > self.source_file_ends.len() or
         prefix.source_file_qualified_bytes > self.source_file_qualified_bytes.len() or
-        prefix.source_file_qualified_ends > self.source_file_qualified_ends.len())
+        prefix.source_file_qualified_ends > self.source_file_qualified_ends.len() or
+        prefix.source_file_identities > self.source_file_identities.len())
     {
         return error.InvalidBodyPrefix;
     }
@@ -523,7 +527,8 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.source_file_bytes != self.source_file_bytes.len() or
         prefix.source_file_ends != self.source_file_ends.len() or
         prefix.source_file_qualified_bytes != self.source_file_qualified_bytes.len() or
-        prefix.source_file_qualified_ends != self.source_file_qualified_ends.len())
+        prefix.source_file_qualified_ends != self.source_file_qualified_ends.len() or
+        prefix.source_file_identities != self.source_file_identities.len())
     {
         return error.UnsupportedShardMetadata;
     }
@@ -798,13 +803,15 @@ pattern_ids: GuardedList.List(LirPatternId, "LirStore.pattern_ids"),
 /// zero-copy from a LIR image.
 source_file_bytes: GuardedList.List(u8, "LirStore.source_file_bytes"),
 source_file_ends: GuardedList.List(u32, "LirStore.source_file_ends"),
-/// Package-qualified module identity per source file table entry (e.g.
+/// Package-qualified module name per source file table entry (e.g.
 /// `pf.Utils`), flattened exactly like `source_file_bytes`/`source_file_ends`.
-/// Module identity comparisons ("does this failed statement belong to the
-/// finalized module?") must use these, never the display names: two packages
-/// may both contain a module with the same bare name.
+/// Display data that tells apart same-named modules of different packages.
 source_file_qualified_bytes: GuardedList.List(u8, "LirStore.source_file_qualified_bytes"),
 source_file_qualified_ends: GuardedList.List(u32, "LirStore.source_file_qualified_ends"),
+/// Deep module content identity per source file table entry. Module identity
+/// comparisons ("does this failed statement belong to the finalized
+/// module?") must use these, never names.
+source_file_identities: GuardedList.List([32]u8, "LirStore.source_file_identities"),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
@@ -865,6 +872,7 @@ pub fn init(allocator: Allocator) Self {
         .source_file_ends = .empty,
         .source_file_qualified_bytes = .empty,
         .source_file_qualified_ends = .empty,
+        .source_file_identities = .empty,
         .cf_stmt_locs = .empty,
         .cf_stmt_regions = .empty,
         .cf_stmt_inline_scopes = .empty,
@@ -959,6 +967,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_ends.deinit(self.allocator);
     self.source_file_qualified_bytes.deinit(self.allocator);
     self.source_file_qualified_ends.deinit(self.allocator);
+    self.source_file_identities.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
     self.cf_stmt_regions.deinit(self.allocator);
     self.cf_stmt_inline_scopes.deinit(self.allocator);
@@ -1045,6 +1054,7 @@ pub fn setSourceFiles(self: *Self, files: []const base.SourceFileEntry) Allocato
         try self.source_file_ends.append(self.allocator, @intCast(self.source_file_bytes.len()));
         try self.source_file_qualified_bytes.appendSlice(self.allocator, file.qualified_name);
         try self.source_file_qualified_ends.append(self.allocator, @intCast(self.source_file_qualified_bytes.len()));
+        try self.source_file_identities.append(self.allocator, file.module_identity);
     }
 }
 
@@ -1062,14 +1072,19 @@ pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
     return self.source_file_bytes.unsafeRawItemsForView()[start..end];
 }
 
-/// Package-qualified module identity of one source file table entry. Use
-/// this (not `sourceFileName`) whenever a location's owning module is
-/// compared against another module: bare names collide across packages.
+/// Package-qualified module name of one source file table entry.
 pub fn sourceFileQualifiedName(self: *const Self, file: u32) []const u8 {
     if (self.body_coordinator) |coordinator| return coordinator.sourceFileQualifiedName(file);
     const end = self.source_file_qualified_ends.get(file);
     const start = if (file == 0) 0 else self.source_file_qualified_ends.get(file - 1);
     return self.source_file_qualified_bytes.unsafeRawItemsForView()[start..end];
+}
+
+/// Deep module content identity of one source file table entry. Use this
+/// whenever a location's owning module is compared against another module.
+pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
+    if (self.body_coordinator) |coordinator| return coordinator.sourceFileModuleIdentity(file);
+    return self.source_file_identities.get(file);
 }
 
 /// Source location of a statement.
@@ -1828,6 +1843,7 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -2676,19 +2692,19 @@ test "body shards borrow Boxy identities and reject added Boxy metadata" {
     try std.testing.expectError(error.UnsupportedShardMetadata, coordinator.captureBodyShard(coordinator_prefix));
 }
 
-test "source file table stores display and package-qualified names per entry" {
+test "source file table stores names and module identity per entry" {
     const gpa = std.testing.allocator;
     var store = Self.init(gpa);
     defer store.deinit();
 
-    // Two modules with the SAME bare name from different packages must stay
-    // distinguishable through their qualified names: the provenance
-    // comparison in compile-time failure reporting matches by qualified
-    // identity, never by display name.
+    // Two modules with the SAME bare name from different packages stay
+    // distinguishable through their qualified names and their identities: the
+    // provenance comparison in compile-time failure reporting matches by
+    // module identity, never by name.
     try store.setSourceFiles(&.{
-        .{ .name = "Cfg", .qualified_name = "app.Cfg" },
-        .{ .name = "Cfg", .qualified_name = "pf.Cfg" },
-        .{ .name = "Utils", .qualified_name = "app.Utils" },
+        .{ .name = "Cfg", .qualified_name = "app.Cfg", .module_identity = @splat(1) },
+        .{ .name = "Cfg", .qualified_name = "pf.Cfg", .module_identity = @splat(2) },
+        .{ .name = "Utils", .qualified_name = "app.Utils", .module_identity = @splat(3) },
     });
 
     try std.testing.expectEqual(@as(u32, 3), store.sourceFileCount());
@@ -2698,6 +2714,9 @@ test "source file table stores display and package-qualified names per entry" {
     try std.testing.expectEqualStrings("app.Cfg", store.sourceFileQualifiedName(0));
     try std.testing.expectEqualStrings("pf.Cfg", store.sourceFileQualifiedName(1));
     try std.testing.expectEqualStrings("app.Utils", store.sourceFileQualifiedName(2));
+    try std.testing.expectEqual(@as([32]u8, @splat(1)), store.sourceFileModuleIdentity(0));
+    try std.testing.expectEqual(@as([32]u8, @splat(2)), store.sourceFileModuleIdentity(1));
+    try std.testing.expectEqual(@as([32]u8, @splat(3)), store.sourceFileModuleIdentity(2));
 }
 
 test "body shard relocates erased-call layouts into the program table" {

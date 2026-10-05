@@ -176,7 +176,7 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "curriedAdd"))
-		(e-call (constraint-fn-var 290)
+		(e-call (constraint-fn-var 294)
 			(e-lookup-local
 				(p-assign (ident "makeAdder")))
 			(e-num (value "5")))
@@ -190,10 +190,10 @@ NO CHANGE
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 296)
+			(e-call (constraint-fn-var 300)
 				(e-lookup-local
 					(p-assign (ident "f")))
-				(e-call (constraint-fn-var 295)
+				(e-call (constraint-fn-var 299)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -211,13 +211,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 312)
+			(e-call (constraint-fn-var 316)
 				(e-lookup-local
 					(p-assign (ident "applyTwice")))
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 310)
+					(e-dispatch-call (method "plus") (constraint-fn-var 314)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

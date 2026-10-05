@@ -17,8 +17,8 @@ platform ""
 		arm64win: { inputs: ["host.lib", app] },
 	}
 
-import NodeValue exposing [NodeValue]
-import Elem exposing [Elem]
+import NodeValue
+import Elem
 import Node
 import Signal
 import Html

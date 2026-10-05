@@ -261,6 +261,7 @@ const DiagnosticNodeTag = enum {
     diag_unused_variable,
     diag_used_underscore_variable,
     diag_duplicate_record_field,
+    diag_duplicate_pattern_binder,
     diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
@@ -270,6 +271,8 @@ const DiagnosticNodeTag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_control_flow_in_expect,
+    diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
@@ -829,7 +832,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 89;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -2386,6 +2389,47 @@ pub fn replaceExprWithMethodEq(
         .rhs = @intFromEnum(rhs),
         .negated = @intFromBool(negated),
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a call into a method call on `receiver`, keeping the call's
+/// arguments. Used when the deferred import drain finds that the callee of
+/// `Alias.Path.U.v(...)` is the member `v` accessed on the qualified tag
+/// `Alias.Path.U`.
+pub fn replaceCallWithMethodCall(
+    store: *NodeStore,
+    call_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    method_name: base.Ident.Idx,
+    method_name_region: Region,
+) Allocator.Error!void {
+    const args = store.getExpr(call_idx).e_call.args;
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(call_idx));
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
+    var node = Node.init(.expr_method_call);
+    node.setPayload(.{ .expr_method_call = .{
+        .receiver = @intFromEnum(receiver),
+        .method_name = @bitCast(method_name),
+        .method_call_data_idx = method_call_data_idx,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred import reference into a field access on `receiver`.
+pub fn resolveDeferredExprToFieldAccess(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    segments: CIR.Expr.FieldAccessSegment.Span,
+) void {
+    std.debug.assert(segments.len > 0);
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_field_access);
+    node.setPayload(.{ .expr_field_access = .{
+        .receiver = @intFromEnum(receiver),
+        .segments_start = @intFromEnum(segments.start),
+        .segments_len = segments.len,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -5977,6 +6021,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.duplicate_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.field_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
+        .duplicate_pattern_binder => |r| {
+            node.tag = .diag_duplicate_pattern_binder;
+            region = r.duplicate_region;
+            node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
+        },
         .duplicate_tag => |r| {
             node.tag = .diag_duplicate_tag;
             region = r.duplicate_region;
@@ -6016,6 +6065,16 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_return_outside_fn;
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.context) } });
+        },
+        .control_flow_in_expect => |r| {
+            node.tag = .diag_control_flow_in_expect;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.kind) } });
+        },
+        .var_reassigned_in_expect => |r| {
+            node.tag = .diag_var_reassigned_in_expect;
+            region = r.region;
+            node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.declaration_region.start.offset, .region_end = r.declaration_region.end.offset } });
         },
         .mutually_recursive_type_aliases => |r| {
             node.tag = .diag_mutually_recursive_type_aliases;
@@ -6483,6 +6542,17 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
+        .diag_duplicate_pattern_binder => {
+            const p = payload.diag_ident_with_region;
+            return CIR.Diagnostic{ .duplicate_pattern_binder = .{
+                .ident = @bitCast(p.ident),
+                .duplicate_region = store.getRegionAt(node_idx),
+                .original_region = .{
+                    .start = .{ .offset = p.region_start },
+                    .end = .{ .offset = p.region_end },
+                },
+            } };
+        },
         .diag_duplicate_tag => {
             const p = payload.diag_ident_with_region;
             return CIR.Diagnostic{ .duplicate_tag = .{
@@ -6526,6 +6596,24 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .return_outside_fn = .{
                 .region = store.getRegionAt(node_idx),
                 .context = @enumFromInt(p.value),
+            } };
+        },
+        .diag_control_flow_in_expect => {
+            const p = payload.diag_single_value;
+            return CIR.Diagnostic{ .control_flow_in_expect = .{
+                .region = store.getRegionAt(node_idx),
+                .kind = @enumFromInt(p.value),
+            } };
+        },
+        .diag_var_reassigned_in_expect => {
+            const p = payload.diag_ident_with_region;
+            return CIR.Diagnostic{ .var_reassigned_in_expect = .{
+                .ident = @bitCast(p.ident),
+                .region = store.getRegionAt(node_idx),
+                .declaration_region = .{
+                    .start = .{ .offset = p.region_start },
+                    .end = .{ .offset = p.region_end },
+                },
             } };
         },
         .diag_mutually_recursive_type_aliases => {

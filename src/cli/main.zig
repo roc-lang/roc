@@ -1258,22 +1258,20 @@ fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
     return suffix;
 }
 
-/// Create a unique temporary directory under roc/{version}/{random}/.
+/// Create a unique scratch directory under {cache}/{version}/tmp/{random}/.
 /// Returns the path to the directory (allocated from arena, no need to free).
-/// Uses system temp directory to avoid race conditions when cache is cleared.
-pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{FailedToCreateUniqueTempDir})![]const u8 {
-    // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
+pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{ FailedToCreateUniqueTempDir, NoHomeDirectory })![]const u8 {
+    const cache_config = cache_config_mod.CacheConfig{ .roc_ctx = ctx.coreCtx() };
+    const scratch_dir = try cache_config.getScratchDir(ctx.arena);
 
-    // Ensure the roc/{version} directory exists
-    // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, version_temp_dir);
+    // createDirPath treats an already-existing directory as success
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, scratch_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
     while (attempt < 6) : (attempt += 1) {
         const random_suffix = try generateRandomSuffix(ctx);
-        const dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
+        const dir_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, random_suffix });
 
         // Try to create the directory
         std.Io.Dir.cwd().createDir(ctx.io.std_io, dir_path, .default_dir) catch |err| switch (err) {
@@ -1342,122 +1340,6 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
-}
-
-/// Create the temporary directory structure for fd communication.
-/// Returns the path to the executable in the temp directory (allocated from arena, no need to free).
-/// Uses the standard roc/{version}/{random}/ structure in the system temp directory.
-/// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
-pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) Allocator.Error![]const u8 {
-    // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
-
-    // Ensure the roc/{version} directory exists
-    // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, version_temp_dir);
-
-    // Try to create a unique subdirectory with random suffix
-    var attempt: u8 = 0;
-    while (attempt < 6) : (attempt += 1) {
-        const random_suffix = try generateRandomSuffix(ctx);
-        const temp_dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
-
-        // The coordination file path is the directory path with .txt appended
-        const dir_name_with_txt = try std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir_path});
-
-        // Try to create the directory
-        std.Io.Dir.cwd().createDir(ctx.io.std_io, temp_dir_path, .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // Directory already exists, try again with a new random suffix
-                continue;
-            },
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.DiskQuota,
-            error.FileNotFound,
-            error.LinkQuotaExceeded,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => return err,
-        };
-
-        // Try to create the fd file
-        const fd_file = std.Io.Dir.cwd().createFile(ctx.io.std_io, dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // File already exists, remove the directory and try again
-                std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
-                continue;
-            },
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileTooBig,
-            error.IsDir,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => {
-                // Clean up directory on other errors
-                std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
-                return err;
-            },
-        };
-        // Note: We'll close this explicitly later, before spawning the child
-
-        // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
-            shm_handle.fd,
-            shm_handle.size,
-            shm_handle.page_size,
-        });
-
-        try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
-
-        // IMPORTANT: Flush and close the file explicitly before spawning child process
-        // On Windows, having the file open can prevent child process access
-        try fd_file.sync(ctx.io.std_io); // Ensure data is written to disk
-        fd_file.close(ctx.io.std_io);
-
-        // Create hardlink to executable in temp directory with display name
-        const temp_exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name });
-
-        // Try to create a hardlink first (more efficient than copying)
-        createHardlink(ctx, exe_path, temp_exe_path) catch {
-            // If hardlinking fails for any reason, fall back to copying
-            // Common reasons: cross-device link, permissions, file already exists
-            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, ctx.io.std_io, .{});
-        };
-
-        return temp_exe_path;
-    }
-
-    // Failed after 6 attempts
-    return error.FailedToCreateUniqueTempDir;
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .{
@@ -1579,7 +1461,7 @@ fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
 fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io) void {
     // Start background cache cleanup on a separate thread.
     // This is a fire-and-forget thread that:
-    // - Cleans up stale temp directories (>5 min old)
+    // - Cleans up stale scratch directories (>5 min old)
     // - Cleans up old persistent cache files (>30 days old)
     // - Exits automatically when done
     //
@@ -1587,18 +1469,17 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     // cleanup completes, the OS will automatically terminate the cleanup thread.
     // This ensures cleanup never delays compilation or execution.
     //
-    // Resolve the temp/cache locations here using the same resolver the cache
-    // writer uses, so cleanup can never target a different directory than where
+    // Resolve the cache root here using the same resolver the cache writer
+    // uses, so cleanup can never target a different directory than where
     // artifacts are written. The background thread itself is CoreCtx-free and
-    // allocation-free; it only borrows these base paths (copied in by value).
+    // allocation-free; it only borrows this path (copied in by value).
     const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
     const cache_base: []const u8 = blk: {
         const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
         break :blk cfg.getEffectiveCacheDir(arena) catch "";
     };
-    if (temp_base.len != 0 or cache_base.len != 0) {
-        if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
+    if (cache_base.len != 0) {
+        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io)) |_| {
             // Thread started successfully, will run in background.
         } else |_| {
             // Non-fatal: cleanup failure shouldn't prevent compilation.
@@ -1707,7 +1588,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .deps => |deps_args| rocDeps(&ctx, deps_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
-        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
+        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, ctx.coreCtx(), .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
             .syntax = lsp_args.debug_syntax,
@@ -4192,7 +4073,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         };
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
-            .target_abi = llvmBuildLinkAbi(selected_target, true),
+            .target_abi = buildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
@@ -6296,7 +6177,7 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
 /// Default apps run on the freestanding default platform: raw syscalls, its own
 /// `_start`, and a machine-code shim that reaches the kernel directly. Nothing
 /// in the executable calls libc, so every Linux host links the same static
-/// executable no matter which libc it ships -- matching what `llvmBuildLinkAbi`
+/// executable no matter which libc it ships -- matching what `buildLinkAbi`
 /// already does for `roc build`.
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
     return switch (native) {
@@ -6896,13 +6777,13 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
+fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) noreturn {
     const message = switch (err) {
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
-        error.Crash => return,
+        error.Crash => interpreter.getCrashMessage(),
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
@@ -6950,10 +6831,7 @@ fn evaluateLirImageEntrypoint(
         error.ExpectErr,
         error.UnsupportedHostedFunction,
         error.InvalidHostedFunctionSignature,
-        => {
-            reportCliInterpreterError(ops, &interpreter, @errorCast(err));
-            return;
-        },
+        => reportCliInterpreterError(ops, &interpreter, @errorCast(err)),
     };
 }
 
@@ -8030,9 +7908,9 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Use the Coordinator to discover every transitive module the entry point
 /// imports (directly, via re-exports, or via a `package [...]` header) and
-/// append the absolute path of any not already in `source_paths`. Also
+/// append module paths and their recorded file imports to `source_paths`. Also
 /// validates platform target binaries if a platform is found.
-fn discoverAndAddBundleModules(
+fn discoverAndAddBundleInputs(
     ctx: *CliCtx,
     abs_entry: []const u8,
     source_paths: *std.ArrayList([]const u8),
@@ -8046,24 +7924,11 @@ fn discoverAndAddBundleModules(
 
     // Run the build—the Coordinator discovers all transitive module dependencies
     build_env.build(abs_entry) catch |build_err| {
-        // Drain and display any errors from the build
-        const drained = try build_env.drainReports();
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => {
-                        try stderr.print("{f}: error in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
-                    },
-                    .warning => {
-                        try stderr.print("{f}: warning in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
-                    },
-                }
-            }
-        }
+        _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         return build_err;
     };
+    const diagnostics = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+    if (diagnostics.errors != 0) return error.CliError;
 
     // Detect platform from BuildEnv packages using the accessor
     const platform_root_file = build_env.getPlatformRootFile();
@@ -8084,14 +7949,39 @@ fn discoverAndAddBundleModules(
     if (build_env.coordinator) |coord| {
         var coord_pkg_it = coord.packages.iterator();
         while (coord_pkg_it.next()) |pkg_entry| {
-            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+            // Dependency headers are source inputs even when the coordinator
+            // does not check them as modules. Consumers need these headers to
+            // resolve the same local package aliases after extraction.
+            if (pkg_entry.value_ptr.*.root_file) |root_file| {
+                if (build_env.isBundleableModule(pkg_entry.key_ptr.*, root_file) and !bundled_set.contains(root_file)) {
+                    const owned_root_file = try ctx.arena.dupe(u8, root_file);
+                    try source_paths.append(ctx.arena, owned_root_file);
+                    try bundled_set.put(owned_root_file, {});
+                }
+            }
+
+            for (pkg_entry.value_ptr.*.modules.items) |*mod_state| {
                 const abs_path = mod_state.path;
                 if (!build_env.isBundleableModule(pkg_entry.key_ptr.*, abs_path)) continue;
-                if (bundled_set.contains(abs_path)) continue;
+                if (!bundled_set.contains(abs_path)) {
+                    const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
+                    try source_paths.append(ctx.arena, owned_abs_path);
+                    try bundled_set.put(owned_abs_path, {});
+                }
 
-                const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
-                try source_paths.append(ctx.arena, owned_abs_path);
-                try bundled_set.put(owned_abs_path, {});
+                // Checked environments retain source-relative file dependencies
+                // on both fresh builds and cache hits. Preserve their logical
+                // paths so extraction keeps each import relative to its module.
+                const env = mod_state.moduleEnv().?;
+                for (env.file_dependencies.items.items) |dep| {
+                    const dep_path = try std.fs.path.resolve(ctx.arena, &.{
+                        mod_state.canonicalSourceDir(),
+                        env.fileDependencyRelativePath(dep),
+                    });
+                    if (bundled_set.contains(dep_path)) continue;
+                    try source_paths.append(ctx.arena, dep_path);
+                    try bundled_set.put(dep_path, {});
+                }
             }
         }
     }
@@ -8205,11 +8095,10 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         return error.InvalidPath;
     };
 
-    // Use the Coordinator to discover all transitive module dependencies
-    // (explicit imports plus modules exposed by a `package [...]` header)
-    // and append any not already in the file list.
+    // Discover transitive modules and their recorded file imports, including
+    // modules exposed by a `package [...]` header, and add their source paths.
     if (first_roc_index != null) {
-        try discoverAndAddBundleModules(ctx, entry_source_path, &source_paths, stderr);
+        try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
     }
 
     var entries = std.ArrayList(bundle.Entry).empty;
@@ -8882,7 +8771,9 @@ fn compileModulePack(
 
 /// Write this build's packs into the object cache: the root module's pack
 /// from the artifacts of the program just compiled, and a pack program for
-/// every other module in view whose pack is not in the store yet. Packs are
+/// every other module in view whose pack is not in the store yet, except the
+/// app module when the platform is the root, since no other program imports
+/// it. Packs are
 /// filed by module identity and artifact key, so an unchanged module's pack
 /// is found and left alone.
 fn writePacksToStore(
@@ -8898,14 +8789,21 @@ fn writePacksToStore(
     target: RocTarget,
 ) CliMainError!void {
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
-        // What this program lowered from source, for comparison with what
-        // the packs it read and wrote offer under the same identities.
+        // What this program lowered from source: every procedure by identity,
+        // for comparison with another build of the same source, and every
+        // specialization by the key a pack serves it by, for comparison with
+        // what packs offer under that key.
         const program_store = &app_lowered.lir_result.store;
         for (program_store.getProcSpecs(), 0..) |proc, index| {
             if (proc.body == null) continue;
             const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
             const fingerprint = try procFingerprint(ctx.gpa, app_lowered, proc_id);
-            std.debug.print("compiled {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
+            std.debug.print("lowered {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
+        }
+        for (app_lowered.lir_result.spec_procs.items) |spec_proc| {
+            if (program_store.getProcSpec(spec_proc.proc).body == null) continue;
+            const fingerprint = try procFingerprint(ctx.gpa, app_lowered, spec_proc.proc);
+            std.debug.print("compiled {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, program_store.procDebugName(spec_proc.proc) orelse "" });
         }
     }
     if (app_artifacts) |set| {
@@ -8919,9 +8817,19 @@ fn writePacksToStore(
             }
         }
     }
+    // An app module is never imported, so its procedures only ever link into
+    // builds of that app, which read the pack written above from the
+    // program just compiled. A pack program of its own would only repeat it.
+    const app_key: ?check.CheckedArtifact.CheckedModuleArtifactKey = if (build_env.getAppSemanticData()) |app|
+        if (app.checked_artifact) |app_artifact| app_artifact.key else null
+    else
+        null;
     const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(artifacts);
     for (artifacts) |artifact| {
+        if (app_key) |key| {
+            if (std.meta.eql(artifact.key, key)) continue;
+        }
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
@@ -8929,6 +8837,9 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
+        if (std.c.getenv("ROC_PACK_TRACE") != null) {
+            std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
+        }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
@@ -8982,6 +8893,11 @@ fn packFileBytes(
             withheld += 1;
             continue;
         }
+        // A linking program inlines it rather than calling it.
+        if (proc.inlined_at_calls) {
+            withheld += 1;
+            continue;
+        }
         // Boxy statements index the program's own descriptor sidecar, and a
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
@@ -8995,7 +8911,7 @@ fn packFileBytes(
         // its producer's code; only a body lowered here has a fingerprint.
         if (trace and proc.body != null) {
             const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
-            std.debug.print("offer {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
+            std.debug.print("offer {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
         }
         try specs.append(allocator, .{
             .key = spec_proc.key,
@@ -9705,7 +9621,9 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
     };
 }
 
-fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
+/// The ABI a `roc build` executable links with. The default platform makes no
+/// libc calls, so Linux default apps link statically for every libc target.
+fn buildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
     if (synthetic_default_platform) {
         const os = target.toOsTag();
         if (os == .linux) return .musl;
@@ -10928,7 +10846,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
             const link_config = linker.LinkConfig{
                 .target_format = target_format,
-                .target_abi = llvmBuildLinkAbi(target, args.synthetic_default_platform),
+                .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
                 .target_os = target_os,
                 .target_arch = target_arch,
                 .output_path = final_output_path,
@@ -11377,7 +11295,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
-            .target_abi = linker.TargetAbi.fromRocTarget(target),
+            .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
             .target_os = target_os,
             .target_arch = target_arch,
             .output_path = final_output_path,
@@ -11694,7 +11612,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
-            .target_abi = linker.TargetAbi.fromRocTarget(target),
+            .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
             .target_os = target_os,
             .target_arch = target_arch,
             .output_path = final_output_path,
@@ -11788,6 +11706,9 @@ const CliTestResultItem = struct {
     transcript: []const CliTestTranscriptEvent = &.{},
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility = .always,
+    /// Whether the result follows from the module alone, so a later run of the
+    /// same module can replay it. A test backend failing to run is not.
+    cacheable: bool = true,
 };
 
 const CliModuleTestResult = struct {
@@ -12050,7 +11971,7 @@ fn deinitCliTestPlanEntries(allocator: Allocator, entries: []const CliTestPlanEn
     allocator.free(@constCast(entries));
 }
 
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V8";
+const cli_test_cache_magic = "ROC_TEST_RESULTS_V9";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -12134,7 +12055,7 @@ fn storeCliTestResultsInCache(
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
     for (results) |result| {
-        if (result.result == .compiler_error) return;
+        if (!result.cacheable) return;
     }
 
     var bytes = std.ArrayList(u8).empty;
@@ -12309,7 +12230,7 @@ fn loadCachedCliTestResults(
         const result: CliTestResult = switch (result_tag) {
             0 => .passed,
             1 => .failed,
-            2 => return null,
+            2 => .compiler_error,
             else => return null,
         };
         if (inline_expect and (result == .failed) != (inline_failed != 0)) return null;
@@ -12423,22 +12344,19 @@ fn buildCliTestPlan(
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
 
-        // Root requests deliberately exclude roots reaching checked errors.
-        // The checked roots retain their identities and the checker's diagnostic
-        // facts, so rejected tests can participate in result aggregation
-        // without being lowered, executed, or stored in the execution cache.
+        // An expect's condition is a `Bool`, so its root is ineligible only
+        // when checking rejected code in the condition itself and left it no
+        // type to evaluate at. Such an expect counts as a compiler error, and
+        // the checker's diagnostic is its only report.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
-            if (root.kind != .expect) continue;
-            if (!artifact.compileTimeRootReachesCheckedError(root)) continue;
-            std.debug.assert(root.request_eligibility == .ineligible);
+            if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
+            std.debug.assert(artifact.checked_bodies.exprContainsDiagnosticError(root.expr));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @intFromEnum(root.id),
                 .region = testRootRegion(module.semantic.env, root.source),
-                // Checking renders the original diagnostic once. A second
-                // generic test failure would only duplicate that report.
                 .failure_detail = null,
             });
         }
@@ -12808,7 +12726,7 @@ test "runtime specialization strategy helpers" {
 test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
-    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers_and_source_single_use, postCheckInlineModeForOpt(.dev));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
@@ -12831,7 +12749,10 @@ test "only optimized builds emit thread-confined count updates" {
 
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
-        .size, .speed, .dev => .wrappers,
+        .size, .speed => .wrappers,
+        // The object cache links dev procedures into other programs, so dev
+        // decides inlining from source alone, the same in every program.
+        .dev => .wrappers_and_source_single_use,
         .interpreter => .none,
     };
 }
@@ -13146,7 +13067,7 @@ fn interpreterTestFailureMessage(
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
-        error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
+        error.Crash => interpreter.getCrashMessage(),
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
         error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
@@ -13310,7 +13231,6 @@ const CliInterpreterTestHostEnv = struct {
     fn installCallbacks(_: *CliInterpreterTestHostEnv, roc_ops: *echo_platform.host_abi.RocOps) void {
         roc_ops.roc_dbg = &rocDbg;
         roc_ops.roc_expect_failed = &rocExpectFailed;
-        roc_ops.roc_crashed = &rocCrashed;
     }
 
     fn fromOps(ops: *echo_platform.host_abi.RocOps) *CliInterpreterTestHostEnv {
@@ -13345,10 +13265,6 @@ const CliInterpreterTestHostEnv = struct {
         const self = fromOps(ops);
         self.echo_env.inline_expect_failed = true;
         self.appendEvent(.stderr, .expect_failed, bytes[0..len]);
-    }
-
-    fn rocCrashed(ops: *echo_platform.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        fromOps(ops).appendEvent(.stderr, .crashed, bytes[0..len]);
     }
 };
 
@@ -13413,6 +13329,30 @@ fn runInterpreterTestRoots(
         }) catch |err| {
             var transcript: []const CliTestTranscriptEvent = try host_env.takeTranscript();
             errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
+            // The expect reached code checking rejected; that problem is
+            // already reported, so the expect counts as a compiler error.
+            const reached_checked_error = switch (err) {
+                error.Crash => eval.CompileTimeFinalization.failedAtCheckedError(&lowered.lir_result, interpreter.getFailedCrashStmt()),
+                error.ComptimeExhaustiveness,
+                error.DivisionByZero,
+                error.ExpectErr,
+                error.InvalidHostedFunctionSignature,
+                error.OutOfMemory,
+                error.RuntimeError,
+                error.UnsupportedHostedFunction,
+                => false,
+            };
+            if (reached_checked_error) {
+                summary.compiler_errors += 1;
+                try results.append(ctx.gpa, .{
+                    .result = .compiler_error,
+                    .order = run.root.order,
+                    .region = run.region,
+                    .transcript = transcript,
+                    .failure_detail = null,
+                });
+                continue;
+            }
             summary.failed += 1;
             // When a `?` operator failed the expect, point the report's
             // source snippet at the `?` itself.
@@ -13432,6 +13372,10 @@ fn runInterpreterTestRoots(
             errdefer if (message_owned) ctx.gpa.free(message);
             const failure_detail: ?[]const u8 = switch (err) {
                 error.Crash => blk: {
+                    // The interpreter reports a Roc crash as `error.Crash`
+                    // rather than through the host's `roc_crashed`, which
+                    // never returns.
+                    transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crashed, interpreter.getCrashMessage());
                     transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crash_diagnostic, message);
                     ctx.gpa.free(message);
                     message_owned = false;
@@ -13569,6 +13513,7 @@ fn appendCompilerErrorsForRuns(
             try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
             .always,
         );
+        results.items[results.items.len - 1].cacheable = false;
     }
 }
 
@@ -13629,6 +13574,15 @@ fn cliTestResultItemFromEval(
                 .failure_detail = message,
                 .failure_detail_visibility = .always,
             };
+        },
+        // The expect reached code checking rejected; that problem is already
+        // reported, so the expect counts as a compiler error.
+        .checked_error => return .{
+            .result = .compiler_error,
+            .order = run.root.order,
+            .region = run.region,
+            .transcript = transcript,
+            .failure_detail = null,
         },
     }
 }
@@ -13784,7 +13738,6 @@ fn runCompiledTestRoots(
         error.SymLinkLoop,
         error.SystemFdQuotaExceeded,
         error.SystemResources,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,
@@ -14045,7 +13998,6 @@ fn runCompiledLoweredTestModulesOnce(
         error.SymLinkLoop,
         error.SystemFdQuotaExceeded,
         error.SystemResources,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,
@@ -14279,9 +14231,7 @@ fn runCompiledTestPlan(
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
-        if (summaries[lowered_module.planned_index].compiler_errors == 0) {
-            try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
-        }
+        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
     }
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
@@ -15695,6 +15645,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             error.NameTooLong,
             error.NetworkNotFound,
             error.NoDevice,
+            error.NoHomeDirectory,
             error.NoSpaceLeft,
             error.NotDir,
             error.PathAlreadyExists,
@@ -19540,7 +19491,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         };
         try origins.putIdentity(ctx.gpa, builtin_identity_hash, builtin_origin);
         try origins.put(ctx.gpa, builtin_env.module_name, builtin_origin);
-        try origins.put(ctx.gpa, builtin_env.getIdentText(builtin_env.qualified_module_ident), builtin_origin);
+        try origins.put(ctx.gpa, builtin_env.qualifiedModuleName(), builtin_origin);
 
         const coord = build_env.coordinator orelse return error.Internal;
         var pkg_iter = coord.packages.iterator();
@@ -19583,7 +19534,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);
                     try origins.put(ctx.gpa, mod_env.module_name, origin);
-                    try origins.put(ctx.gpa, mod_env.getIdentText(mod_env.qualified_module_ident), origin);
+                    try origins.put(ctx.gpa, mod_env.qualifiedModuleName(), origin);
                 }
             }
         }

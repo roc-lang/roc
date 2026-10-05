@@ -69,6 +69,7 @@ const UnifyFinishAction = union(enum) {
         rhs: Type.TypeVarId,
         source_fn_ty: Type.names.TypeDigest,
         members: Type.Span,
+        abi_fn: ?Type.TypeVarId,
     },
     set_left_lambda_set_link_right: struct {
         lhs: Type.TypeVarId,
@@ -167,6 +168,8 @@ const Solver = struct {
     /// solver's lifetime and a row unified against many small rows is
     /// indexed once.
     tag_row_indexes: std.AutoHashMapUnmanaged(u32, TagRowIndex),
+    /// Member positions by lambda per stored lambda set (`lambdaSetIndex`).
+    lambda_set_indexes: std.AutoHashMapUnmanaged(u32, LambdaSetIndex),
     /// Field positions by name per stored record row, keyed by the row's
     /// start, so a record's fields each resolve in constant time.
     record_row_indexes: std.AutoHashMapUnmanaged(u32, RecordRowIndex),
@@ -191,6 +194,16 @@ const Solver = struct {
     uninhabited_path: std.DynamicBitSetUnmanaged = .{},
     mono_uninhabited_path: std.DynamicBitSetUnmanaged = .{},
     clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
+    /// Frame stacks no clone is running on and the lists a finished clone
+    /// build leaves behind, kept for their capacity across clones. Each
+    /// clone takes its own stack, since a step can begin another clone.
+    spare_clone_stacks: std.ArrayList(std.ArrayList(TypeCloner.CloneFrame)) = .empty,
+    spare_clone_lists: std.ArrayList(TypeCloner.CloneLists) = .empty,
+    /// Stacks the uninhabitedness scans run on, kept between scans.
+    solved_uninhabited_scratch: SolvedUninhabitedScan.Eval.Scratch = .{},
+    solved_entry_marks: std.ArrayList(SolvedUninhabitedScan.EntryMark) = .empty,
+    mono_uninhabited_scratch: MonoUninhabitedScan.Eval.Scratch = .{},
+    mono_entry_stops: std.ArrayList(u32) = .empty,
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -220,6 +233,7 @@ const Solver = struct {
         list_swap,
         list_prepend,
         list_map_prepare_reuse,
+        list_prefetched,
         list_map_can_reuse,
         list_map_write_unsafe,
         dict_pseudo_seed,
@@ -311,6 +325,7 @@ const Solver = struct {
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
             .tag_row_indexes = .empty,
+            .lambda_set_indexes = .empty,
             .record_row_indexes = .empty,
             .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
@@ -324,10 +339,21 @@ const Solver = struct {
         var row_indexes = self.tag_row_indexes.valueIterator();
         while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
         self.tag_row_indexes.deinit(self.allocator);
+        var set_indexes = self.lambda_set_indexes.valueIterator();
+        while (set_indexes.next()) |set_index| set_index.by_lambda.deinit(self.allocator);
+        self.lambda_set_indexes.deinit(self.allocator);
         var record_indexes = self.record_row_indexes.valueIterator();
         while (record_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
         self.record_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
+        for (self.spare_clone_stacks.items) |*stack| stack.deinit(self.allocator);
+        self.spare_clone_stacks.deinit(self.allocator);
+        for (self.spare_clone_lists.items) |*lists| lists.deinit(self.allocator);
+        self.spare_clone_lists.deinit(self.allocator);
+        self.solved_uninhabited_scratch.deinit(self.allocator);
+        self.solved_entry_marks.deinit(self.allocator);
+        self.mono_uninhabited_scratch.deinit(self.allocator);
+        self.mono_entry_stops.deinit(self.allocator);
         self.mono_set_pool.deinit();
         self.mono_uninhabited.deinit();
         self.uninhabited_memo.deinit();
@@ -771,7 +797,7 @@ const Solver = struct {
                     .let_ => |let_| return .{ .expr = .{ .id = let_.value } },
                     .expr, .expect, .dbg => |expr| return .{ .expr = .{ .id = expr } },
                     .return_ => |ret| return .{ .expr = .{ .id = ret.value } },
-                    .crash => return null,
+                    .crash, .checked_error => return null,
                 }
             },
         };
@@ -794,7 +820,6 @@ const Solver = struct {
                 const children = self.lifted.exprSpan(if (expr.data == .tuple) expr.data.tuple else expr.data.tag.payloads);
                 return if (cursor < children.len) .{ .expr = .{ .id = children[cursor] } } else null;
             },
-            .inline_expects_enabled => {},
             .comptime_value => |value| {
                 return if (cursor == 0) .{ .expr = .{ .id = value.initializer, .generated_backing = true } } else null;
             },
@@ -810,13 +835,12 @@ const Solver = struct {
                 }
                 return null;
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .literal_rejected, .comptime_branch_taken => {},
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .literal_rejected, .comptime_branch_taken => {},
         };
 
         switch (expr.data) {
             .local => |local| try self.unify(expected, self.localTy(local)),
-            .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .comptime_exhaustiveness_failed, .@"unreachable" => {},
-            .inline_expects_enabled => {},
+            .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .checked_error, .comptime_exhaustiveness_failed, .@"unreachable" => {},
             .comptime_value => |value| {
                 if (cursor == 0) return .{ .expr = .{ .id = value.initializer, .expected = expected } };
             },
@@ -1098,7 +1122,7 @@ const Solver = struct {
     fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
         const data = self.lifted.exprs[@intFromEnum(value)].data;
         const tag = std.meta.activeTag(data);
-        if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
+        if (tag == .crash or tag == .checked_error or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
         if (tag == .block and self.lifted.exprs[@intFromEnum(data.block.final_expr)].data == .@"unreachable") return;
         try self.relateReturn(self.inferredExpr(value), target);
     }
@@ -1260,7 +1284,7 @@ const Solver = struct {
                 if (children.component_tys.count() != self.lifted.patSpan(tag.payloads).len) Common.invariant("tag pattern payload arity differs from its checked type");
             },
             .nominal => |backing| {
-                if (self.hasGeneratedOpaquePatOwner(pat_id) or try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
+                if (try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
                     const backing_index = @intFromEnum(backing);
                     if (self.generated_backing_pats[backing_index]) return;
                     self.generated_backing_pats[backing_index] = true;
@@ -1320,21 +1344,14 @@ const Solver = struct {
         }
     }
 
-    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
-        const content = self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty);
-        if (std.meta.activeTag(content) != .named) return false;
-        const backing = content.named.backing orelse return false;
-        return backing.authority == .generated_private;
-    }
-
     fn unifyGeneratedOpaqueBacking(self: *Solver, generated_ty: Type.TypeVarId, expected_ty: Type.TypeVarId) Allocator.Error!void {
         const generated = self.program.types.rootCompressed(generated_ty);
         const expected = self.program.types.rootCompressed(expected_ty);
         if (generated == expected) return;
-        // The caller reached this path only through a pattern whose named
-        // backing carries generated-private authority. Preserve that explicit
-        // producer-owned backing deterministically; structural size is not an
-        // authority signal.
+        // The caller reached this path only through the backing pattern of a
+        // `Fields` or `Field` nominal, whose backing is compiler-generated.
+        // Preserve that explicit generated backing deterministically;
+        // structural size is not an authority signal.
         self.program.types.set(expected, .{ .link = generated });
     }
 
@@ -1521,6 +1538,7 @@ const Solver = struct {
                         const erased = try types.add(.{ .erased = .{
                             .source_fn_ty = try self.solvedTypeDigest(root),
                             .members = .empty(),
+                            .abi_fn = root,
                         } });
                         try self.unify(func.callable, erased);
                     }
@@ -1596,6 +1614,27 @@ const Solver = struct {
     fn isCallableFree(self: *const Solver, ty: MonoType.TypeId) bool {
         const raw_id = @intFromEnum(ty);
         return !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
+    }
+
+    /// Give a build lists from the pool, or empty ones.
+    fn acquireCloneLists(self: *Solver, build: *TypeCloner.CloneBuild) void {
+        const lists = self.spare_clone_lists.pop() orelse TypeCloner.CloneLists{};
+        build.parts = lists.parts;
+        build.results = lists.results;
+        build.spans = lists.spans;
+    }
+
+    /// Keep a build's lists for the next build; when the pool cannot grow,
+    /// their capacity is released instead.
+    fn releaseCloneLists(self: *Solver, build: *TypeCloner.CloneBuild) void {
+        var lists = TypeCloner.CloneLists{ .parts = build.parts, .results = build.results, .spans = build.spans };
+        build.parts = .empty;
+        build.results = .empty;
+        build.spans = .empty;
+        lists.parts.clearRetainingCapacity();
+        lists.results.clearRetainingCapacity();
+        lists.spans.clearRetainingCapacity();
+        self.spare_clone_lists.append(self.allocator, lists) catch lists.deinit(self.allocator);
     }
 
     /// The one clone context every callable-free leaf materializes in.
@@ -1836,6 +1875,10 @@ const Solver = struct {
             },
             .list_map_prepare_reuse => {
                 expectLowLevelArity(op, args, 1);
+                try self.unify(expected, args[0]);
+            },
+            .list_prefetched => {
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
             },
             .list_map_can_reuse => {
@@ -2099,6 +2142,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = left_erased.abi_fn orelse right_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
@@ -2111,6 +2155,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = left_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
@@ -2128,6 +2173,7 @@ const Solver = struct {
                         .rhs = b,
                         .source_fn_ty = right_erased.source_fn_ty,
                         .members = merged,
+                        .abi_fn = right_erased.abi_fn,
                     } };
                     try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
@@ -2249,6 +2295,7 @@ const Solver = struct {
                 self.program.types.set(set.lhs, .{ .erased = .{
                     .source_fn_ty = set.source_fn_ty,
                     .members = set.members,
+                    .abi_fn = set.abi_fn,
                 } });
                 self.program.types.set(set.rhs, .{ .link = set.lhs });
             },
@@ -2381,13 +2428,25 @@ const Solver = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
+        // A remembered answer needs no scan.
+        if (self.uninhabited_memo.get(self.program.types.rootCompressed(ty))) |answer| {
+            if (answer.epoch == self.program.types.mutation_epoch) return answer.uninhabited;
+        }
         const var_count = self.program.types.vars.items.len;
         if (self.uninhabited_path.bit_length < var_count) {
             try self.uninhabited_path.resize(self.allocator, var_count, false);
         }
-        var scan = SolvedUninhabitedScan{ .solver = self };
-        defer scan.entry_marks.deinit(self.allocator);
-        return try SolvedUninhabitedScan.Eval.run(self.allocator, &scan, ty);
+        var scan = SolvedUninhabitedScan{ .solver = self, .entry_marks = self.solved_entry_marks };
+        self.solved_entry_marks = .empty;
+        defer {
+            // A scan that ran inside this one has already returned its
+            // list; this one's is then released.
+            scan.entry_marks.clearRetainingCapacity();
+            if (self.solved_entry_marks.capacity == 0) {
+                self.solved_entry_marks = scan.entry_marks;
+            } else scan.entry_marks.deinit(self.allocator);
+        }
+        return try SolvedUninhabitedScan.Eval.runWith(self.allocator, &self.solved_uninhabited_scratch, &scan, ty);
     }
 
     /// `typeIsProvenUninhabited` over the lifted Monotype store, for lazy
@@ -2398,9 +2457,17 @@ const Solver = struct {
         if (self.mono_uninhabited_path.bit_length < type_count) {
             try self.mono_uninhabited_path.resize(self.allocator, type_count, false);
         }
-        var scan = MonoUninhabitedScan{ .solver = self };
-        defer scan.entry_stops.deinit(self.allocator);
-        return try MonoUninhabitedScan.Eval.run(self.allocator, &scan, id);
+        var scan = MonoUninhabitedScan{ .solver = self, .entry_stops = self.mono_entry_stops };
+        self.mono_entry_stops = .empty;
+        defer {
+            // A scan that ran inside this one has already returned its
+            // list; this one's is then released.
+            scan.entry_stops.clearRetainingCapacity();
+            if (self.mono_entry_stops.capacity == 0) {
+                self.mono_entry_stops = scan.entry_stops;
+            } else scan.entry_stops.deinit(self.allocator);
+        }
+        return try MonoUninhabitedScan.Eval.runWith(self.allocator, &self.mono_uninhabited_scratch, &scan, id);
     }
 
     /// Transfer Lambda Solved callable evidence from a checked-public value
@@ -2592,6 +2659,17 @@ const Solver = struct {
                         self.program.types.spanItem(public_named.args, 0),
                         self.program.types.spanItem(private_named.args, 0),
                     );
+                    // A public iterator viewing a generated representation
+                    // receives its callable evidence through the backings,
+                    // exactly as the unifying relation transfers it.
+                    if (public_named.backing) |public_backing| if (private_named.backing) |private_backing| {
+                        if (public_backing.authority == .checked_public and private_backing.authority == .generated_private) {
+                            if (public_backing.use != private_backing.use) {
+                                Common.invariant("generated-private iterator evidence relation received different backing uses");
+                            }
+                            try self.pushRelate(stack, public_backing.ty, private_backing.ty);
+                        }
+                    };
                 }
             },
         }
@@ -2914,27 +2992,89 @@ const Solver = struct {
         rhs: Type.Span,
         capture_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
-        var members = std.ArrayList(Type.FnMember).empty;
-        defer members.deinit(self.allocator);
+        // The merge keeps one set's members in order and appends the other's
+        // missing members. The kept set is one that can grow in place at the
+        // end of the member pool, so growing a long set by a few members never
+        // copies it.
+        const keep_rhs = !self.lambdaSetGrowsInPlace(lhs) and self.lambdaSetGrowsInPlace(rhs);
+        const kept = if (keep_rhs) rhs else lhs;
+        const other = if (keep_rhs) lhs else rhs;
+        const kept_index = try self.lambdaSetIndex(kept);
+        var added = std.ArrayList(Type.FnMember).empty;
+        defer added.deinit(self.allocator);
+        var added_positions = std.AutoHashMapUnmanaged(Common.Symbol, usize).empty;
+        defer added_positions.deinit(self.allocator);
 
-        for (0..lhs.count()) |i| try members.append(self.allocator, self.program.types.memberItem(lhs, i));
-
-        for (0..rhs.count()) |i| {
-            const right_member = self.program.types.memberItem(rhs, i);
-            var found = false;
-            for (members.items) |left_member| {
-                if (left_member.lambda != right_member.lambda) continue;
-                found = true;
-                try capture_pairs.append(self.allocator, .{
-                    .lhs = left_member.captures,
-                    .rhs = right_member.captures,
-                });
-                break;
-            }
-            if (!found) try members.append(self.allocator, right_member);
+        for (0..other.count()) |i| {
+            const other_member = self.program.types.memberItem(other, i);
+            const kept_captures = if (kept_index.position(other_member.lambda, kept)) |position|
+                self.program.types.memberItem(kept, position).captures
+            else if (added_positions.get(other_member.lambda)) |position|
+                added.items[position].captures
+            else {
+                try added_positions.put(self.allocator, other_member.lambda, added.items.len);
+                try added.append(self.allocator, other_member);
+                continue;
+            };
+            try capture_pairs.append(self.allocator, if (keep_rhs) .{
+                .lhs = other_member.captures,
+                .rhs = kept_captures,
+            } else .{
+                .lhs = kept_captures,
+                .rhs = other_member.captures,
+            });
         }
 
+        // Every other member already sits in the kept set: the merge is the
+        // kept set itself.
+        if (added.items.len == 0) return kept;
+        // A kept set at the end of the member pool grows in place. Every set
+        // sharing its start stays a prefix of it, so they all read the same
+        // stored members.
+        if (self.lambdaSetGrowsInPlace(kept)) {
+            _ = try self.program.types.addMembers(added.items);
+            return .{ .start = kept.start, .len = @intCast(kept.count() + added.items.len) };
+        }
+        var members = try std.ArrayList(Type.FnMember).initCapacity(self.allocator, kept.count() + added.items.len);
+        defer members.deinit(self.allocator);
+        for (0..kept.count()) |i| members.appendAssumeCapacity(self.program.types.memberItem(kept, i));
+        members.appendSliceAssumeCapacity(added.items);
         return try self.program.types.addMembers(members.items);
+    }
+
+    /// Whether `span` is a nonempty set ending at the end of the member pool,
+    /// so members appended to the pool extend it.
+    fn lambdaSetGrowsInPlace(self: *const Solver, span: Type.Span) bool {
+        return span.count() != 0 and @as(usize, span.start) + span.count() == self.program.types.fn_members.items.len;
+    }
+
+    const LambdaSetIndex = struct {
+        len: u32,
+        by_lambda: std.AutoHashMapUnmanaged(Common.Symbol, usize),
+
+        /// The first position of `lambda` within `span`, a set sharing this
+        /// index's start.
+        fn position(index: *const LambdaSetIndex, lambda: Common.Symbol, span: Type.Span) ?usize {
+            const found = index.by_lambda.get(lambda) orelse return null;
+            return if (found < span.count()) found else null;
+        }
+    };
+
+    /// Member positions by lambda per stored lambda set, keyed by the set's
+    /// start. Stored members never change and a set grows only in place, so
+    /// every set sharing a start is a prefix of the longest, and one index
+    /// serves them all, extended as the longest grows.
+    fn lambdaSetIndex(self: *Solver, span: Type.Span) Allocator.Error!*const LambdaSetIndex {
+        const gop = try self.lambda_set_indexes.getOrPut(self.allocator, span.start);
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = 0, .by_lambda = .empty };
+        if (gop.value_ptr.len >= span.len) return gop.value_ptr;
+        try gop.value_ptr.by_lambda.ensureUnusedCapacity(self.allocator, span.len - gop.value_ptr.len);
+        for (gop.value_ptr.len..span.count()) |index| {
+            const entry = gop.value_ptr.by_lambda.getOrPutAssumeCapacity(self.program.types.memberItem(span, index).lambda);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        gop.value_ptr.len = span.len;
+        return gop.value_ptr;
     }
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
@@ -3444,15 +3584,18 @@ const TypeCloner = struct {
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         if (try self.existingClone(ty)) |existing| return existing;
         const allocator = self.solver.allocator;
-        var frames: std.ArrayList(CloneFrame) = .empty;
+        var stack: std.ArrayList(CloneFrame) = self.solver.spare_clone_stacks.pop() orelse .empty;
+        const frames = &stack;
         defer {
-            for (frames.items) |*frame| frame.build.deinit(allocator);
-            frames.deinit(allocator);
+            while (frames.items.len > 0) {
+                self.solver.releaseCloneLists(&frames.items[frames.items.len - 1].build);
+                frames.items.len -= 1;
+            }
+            self.solver.spare_clone_stacks.append(allocator, stack) catch stack.deinit(allocator);
         }
-        // Stack space is reserved before a clone begins, so a begun frame's
-        // build is always owned by the stack.
-        try frames.ensureUnusedCapacity(allocator, 1);
-        frames.appendAssumeCapacity(try self.beginClone(ty));
+        // A frame is built in place on the stack, so a begun frame's build
+        // is always owned by the stack.
+        try self.beginClone(try frames.addOne(allocator), ty);
         var input: ?Type.TypeVarId = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
@@ -3469,18 +3612,21 @@ const TypeCloner = struct {
                 break child_ty;
             } else null;
             if (child) |child_ty| {
-                try frames.ensureUnusedCapacity(allocator, 1);
-                frames.appendAssumeCapacity(try self.beginClone(child_ty));
+                try self.beginClone(try frames.addOne(allocator), child_ty);
                 continue;
             }
-            var finished = frames.pop().?;
-            defer finished.build.deinit(allocator);
+            const finished = &frames.items[frames.items.len - 1];
             const lowered = try self.finishClone(&finished.build);
-            self.solver.program.types.set(finished.reserved, lowered);
+            const finished_ty = finished.ty;
+            const reserved = finished.reserved;
+            const shareable = finished.shareable;
+            self.solver.releaseCloneLists(&finished.build);
+            frames.items.len -= 1;
+            self.solver.program.types.set(reserved, lowered);
             self.solver.registerNamedBacking(lowered);
-            if (finished.shareable) try self.solver.shared_clones.put(finished.ty, finished.reserved);
-            if (frames.items.len == 0) return finished.reserved;
-            input = finished.reserved;
+            if (shareable) try self.solver.shared_clones.put(finished_ty, reserved);
+            if (frames.items.len == 0) return reserved;
+            input = reserved;
         }
     }
 
@@ -3533,26 +3679,36 @@ const TypeCloner = struct {
         next: usize = 0,
         results: std.ArrayList(Type.TypeVarId) = .empty,
         spans: std.ArrayList(Type.Span) = .empty,
+    };
 
-        fn deinit(self: *CloneBuild, allocator: Allocator) void {
+    /// A build's lists, pooled on the solver between builds.
+    const CloneLists = struct {
+        parts: std.ArrayList(ClonePart) = .empty,
+        results: std.ArrayList(Type.TypeVarId) = .empty,
+        spans: std.ArrayList(Type.Span) = .empty,
+
+        fn deinit(self: *CloneLists, allocator: Allocator) void {
             self.parts.deinit(allocator);
             self.results.deinit(allocator);
             self.spans.deinit(allocator);
         }
     };
 
-    fn beginClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!CloneFrame {
+    /// Begin cloning `ty` in `frame`, which is written in place: a frame
+    /// holds the type's content and three lists, so it is never copied.
+    /// The frame's build owns its lists before anything can fail.
+    fn beginClone(self: *TypeCloner, frame: *CloneFrame, ty: MonoType.TypeId) Allocator.Error!void {
+        frame.* = .{
+            .ty = ty,
+            .reserved = undefined,
+            .shareable = self.share and !self.solver.contains_callable[@intFromEnum(ty)],
+            .build = .{ .content = self.solver.lifted.types.get(ty) },
+        };
+        self.solver.acquireCloneLists(&frame.build);
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        var build = CloneBuild{ .content = self.solver.lifted.types.get(ty) };
-        errdefer build.deinit(self.solver.allocator);
-        try self.planClone(&build);
-        return .{
-            .ty = ty,
-            .reserved = reserved,
-            .shareable = self.share and !self.solver.contains_callable[@intFromEnum(ty)],
-            .build = build,
-        };
+        frame.reserved = reserved;
+        try self.planClone(&frame.build);
     }
 
     /// Lower one Monotype content whose components are cloned already or,
@@ -3561,7 +3717,8 @@ const TypeCloner = struct {
         std.debug.assert(self.lazy_ctx != null);
         const allocator = self.solver.allocator;
         var build = CloneBuild{ .content = content };
-        defer build.deinit(allocator);
+        self.solver.acquireCloneLists(&build);
+        defer self.solver.releaseCloneLists(&build);
         try self.planClone(&build);
         for (build.parts.items) |part| {
             const child = try self.issueClonePart(&build, part) orelse continue;
@@ -3570,8 +3727,9 @@ const TypeCloner = struct {
         return try self.finishClone(&build);
     }
 
-    fn addClonePart(self: *TypeCloner, build: *CloneBuild, part: ClonePart) Allocator.Error!void {
-        try build.parts.append(self.solver.allocator, part);
+    inline fn addClonePart(self: *TypeCloner, build: *CloneBuild, part: ClonePart) Allocator.Error!void {
+        if (build.parts.items.len == build.parts.capacity) try build.parts.ensureUnusedCapacity(self.solver.allocator, 1);
+        build.parts.appendAssumeCapacity(part);
     }
 
     fn addCloneSpanParts(self: *TypeCloner, build: *CloneBuild, start: *usize, span: MonoType.Span) Allocator.Error!void {
@@ -3817,6 +3975,22 @@ fn solvedTypeDigestTestSolver(
     solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator);
     defer solver.uninhabited_memo.deinit();
     solver.mono_uninhabited_path_stops = 0;
+    solver.spare_clone_stacks = .empty;
+    solver.spare_clone_lists = .empty;
+    solver.solved_uninhabited_scratch = .{};
+    solver.solved_entry_marks = .empty;
+    solver.mono_uninhabited_scratch = .{};
+    solver.mono_entry_stops = .empty;
+    defer {
+        for (solver.spare_clone_stacks.items) |*stack| stack.deinit(allocator);
+        solver.spare_clone_stacks.deinit(allocator);
+        for (solver.spare_clone_lists.items) |*lists| lists.deinit(allocator);
+        solver.spare_clone_lists.deinit(allocator);
+        solver.solved_uninhabited_scratch.deinit(allocator);
+        solver.solved_entry_marks.deinit(allocator);
+        solver.mono_uninhabited_scratch.deinit(allocator);
+        solver.mono_entry_stops.deinit(allocator);
+    }
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(allocator);
     solver.mono_uninhabited_path = .{};
@@ -3826,6 +4000,7 @@ fn solvedTypeDigestTestSolver(
     solver.lifted.names = name_store;
     solver.solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator);
     solver.tag_row_indexes = .empty;
+    solver.lambda_set_indexes = .empty;
     solver.record_row_indexes = .empty;
     solver.shared_leaf_context = null;
     return solver;
@@ -3935,6 +4110,22 @@ test "lambda solved erased callable digest includes record field default identit
     solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(gpa);
     defer solver.uninhabited_memo.deinit();
     solver.mono_uninhabited_path_stops = 0;
+    solver.spare_clone_stacks = .empty;
+    solver.spare_clone_lists = .empty;
+    solver.solved_uninhabited_scratch = .{};
+    solver.solved_entry_marks = .empty;
+    solver.mono_uninhabited_scratch = .{};
+    solver.mono_entry_stops = .empty;
+    defer {
+        for (solver.spare_clone_stacks.items) |*stack| stack.deinit(gpa);
+        solver.spare_clone_stacks.deinit(gpa);
+        for (solver.spare_clone_lists.items) |*lists| lists.deinit(gpa);
+        solver.spare_clone_lists.deinit(gpa);
+        solver.solved_uninhabited_scratch.deinit(gpa);
+        solver.solved_entry_marks.deinit(gpa);
+        solver.mono_uninhabited_scratch.deinit(gpa);
+        solver.mono_entry_stops.deinit(gpa);
+    }
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(gpa);
     solver.mono_uninhabited_path = .{};
@@ -3979,6 +4170,22 @@ test "inspectable backing unification isolates the structural type variable once
     solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator);
     defer solver.uninhabited_memo.deinit();
     solver.mono_uninhabited_path_stops = 0;
+    solver.spare_clone_stacks = .empty;
+    solver.spare_clone_lists = .empty;
+    solver.solved_uninhabited_scratch = .{};
+    solver.solved_entry_marks = .empty;
+    solver.mono_uninhabited_scratch = .{};
+    solver.mono_entry_stops = .empty;
+    defer {
+        for (solver.spare_clone_stacks.items) |*stack| stack.deinit(allocator);
+        solver.spare_clone_stacks.deinit(allocator);
+        for (solver.spare_clone_lists.items) |*lists| lists.deinit(allocator);
+        solver.spare_clone_lists.deinit(allocator);
+        solver.solved_uninhabited_scratch.deinit(allocator);
+        solver.solved_entry_marks.deinit(allocator);
+        solver.mono_uninhabited_scratch.deinit(allocator);
+        solver.mono_entry_stops.deinit(allocator);
+    }
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(allocator);
     solver.mono_uninhabited_path = .{};
@@ -4024,6 +4231,22 @@ test "inspectable backing unification never redirects an owned backing to its no
     solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator);
     defer solver.uninhabited_memo.deinit();
     solver.mono_uninhabited_path_stops = 0;
+    solver.spare_clone_stacks = .empty;
+    solver.spare_clone_lists = .empty;
+    solver.solved_uninhabited_scratch = .{};
+    solver.solved_entry_marks = .empty;
+    solver.mono_uninhabited_scratch = .{};
+    solver.mono_entry_stops = .empty;
+    defer {
+        for (solver.spare_clone_stacks.items) |*stack| stack.deinit(allocator);
+        solver.spare_clone_stacks.deinit(allocator);
+        for (solver.spare_clone_lists.items) |*lists| lists.deinit(allocator);
+        solver.spare_clone_lists.deinit(allocator);
+        solver.solved_uninhabited_scratch.deinit(allocator);
+        solver.solved_entry_marks.deinit(allocator);
+        solver.mono_uninhabited_scratch.deinit(allocator);
+        solver.mono_entry_stops.deinit(allocator);
+    }
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(allocator);
     solver.mono_uninhabited_path = .{};

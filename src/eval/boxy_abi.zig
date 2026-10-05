@@ -567,7 +567,6 @@ fn leave(g: *GlobalBoxyRuntime) void {
 
 fn abiCrash(g: *GlobalBoxyRuntime, comptime what: []const u8) noreturn {
     g.runtime.roc_ops.crash("boxy runtime " ++ what ++ " failed");
-    unreachable;
 }
 
 /// Fixed-buffer message builder for the crash paths below.
@@ -642,7 +641,6 @@ fn abiCrashMissingDescriptorCapture(
     message.str("; supplied capture ids=");
     message.uintList(g.capture_ids);
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashNullErasedArgDescriptor(
@@ -659,7 +657,6 @@ fn abiCrashNullErasedArgDescriptor(
     message.uint(key.descriptor_index);
     message.str(")");
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashMissingErasedArgDescriptor(
@@ -678,7 +675,6 @@ fn abiCrashMissingErasedArgDescriptor(
     message.str("); supplied keys=");
     message.keyList(supplied_keys);
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashDuplicateErasedArgDescriptor(
@@ -695,7 +691,6 @@ fn abiCrashDuplicateErasedArgDescriptor(
     message.uint(key.descriptor_index);
     message.str(")");
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn layoutIdx(raw: u32) layout_mod.Idx {
@@ -1210,6 +1205,37 @@ pub fn roc_boxy_box(
     ) catch abiCrash(g, "box");
     writeResult(g, out, boxed.value, layoutIdx(target_layout));
     out_desc.* = boxed.desc;
+}
+
+/// Box a copy of a dynamic record whose named fields take their values from a
+/// replacement record payload. Writes the boxed record through `out` and its
+/// descriptor through `out_desc`.
+pub fn roc_boxy_record_update(
+    out: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
+    base: ?[*]const u8,
+    base_layout: u32,
+    base_desc: *const BoxyTypeDesc,
+    fields: ?[*]const u8,
+    fields_layout: u32,
+    fields_desc: *const BoxyTypeDesc,
+    target_layout: u32,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const updated = g.runtime.boxyRecordUpdate(
+        hooks(g),
+        valueAt(base),
+        layoutIdx(base_layout),
+        base_desc,
+        valueAt(fields),
+        layoutIdx(fields_layout),
+        fields_desc,
+        layoutIdx(target_layout),
+    ) catch abiCrash(g, "record update");
+    writeResult(g, out, updated.value, layoutIdx(target_layout));
+    out_desc.* = updated.desc;
 }
 
 /// Read a dynamic box's payload back out. Writes the payload value through

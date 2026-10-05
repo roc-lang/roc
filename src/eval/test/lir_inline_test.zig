@@ -606,7 +606,10 @@ fn runLoweredWithHostEvents(
         .proc_id = try rootProc(lowered),
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
-        error.Crash => return runtime_env.snapshot(allocator),
+        error.Crash => {
+            runtime_env.noteCrash(interpreter.getCrashMessage());
+            return runtime_env.snapshot(allocator);
+        },
         error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
@@ -662,6 +665,7 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -1251,6 +1255,7 @@ fn collectAssignCallProcs(
             .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_record_update => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
@@ -3632,7 +3637,7 @@ test "boxy lowering preserves a runtime-built crash message" {
 
     _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
         try std.testing.expectEqual(error.Crash, err);
-        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage() orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage());
         return;
     };
     return error.TestUnexpectedResult;
@@ -4189,6 +4194,7 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -4564,6 +4570,7 @@ fn collectLirResultProcShape(
             .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_record_update => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
@@ -8803,7 +8810,35 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
+}
+
+// Depth pin for published evidence paths. Each level of this tuple literal
+// holds its own numeral, so the function's scheme has one evidence param per
+// level with paths of every length up to the nesting depth. Paths share their
+// prefixes, so the published pool grows with the depth; flat per-param paths
+// would total the sum of all the depths, and a literal tens of thousands of
+// levels deep exhausted memory publishing its scheme.
+test "deeply nested tuple literal publishes evidence paths linear in its depth" {
+    const allocator = std.testing.allocator;
+    const depth = 512;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "f = |_| ");
+    for (0..depth) |_| try source.appendSlice(allocator, "(1, ");
+    try source.appendSlice(allocator, "1");
+    for (0..depth) |_| try source.appendSlice(allocator, ")");
+    try source.appendSlice(allocator, "\n\nmain : Str\nmain = \"ok\"\n");
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source.items, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const templates = &resources.checked_artifact.checked_procedure_templates;
+    var deepest_path: u32 = 0;
+    for (templates.evidence_params_pool) |param| deepest_path = @max(deepest_path, param.path.len);
+    try std.testing.expect(deepest_path > depth);
+    try std.testing.expect(templates.evidence_path_nodes.len < 4 * depth);
+    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
 }
 
 test "literal conversion ownership includes nested codec evidence" {
@@ -8842,7 +8877,7 @@ test "literal conversion ownership includes nested codec evidence" {
         defer helpers.cleanupParseAndCanonical(allocator, resources);
         const artifact = &resources.checked_artifact;
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
-        try std.testing.expect(artifact.validateDispatchEvidence() == null);
+        try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
         for (artifact.checked_bodies.stored_exprs.items) |expr| {
             const plan_id = switch (expr.data) {
@@ -8954,7 +8989,7 @@ test "custom literal field default gets an ordinary conversion root" {
     // A root link cannot outlive its proof of independence. Pin validation
     // here as well as checking that both kinds of closed literal retain roots.
     const artifact = &resources.checked_artifact;
-    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
     const expr_id = artifact.checked_bodies.default_exprs.items[0].checked_expr;
     const plan_id = switch (artifact.checked_bodies.expr(expr_id).data) {
         .numeral => |numeral| numeral.plan.?,
@@ -9009,7 +9044,7 @@ test "custom literal field default gets an ordinary conversion root" {
     const saved = plan.resolution;
     defer plan.resolution = saved;
     plan.resolution = .{ .direct_parametric = saved.direct_closed };
-    const failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    const failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.literal_conversion_root_invalid, failure.kind);
 }
 
@@ -9035,7 +9070,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const artifact = &resources.checked_artifact;
     const templates = &artifact.checked_procedure_templates;
-    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
     try std.testing.expect(templates.dispatch_scopes.len > 0);
     try std.testing.expect(templates.specialization_interface_relations.len > 0);
 
@@ -9050,25 +9085,25 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const saved_template_span = templates.templates.items[raw_template].specialization_interface_relations;
     templates.templates.items[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
     templates.templates.items[raw_template].specialization_interface_relations.len = 1;
-    var failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    var failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
     templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
     templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
     templates.dispatch_scopes[0].parent = saved_parent;
 
     const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
     templates.dispatch_scopes[0].scheme_root = @enumFromInt(artifact.checked_types.payloadCount());
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
     templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
 
     const saved_scope = templates.specialization_interface_relations[0].scope;
     templates.specialization_interface_relations[0].scope = .{ .generalized = @enumFromInt(templates.dispatch_scopes.len) };
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[0].scope = saved_scope;
 
@@ -9077,7 +9112,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         .left = @enumFromInt(artifact.checked_types.payloadCount()),
         .right = templates.dispatch_scopes[0].scheme_root,
     } };
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[0].data = saved_relation_data;
 
@@ -9101,14 +9136,14 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         .start = @intCast(templates.specialization_interface_types.len),
         .len = 1,
     };
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_call_args_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[raw_call].data.call.args = saved_args;
 
     const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
     const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @enumFromInt(artifact.resolved_value_refs.records.len);
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
 
@@ -9128,14 +9163,14 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     }
     const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_direct_target_invalid, failure.kind);
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     const raw_local_use = local_use_index orelse return error.TestUnexpectedResult;
     const saved_local_ref = templates.specialization_interface_relations[raw_local_use].data.local_proc_use;
     templates.specialization_interface_relations[raw_local_use].data.local_proc_use = invalid_procedure_ref;
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
 
@@ -9145,7 +9180,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
     const next_expr = (@intFromEnum(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
     templates.dispatch_scopes[raw_local_scope].checked_expr = @enumFromInt(next_expr);
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
 
@@ -9162,11 +9197,11 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     }
     const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
     templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
     templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
 
-    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
 }
 
 test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {
@@ -9181,27 +9216,39 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    const paths = resources.checked_artifact.checked_procedure_templates.evidence_param_paths;
+    const templates = &resources.checked_artifact.checked_procedure_templates;
+    const paths = templates.evidence_path_nodes;
     try std.testing.expect(paths.len > 0);
+    const original_step = paths[0].step;
 
     // Raw discriminant 8 is the retired checked-store `record_ext` step.
-    paths[0].kind = 8;
-    var failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    paths[0].step.kind = 8;
+    var failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_kind, failure.kind);
 
     // A tag label must be immediately paired with a payload-index step.
-    paths[0].kind = 9;
-    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    paths[0].step.kind = 9;
+    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_shape, failure.kind);
 
     // A well-formed selector must still resolve over the checked callable.
-    paths[0].kind = 0;
-    paths[0].data = std.math.maxInt(u32);
-    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    paths[0].step.kind = 0;
+    paths[0].step.data = std.math.maxInt(u32);
+    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
+
+    // A param's length must match the depth of the node it names.
+    paths[0].step = original_step;
+    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
+    for (templates.evidence_params_pool) |*param| {
+        if (param.path.len != 0) param.path.len += 1;
+    }
+    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_out_of_bounds, failure.kind);
 }
 
 test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {
@@ -9219,7 +9266,7 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
     }
     try std.testing.expect(removed != null);
 
-    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.dispatch_expr_missing_plan, failure.kind);
     try std.testing.expectEqual(removed.?, failure.expr.?);
@@ -9254,7 +9301,7 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     }
     try std.testing.expect(corrupted_method != null);
 
-    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.plan_evidence_node_out_of_bounds, failure.kind);
     const named_method = resources.checked_artifact.canonical_names.methodNameText(failure.method orelse return error.TestUnexpectedResult);
@@ -9284,7 +9331,7 @@ test "dispatch evidence boundary validator reports a site-evidence key outside t
     try std.testing.expect(table.site_evidence.len > 0);
     table.site_evidence[0].key = @intCast(resources.checked_artifact.checked_bodies.exprCount());
 
-    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.site_evidence_key_out_of_bounds, failure.kind);
     try std.testing.expectEqual(@as(?u32, 0), failure.index);
@@ -10387,7 +10434,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -10510,7 +10557,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -10667,6 +10714,75 @@ test "field takes split across the arms of a branch" {
     try std.testing.expectEqual(@as(usize, 0), root_retained.?);
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/12009
+//
+// `step` can only ever return `Ok`, so tag reachability removes the caller's
+// discriminant switch and leaves an unguarded `Ok` payload read of the call
+// result. That payload view still owns every refcounted byte of the dying
+// `Try`, so its record's field reads must take the union's stored units
+// rather than each paying a retain followed by a whole release of the `Try`
+// on every loop iteration.
+test "field takes dismantle a Try whose caller match tag reachability folded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Pair : { a : List(U16), b : List(U16) }
+        \\
+        \\step : List(U16), List(U16), U64 -> Try(Pair, [Bug])
+        \\step = |a, b0, i| {
+        \\    if i > 100 {
+        \\        return Ok({ a, b: b0 })
+        \\    } else {
+        \\    }
+        \\    var $b = b0
+        \\    var $j = 0.U64
+        \\    while $j < i {
+        \\        $b = match List.set($b, $j, 1) {
+        \\            Ok(next) => next
+        \\            Err(_) => crash "unreachable"
+        \\        }
+        \\        $j = $j + 1
+        \\    }
+        \\    Ok({ a, b: $b })
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $a = List.repeat(0.U16, 8)
+        \\    var $b = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        pair = match step($a, $b, $i) {
+        \\            Ok(p) => p
+        \\            Err(_) => crash "step"
+        \\        }
+        \\        $a = List.set(pair.a, $i, 2) ?? pair.a
+        \\        $b = pair.b
+        \\        $i = $i + 1
+        \\    }
+        \\    (List.get($a, 3) ?? 0).to_u64() + (List.get($b, 2) ?? 0).to_u64()
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var main_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpec(proc_id).body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        main_retained = (main_retained orelse 0) + retained;
+    }
+    try std.testing.expect(main_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), main_retained.?);
+}
+
 // A record of lists updated through a helper function stays in place: the
 // call site demands a mode-specialized variant whose owned parameter lets the
 // field reads take, so no emitted variant both mutates a list and retains a
@@ -10756,7 +10872,7 @@ fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) b
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -11156,7 +11272,6 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.SymLinkLoop,
         error.SystemFdQuotaExceeded,
         error.SystemResources,
-        error.TempFileError,
         error.TempFileOpenFailed,
         error.TempFileUnlinkFailed,
         error.TestExpectedEqual,
@@ -11979,7 +12094,7 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
         \\to_list_help = |{ items }| items
     ;
     const source =
-        \\import Container exposing [Container]
+        \\import Container
         \\value : Container(U8)
         \\value = { items: Str.to_utf8("xyz") }
         \\main = Container.to_list(value)
@@ -12437,7 +12552,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }

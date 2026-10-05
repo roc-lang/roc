@@ -3,6 +3,7 @@
 //! live sets or pairwise interference graph are materialized.
 const std = @import("std");
 const collections = @import("collections");
+const LoopForest = collections.LoopForest;
 const lir = @import("lir");
 const Allocator = std.mem.Allocator;
 const none = std.math.maxInt(u32);
@@ -172,10 +173,289 @@ fn compactRanges(ranges: *Ranges) void {
     }
     ranges.truncate(count);
 }
-fn appendPreds(self: *Self, blocks: []const Block, block: u32, work: *std.ArrayList(u32)) Allocator.Error!void {
-    var e = self.nodes.items[blocks[block].first].pred;
-    while (e != none) : (e = self.edges.items[e].next_pred) {
-        try work.append(self.allocator, self.nodes.items[self.edges.items[e].from].block);
+/// The block graph of a procedure, its loop-nesting forest, and each loop's
+/// position coverage.
+const BlockStructure = struct {
+    succ_starts: []u32,
+    succs: []u32,
+    pred_starts: []u32,
+    preds: []u32,
+    forest: LoopForest,
+    /// Every loop's entering blocks: its header's predecessors outside it,
+    /// then its side entries.
+    entry_starts: []u32,
+    entries: []u32,
+    /// Blocks ordered by their innermost loop's loop-tree position (blocks in
+    /// no loop last), so each loop's blocks are one contiguous run.
+    blocks_by_loop: []u32,
+    /// The span of positions a loop's blocks cover, and whether they cover it
+    /// without gaps.
+    first_position: []u32,
+    end_position: []u32,
+    contiguous: []bool,
+
+    fn init(plan: *Self, blocks: []Block) Allocator.Error!BlockStructure {
+        const allocator = plan.allocator;
+        const count = blocks.len;
+        const succ_starts = try allocator.alloc(u32, count + 1);
+        errdefer allocator.free(succ_starts);
+        const pred_starts = try allocator.alloc(u32, count + 1);
+        errdefer allocator.free(pred_starts);
+        @memset(succ_starts, 0);
+        @memset(pred_starts, 0);
+        for (blocks, 0..) |block, index| {
+            const last_node = plan.lastNodeOf(block);
+            var edge_index = plan.nodes.items[last_node].succ;
+            while (edge_index != none) : (edge_index = plan.edges.items[edge_index].next_succ) {
+                const target = plan.nodes.items[plan.edges.items[edge_index].to].block;
+                succ_starts[index + 1] += 1;
+                pred_starts[target + 1] += 1;
+            }
+        }
+        for (1..count + 1) |index| {
+            succ_starts[index] += succ_starts[index - 1];
+            pred_starts[index] += pred_starts[index - 1];
+        }
+        const succs = try allocator.alloc(u32, succ_starts[count]);
+        errdefer allocator.free(succs);
+        const preds = try allocator.alloc(u32, pred_starts[count]);
+        errdefer allocator.free(preds);
+        {
+            const succ_fill = try allocator.dupe(u32, succ_starts[0..count]);
+            defer allocator.free(succ_fill);
+            const pred_fill = try allocator.dupe(u32, pred_starts[0..count]);
+            defer allocator.free(pred_fill);
+            for (blocks, 0..) |block, index| {
+                const last_node = plan.lastNodeOf(block);
+                var edge_index = plan.nodes.items[last_node].succ;
+                while (edge_index != none) : (edge_index = plan.edges.items[edge_index].next_succ) {
+                    const target = plan.nodes.items[plan.edges.items[edge_index].to].block;
+                    succs[succ_fill[index]] = target;
+                    succ_fill[index] += 1;
+                    preds[pred_fill[target]] = @intCast(index);
+                    pred_fill[target] += 1;
+                }
+            }
+        }
+        var forest = try LoopForest.build(allocator, succ_starts, succs, pred_starts, preds);
+        errdefer forest.deinit();
+        const loop_count = forest.loops.len;
+
+        // Side entries, by loop.
+        const SideEntry = struct { loop: u32, pred: u32 };
+        var side: std.ArrayList(SideEntry) = .empty;
+        defer side.deinit(allocator);
+        for (0..count) |target_index| {
+            for (preds[pred_starts[target_index]..pred_starts[target_index + 1]]) |pred| {
+                var loop = forest.innermost[target_index];
+                while (loop != LoopForest.none and !forest.containsNode(loop, pred)) : (loop = forest.loops[loop].parent) {
+                    if (forest.loops[loop].header != target_index) try side.append(allocator, .{ .loop = loop, .pred = pred });
+                }
+            }
+        }
+        std.mem.sort(SideEntry, side.items, {}, struct {
+            fn lessThan(_: void, lhs: SideEntry, rhs: SideEntry) bool {
+                return lhs.loop < rhs.loop;
+            }
+        }.lessThan);
+        var entry_list: std.ArrayList(u32) = .empty;
+        defer entry_list.deinit(allocator);
+        const entry_starts = try allocator.alloc(u32, loop_count + 1);
+        errdefer allocator.free(entry_starts);
+        {
+            var cursor: usize = 0;
+            for (0..loop_count) |loop| {
+                entry_starts[loop] = @intCast(entry_list.items.len);
+                const header = forest.loops[loop].header;
+                for (preds[pred_starts[header]..pred_starts[header + 1]]) |pred| {
+                    if (!forest.containsNode(@intCast(loop), pred)) try entry_list.append(allocator, pred);
+                }
+                while (cursor < side.items.len and side.items[cursor].loop == loop) : (cursor += 1) {
+                    try entry_list.append(allocator, side.items[cursor].pred);
+                }
+            }
+            entry_starts[loop_count] = @intCast(entry_list.items.len);
+        }
+        const entries = try entry_list.toOwnedSlice(allocator);
+        errdefer allocator.free(entries);
+
+        // Blocks grouped by loop-tree position, and each loop's coverage.
+        const blocks_by_loop = try allocator.alloc(u32, count);
+        errdefer allocator.free(blocks_by_loop);
+        for (blocks_by_loop, 0..) |*slot, index| slot.* = @intCast(index);
+        const LoopOrder = struct {
+            forest: *const LoopForest,
+            fn key(ctx: @This(), block: u32) u64 {
+                const loop = ctx.forest.innermost[block];
+                const position: u64 = if (loop == LoopForest.none) std.math.maxInt(u32) else ctx.forest.loops[loop].enter;
+                return (position << 32) | block;
+            }
+            fn lessThan(ctx: @This(), lhs: u32, rhs: u32) bool {
+                return key(ctx, lhs) < key(ctx, rhs);
+            }
+        };
+        std.mem.sort(u32, blocks_by_loop, LoopOrder{ .forest = &forest }, LoopOrder.lessThan);
+
+        // Lay the blocks out in that order, so every loop's positions are one
+        // interval. Lifetimes overlap exactly when they share a node, so the
+        // order of blocks does not change which values interfere.
+        {
+            var position: u32 = 0;
+            for (blocks_by_loop) |block_index| {
+                const block = &blocks[block_index];
+                const start = position;
+                var current = block.first;
+                while (true) {
+                    const n = &plan.nodes.items[current];
+                    const next_in_block: ?u32 = if (n.succ_count == 1) blk: {
+                        const next = plan.edges.items[n.succ].to;
+                        const next_node = plan.nodes.items[next];
+                        break :blk if (next_node.block == n.block and next_node.position == n.position + 1) next else null;
+                    } else null;
+                    n.position = position;
+                    position += 1;
+                    current = next_in_block orelse break;
+                }
+                block.start = start;
+                block.end = position;
+            }
+        }
+        const first_position = try allocator.alloc(u32, loop_count);
+        errdefer allocator.free(first_position);
+        const end_position = try allocator.alloc(u32, loop_count);
+        errdefer allocator.free(end_position);
+        const contiguous = try allocator.alloc(bool, loop_count);
+        errdefer allocator.free(contiguous);
+        {
+            const covered = try allocator.alloc(u64, loop_count);
+            defer allocator.free(covered);
+            @memset(first_position, std.math.maxInt(u32));
+            @memset(end_position, 0);
+            @memset(covered, 0);
+            for (blocks, 0..) |block, index| {
+                const loop = forest.innermost[index];
+                if (loop == LoopForest.none) continue;
+                first_position[loop] = @min(first_position[loop], block.start);
+                end_position[loop] = @max(end_position[loop], block.end);
+                covered[loop] += block.end - block.start;
+            }
+            var order = loop_count;
+            while (order > 0) {
+                order -= 1;
+                const loop = forest.preorder[order];
+                const parent = forest.loops[loop].parent;
+                if (parent == LoopForest.none) continue;
+                first_position[parent] = @min(first_position[parent], first_position[loop]);
+                end_position[parent] = @max(end_position[parent], end_position[loop]);
+                covered[parent] += covered[loop];
+            }
+            for (0..loop_count) |loop| contiguous[loop] = covered[loop] == end_position[loop] - first_position[loop];
+        }
+
+        return .{
+            .succ_starts = succ_starts,
+            .succs = succs,
+            .pred_starts = pred_starts,
+            .preds = preds,
+            .forest = forest,
+            .entry_starts = entry_starts,
+            .entries = entries,
+            .blocks_by_loop = blocks_by_loop,
+            .first_position = first_position,
+            .end_position = end_position,
+            .contiguous = contiguous,
+        };
+    }
+
+    fn deinit(self: *BlockStructure, allocator: Allocator) void {
+        allocator.free(self.contiguous);
+        allocator.free(self.end_position);
+        allocator.free(self.first_position);
+        allocator.free(self.blocks_by_loop);
+        allocator.free(self.entries);
+        allocator.free(self.entry_starts);
+        self.forest.deinit();
+        allocator.free(self.preds);
+        allocator.free(self.pred_starts);
+        allocator.free(self.succs);
+        allocator.free(self.succ_starts);
+    }
+
+    fn blockPreds(self: *const BlockStructure, block: u32) []const u32 {
+        return self.preds[self.pred_starts[block]..self.pred_starts[block + 1]];
+    }
+
+    fn loopEntries(self: *const BlockStructure, loop: u32) []const u32 {
+        return self.entries[self.entry_starts[loop]..self.entry_starts[loop + 1]];
+    }
+
+    /// The first index of `blocks_by_loop` whose block's innermost loop is at
+    /// or after loop-tree position `order`.
+    fn firstBlockFrom(self: *const BlockStructure, order: u32) usize {
+        var low: usize = 0;
+        var high: usize = self.blocks_by_loop.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const loop = self.forest.innermost[self.blocks_by_loop[mid]];
+            const position = if (loop == LoopForest.none) std.math.maxInt(u32) else self.forest.loops[loop].enter;
+            if (position < order) low = mid + 1 else high = mid;
+        }
+        return low;
+    }
+
+    /// Append every position a loop's blocks cover.
+    fn appendCoverage(self: *const BlockStructure, allocator: Allocator, loop: u32, blocks: []const Block, ranges: *Ranges) Allocator.Error!void {
+        if (self.contiguous[loop]) {
+            try ranges.append(allocator, .{ .start = self.first_position[loop], .end = self.end_position[loop] });
+            return;
+        }
+        const run_start = self.firstBlockFrom(self.forest.loops[loop].enter);
+        const run_end = self.firstBlockFrom(self.forest.loops[loop].exit + 1);
+        for (self.blocks_by_loop[run_start..run_end]) |block| {
+            try ranges.append(allocator, .{ .start = blocks[block].start, .end = blocks[block].end });
+        }
+    }
+};
+
+/// Which loops write a value: the sorted loop-tree positions of the loops
+/// holding its writes.
+const Transparency = struct {
+    forest: *const LoopForest,
+    write_enters: []const u32,
+
+    fn holdsWrite(self: Transparency, loop: u32) bool {
+        const enter = self.forest.loops[loop].enter;
+        const exit = self.forest.loops[loop].exit;
+        // The first write position at or after `enter`.
+        var low: usize = 0;
+        var high: usize = self.write_enters.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.write_enters[mid] < enter) low = mid + 1 else high = mid;
+        }
+        return low < self.write_enters.len and self.write_enters[low] <= exit;
+    }
+
+    fn transparent(self: Transparency, loop: u32) bool {
+        return !self.holdsWrite(loop);
+    }
+
+    /// The largest loop around `innermost` (a block's innermost loop) that
+    /// holds none of the value's writes, or none.
+    fn outermost(self: Transparency, innermost: u32) ?u32 {
+        if (innermost == LoopForest.none or self.holdsWrite(innermost)) return null;
+        return self.forest.outermostWhile(innermost, self, transparent);
+    }
+};
+
+fn lastNodeOf(self: *const Self, block: Block) u32 {
+    var current = block.first;
+    while (true) {
+        const n = self.nodes.items[current];
+        if (n.succ_count != 1) return current;
+        const next = self.edges.items[n.succ].to;
+        if (self.nodes.items[next].block != n.block or self.nodes.items[next].position != n.position + 1) return current;
+        current = next;
     }
 }
 
@@ -203,13 +483,23 @@ pub fn solve(self: *Self) Allocator.Error!void {
         }
         a.value = root;
     }
+    var structure = try BlockStructure.init(self, blocks.items);
+    defer structure.deinit(self.allocator);
     std.mem.sort(Access, self.accesses.items, self, accessLess);
     const BlockState = struct { epoch: u32 = none, last_write: ?u32 = null, propagated: bool = false };
     const states = try self.allocator.alloc(BlockState, blocks.items.len);
     defer self.allocator.free(states);
     @memset(states, .{});
-    var work: std.ArrayList(u32) = .empty;
+    const loop_epochs = try self.allocator.alloc(u32, structure.forest.loops.len);
+    defer self.allocator.free(loop_epochs);
+    @memset(loop_epochs, none);
+    // A unit of propagation: a block, or a loop that writes the value nowhere
+    // and so holds it at every position or at none.
+    const Unit = struct { loop: bool, index: u32 };
+    var work: std.ArrayList(Unit) = .empty;
     defer work.deinit(self.allocator);
+    var write_loops: std.ArrayList(u32) = .empty;
+    defer write_loops.deinit(self.allocator);
     var begin: usize = 0;
     while (begin < self.accesses.items.len) {
         const value = self.accesses.items[begin].value;
@@ -218,6 +508,18 @@ pub fn solve(self: *Self) Allocator.Error!void {
         defer begin = end;
         if (self.values.items[value].size == 0) continue;
         const ranges = &self.values.items[value].ranges;
+
+        // The loop-tree positions of the loops holding the value's writes:
+        // a loop is transparent to the value when none lies within it.
+        write_loops.clearRetainingCapacity();
+        for (self.accesses.items[begin..end]) |a| {
+            if (!a.write) continue;
+            const loop = structure.forest.innermost[self.nodes.items[a.node].block];
+            if (loop != LoopForest.none) try write_loops.append(self.allocator, structure.forest.loops[loop].enter);
+        }
+        std.mem.sort(u32, write_loops.items, {}, std.sort.asc(u32));
+        const transparency = Transparency{ .forest = &structure.forest, .write_enters = write_loops.items };
+
         var b = begin;
         while (b < end) {
             const block = self.nodes.items[self.accesses.items[b].node].block;
@@ -246,17 +548,37 @@ pub fn solve(self: *Self) Allocator.Error!void {
             }
             if (needed_until) |limit| {
                 try ranges.append(self.allocator, .{ .start = blocks.items[block].start, .end = limit });
-                try self.appendPreds(blocks.items, block, &work);
+                if (transparency.outermost(structure.forest.innermost[block])) |loop| {
+                    if (loop_epochs[loop] != value) {
+                        loop_epochs[loop] = value;
+                        try work.append(self.allocator, .{ .loop = true, .index = loop });
+                    }
+                } else {
+                    try work.append(self.allocator, .{ .loop = false, .index = block });
+                }
             }
             b = e;
         }
-        while (work.pop()) |block| {
-            const state = &states[block];
-            if (state.epoch != value) state.* = .{ .epoch = value };
-            if (state.propagated) continue;
-            state.propagated = true;
-            try ranges.append(self.allocator, .{ .start = state.last_write orelse blocks.items[block].start, .end = blocks.items[block].end });
-            if (state.last_write == null) try self.appendPreds(blocks.items, block, &work);
+        while (work.pop()) |unit| {
+            const entries = if (unit.loop)
+                structure.loopEntries(unit.index)
+            else
+                structure.blockPreds(unit.index);
+            if (unit.loop) try structure.appendCoverage(self.allocator, unit.index, blocks.items, ranges);
+            for (entries) |pred| {
+                if (transparency.outermost(structure.forest.innermost[pred])) |loop| {
+                    if (loop_epochs[loop] == value) continue;
+                    loop_epochs[loop] = value;
+                    try work.append(self.allocator, .{ .loop = true, .index = loop });
+                    continue;
+                }
+                const state = &states[pred];
+                if (state.epoch != value) state.* = .{ .epoch = value };
+                if (state.propagated) continue;
+                state.propagated = true;
+                try ranges.append(self.allocator, .{ .start = state.last_write orelse blocks.items[pred].start, .end = blocks.items[pred].end });
+                if (state.last_write == null) try work.append(self.allocator, .{ .loop = false, .index = pred });
+            }
         }
         compactRanges(ranges);
     }

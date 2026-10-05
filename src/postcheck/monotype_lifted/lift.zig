@@ -105,6 +105,7 @@ pub fn run(
         );
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
         output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
+        output.platform_requirement_filling = owned.platform_requirement_filling;
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
@@ -651,7 +652,7 @@ const Lifter = struct {
             .dbg,
             => |expr| try work.append(self.allocator, .{ .expr = expr }),
             .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -708,6 +709,7 @@ const Lifter = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
@@ -724,7 +726,6 @@ const Lifter = struct {
             },
             .tag => |tag| try children.span(tag.payloads),
             .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .inline_expects_enabled => {},
             .comptime_value => |candidate| try children.child(candidate.initializer),
             .typed_boundary => |boundary| try children.child(boundary.value),
             .nominal,
@@ -1484,7 +1485,7 @@ const CaptureSet = struct {
             .dbg,
             => |expr| try work.append(self.allocator, .{ .expr = expr }),
             .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -1526,6 +1527,7 @@ const CaptureSet = struct {
             .uninitialized_payload,
             .def_ref,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
@@ -1558,7 +1560,6 @@ const CaptureSet = struct {
             },
             .tag => |tag| try children.span(input, tag.payloads),
             .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .inline_expects_enabled => {},
             .comptime_value => |candidate| try children.child(candidate.initializer),
             .typed_boundary => |boundary| try children.child(boundary.value),
             .nominal,
@@ -2364,7 +2365,7 @@ const CaptureGraphBuilder = struct {
             .dbg,
             => |expr| try work.append(allocator, .{ .expr = .{ .expr = expr, .node = node } }),
             .return_ => |ret| try work.append(allocator, .{ .expr = .{ .expr = ret.value, .node = node } }),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -2412,6 +2413,7 @@ const CaptureGraphBuilder = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .def_ref => if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw a definition reference"),
@@ -2445,7 +2447,6 @@ const CaptureGraphBuilder = struct {
             },
             .tag => |tag| try children.span(input, tag.payloads),
             .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .inline_expects_enabled => {},
             .comptime_value => |candidate| try children.child(candidate.initializer),
             .typed_boundary => |boundary| try children.child(boundary.value),
             .nominal,
@@ -2632,7 +2633,7 @@ test "lift owns transferred tables across every allocation failure" {
         .initializer = initializer,
     } } });
     const stmt = try source.addStmt(.{ .expr = value });
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@enumFromInt(1), name);
     source.freeze();

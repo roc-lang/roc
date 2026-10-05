@@ -106,6 +106,11 @@ pub const ExpectFailure = struct {
 /// retaining local bookkeeping for crash and expect messages so hosts that care
 /// can inspect the last message after evaluation. A retained interpreter
 /// rebinds this pointer when the host invokes one of its callables later.
+///
+/// A Roc crash is never forwarded to the caller's `roc_crashed`: that callback
+/// never returns, and the interpreter has to unwind its own state first. The
+/// crash is recorded here and surfaces as `error.Crash`; whoever embeds the
+/// interpreter decides how to deliver it.
 const InterpreterRocEnv = struct {
     allocator: Allocator,
     crashed: bool = false,
@@ -171,6 +176,9 @@ const InterpreterRocEnv = struct {
         return self.caller_roc_ops;
     }
 
+    /// Record a Roc crash. A message that cannot be copied leaves
+    /// `crash_message` null, which `LirInterpreter.crashError` reports as
+    /// running out of memory.
     fn recordCrash(self: *InterpreterRocEnv, msg: []const u8) void {
         self.crashed = true;
         if (self.crash_message) |old| self.allocator.free(old);
@@ -194,17 +202,12 @@ const InterpreterRocEnv = struct {
         });
     }
 
-    fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
-        const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_crashed(caller_roc_ops, msg.ptr, msg.len);
-        self.recordCrash(msg);
-    }
-
-    /// The host allocators signal OOM by returning a null pointer (see
-    /// `host_abi.RocOps.roc_alloc`). Turn that into a Roc crash that unwinds to
-    /// the eval boundary via the active jump buffer, instead of letting it abort.
+    /// Report an allocation failure as a Roc crash and unwind to the eval
+    /// boundary via the active jump buffer. A caller host whose allocator can
+    /// fail reaches this through `OutOfMemoryUnwind`, because host allocation
+    /// callbacks never return null (see `host_abi.RocOps.roc_alloc`).
     fn crashAllocationFailed(self: *InterpreterRocEnv) noreturn {
-        self.reportCrash("ran out of memory");
+        self.recordCrash("ran out of memory");
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
                 "LIR/interpreter invariant violated: allocation failed without an active jump buffer\n",
@@ -220,10 +223,10 @@ const InterpreterRocEnv = struct {
         longjmp(active_jmp_buf, 1);
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment) orelse self.crashAllocationFailed();
+        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment);
         trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), length, alignment });
         return ptr;
     }
@@ -235,11 +238,11 @@ const InterpreterRocEnv = struct {
         caller_roc_ops.roc_dealloc(caller_roc_ops, ptr, alignment);
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
         const old_ptr = ptr;
-        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment) orelse self.crashAllocationFailed();
+        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment);
         trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), new_length });
         return new_ptr;
     }
@@ -262,8 +265,7 @@ const InterpreterRocEnv = struct {
 
     fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
-        const msg = bytes[0..len];
-        self.reportCrash(msg);
+        self.recordCrash(bytes[0..len]);
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
                 "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
@@ -277,6 +279,17 @@ const InterpreterRocEnv = struct {
         };
         self.active_jmp_buf = null;
         longjmp(active_jmp_buf, 1);
+    }
+};
+
+/// Lets a caller host whose allocator can fail turn that failure into a Roc
+/// crash that unwinds this interpreter's current evaluation, since the host's
+/// allocation callbacks must not return to Roc without an allocation.
+pub const OutOfMemoryUnwind = struct {
+    roc_env: *InterpreterRocEnv,
+
+    pub fn unwind(self: OutOfMemoryUnwind) noreturn {
+        self.roc_env.crashAllocationFailed();
     }
 };
 
@@ -929,10 +942,20 @@ pub const Interpreter = struct {
         return self.arena.allocator();
     }
 
-    /// Get the crash message from the last evaluation (if any).
-    /// The message is owned by the interpreter and valid until the next eval or deinit.
-    pub fn getCrashMessage(self: *const LirInterpreter) ?[]const u8 {
-        return self.roc_env.crash_message;
+    /// The unwind a caller host uses when it cannot satisfy an allocation
+    /// made during this interpreter's evaluation.
+    pub fn outOfMemoryUnwind(self: *const LirInterpreter) OutOfMemoryUnwind {
+        return .{ .roc_env = self.roc_env };
+    }
+
+    /// The message of the Roc crash that ended the last evaluation with
+    /// `error.Crash`. The message is owned by the interpreter and valid until
+    /// the next eval or deinit.
+    pub fn getCrashMessage(self: *const LirInterpreter) []const u8 {
+        return self.roc_env.crash_message orelse self.invariantFailed(
+            "LIR/interpreter invariant violated: crash message requested without a recorded crash",
+            .{},
+        );
     }
 
     pub fn getRuntimeErrorMessage(self: *const LirInterpreter) ?[]const u8 {
@@ -989,6 +1012,7 @@ pub const Interpreter = struct {
         return .{
             .name = self.store.sourceFileName(self.failed_stmt_loc.file),
             .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.file),
+            .module_identity = self.store.sourceFileModuleIdentity(self.failed_stmt_loc.file),
         };
     }
 
@@ -1078,7 +1102,14 @@ pub const Interpreter = struct {
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
         self.recordActiveFailureLocIfUnset();
-        self.roc_env.reportCrash(message);
+        self.roc_env.recordCrash(message);
+        return self.crashError();
+    }
+
+    /// The error a recorded crash unwinds with: `error.Crash`, or
+    /// `error.OutOfMemory` when the crash message could not be copied.
+    fn crashError(self: *const LirInterpreter) Error {
+        if (self.roc_env.crash_message == null) return error.OutOfMemory;
         return error.Crash;
     }
 
@@ -1352,7 +1383,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, &self.roc_ops);
     }
 
@@ -1475,7 +1506,7 @@ pub const Interpreter = struct {
             if (sj != 0) {
                 self.recordActiveFailureLocIfUnset();
                 self.recordFailedCallStackIfUnset() catch {};
-                return error.Crash;
+                return self.crashError();
             }
         }
 
@@ -2122,6 +2153,7 @@ pub const Interpreter = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2162,6 +2194,7 @@ pub const Interpreter = struct {
                 .assign_boxy_desc_ref => |assign| assign.next,
                 .assign_boxy_dict_ref => |assign| assign.next,
                 .assign_boxy_box => |assign| assign.next,
+                .assign_boxy_record_update => |assign| assign.next,
                 .assign_boxy_reuse_box => |assign| assign.next,
                 .assign_boxy_unbox => |assign| assign.next,
                 .assign_boxy_adapt => |assign| assign.next,
@@ -2959,6 +2992,21 @@ pub const Interpreter = struct {
                     frame.setLocalDesc(assign.target, boxed.desc);
                     current = assign.next;
                 },
+                .assign_boxy_record_update => |assign| {
+                    const updated = try self.boxy_runtime.boxyRecordUpdate(
+                        self.boxyFrameHooks(frame),
+                        try self.getLocalChecked(frame, assign.base),
+                        self.store.getLocal(assign.base).layout_idx,
+                        try self.resolveBoxyDescRef(frame, assign.base_desc),
+                        try self.getLocalChecked(frame, assign.fields),
+                        assign.fields_layout,
+                        try self.resolveBoxyDescRef(frame, assign.fields_desc),
+                        self.store.getLocal(assign.target).layout_idx,
+                    );
+                    try self.setLocalChecked(frame, current, assign.target, updated.value, false);
+                    frame.setLocalDesc(assign.target, updated.desc);
+                    current = assign.next;
+                },
                 .assign_boxy_reuse_box => |assign| {
                     _ = try self.resolveBoxyDescRef(frame, assign.desc);
                     const source_value = try self.getLocalChecked(frame, assign.source);
@@ -3447,9 +3495,9 @@ pub const Interpreter = struct {
                             const message_value = try self.getLocalChecked(frame, message_local);
                             const message = self.readRocStr(message_value);
                             self.recordActiveFailureLocIfUnset();
-                            self.roc_env.reportCrash(message);
+                            self.roc_env.recordCrash(message);
                             self.dropValue(message_value, self.store.getLocal(message_local).layout_idx);
-                            return error.Crash;
+                            return self.crashError();
                         },
                     }
                 },
@@ -3611,6 +3659,7 @@ pub const Interpreter = struct {
                 },
                 inline .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -4243,15 +4292,13 @@ pub const Interpreter = struct {
         const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const self: *LirInterpreter = @ptrCast(@alignCast(env.active_interpreter orelse {
             ops.crash("static interpreted callable has no active interpreter");
-            return;
         }));
         const capture_ptr = capture orelse {
             ops.crash("static interpreted callable omitted its capture address");
-            return;
         };
         for (self.static_erased_callables) |entry| {
             if (entry.capture_ptr != capture_ptr) continue;
-            self.callInterpreterErasedCallable(.{ .proc = entry.proc_id, .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc) catch |err| reportInterpreterErasedCallableError(ops, err);
+            self.callInterpreterErasedCallable(.{ .proc = entry.proc_id, .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc) catch |err| self.crashErasedCallable(null, ops, err, .call);
             return;
         }
         ops.crash("static interpreted callable omitted its producer registry entry");
@@ -4289,27 +4336,37 @@ pub const Interpreter = struct {
             retained.retain();
             retained.enter();
         }
-        context.interpreter.callInterpreterErasedCallable(.{ .proc = @enumFromInt(context.proc_id), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| {
-            leaveAndReleaseErasedCallableOwner(owner);
-            reportInterpreterErasedCallableError(ops, err);
-            return;
-        };
+        context.interpreter.callInterpreterErasedCallable(.{ .proc = @enumFromInt(context.proc_id), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
         leaveAndReleaseErasedCallableOwner(owner);
     }
 
-    fn reportInterpreterErasedCallableError(ops: *RocOps, err: Error) void {
-        switch (err) {
-            error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
-            error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
-            error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
-            error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
-            error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
-            error.UnsupportedHostedFunction => ops.crash("LIR/interpreter erased callable trampoline reached an unsupported hosted function"),
-            error.InvalidHostedFunctionSignature => ops.crash("LIR/interpreter erased callable trampoline reached an invalid hosted function signature"),
+    const ErasedCallableEntry = enum { call, drop };
+
+    /// Deliver an erased-callable failure to the host, which never returns.
+    /// A Roc crash's message lives in this interpreter, so for `error.Crash`
+    /// the owner's reference stays held and only its execution lock is left.
+    fn crashErasedCallable(self: *const LirInterpreter, owner: ?*Retained, ops: *RocOps, err: Error, comptime entry: ErasedCallableEntry) noreturn {
+        const prefix = switch (entry) {
+            .call => "LIR/interpreter erased callable trampoline ",
+            .drop => "LIR/interpreter erased callable capture drop ",
+        };
+        const message = switch (err) {
+            error.Crash => {
+                if (owner) |retained| retained.leave();
+                ops.crash(self.getCrashMessage());
+            },
+            error.OutOfMemory => prefix ++ "ran out of memory",
+            error.RuntimeError => prefix ++ "hit runtime error",
+            error.ComptimeExhaustiveness => prefix ++ "hit compile-time exhaustiveness marker",
+            error.DivisionByZero => prefix ++ "hit division by zero",
+            error.UnsupportedHostedFunction => prefix ++ "reached an unsupported hosted function",
+            error.InvalidHostedFunctionSignature => prefix ++ "reached an invalid hosted function signature",
             // expect_err statements only occur in top-level expect test
             // roots, never in callable bodies.
             error.ExpectErr => unreachable,
-        }
+        };
+        leaveAndReleaseErasedCallableOwner(owner);
+        ops.crash(message);
     }
 
     fn leaveAndReleaseErasedCallableOwner(owner: ?*Retained) void {
@@ -4325,11 +4382,7 @@ pub const Interpreter = struct {
         if (owner) |retained| retained.enter();
         context.interpreter.bindCallerRocOps(roc_ops);
 
-        context.interpreter.dropInterpreterErasedCallableCapture(context, capture) catch |err| {
-            leaveAndReleaseErasedCallableOwner(owner);
-            reportInterpreterErasedCallableDropError(roc_ops, err);
-            return;
-        };
+        context.interpreter.dropInterpreterErasedCallableCapture(context, capture) catch |err| context.interpreter.crashErasedCallable(owner, roc_ops, err, .drop);
         leaveAndReleaseErasedCallableOwner(owner);
     }
 
@@ -4380,19 +4433,6 @@ pub const Interpreter = struct {
         }
     }
 
-    fn reportInterpreterErasedCallableDropError(roc_ops: *RocOps, err: Error) void {
-        switch (err) {
-            error.OutOfMemory => roc_ops.crash("LIR/interpreter erased callable capture drop ran out of memory"),
-            error.RuntimeError => roc_ops.crash("LIR/interpreter erased callable capture drop hit runtime error"),
-            error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
-            error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
-            error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
-            error.UnsupportedHostedFunction => roc_ops.crash("LIR/interpreter erased callable capture drop reached an unsupported hosted function"),
-            error.InvalidHostedFunctionSignature => roc_ops.crash("LIR/interpreter erased callable capture drop reached an invalid hosted function signature"),
-            error.ExpectErr => unreachable,
-        }
-    }
-
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
         callable: InterpretedCallable,
@@ -4412,7 +4452,7 @@ pub const Interpreter = struct {
             if (sj != 0) {
                 self.recordActiveFailureLocIfUnset();
                 self.recordFailedCallStackIfUnset() catch {};
-                return error.Crash;
+                return self.crashError();
             }
         }
 
@@ -5171,7 +5211,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
 
         if (self.hosted_call_handler) |handler| {
             try handler.dispatch(handler.context, .{
@@ -5221,7 +5261,7 @@ pub const Interpreter = struct {
             uniform(args_buf.ptr, ret_buf.ptr);
         }
 
-        if (self.roc_env.crashed) return error.Crash;
+        if (self.roc_env.crashed) return self.crashError();
         if (ret_sa.size == 0) return Value.zst;
 
         const result = try self.alloc(ret_layout);
@@ -5997,7 +6037,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         const result = func(a, update_mode, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
     }
@@ -6006,7 +6046,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         const result = func(a, b, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
     }
@@ -6017,7 +6057,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         const result = func(a, b, update_mode, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
     }
@@ -6195,6 +6235,8 @@ pub const Interpreter = struct {
 
         return switch (ll.op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             // ── String ops ──
             .str_is_eq => blk: {
@@ -6275,7 +6317,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.repeatC(valueToRocStr(args[0]), args[1].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6285,7 +6327,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.splitFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6312,7 +6354,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.splitLast(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6339,7 +6381,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.strDropPrefixCaselessAscii(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6385,7 +6427,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.strToUtf8C(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
@@ -6400,7 +6442,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.fromUtf8C(self.valueToRocListForLayout(args[0], arg_layout), UpdateMode.Immutable, &self.roc_ops);
 
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6478,7 +6520,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.fromUtf8Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6486,7 +6528,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.strSplitOn(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
@@ -6494,7 +6536,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6502,7 +6544,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.withCapacityC(args[0].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6510,7 +6552,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.str.reserveC(valueToRocStr(args[0]), args[1].read(u64), updateModeForArg0(ll.unique_args), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6519,7 +6561,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var result: RocStr = undefined;
                 const roc_str = valueToRocStr(args[0]);
                 const entered = builtins.in_process_host.enter(&self.roc_ops, null);
@@ -6586,7 +6628,7 @@ pub const Interpreter = struct {
                     var crash_boundary = self.enterCrashBoundary();
                     defer crash_boundary.deinit();
                     const sj = crash_boundary.set();
-                    if (sj != 0) return error.Crash;
+                    if (sj != 0) return self.crashError();
                     const result = builtins.dec.to_str(dec, &self.roc_ops);
                     break :blk self.rocStrToValue(result, ll.ret_layout);
                 } else if (is_float) {
@@ -6602,6 +6644,8 @@ pub const Interpreter = struct {
             },
 
             // ── List ops ──
+            // A hint only: nothing to do, and nothing to return.
+            .list_prefetch => Value.zst,
             .list_len => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
@@ -6666,7 +6710,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) {
-                    return error.Crash;
+                    return self.crashError();
                 }
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listConcat(
@@ -6699,7 +6743,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listAppendRangeWithin(
                     list_val,
@@ -6728,7 +6772,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listCopyRangeWithin(
                     list_val,
@@ -6775,7 +6819,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.list.listAppendLeBytes(
                     list_val,
                     args[1].read(u64),
@@ -6798,7 +6842,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listAppendSublist(
                     list_val,
@@ -6827,7 +6871,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listPrepend(
                     list_val,
@@ -6856,7 +6900,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listSwap(
                     list_val,
@@ -6945,7 +6989,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listSublist(
                     source_list,
@@ -6974,7 +7018,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listDropAt(
                     source_list,
@@ -7023,7 +7067,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
 
                 // listReplace writes the displaced (old) element into the out_element slot.
@@ -7072,7 +7116,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 // listReplace moves the old element into a scratch slot. list_set does not
                 // return that ownership unit, so release it after the replacement.
@@ -7117,7 +7161,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = builtins.list.listWithCapacity(
                     args[0].read(u64),
                     @intCast(sa.alignment.toByteUnits()),
@@ -7141,7 +7185,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listSublist(
                     source_list,
@@ -7167,7 +7211,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listReleaseExcessCapacity(
                     list_val,
@@ -7416,7 +7460,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const bytes = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const result = if (ll.op == .crypto_sha256_hash_bytes)
                     builtins.crypto.sha256HashBytes(bytes.ptr, bytes.len, &self.roc_ops)
@@ -7430,7 +7474,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const result = if (ll.op == .crypto_sha256_hasher_empty)
                     builtins.crypto.sha256HasherEmpty(&self.roc_ops)
                 else
@@ -7443,7 +7487,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
                 const result = if (ll.op == .crypto_sha256_hasher_write)
@@ -7458,7 +7502,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const result = if (ll.op == .crypto_sha256_hasher_finish)
                     builtins.crypto.sha256HasherFinish(state.ptr, state.len, &self.roc_ops)
@@ -7564,7 +7608,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
 
                 const source: PrefixParseSource = switch (spec.source) {
                     .str => .{ .str = valueToRocStr(args[0]) },
@@ -7861,7 +7905,7 @@ pub const Interpreter = struct {
             .ptr_cast => try self.evalPtrCast(args[0], ll.ret_layout),
 
             // ── Crash ──
-            .crash => return error.Crash,
+            .crash => return self.triggerCrash("Roc crashed"),
         };
     }
 
@@ -8401,7 +8445,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 val.write(i128, builtins.dec.powC(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
@@ -8443,7 +8487,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 val.write(i128, builtins.dec.sqrtC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
@@ -8466,7 +8510,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
@@ -8524,7 +8568,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 const dec = RocDec{ .num = a.read(i128) };
                 const result = switch (op) {
                     .sin => builtins.dec.sinC(dec, &self.roc_ops),
@@ -8886,7 +8930,7 @@ pub const Interpreter = struct {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
+                if (sj != 0) return self.crashError();
                 break :blk self.rocStrToValue(builtins.dec.to_str(dec, &self.roc_ops), ret_layout);
             },
         };
@@ -8954,7 +8998,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
@@ -8983,7 +9027,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
@@ -9010,7 +9054,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
@@ -9040,7 +9084,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
@@ -9065,7 +9109,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listReverse(
             rl,
@@ -9095,7 +9139,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSortWith(
             rl,
@@ -9146,7 +9190,7 @@ pub const Interpreter = struct {
             var crash_boundary = self.enterCrashBoundary();
             defer crash_boundary.deinit();
             const sj = crash_boundary.set();
-            if (sj != 0) return error.Crash;
+            if (sj != 0) return self.crashError();
             var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
             const rest = builtins.list.listSublist(
                 rl,
@@ -9200,7 +9244,7 @@ pub const Interpreter = struct {
             var crash_boundary = self.enterCrashBoundary();
             defer crash_boundary.deinit();
             const sj = crash_boundary.set();
-            if (sj != 0) return error.Crash;
+            if (sj != 0) return self.crashError();
             var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
             const rest = builtins.list.listSublist(
                 rl,
@@ -9330,7 +9374,7 @@ pub const Interpreter = struct {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
+        if (sj != 0) return self.crashError();
         return func(RocDec{ .num = av }, RocDec{ .num = bv }, &self.roc_ops);
     }
 
@@ -10232,4 +10276,54 @@ test "interpreter evaluates explicit static data by compact id" {
 
     const result = try interpreter.eval(.{ .proc_id = proc, .ret_layout = .u64 });
     try std.testing.expectEqual(static_value, result.value.read(u64));
+}
+
+test "interpreter turns a compiler host allocation failure into a Roc crash" {
+    const CompilerHost = @import("compiler_host.zig");
+    const allocator = std.testing.allocator;
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    const list_layout = try layouts.insertList(.u8);
+
+    const capacity = try store.addLocal(.{ .layout_idx = .u64 });
+    const list = try store.addLocal(.{ .layout_idx = list_layout });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = list } }, .test_fixture);
+    const with_capacity = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = list,
+        .op = .list_with_capacity,
+        .rc_effect = base.LowLevel.list_with_capacity.rcEffect(),
+        .args = try store.addLocalSpan(&.{capacity}),
+        .next = ret_stmt,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = capacity,
+        .value = .{ .i64_literal = .{ .value = 64, .layout_idx = .u64 } },
+        .next = with_capacity,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = list_layout,
+        .frame_locals = try store.addLocalSpan(&.{ capacity, list }),
+    }, .none);
+
+    // Every allocation the host attempts fails, so it must unwind the
+    // evaluation instead of returning to the builtin that asked.
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    var host = CompilerHost.init(failing.allocator());
+    defer host.deinit();
+
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), host.ops());
+    defer interpreter.deinit();
+    host.bindInterpreter(&interpreter);
+
+    try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = proc, .ret_layout = list_layout }));
+    try std.testing.expectEqualStrings("ran out of memory", interpreter.getCrashMessage());
 }

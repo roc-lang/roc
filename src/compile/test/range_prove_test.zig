@@ -1652,3 +1652,41 @@ test "a nested chain walk's probe past the length in hand proves from the outer 
     // bound test both folded.
     try std.testing.expectEqual(@as(usize, 2), marked_shape.is_gt);
 }
+
+// repro for https://github.com/roc-lang/roc/issues/12010
+// The loop runs `level` from 0 through 12, so `pick`'s `level >= 10` test is
+// true on the last three iterations and must survive as a real comparison.
+test "a loop parameter bounded by its loop head keeps a test it does not decide" {
+    marked_op = "num_is_lte(";
+    try harness.expectLirInspectionWithOptions(
+        \\pick : U64 -> Try(U64, [Bug])
+        \\pick = |level| {
+        \\    limit = if level == 0 { 5000 } else if level * 4 >= 55 { 0 } else { 55 }
+        \\    if limit > 1000 {
+        \\        Ok(0)
+        \\    } else if level >= 10 {
+        \\        Ok(10)
+        \\    } else {
+        \\        Ok(2)
+        \\    }
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    var $level = 0.U64
+        \\    while $level <= 12 {
+        \\        parser = pick($level) ?? 99
+        \\        echo!("${$level.to_str()}:${parser.to_str()}")
+        \\        $level = $level + 1
+        \\    }
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    // The one `>=` left is `level >= 10`. `level * 4 >= 55` folds soundly,
+    // since the loop head bounds `level` by 12 inside the body.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
+}

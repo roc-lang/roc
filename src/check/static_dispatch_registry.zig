@@ -32,8 +32,8 @@ const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
 /// Shared policy for checked evidence publication and Boxy's dictionary
-/// inventory. Quote conversion evidence carries its method implementation even
-/// when the constraint originated at a literal.
+/// inventory. Quote and interpolation conversion evidence carries its method
+/// implementation even when the constraint originated at a literal.
 pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
     return if (origin.literalKind()) |kind| switch (kind) {
         .numeral => false,
@@ -67,11 +67,27 @@ fn typeDispatchCallDispatcherVar(module: TypedCIR.Module, owner: CIR.TypeDispatc
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
     by_def: []const ProcedureTemplateLookupEntry = &.{},
+    promoted: []const PromotedProcedureTemplateEntry = &.{},
 
     pub fn entryForDef(self: *const ProcedureTemplateLookup, def_idx: CIR.Def.Idx) ?ProcedureTemplateLookupEntry {
         const found = artifact_serialize.binarySearchByKey(ProcedureTemplateLookupEntry, CIR.Def.Idx, self.by_def, def_idx, templateEntryOrder) orelse return null;
         return found.*;
     }
+
+    /// The template of the promoted local procedure bound by `pattern`.
+    pub fn promotedTemplateForPattern(self: *const ProcedureTemplateLookup, pattern: CIR.Pattern.Idx) ?canonical.ProcedureTemplateRef {
+        for (self.promoted) |entry| {
+            if (entry.pattern == pattern) return entry.template;
+        }
+        return null;
+    }
+};
+
+/// A promoted local procedure's template and the binding pattern whose
+/// generalized scheme it publishes.
+pub const PromotedProcedureTemplateEntry = struct {
+    pattern: CIR.Pattern.Idx,
+    template: canonical.ProcedureTemplateRef,
 };
 
 fn templateEntryOrder(e: ProcedureTemplateLookupEntry, key: CIR.Def.Idx) std.math.Order {
@@ -803,7 +819,7 @@ pub const MethodRegistry = struct {
 
         const module_env = module.moduleEnvConst();
         const idents = module.identStoreConst();
-        const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
+        const module_name = try names.internModuleName(module_env.module_name);
 
         for (module.methodDefEntries()) |entry| {
             const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
@@ -859,6 +875,9 @@ pub const MethodRegistry = struct {
                         } };
                     },
                 }
+            } else if (promotedProcedureTargetForMethodBinding(module, local_templates, entry.value)) |promoted| blk: {
+                referenced_callable_var = promoted.callable_var;
+                break :blk promoted.kind;
             } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
             else if (referencedProcedureTargetForMethodBinding(
@@ -888,8 +907,11 @@ pub const MethodRegistry = struct {
                     .callable_ty = callable_ty,
                     .reached_through_alias = reached_through_alias,
                 },
+                // Inspection calls an override from rendering workers and
+                // generic code that never hold a local procedure's declaration
+                // context, so only a procedure can be one.
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    std.meta.activeTag(target_kind) != .structural)
+                    std.meta.activeTag(target_kind) == .procedure)
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
                     null,
@@ -1053,6 +1075,35 @@ const ReferencedProcedureTarget = struct {
     callable_var: Var,
 };
 
+/// Resolve a method declared in a function body whose binding checking
+/// promoted to a procedure of its own. Every reference to a promoted local
+/// procedure names its promoted template, and a dispatch is such a reference.
+fn promotedProcedureTargetForMethodBinding(
+    module: TypedCIR.Module,
+    local_templates: *const ProcedureTemplateLookup,
+    binding: ModuleEnv.MethodBinding,
+) ?ReferencedProcedureTarget {
+    if (module.nodeTag(binding.type_node_idx) != .statement_decl) return null;
+    const decl = module.getStatement(@enumFromInt(@intFromEnum(binding.type_node_idx))).s_decl;
+    return promotedProcedureTarget(module, local_templates, decl.pattern, decl.expr);
+}
+
+fn promotedProcedureTarget(
+    module: TypedCIR.Module,
+    local_templates: *const ProcedureTemplateLookup,
+    pattern: CIR.Pattern.Idx,
+    expr: CIR.Expr.Idx,
+) ?ReferencedProcedureTarget {
+    const template = local_templates.promotedTemplateForPattern(pattern) orelse return null;
+    return .{
+        .kind = .{ .procedure = .{
+            .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
+            .template = template,
+        } },
+        .callable_var = module.exprType(expr),
+    };
+}
+
 /// Resolve a function-typed associated value bound by reference
 /// (`method = top_level_fn`) to the referenced procedure. The reference chain
 /// is followed through top-level defs and associated declarations until it
@@ -1092,6 +1143,7 @@ fn referencedProcedureTargetForMethodBinding(
             continue;
         }
         if (statementDeclForBoundPattern(module, pattern_idx)) |decl| {
+            if (promotedProcedureTarget(module, local_templates, decl.pattern, decl.expr)) |promoted| return promoted;
             if (localProcedureExpr(module, decl.expr)) {
                 const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
                 const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse return null;
@@ -1657,6 +1709,24 @@ pub const SiteEvidenceEntry = extern struct {
 /// a `canonical.RecordFieldLabelId`, or a `canonical.TagNameId` per kind).
 pub const EvidencePathStep = dispatch_evidence.PathStep;
 
+/// Public `EvidencePathNode` declaration: one step of a published evidence
+/// path, linked to the node of the step before it. Paths of one published
+/// param vector share their common prefixes.
+pub const EvidencePathNode = dispatch_evidence.PathNode;
+
+pub const no_evidence_path_node = dispatch_evidence.no_path_node;
+
+/// Public `EvidencePathMemo` declaration: resolves published path nodes once
+/// each per root.
+pub const EvidencePathMemo = dispatch_evidence.PathMemo;
+
+/// Public `EvidencePath` declaration: a published path, named by its last node
+/// in the template table's `evidence_path_nodes`.
+pub const EvidencePath = struct {
+    last: u32 = no_evidence_path_node,
+    len: u32 = 0,
+};
+
 /// Public `EvidenceParamRecord` declaration.
 ///
 /// One published evidence param of a procedure template's scheme, in canonical
@@ -1691,7 +1761,7 @@ pub const EvidenceParamRecord = struct {
     /// dispatcher has no registered method target.
     structural: ?StructuralKind = null,
     source: EvidenceParamSource = .scheme_callable,
-    path: artifact_serialize.Span = .{},
+    path: EvidencePath = .{},
 };
 
 /// Exact producer-authored source of an evidence parameter's dispatcher.
@@ -1728,18 +1798,14 @@ pub const ProcedureEvidenceSchema = enum {
 /// callable root (an empty path). A vector consisting only of captured scheme
 /// requirements belongs to the selected target. Mixed vectors and every other
 /// source need the checked per-use record.
-pub fn procedureEvidenceSchema(
-    params: []const EvidenceParamRecord,
-    paths: []const EvidencePathStep,
-) ProcedureEvidenceSchema {
+pub fn procedureEvidenceSchema(params: []const EvidenceParamRecord) ProcedureEvidenceSchema {
     if (params.len == 0) return .none;
     var scheme_requirements: usize = 0;
     for (params) |param| {
-        const path = paths[param.path.start .. param.path.start + param.path.len];
         switch (param.source) {
             .scheme_callable => {},
-            .explicit_default => if (path.len != 0) return .requires_record,
-            .scheme_requirement => if (path.len == 0) {
+            .explicit_default => if (param.path.len != 0) return .requires_record,
+            .scheme_requirement => if (param.path.len == 0) {
                 scheme_requirements += 1;
             } else {
                 return .requires_record;

@@ -85,7 +85,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "convert") (constraint-fn-var 234)
+			(e-dispatch-call (method "convert") (constraint-fn-var 238)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

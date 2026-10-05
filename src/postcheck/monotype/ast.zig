@@ -231,6 +231,11 @@ pub const FnTemplate = struct {
     /// whose closed types commit the same layouts share one procedure
     /// (design.md "Layout-Keyed Builtin Procedures").
     procedure_keyed_by_layout: bool = false,
+    /// The checked template is called at exactly one site of its module's
+    /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
+    /// when Monotype finalizes the program. Dev inline analysis decides
+    /// single-use inlining by this flag, which is the same in every program.
+    single_source_call: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -1166,8 +1171,6 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
-    /// Explicit consumer input: opaque until target LIR selects run/omit.
-    inline_expects_enabled: void,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
@@ -1231,6 +1234,10 @@ pub const ExprData = union(enum(u8)) {
     jump: JumpExpr,
     return_: Return,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
@@ -1363,6 +1370,10 @@ pub const Stmt = union(enum(u8)) {
     dbg: ExprId,
     return_: Return,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
 };
 
 /// Top-level or generated Monotype definition.
@@ -1746,6 +1757,9 @@ pub const ProgramBuilder = struct {
     /// lowered and never appended to afterwards, so the rows that carry a
     /// module-local checked id name their owner explicitly.
     lowering_modules: ProgramList(checked.ModuleId, "lowering_modules") = .empty,
+    /// See `Common.PlatformRequirementFilling`; null when no module of the
+    /// input has platform requirements filled by an app.
+    platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -2016,6 +2030,10 @@ pub const ProgramBuilder = struct {
         return self.nested_defs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
+    pub fn setNestedDefSource(self: *ProgramBuilder, id: NestedDefId, source: FnTemplate) void {
+        self.nested_defs.getPtrImmediate(@intFromEnum(id)).fn_def = source;
+    }
+
     pub fn nestedDefsView(self: *const ProgramBuilder) []const NestedDef {
         return self.nested_defs.unsafeRawItemsForView();
     }
@@ -2175,9 +2193,9 @@ pub const ProgramBuilder = struct {
         return self.proc_debug_names.get(symbol);
     }
 
-    /// Register a source file (module display name plus package-qualified
-    /// module identity) and return its index for `SourceLoc.file`. Callers
-    /// deduplicate; this always appends.
+    /// Register a source file (module display name, package-qualified module
+    /// name, and module content identity) and return its index for
+    /// `SourceLoc.file`. Callers deduplicate; this always appends.
     pub fn addSourceFile(self: *ProgramBuilder, file: base.SourceFileEntry) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.len());
         const owned_name = try self.allocator.dupe(u8, file.name);
@@ -2187,6 +2205,7 @@ pub const ProgramBuilder = struct {
         try self.source_files.append(self.allocator, .{
             .name = owned_name,
             .qualified_name = owned_qualified,
+            .module_identity = file.module_identity,
         });
         return id;
     }
@@ -3166,7 +3185,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const local = try source.addLocal(@enumFromInt(1), ty);
     try source.setLocalName(local, "value");
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);

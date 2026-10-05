@@ -1,7 +1,7 @@
 //! Cache cleanup utilities for managing temporary and persistent cache files.
 //!
 //! This module provides background cleanup functionality that:
-//! - Removes temporary runtime directories older than 5 minutes
+//! - Removes per-invocation scratch directories older than 5 minutes
 //! - Removes persistent cache files (mod/, exe/, test/, and wasm-host/) older than 30 days
 //!
 //! The cleanup runs on a single background thread that is fire-and-forget:
@@ -13,7 +13,7 @@
 //! the real OS directly through `std.Io.Dir` rather than going through the
 //! `CoreCtx` filesystem abstraction, whose only purpose is injecting a
 //! non-OS implementation (the playground's virtual FS or test mocks)—none
-//! of which can apply here. The directory base paths are resolved once by the
+//! of which can apply here. The cache root path is resolved once by the
 //! caller (see `startBackgroundCleanup`) and copied in by value, so this code
 //! depends on neither `CoreCtx` nor a caller-provided allocator. The walk uses
 //! open directory handles and operates on entry basenames, so it allocates
@@ -21,6 +21,7 @@
 
 const std = @import("std");
 const threading = @import("threading.zig");
+const scratch_dir_name = @import("cache_config.zig").scratch_dir_name;
 
 const Dir = std.Io.Dir;
 const Io = std.Io;
@@ -29,7 +30,7 @@ const is_freestanding = threading.is_freestanding;
 
 /// Cleanup configuration constants
 pub const Config = struct {
-    /// Maximum age for temp directories (5 minutes in nanoseconds)
+    /// Maximum age for scratch directories (5 minutes in nanoseconds)
     pub const TEMP_MAX_AGE_NS: i96 = 5 * 60 * std.time.ns_per_s;
 
     /// Maximum age for persistent cache files (30 days in nanoseconds)
@@ -65,71 +66,57 @@ pub const CleanupThread = if (!is_freestanding) struct {
     }
 } else struct {};
 
-/// Cleanup base directories, owned by value so the detached thread depends on
+/// The cache root path, owned by value so the detached thread depends on
 /// neither the caller's allocator nor the caller's `CoreCtx`. Filled by
-/// copying the resolved base path slices in `startBackgroundCleanup`.
-const Bases = struct {
-    temp_buf: [std.fs.max_path_bytes]u8 = undefined,
-    temp_len: usize = 0,
-    cache_buf: [std.fs.max_path_bytes]u8 = undefined,
-    cache_len: usize = 0,
+/// copying the resolved path slice in `startBackgroundCleanup`.
+const CacheBase = struct {
+    buf: [std.fs.max_path_bytes]u8 = undefined,
+    len: usize = 0,
 
-    /// The `<tmp>/roc` directory (empty if it could not be resolved).
-    fn tempBase(self: *const Bases) []const u8 {
-        return self.temp_buf[0..self.temp_len];
-    }
-
-    /// The persistent cache root, e.g. `~/.cache/roc` (empty if unresolved).
-    fn cacheBase(self: *const Bases) []const u8 {
-        return self.cache_buf[0..self.cache_len];
+    fn path(self: *const CacheBase) []const u8 {
+        return self.buf[0..self.len];
     }
 };
 
 /// Start background cleanup on a separate thread.
 ///
-/// `temp_base` is the `<tmp>/roc` directory and `cache_base` is the persistent
-/// cache root; resolve them with `cache_config.getTempDir` /
+/// `cache_base` is the cache root (e.g. `~/.cache/roc`); resolve it with
 /// `CacheConfig.getEffectiveCacheDir` so this matches where the cache writer
-/// stores artifacts. Pass an empty slice for either to skip that half of the
-/// cleanup. The slices are copied by value into the spawned thread, so they
-/// only need to be valid until this function returns.
+/// stores artifacts and where scratch directories are created. The slice is
+/// copied by value into the spawned thread, so it only needs to be valid until
+/// this function returns.
 ///
 /// The thread is fire-and-forget: if the main process exits before cleanup
 /// completes, the OS terminates it. You do not need to join the returned handle.
-pub fn startBackgroundCleanup(temp_base: []const u8, cache_base: []const u8, std_io: Io) std.Thread.SpawnError!?CleanupThread {
+pub fn startBackgroundCleanup(cache_base: []const u8, std_io: Io) std.Thread.SpawnError!?CleanupThread {
     if (comptime is_freestanding) return null;
 
-    var bases = Bases{};
-    // A base longer than the platform path limit can't be opened anyway; skip it.
-    if (temp_base.len <= bases.temp_buf.len) {
-        @memcpy(bases.temp_buf[0..temp_base.len], temp_base);
-        bases.temp_len = temp_base.len;
-    }
-    if (cache_base.len <= bases.cache_buf.len) {
-        @memcpy(bases.cache_buf[0..cache_base.len], cache_base);
-        bases.cache_len = cache_base.len;
-    }
+    var base = CacheBase{};
+    // A path longer than the platform path limit can't be opened anyway.
+    if (cache_base.len > base.buf.len) return null;
+    @memcpy(base.buf[0..cache_base.len], cache_base);
+    base.len = cache_base.len;
 
-    const thread = try std.Thread.spawn(.{}, runCleanup, .{ bases, std_io });
+    const thread = try std.Thread.spawn(.{}, runCleanup, .{ base, std_io });
     return CleanupThread{ .thread = thread };
 }
 
 /// Run the full cleanup process (called on background thread).
-fn runCleanup(bases: Bases, std_io: Io) void {
+fn runCleanup(base: CacheBase, std_io: Io) void {
     const now_ns = nowNs(std_io);
 
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
     // This is just to clean up people who have old stale persistent Roc caches
     // from before we restructured the cache directories to use roc/{version}/
     // structure.
-    cleanupLegacyPersistentCache(std_io, bases.cacheBase(), null);
+    cleanupLegacyPersistentCache(std_io, base.path(), null);
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
 
-    // Clean up temp directories (5 minute threshold)
-    cleanupTempDirs(std_io, bases.tempBase(), now_ns, null);
+    // Clean up scratch directories (5 minute threshold)
+    cleanupScratchDirs(std_io, base.path(), now_ns, null);
 
     // Clean up persistent cache (30 day threshold)
-    cleanupPersistentCache(std_io, bases.cacheBase(), now_ns, null);
+    cleanupPersistentCache(std_io, base.path(), now_ns, null);
 }
 
 /// Current wall-clock time in nanoseconds since the Unix epoch.
@@ -144,13 +131,13 @@ fn mtimeNs(dir: Dir, std_io: Io, name: []const u8) ?i128 {
     return ns;
 }
 
-/// Clean up temporary runtime directories older than 5 minutes.
+/// Clean up per-invocation scratch directories older than 5 minutes.
 ///
-/// Layout: `<temp_base>/<version>/<random-dir>` plus sibling `<random>.txt`
-/// coordination files. We descend one level (into version directories) and
-/// act on their entries; we never recurse into the random dirs themselves.
-fn cleanupTempDirs(std_io: Io, temp_base: []const u8, now_ns: i128, maybe_stats: ?*CleanupStats) void {
-    var base_dir = Dir.cwd().openDir(std_io, temp_base, .{ .iterate = true }) catch return;
+/// Layout: `<cache_base>/<version>/tmp/<random-dir>` plus sibling
+/// `<random>.txt` coordination files. We act on the entries of each version's
+/// scratch directory; we never recurse into the random dirs themselves.
+fn cleanupScratchDirs(std_io: Io, cache_base: []const u8, now_ns: i128, maybe_stats: ?*CleanupStats) void {
+    var base_dir = Dir.cwd().openDir(std_io, cache_base, .{ .iterate = true }) catch return;
     defer base_dir.close(std_io);
 
     var version_it = base_dir.iterate();
@@ -158,18 +145,20 @@ fn cleanupTempDirs(std_io: Io, temp_base: []const u8, now_ns: i128, maybe_stats:
         const version_entry = (version_it.next(std_io) catch break) orelse break;
         if (version_entry.kind != .directory) continue;
 
-        var version_dir = base_dir.openDir(std_io, version_entry.name, .{ .iterate = true }) catch continue;
+        var version_dir = base_dir.openDir(std_io, version_entry.name, .{}) catch continue;
         defer version_dir.close(std_io);
+        var scratch_dir = version_dir.openDir(std_io, scratch_dir_name, .{ .iterate = true }) catch continue;
+        defer scratch_dir.close(std_io);
 
-        var entry_it = version_dir.iterate();
+        var entry_it = scratch_dir.iterate();
         while (true) {
             const entry = (entry_it.next(std_io) catch break) orelse break;
 
             if (entry.kind == .directory) {
-                const mtime = mtimeNs(version_dir, std_io, entry.name) orelse continue;
+                const mtime = mtimeNs(scratch_dir, std_io, entry.name) orelse continue;
                 if (now_ns - mtime <= Config.TEMP_MAX_AGE_NS) continue;
 
-                version_dir.deleteTree(std_io, entry.name) catch {
+                scratch_dir.deleteTree(std_io, entry.name) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -178,15 +167,15 @@ fn cleanupTempDirs(std_io: Io, temp_base: []const u8, now_ns: i128, maybe_stats:
                 // Also try to delete the coordination file (`<name>.txt`).
                 var txt_buf: [std.fs.max_path_bytes]u8 = undefined;
                 const txt_path = std.fmt.bufPrint(&txt_buf, "{s}.txt", .{entry.name}) catch continue;
-                version_dir.deleteFile(std_io, txt_path) catch {};
+                scratch_dir.deleteFile(std_io, txt_path) catch {};
                 if (maybe_stats) |stats| stats.temp_files_deleted += 1;
             } else if (entry.kind == .file) {
                 // Stale `.txt` coordination file with no surviving directory.
                 if (!std.mem.endsWith(u8, entry.name, ".txt")) continue;
-                const mtime = mtimeNs(version_dir, std_io, entry.name) orelse continue;
+                const mtime = mtimeNs(scratch_dir, std_io, entry.name) orelse continue;
                 if (now_ns - mtime <= Config.TEMP_MAX_AGE_NS) continue;
 
-                version_dir.deleteFile(std_io, entry.name) catch {
+                scratch_dir.deleteFile(std_io, entry.name) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -195,9 +184,8 @@ fn cleanupTempDirs(std_io: Io, temp_base: []const u8, now_ns: i128, maybe_stats:
         }
     }
 
-    // NOTE: We intentionally do NOT delete empty version directories or the roc
-    // temp directory. It's harmless and avoids race conditions with concurrent
-    // processes.
+    // NOTE: We intentionally do NOT delete empty scratch directories. It's
+    // harmless and avoids race conditions with concurrent processes.
 }
 
 /// Clean up persistent cache files older than 30 days.
@@ -348,7 +336,7 @@ fn deleteCacheFileIfOld(std_io: Io, dir: Dir, name: []const u8, now_ns: i128, ma
     if (maybe_stats) |stats| stats.cache_files_deleted += 1;
 }
 
-/// Delete a specific temp directory and its coordination file.
+/// Delete a specific scratch directory and its coordination file.
 /// Used for immediate cleanup after spawning a child process.
 pub fn deleteTempDir(std_io: Io, temp_dir_path: []const u8) void {
     // `temp_dir_path` is absolute; cwd()-relative operations resolve it directly.
@@ -423,7 +411,7 @@ test "CleanupStats initializes to zero" {
     try std.testing.expectEqual(@as(u32, 0), stats.errors);
 }
 
-test "background cleanup preserves unrelated roc-prefixed temp directories" {
+test "background cleanup preserves directories next to the cache root" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -431,29 +419,66 @@ test "background cleanup preserves unrelated roc-prefixed temp directories" {
 
     const root_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path });
     defer allocator.free(root_path);
-    const temp_base = try std.fs.path.join(allocator, &.{ root_path, "roc" });
-    defer allocator.free(temp_base);
-    const cache_base = try std.fs.path.join(allocator, &.{ root_path, "cache" });
+    const cache_base = try std.fs.path.join(allocator, &.{ root_path, "roc" });
     defer allocator.free(cache_base);
     const unrelated_dir = try std.fs.path.join(allocator, &.{ root_path, "roc-active-cache" });
     defer allocator.free(unrelated_dir);
     const sentinel_path = try std.fs.path.join(allocator, &.{ unrelated_dir, "sentinel" });
     defer allocator.free(sentinel_path);
 
-    try Dir.cwd().createDirPath(std.testing.io, temp_base);
     try Dir.cwd().createDirPath(std.testing.io, cache_base);
     try Dir.cwd().createDirPath(std.testing.io, unrelated_dir);
     (try Dir.cwd().createFile(std.testing.io, sentinel_path, .{})).close(std.testing.io);
 
-    var bases = Bases{};
-    @memcpy(bases.temp_buf[0..temp_base.len], temp_base);
-    bases.temp_len = temp_base.len;
-    @memcpy(bases.cache_buf[0..cache_base.len], cache_base);
-    bases.cache_len = cache_base.len;
+    var base = CacheBase{};
+    @memcpy(base.buf[0..cache_base.len], cache_base);
+    base.len = cache_base.len;
 
-    runCleanup(bases, std.testing.io);
+    runCleanup(base, std.testing.io);
 
     try Dir.cwd().access(std.testing.io, sentinel_path, .{});
+}
+
+test "cleanupScratchDirs deletes only stale entries of each version's scratch directory" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const cache_base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc" });
+    defer allocator.free(cache_base);
+    const run_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", scratch_dir_name, "run" });
+    defer allocator.free(run_dir);
+    const run_exe = try std.fs.path.join(allocator, &.{ run_dir, "app" });
+    defer allocator.free(run_exe);
+    const run_txt = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", scratch_dir_name, "run.txt" });
+    defer allocator.free(run_txt);
+    const exe_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "exe", "old" });
+    defer allocator.free(exe_dir);
+    const exe_file = try std.fs.path.join(allocator, &.{ exe_dir, "app" });
+    defer allocator.free(exe_file);
+
+    try Dir.cwd().createDirPath(std.testing.io, run_dir);
+    try Dir.cwd().createDirPath(std.testing.io, exe_dir);
+    (try Dir.cwd().createFile(std.testing.io, run_exe, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, run_txt, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, exe_file, .{})).close(std.testing.io);
+
+    const now_ns = nowNs(std.testing.io);
+
+    var fresh_stats = CleanupStats{};
+    cleanupScratchDirs(std.testing.io, cache_base, now_ns, &fresh_stats);
+    try std.testing.expectEqual(@as(u32, 0), fresh_stats.temp_dirs_deleted);
+    try Dir.cwd().access(std.testing.io, run_exe, .{});
+    try Dir.cwd().access(std.testing.io, run_txt, .{});
+
+    const stale_ns: i128 = now_ns + Config.TEMP_MAX_AGE_NS + std.time.ns_per_s;
+    var stale_stats = CleanupStats{};
+    cleanupScratchDirs(std.testing.io, cache_base, stale_ns, &stale_stats);
+    try std.testing.expectEqual(@as(u32, 1), stale_stats.temp_dirs_deleted);
+    try std.testing.expectError(error.FileNotFound, Dir.cwd().access(std.testing.io, run_dir, .{}));
+    try std.testing.expectError(error.FileNotFound, Dir.cwd().access(std.testing.io, run_txt, .{}));
+    try Dir.cwd().access(std.testing.io, exe_file, .{});
 }
 
 test "deleteTempDir deletes directory and coordination file" {

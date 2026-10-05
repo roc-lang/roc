@@ -109,7 +109,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
-    try expectContains(type_node_step, ".lookup_required => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
+    try expectContains(type_node_step, ".lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| {\n                frame.cursor = 3;\n                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
@@ -678,7 +678,7 @@ test "Monotype structural equality result probes remain graph-native" {
         "fn structuralEqualityOperandType",
         "fn prepareStructuralEqNode",
     );
-    try expectContains(equality_source, "fn structuralEqualityExprResultNode");
+    try expectContains(equality_source, "fn structuralDerivationExprResultNode");
     try expectContains(equality_source, "try self.callResultTypeNode");
     try expectContains(equality_source, "try self.dispatchResultTypeNode");
     try expectContains(equality_source, "try self.lookupExprTypeNode");
@@ -692,9 +692,26 @@ test "Monotype structural equality result probes remain graph-native" {
         "const StructuralBinaryOperands = struct",
     );
     try expectContains(dispatch_equality, "self.graph.functionNodes(callable_node)");
-    try expectContains(dispatch_equality, "self.graph.typeIsResolved(fn_nodes.args[0])");
+    try expectContains(dispatch_equality, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
     try expectContains(dispatch_equality, "deferStructuralEqOperandsAtNode");
     try expectNotContains(dispatch_equality, "resolvedTypeViewForNode(callable_node)");
+
+    const dispatch_hash = sourceSliceBetween(
+        lower_source,
+        "fn finishStructuralHashAtNode(",
+        "fn deferStructuralSerializationAtNode(",
+    );
+    try expectContains(dispatch_hash, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
+    try expectContains(dispatch_hash, "deferStructuralDerivationOperandsAtNode");
+
+    const direct_hash = sourceSliceBetween(
+        lower_source,
+        "fn stepDirectStructural(",
+        "fn directStructuralOperandCell(",
+    );
+    try expectContains(direct_hash, "self.structuralHashOperandType(h)");
+    try expectContains(direct_hash, "deferStructuralDerivationOperandsAtNode");
+    try expectNotContains(direct_hash, "lowerExprType(");
 }
 
 test "Monotype loop carries remain graph-native through headers and backedges" {
@@ -1153,7 +1170,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "const ImpossibilityProofScan = struct {",
     );
     try expectContains(durable_scan, "const types_ = self.body.typeStore()");
-    try expectContains(durable_scan, "_ = self.visiting.remove(ty)");
+    try expectContains(durable_scan, "self.visiting.fetchRemove(ty)");
     try expectNotContains(durable_scan, "activeNodeFromType");
     const inspect_call = sourceSliceBetween(
         lower_source,

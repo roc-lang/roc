@@ -1,4 +1,4 @@
-import Inner exposing [Inner]
+import Inner
 
 Wrap := [W].{
     encoder_for = |encoding| {

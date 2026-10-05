@@ -254,7 +254,7 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
         const size_prefix = @sizeOf(usize);
 
         /// Allocate with a size prefix so realloc/dealloc can recover the old length.
-        fn rocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        fn rocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             const total = length + size_prefix;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
@@ -280,7 +280,7 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             alloc.rawFree(raw[0 .. length + size_prefix], align_enum, @returnAddress());
         }
 
-        fn rocRealloc(_: *host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        fn rocRealloc(_: *host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
 

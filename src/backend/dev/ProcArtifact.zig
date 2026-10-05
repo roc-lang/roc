@@ -629,14 +629,12 @@ pub fn extractPrepared(
         if (regionHasArtifact(region.kind)) artifact_count += 1;
     }
 
-    var digests = try layout.Digests.init(allocator, layout_store);
-    defer digests.deinit();
     const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
     for (regions, 0..) |region, region_index| {
         const index = artifact_of_region[region_index] orelse continue;
         const kind: Kind = switch (region.kind) {
             .proc => |proc_id| .{ .proc = proc_specs[@intFromEnum(proc_id)].identity },
-            .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolNameWithDigests(arena_allocator, &digests, key) },
+            .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) },
             .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
@@ -666,7 +664,7 @@ pub fn extractPrepared(
             if (ref.site < region.start or ref.site >= region.end) continue;
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
                 .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@intFromEnum(proc_id)].identity } else null,
-                .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolNameWithDigests(arena_allocator, &digests, key) } else null,
+                .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) } else null,
                 .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity } else null,
                 .message, .offset => null,
             };
@@ -997,10 +995,8 @@ pub fn verifyRoundTrip(
     }
     const helpers = try original.compiledRcHelpers(allocator);
     defer allocator.free(helpers);
-    var digests = try layout.Digests.init(allocator, layout_store);
-    defer digests.deinit();
     for (helpers) |helper| {
-        const name = try LirCodeGenMod.compiledRcHelperSymbolNameWithDigests(allocator, &digests, helper.key);
+        const name = try LirCodeGenMod.compiledRcHelperSymbolName(allocator, layout_store, helper.key);
         errdefer allocator.free(name);
         try helper_keys.putNoClobber(name, helper.key);
     }

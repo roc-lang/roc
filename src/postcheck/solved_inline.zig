@@ -13,23 +13,53 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
+    /// Inline wrappers, and bodies the whole program calls exactly once.
     wrappers,
+    /// Inline wrappers, and bodies whose module's source calls them at
+    /// exactly one site (`FnTemplate.single_source_call`). Both depend only on
+    /// source, never on which other procedures a program contains, so every
+    /// program inlines the same calls. Dev builds use this: the object cache
+    /// links a dev procedure into programs other than the one compiling it.
+    wrappers_and_source_single_use,
+};
+
+/// What an inline body is.
+pub const InlineKind = enum(u8) {
+    none,
+    /// A small call-through or low-level wrapper, inlined at every call site.
+    wrapper,
+    /// Called exactly once in the whole program and lowered only there.
+    single_use,
+    /// Called at one site of its module's source. Inlined wherever that call
+    /// is lowered outside a wrapper body: a wrapper body can be lowered more
+    /// than once into one procedure, and a single-use body must not be.
+    source_single_use,
 };
 
 /// Immutable inline eligibility table consumed by later lowering stages.
 pub const Plan = struct {
     inline_bodies: []const ?Lifted.ExprId = &.{},
-    /// Whether a selected body is a single-use body: lowered only at its one
-    /// call site, so the function has no procedure of its own.
-    single_use: []const bool = &.{},
+    kinds: []const InlineKind = &.{},
 
-    pub fn isSingleUse(self: Plan, fn_id: Lifted.FnId) bool {
-        if (self.single_use.len == 0) return false;
+    pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
+        if (self.kinds.len == 0) return .none;
         const index = @intFromEnum(fn_id);
-        if (index >= self.single_use.len) {
+        if (index >= self.kinds.len) {
             Common.invariant("inline plan did not contain a lifted function");
         }
-        return self.single_use[index];
+        return self.kinds[index];
+    }
+
+    /// The body to inline for a direct call to `callee` lowered while
+    /// lowering `owner`'s body, if the plan inlines that call.
+    pub fn bodyForCall(self: Plan, callee: Lifted.FnId, owner: ?Lifted.FnId) ?Lifted.ExprId {
+        const body = self.bodyForFn(callee) orelse return null;
+        if (self.kind(callee) == .source_single_use) {
+            if (owner) |owning_fn| {
+                if (self.kind(owning_fn) == .wrapper) return null;
+            }
+        }
+        return body;
     }
 
     pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
@@ -47,32 +77,30 @@ pub const Plan = struct {
 pub const OwnedPlan = struct {
     allocator: std.mem.Allocator,
     inline_bodies: []?Lifted.ExprId,
-    single_use: []bool,
+    kinds: []InlineKind,
 
     pub fn empty(allocator: std.mem.Allocator) OwnedPlan {
-        return .{ .allocator = allocator, .inline_bodies = &.{}, .single_use = &.{} };
+        return .{ .allocator = allocator, .inline_bodies = &.{}, .kinds = &.{} };
     }
 
     pub fn deinit(self: *OwnedPlan) void {
         if (self.inline_bodies.len != 0) self.allocator.free(self.inline_bodies);
-        if (self.single_use.len != 0) self.allocator.free(self.single_use);
+        if (self.kinds.len != 0) self.allocator.free(self.kinds);
         self.* = empty(self.allocator);
     }
 
     pub fn view(self: *const OwnedPlan) Plan {
-        return .{ .inline_bodies = self.inline_bodies, .single_use = self.single_use };
+        return .{ .inline_bodies = self.inline_bodies, .kinds = self.kinds };
     }
 };
 
 /// Analyze a Lambda Solved program and produce explicit inline decisions.
 /// With `keep_keyed_specializations`, a function that is a keyed template
-/// specialization is never inlined away: a pack program offers those
-/// procedures from its manifest, so each must survive as a procedure even
-/// when its only caller is the export wrapper. Every other inline decision is
-/// the one any program makes, so the pack's procedures are lowered as a
-/// program that links them would lower them: a wrapper is inlined at its call
-/// sites and keeps its procedure, and a single-use body whose one caller is
-/// not a root is inlined, so the pack does not offer it.
+/// specialization is never inlined away by the whole-program single-use
+/// rule: a pack program offers those procedures from its manifest, so each
+/// must survive as a procedure even when its only caller is the export
+/// wrapper. Wrapper and source-single-use decisions depend on source alone,
+/// so a pack program makes them as any program does.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
@@ -82,7 +110,8 @@ pub fn analyze(
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
-        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations),
+        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
+        .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
     };
 }
 
@@ -95,8 +124,10 @@ const Decision = union(enum) {
 
 const Candidate = struct {
     body: Lifted.ExprId,
-    kind: enum { wrapper, single_use },
+    kind: InlineKind,
 };
+
+const SingleUseRule = enum { program, source };
 
 const MaterializationState = enum {
     unknown,
@@ -113,15 +144,16 @@ const InlineAnalyzer = struct {
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
     keep_keyed_specializations: bool,
-    /// Root functions, under `keep_keyed_specializations`: a pack program's
-    /// export wrappers, whose calls no other program makes.
-    roots: std.DynamicBitSetUnmanaged,
+    /// How a body qualifies as used once: by the whole program's calls, or
+    /// by its module's source.
+    single_use: SingleUseRule,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
         keep_keyed_specializations: bool,
+        single_use: SingleUseRule,
     ) std.mem.Allocator.Error!OwnedPlan {
         if (procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
@@ -138,13 +170,9 @@ const InlineAnalyzer = struct {
             .decisions = decisions,
             .stack = .empty,
             .keep_keyed_specializations = keep_keyed_specializations,
-            .roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, if (keep_keyed_specializations) solved.lifted.fnCount() else 0),
+            .single_use = single_use,
         };
         defer analyzer.stack.deinit(allocator);
-        defer analyzer.roots.deinit(allocator);
-        if (keep_keyed_specializations) {
-            for (solved.lifted.rootsView()) |root| analyzer.roots.set(@intFromEnum(root.fn_id));
-        }
 
         for (0..solved.lifted.fnCount()) |index| {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
@@ -161,9 +189,9 @@ const InlineAnalyzer = struct {
 
         const inline_bodies = try allocator.alloc(?Lifted.ExprId, decisions.len);
         errdefer allocator.free(inline_bodies);
-        const single_use = try allocator.alloc(bool, decisions.len);
-        errdefer allocator.free(single_use);
-        for (decisions, inline_bodies, single_use) |decision, *body, *is_single_use| {
+        const kinds = try allocator.alloc(InlineKind, decisions.len);
+        errdefer allocator.free(kinds);
+        for (decisions, inline_bodies, kinds) |decision, *body, *body_kind| {
             body.* = switch (decision) {
                 .inline_body => |candidate| candidate.body,
                 .unknown,
@@ -171,7 +199,7 @@ const InlineAnalyzer = struct {
                 .never,
                 => null,
             };
-            is_single_use.* = decision == .inline_body and decision.inline_body.kind == .single_use;
+            body_kind.* = if (decision == .inline_body) decision.inline_body.kind else .none;
         }
 
         allocator.free(decisions);
@@ -180,30 +208,42 @@ const InlineAnalyzer = struct {
         return .{
             .allocator = allocator,
             .inline_bodies = inline_bodies,
-            .single_use = single_use,
+            .kinds = kinds,
         };
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
-        // A wrapper is inlined at every call site and still lowered as a
-        // procedure, so a pack program inlines it exactly as any program
-        // does and keeps the procedure to offer.
+        // A pack program inlines a wrapper exactly as any program does.
         if (try self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
-        // A single-use body is lowered only at its call site. A keyed
-        // specialization whose one caller is a pack program's export wrapper
-        // must survive as a procedure to be offered; no other program calls
-        // it from there.
+        if (self.single_use == .source) {
+            if (self.sourceSingleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .source_single_use };
+            return null;
+        }
+        // A single-use body is lowered only at its call site, and a keyed
+        // specialization a pack program offers must survive as a procedure.
         if (self.keep_keyed_specializations) {
             if (self.solved.lifted.getFn(fn_id).source) |template| {
-                if (template.spec_key != null) {
-                    if (self.procedure_usage.get(fn_id).external_call_owner) |owner| {
-                        if (self.roots.isSet(@intFromEnum(owner))) return null;
-                    }
-                }
+                if (template.spec_key != null) return null;
             }
         }
         if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
         return null;
+    }
+
+    /// A body its module's source calls at one site. Every call to it in any
+    /// program is that site, lowered in some specialization of the function
+    /// containing it, so the decision needs no program-wide count.
+    fn sourceSingleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
+        const source_fn = self.solved.lifted.getFn(fn_id);
+        const template = source_fn.source orelse return null;
+        if (!template.single_source_call) return null;
+        if (self.procedure_usage.get(fn_id).contains_return) return null;
+        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
+        if (self.solvedCaptureCount(fn_id) != 0) return null;
+        return switch (source_fn.body) {
+            .roc => |body_expr| body_expr,
+            .hosted => null,
+        };
     }
 
     fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
@@ -377,7 +417,7 @@ const InlineAnalyzer = struct {
             switch (item.child) {
                 .stmt => |stmt_id| switch (self.solved.lifted.getStmt(stmt_id)) {
                     .return_ => return .open,
-                    .let_, .expr, .expect, .dbg, .uninitialized, .crash => try Lifted.appendStmtChildren(self.allocator, &self.solved.lifted, stmt_id, &children),
+                    .let_, .expr, .expect, .dbg, .uninitialized, .crash, .checked_error => try Lifted.appendStmtChildren(self.allocator, &self.solved.lifted, stmt_id, &children),
                 },
                 .expr => |expr_id| switch (self.solved.lifted.getExpr(expr_id).data) {
                     .return_ => return .open,
@@ -393,8 +433,8 @@ const InlineAnalyzer = struct {
                     .uninitialized,
                     .uninitialized_payload,
                     .crash,
+                    .checked_error,
                     .comptime_exhaustiveness_failed,
-                    .inline_expects_enabled,
                     => {},
                     .call_proc => |call| {
                         callee = Lifted.localDirectCallee(call);
@@ -640,9 +680,9 @@ const InlineAnalyzer = struct {
                 .dec_lit,
                 .str_lit,
                 .crash,
+                .checked_error,
                 .bytes_lit,
                 .def_ref,
-                .inline_expects_enabled,
                 => {},
                 .fn_ref,
                 .list,
@@ -751,6 +791,7 @@ const InlineAnalyzer = struct {
                     => .body,
                     .@"unreachable",
                     .crash,
+                    .checked_error,
                     .def_ref,
                     .fn_ref,
                     .list,
@@ -758,7 +799,6 @@ const InlineAnalyzer = struct {
                     .record,
                     .record_update,
                     .static_data_candidate,
-                    .inline_expects_enabled,
                     .comptime_value,
                     .typed_boundary,
                     .dbg,
@@ -809,7 +849,7 @@ const InlineAnalyzer = struct {
                     if (lifted.stmtSpan(block.statements).len != 0) return false;
                     try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
         return true;
@@ -822,7 +862,7 @@ const InlineAnalyzer = struct {
         var expr_id = root;
         while (true) {
             switch (lifted.getExpr(expr_id).data) {
-                .crash => return true,
+                .crash, .checked_error => return true,
                 .low_level => |call| {
                     if (call.op != .crash) return false;
                     const args = lifted.exprSpan(call.args);
@@ -839,12 +879,12 @@ const InlineAnalyzer = struct {
                     // followed by unreachable. No preceding work is admitted.
                     if (stmts.len != 1 or lifted.getExpr(block.final_expr).data != .@"unreachable") return false;
                     switch (lifted.getStmt(GuardedList.at(stmts, 0))) {
-                        .crash => return true,
+                        .crash, .checked_error => return true,
                         .expr => |child| expr_id = child,
                         .uninitialized, .let_, .expect, .dbg, .return_ => return false,
                     }
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }
@@ -856,7 +896,7 @@ const InlineAnalyzer = struct {
                 .str_lit => return true,
                 .nominal => |backing| expr_id = backing,
                 .typed_boundary => |boundary| expr_id = boundary.value,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }

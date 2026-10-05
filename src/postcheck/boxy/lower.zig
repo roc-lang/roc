@@ -152,6 +152,7 @@ fn appendSourceFile(
     try files.append(allocator, .{
         .name = module.module_env.module_name,
         .qualified_name = qualified_name,
+        .module_identity = module.key.module_identity_hash,
     });
 }
 
@@ -1781,6 +1782,7 @@ const ProcedureBuilder = struct {
         worker_desc_args: ?Plan.Span,
         requirement_desc_args: ?Plan.Span,
         requirement_desc_sources: ?Plan.Span,
+        requirement_leaf_sources: ?Plan.Span,
         hidden_desc_sources: ?Plan.Span,
         frame_requirement_descs: []const FrameRequirementDescriptor,
     };
@@ -3333,6 +3335,7 @@ const ProcedureBuilder = struct {
             .worker_desc_args = if (exact_method) |method| method.worker_desc_args else null,
             .requirement_desc_args = if (exact_method) |method| method.requirement_desc_args else null,
             .requirement_desc_sources = if (exact_method) |method| method.requirement_desc_sources else null,
+            .requirement_leaf_sources = if (exact_method) |method| method.requirement_leaf_sources else null,
             .hidden_desc_sources = if (exact_method) |method| method.hidden_desc_sources else null,
             .frame_requirement_descs = frame.frame_requirement_descs.items,
         } } };
@@ -3587,7 +3590,8 @@ const ProcedureBuilder = struct {
             if (frame.indexes.entries.items.len != planned_args.len or planned_args.len != planned_sources.len) {
                 boxyLowerInvariant("planned dictionary method descriptor sources disagreed with requirement descriptors");
             }
-            if (planned_sources.len == 0) return try self.finishStaticMethodAdapter(frame, .{});
+            const leaf_sources = self.plan.requirementLeafRepSlice(request.requirement_leaf_sources orelse .{});
+            if (planned_sources.len == 0 and leaf_sources.len == 0) return try self.finishStaticMethodAdapter(frame, .{});
             for (frame.indexes.entries.items, planned_args, planned_sources) |entry, arg, source| {
                 if (source.rep != arg.rep or entry.desc != arg.worker_desc) {
                     boxyLowerInvariant("planned dictionary method descriptor source identity disagreed with its requirement argument");
@@ -3596,7 +3600,7 @@ const ProcedureBuilder = struct {
                     try frame.call_sources.put(self.allocator, entry.desc, source.rep);
                 }
             }
-            try frame.runtime_sources.ensureTotalCapacity(self.allocator, planned_sources.len);
+            try frame.runtime_sources.ensureTotalCapacity(self.allocator, planned_sources.len + leaf_sources.len);
         } else {
             if (frame.mapping.indexes.entries.items.len == 0) return try self.finishStaticMethodAdapter(frame, .{});
             for (frame.mapping.indexes.entries.items) |entry| {
@@ -3655,6 +3659,17 @@ const ProcedureBuilder = struct {
                     frame.runtime_sources.appendAssumeCapacity(.{ .call = planned_call_index });
                 },
             }
+        }
+        const leaf_sources = self.plan.requirementLeafRepSlice(frame.request.requirement_leaf_sources orelse .{});
+        if (frame.index - entries.len < leaf_sources.len) {
+            const source_rep = leaf_sources[frame.index - entries.len];
+            frame.index += 1;
+            frame.pending_slot = @intCast(frame.call_descs.items.len);
+            return .{ .request = .{ .source_desc_ref = .{
+                .worker = source_rep,
+                .source = null,
+                .mapping = .{ .sources = &frame.call_sources, .context = frame.request.desc_context },
+            } } };
         }
         const refs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
         try self.result.boxy_desc_refs.appendSlice(self.allocator, frame.call_descs.items);
@@ -3751,6 +3766,9 @@ const ProcedureBuilder = struct {
                     .static_rep => if (try frame.repDescriptorNeedsFrame(source.rep)) return true,
                     .argument, .call => {},
                 }
+            }
+            for (self.plan.requirementLeafRepSlice(method.requirement_leaf_sources)) |source_rep| {
+                if (try frame.repDescriptorNeedsFrame(source_rep)) return true;
             }
             for (self.plan.directCallHiddenDictionaryArgSlice(method.nested_dict_args)) |arg| {
                 switch (arg.source) {
@@ -4195,6 +4213,7 @@ const ProcedureBuilder = struct {
         }
         const frame_requirement_end = proc.arg_locals.items.len;
         try proc.bindHiddenDictionaryArgs();
+        try proc.bindWorkerDictionaryDescriptors();
         proc.template_frame_descriptors = frame_requirement_descs.len != 0;
         try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, job.concrete_function == null);
         for (requirement_args, requirement_arg_locals) |arg, local| {
@@ -5682,7 +5701,7 @@ const ProcedureBuilder = struct {
             call_args,
             &arg_desc_initializers,
         );
-        const expected_result_desc = try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
+        const expected_result_desc = if (adapter_proc.repIsOpenRecord(source_function.ret)) ProcBodyBuilder.ResultDescriptorSource{} else try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
         try adapter_proc.appendResultDescriptorInitializers(&arg_desc_initializers, expected_result_desc);
         const call_stmt = try self.result.store.addCFStmt(.{
             .assign_call_erased = .{
@@ -6935,6 +6954,7 @@ const ProcedureBuilder = struct {
                     .assign_packed_erased_fn,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -7429,6 +7449,7 @@ const ProcedureBuilder = struct {
             header.body_source = try self.bodySourceForWorker(resolved, proc);
             try proc.bindHiddenDescriptorArgs();
             try proc.bindHiddenDictionaryArgs();
+            try proc.bindWorkerDictionaryDescriptors();
             try proc.bindLambdaArgDescriptors();
             header.ret_local = try proc.addWorkerReturnLocal(true);
             header.args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
@@ -15074,6 +15095,7 @@ const ProcedureBuilder = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -15258,6 +15280,7 @@ const ProcedureBuilder = struct {
                     .assign_packed_erased_fn,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_inspect,
@@ -15339,6 +15362,7 @@ const ProcedureBuilder = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -15457,6 +15481,10 @@ const ProcBodyBuilder = struct {
     scoped_descriptor_locals_start: usize = 0,
     local_descriptor_environments: std.ArrayList(LocalDescriptorEnvironment),
     descriptor_transfer_aliases: std.ArrayList(DescriptorTransferAlias),
+    /// The values a declared local closure's reassignable captures held at
+    /// its declaration. Every construction of that closure's callable reads
+    /// these instead of the variables' current values.
+    closure_capture_snapshots: std.ArrayList(ClosureCaptureSnapshot) = .empty,
     /// This frame is a template dictionary's method adapter, which binds
     /// descriptors the building frame supplied.
     template_frame_descriptors: bool = false,
@@ -15504,6 +15532,12 @@ const ProcBodyBuilder = struct {
     const DescriptorTransferAlias = struct {
         source: LIR.LocalId,
         target: LIR.LocalId,
+    };
+
+    const ClosureCaptureSnapshot = struct {
+        closure: Plan.CheckedExprIdentity,
+        /// One entry per source capture, null for an immutable capture.
+        locals: []?LIR.LocalId,
     };
 
     const PatternMiss = struct {
@@ -15955,6 +15989,8 @@ const ProcBodyBuilder = struct {
     }
 
     fn deinit(self: *ProcBodyBuilder) void {
+        for (self.closure_capture_snapshots.items) |snapshot| self.parent.allocator.free(snapshot.locals);
+        self.closure_capture_snapshots.deinit(self.parent.allocator);
         self.literal_locals.deinit(self.parent.allocator);
         self.worker_return_descriptor_initializers.deinit(self.parent.allocator);
         self.stored_capture_initializers.deinit(self.parent.allocator);
@@ -16318,7 +16354,11 @@ const ProcBodyBuilder = struct {
                 }
             }
 
-            if (root_param_index != null and overrides.items.len != 0) {
+            // An open record's descriptor describes the complete record its
+            // caller passed; the row's named fields describe only their static view.
+            if (root_param_index != null and overrides.items.len != 0 and
+                !self.repIsOpenRecord(params.items[root_param_index.?].rep))
+            {
                 const root_param = params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
@@ -16788,7 +16828,9 @@ const ProcBodyBuilder = struct {
             }
 
             var body_root_local = governing_param_local;
-            if (root_param_index != null and overrides.items.len != 0) {
+            if (root_param_index != null and overrides.items.len != 0 and
+                !self.repIsOpenRecord(all_params.items[root_param_index.?].rep))
+            {
                 const root_param = all_params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
@@ -17015,6 +17057,31 @@ const ProcBodyBuilder = struct {
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = continuation,
         } }, self.scaffoldOrigin());
+    }
+
+    /// Read each open record descriptor the worker's own dictionaries supply
+    /// on entry, before any body statement observes it.
+    fn bindWorkerDictionaryDescriptors(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        for (self.parent.plan.workerDictionaryDescriptorSlice(worker.dictionary_descs)) |entry| {
+            const dict_local = self.dictionaryLocalForRequirementOrNull(entry.requirement) orelse
+                boxyLowerInvariant("boxy worker dictionary descriptor had no bound dictionary");
+            const requirement = self.parent.plan.dictionaries.items[@intFromEnum(entry.requirement)];
+            const desc = self.parent.plan.representations.items[@intFromEnum(entry.rep)].descriptor orelse
+                boxyLowerInvariant("boxy worker dictionary descriptor representation had no descriptor");
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try self.worker_argument_desc_initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = .{ .dict_method_hidden = .{
+                    .dict = dict_local,
+                    .method = requirement.fn_name,
+                    .method_slot = requirement.slot,
+                    .hidden_index = entry.hidden_index,
+                    .shape = .requirement,
+                } },
+            });
+            try self.bindDescriptorRequirementLocalForRep(desc, entry.rep, local, true);
+        }
     }
 
     fn prependWorkerArgumentDescriptorInitializers(
@@ -17329,6 +17396,7 @@ const ProcBodyBuilder = struct {
         restore_descriptors,
         /// Materialize descriptor initializers, owning the slice.
         prepend_descriptor_initializers: []DescriptorArgLocal,
+        capture_snapshots: checked.CheckedExprId,
         runtime_error,
         /// Crash when a declaration's pattern misses.
         pattern_miss_crash: LIR.JoinPointId,
@@ -17419,7 +17487,7 @@ const ProcBodyBuilder = struct {
                 for (chain.items[chain.index..]) |item| switch (item) {
                     .record_local_env => |env| self.parent.allocator.free(env.bindings),
                     .prepend_descriptor_initializers => |initializers| self.parent.allocator.free(initializers),
-                    .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .pattern_miss_crash, .callable_adapter => {},
+                    .capture_snapshots, .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .pattern_miss_crash, .callable_adapter => {},
                 };
                 if (chain.scope) |scope| self.dropNominalBackingFormalScope(scope);
                 chain.scope = null;
@@ -17624,7 +17692,11 @@ const ProcBodyBuilder = struct {
                     snapshot.deinit(self.parent.allocator);
                     break :blk chain.current;
                 },
-                .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error, self.origin),
+                .capture_snapshots => |expr| try self.prependClosureCaptureSnapshots(expr, chain.current),
+                .runtime_error => try self.parent.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
+                    .checked_error = true,
+                } }, self.origin),
                 .prepend_descriptor_initializers => |initializers| blk: {
                     chain.items[chain.index - 1] = .runtime_error;
                     defer self.parent.allocator.free(initializers);
@@ -17719,7 +17791,10 @@ const ProcBodyBuilder = struct {
                 .rhs = binop.rhs,
                 .next = next,
             } } },
-            .structural_eq => |eq| try self.beginStructuralEq(target, eq.lhs, eq.rhs, null, eq.negated, next),
+            .structural_eq => |eq| if (eq.discriminant) |discriminant|
+                try self.beginTagDiscriminantEq(target, discriminant, eq.negated, next)
+            else
+                try self.beginStructuralEq(target, eq.lhs, eq.rhs, null, eq.negated, next),
             .method_eq => |plan| try self.beginMethodEq(target, plan, next),
             .structural_hash => |hash| try self.beginStructuralHash(target, hash.value, hash.hasher, next),
             .record => |record| try self.beginRecordExpr(target, expr_id, expr.ty, record, next),
@@ -17772,7 +17847,7 @@ const ProcBodyBuilder = struct {
             } }, self.origin)),
             .break_ => exprDone(try self.lowerBreak()),
             .return_ => |ret| try self.beginReturn(ret.expr, ret.lambda),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin)),
+            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -18706,6 +18781,24 @@ const ProcBodyBuilder = struct {
         const payload_layout = self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].descriptor_payload_layout orelse
             boxyLowerInvariant("dynamic record descriptor had no payload layout");
         const payload = try self.addFrameLocal(payload_layout);
+        if (extension) |ext| {
+            // The base of an update has fields its open row does not name,
+            // which only its runtime descriptor knows. The update keeps them
+            // and replaces the fields this representation names, which the
+            // record's static-field view describes.
+            const fields_desc = try self.openRecordViewDescriptorSource(rep_id);
+            const update = try self.parent.result.store.addCFStmt(.{ .assign_boxy_record_update = .{
+                .target = target,
+                .base = ext.local,
+                .base_desc = try self.descriptorRefForSourceLocalRep(ext.local, ext.rep),
+                .fields = payload,
+                .fields_layout = payload_layout,
+                .fields_desc = fields_desc.desc.?,
+                .next = try self.prependSetLocalDescriptorTransfer(target, ext.local, .replace_existing, next),
+            } }, self.origin);
+            const with_fields_desc = try self.prependOptionalDescriptorMaterialization(fields_desc.materialize, update);
+            return try self.beginRecordPayload(payload, record_expr, rep_id, rep, expr_fields, unset_fields, extension, with_fields_desc);
+        }
         const payload_desc_info = try self.descriptorForConstructedTarget(target, try self.descriptorRefForKnownRep(rep_id));
         const payload_desc = payload_desc_info.desc orelse
             boxyLowerInvariant("dynamic record construction had no target descriptor");
@@ -19104,7 +19197,7 @@ const ProcBodyBuilder = struct {
             => null,
         };
         if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
-            return exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin));
+            return exprDone(try self.lowerCheckedRuntimeError());
         };
         return switch (statement.data) {
             .decl => |decl| try self.beginDeclPattern(decl.pattern, decl.expr, next),
@@ -19144,7 +19237,7 @@ const ProcBodyBuilder = struct {
             .crash => |msg| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
             } }, self.origin)),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin)),
+            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -19155,13 +19248,103 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The closure a local declaration binds, when it binds one.
+    fn declaredClosureExpr(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) ?checked.CheckedExprId {
+        const site = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return null;
+        if (self.module.checked_bodies.expr(site).data != .closure) return null;
+        return site;
+    }
+
+    fn captureIsReassignable(self: *ProcBodyBuilder, capture: checked.CheckedCapture) bool {
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@intFromEnum(capture.pattern)] orelse
+            boxyLowerInvariant("boxy closure capture referenced a non-binding pattern");
+        return self.module.checked_bodies.patternBinder(binder).reassignable;
+    }
+
+    /// A declared closure's callable is constructed at each use, but its
+    /// captures are the values at the declaration. A reassignable capture can
+    /// change in between, so its declaration-time value gets its own local.
+    fn reserveClosureCaptureSnapshots(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        const closure_expr = self.declaredClosureExpr(expr_id) orelse return;
+        const captures = self.callableExprCaptures(closure_expr);
+        for (captures) |capture| {
+            if (self.captureIsReassignable(capture)) break;
+        } else return;
+
+        const closure = Plan.CheckedExprIdentity{ .module = self.module.key, .expr = closure_expr };
+        if (self.closureCaptureSnapshotLocals(closure) != null) {
+            boxyLowerInvariant("boxy reserved a declared closure's capture snapshots twice");
+        }
+        const locals = try self.parent.allocator.alloc(?LIR.LocalId, captures.len);
+        errdefer self.parent.allocator.free(locals);
+        for (captures, locals) |capture, *local| {
+            if (!self.captureIsReassignable(capture)) {
+                local.* = null;
+                continue;
+            }
+            const binder = self.module.checked_bodies.pattern_binder_by_pattern[@intFromEnum(capture.pattern)].?;
+            const rep = self.binderStorageRep(binder);
+            local.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(rep).layoutIdx()))
+                try self.addFrameLocalForRepWithFreshDescriptor(rep)
+            else
+                try self.addFrameLocalForRep(rep);
+        }
+        try self.closure_capture_snapshots.append(self.parent.allocator, .{ .closure = closure, .locals = locals });
+    }
+
+    fn closureCaptureSnapshotLocals(self: *ProcBodyBuilder, closure: Plan.CheckedExprIdentity) ?[]?LIR.LocalId {
+        for (self.closure_capture_snapshots.items) |snapshot| {
+            if (snapshot.closure.expr == closure.expr and checked_moduleKeyEqual(snapshot.closure.module, closure.module)) {
+                return snapshot.locals;
+            }
+        }
+        return null;
+    }
+
+    fn prependClosureCaptureSnapshots(
+        self: *ProcBodyBuilder,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const closure_expr = self.declaredClosureExpr(expr_id) orelse return next;
+        const locals = self.closureCaptureSnapshotLocals(.{ .module = self.module.key, .expr = closure_expr }) orelse return next;
+        var continuation = next;
+        for (self.callableExprCaptures(closure_expr), locals) |capture, maybe_local| {
+            const local = maybe_local orelse continue;
+            continuation = try self.assignLocal(local, self.localForPattern(capture.pattern), continuation);
+        }
+        return continuation;
+    }
+
+    /// The local holding one source capture of a callable being constructed.
+    fn sourceCaptureLocal(
+        self: *ProcBodyBuilder,
+        source: Plan.WorkerSource,
+        maybe_expr: ?checked.CheckedExprId,
+        capture_index: usize,
+        capture: checked.CheckedCapture,
+    ) LIR.LocalId {
+        const closure: ?Plan.CheckedExprIdentity = if (maybe_expr) |expr_id|
+            .{ .module = self.module.key, .expr = expr_id }
+        else switch (source) {
+            .nested_expr => |expr_ref| expr_ref,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
+        };
+        if (closure) |closure_ref| {
+            if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
+                if (locals[capture_index]) |local| return local;
+            }
+        }
+        return self.localForPattern(capture.pattern);
+    }
+
     fn beginDeclPattern(
         self: *ProcBodyBuilder,
         pattern_id: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (try self.declOmitsRuntimeBinding(pattern_id, expr_id)) return exprDone(next);
+        if (try self.declOmitsRuntimeBinding(pattern_id, expr_id)) return exprDone(try self.prependClosureCaptureSnapshots(expr_id, next));
 
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const source = switch (pattern.data) {
@@ -19171,15 +19354,17 @@ const ProcBodyBuilder = struct {
         const value: ExprChainItem = .{ .lower = .{ .expr = .{ .target = source, .expr_id = expr_id, .next = undefined } } };
         if (try self.patternCanMiss(pattern_id)) {
             const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
-            const items = try self.parent.allocator.alloc(ExprChainItem, 3);
+            const items = try self.parent.allocator.alloc(ExprChainItem, 4);
             items[0] = .{ .lower = .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .{ .match = .{ .miss = miss, .remaps = &.{} } }, .next = undefined } } };
             items[1] = .{ .pattern_miss_crash = miss.join_id };
             items[2] = value;
+            items[3] = .{ .capture_snapshots = expr_id };
             return exprChain(items, next);
         }
-        const items = try self.parent.allocator.alloc(ExprChainItem, 2);
+        const items = try self.parent.allocator.alloc(ExprChainItem, 3);
         items[0] = .{ .lower = .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .bind, .next = undefined } } };
         items[1] = value;
+        items[2] = .{ .capture_snapshots = expr_id };
         return exprChain(items, next);
     }
 
@@ -19406,7 +19591,7 @@ const ProcBodyBuilder = struct {
                 .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
-            .checked_error => return exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
+            .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
             .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         }
 
@@ -19467,6 +19652,56 @@ const ProcBodyBuilder = struct {
             .{ .tail = .{ .expr = .{ .target = value, .expr_id = expr_id, .next = inspect } } }
         else
             exprDone(try self.lowerExprStorageRepInto(value, storage_rep, expr_id, inspect));
+    }
+
+    /// The checker decided this equality compares against one payload-free
+    /// tag, so it is exactly a test of the value's tag, as a `match` arm for
+    /// that tag would perform.
+    fn beginTagDiscriminantEq(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        discriminant: checked.CheckedTagDiscriminantEquality,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const value_expr = self.module.checked_bodies.expr(discriminant.value);
+        const value_rep = self.matchConditionRep(discriminant.value, self.repForType(value_expr.ty));
+        const value = try self.addFrameBoundaryTargetLocalForRep(value_rep);
+        if (self.parent.result.store.getLocal(value).boxy_desc == null and
+            self.matchConditionNeedsExactResultDescriptor(discriminant.value, value_rep))
+        {
+            const desc_local = try self.addFrameLocal(.opaque_ptr);
+            self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+        }
+
+        const done = self.freshJoinPointId();
+        const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+        const matched = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
+        const state = try self.parent.allocator.create(PatternState);
+        state.* = .{ .current = matched };
+        defer self.releasePatternState(state);
+        try self.expandTagPattern(state, value_expr.ty, value_rep, discriminant.tag, &.{}, value, .{ .miss = miss, .remaps = &.{} });
+        while (state.actions.pop()) |action| {
+            if (try self.stepPatternAction(state, action) != null) {
+                boxyLowerInvariant("payload-free tag equality requested a payload expression");
+            }
+        }
+        const tested = state.current;
+        const missed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
+        const test_stmt = try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = miss.join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = missed,
+            .remainder = tested,
+        } }, self.glueOrigin());
+        const params = [_]LIR.LocalId{target};
+        const joined = try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = done,
+            .params = try self.joinParamSpan(&params),
+            .body = next,
+            .remainder = test_stmt,
+        } }, self.glueOrigin());
+        return .{ .tail = .{ .into_rep = .{ .target = value, .target_rep = value_rep, .expr_id = discriminant.value, .next = joined } } };
     }
 
     fn beginStructuralEq(
@@ -19576,9 +19811,18 @@ const ProcBodyBuilder = struct {
             .structural,
             => try self.beginDispatchCall(target, plan.expr, maybe_plan, self.module.checked_bodies.expr(plan.expr).ty, next),
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .checked_error => exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
+            .checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
             .@"unreachable" => exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         };
+    }
+
+    /// The local a loop body lowers into; the loop discards its value. A
+    /// `runtime_error` body produces no value, and the representation plan
+    /// gives its type no representation.
+    fn addLoopBodyResultLocal(self: *ProcBodyBuilder, body_id: checked.CheckedExprId) Allocator.Error!LIR.LocalId {
+        const body_expr = self.module.checked_bodies.expr(body_id);
+        if (body_expr.data == .runtime_error) return try self.addFrameLocal(.zst);
+        return try self.addFrameLocalForType(body_expr.ty);
     }
 
     /// A loop header re-evaluates its condition before each pass of its body,
@@ -19593,8 +19837,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("checked while condition did not lower to Bool layout");
                 }
 
-                const body_expr = self.module.checked_bodies.expr(task.body_id);
-                const body_result = try self.addFrameLocalForType(body_expr.ty);
+                const body_result = try self.addLoopBodyResultLocal(task.body_id);
                 const loop_result = try self.addFrameLocal(.zst);
 
                 task.join_id = self.freshJoinPointId();
@@ -19674,7 +19917,7 @@ const ProcBodyBuilder = struct {
                 const plan = self.iteratorForPlan(plan_id);
                 inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
                     switch (resolution) {
-                        .checked_error => return exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
+                        .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
                         .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
                         .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
                         .direct_closed, .direct_parametric, .evidence_dependent => {},
@@ -19895,8 +20138,7 @@ const ProcBodyBuilder = struct {
             task.payload_desc = try self.ensureTagPayloadTargetDescriptorLocal(task.payload, payload_rep);
             task.item = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_item.ty }));
             task.rest = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty }));
-            const body_expr = self.module.checked_bodies.expr(task.for_.body);
-            const body_result = try self.addFrameLocalForType(body_expr.ty);
+            const body_result = try self.addLoopBodyResultLocal(task.for_.body);
 
             var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = task.join_id } }, self.glueOrigin());
             continuation = try self.setLocalInitializeJoinParam(task.iterator_param, task.rest, continuation);
@@ -19943,7 +20185,7 @@ const ProcBodyBuilder = struct {
             .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
             .evidence_dependent => return .{ .child = (try self.unresolvedIteratorDispatchStep(task.target, task.plan, task.kind, call, task.loop_iterator, task.next)).tail },
             .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
-            .checked_error => return .{ .child = .{ .chain = .{ .items = try self.parent.allocator.alloc(ExprChainItem, 0), .current = try self.lowerUnexecutableDispatchInto("method dispatch failed to check") } } },
+            .checked_error => return .{ .child = .{ .chain = .{ .items = try self.parent.allocator.alloc(ExprChainItem, 0), .current = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check") } } },
             .@"unreachable" => return .{ .child = .{ .chain = .{ .items = try self.parent.allocator.alloc(ExprChainItem, 0), .current = try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist") } } },
         }
 
@@ -20233,7 +20475,7 @@ const ProcBodyBuilder = struct {
                 try self.addFrameLocalForRepWithFreshDescriptor(callee_ret_rep);
             if (self.parent.result.store.getLocal(raw_ret).boxy_desc) |desc| {
                 if (desc.localOrNull()) |local| {
-                    try self.recordDescriptorLocalTemplate(
+                    if (!self.repIsOpenRecord(callee_ret_rep)) try self.recordDescriptorLocalTemplate(
                         local,
                         try self.descriptorMaterializationForExactRep(callee_ret_rep),
                     );
@@ -20245,7 +20487,7 @@ const ProcBodyBuilder = struct {
 
         const out_desc = self.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| {
-            if (self.descriptorTemplateForLocal(local) == null) {
+            if (self.descriptorTemplateForLocal(local) == null and !self.repIsOpenRecord(callee_ret_rep)) {
                 try self.recordDescriptorLocalTemplate(
                     local,
                     try self.descriptorMaterializationForExactRep(callee_ret_rep),
@@ -20327,13 +20569,34 @@ const ProcBodyBuilder = struct {
             return try self.loweredExprsChain(args, lowered, crash);
         }
 
+        if (op == .list_prefetched) {
+            // The result is the list itself, so it is an alias of the
+            // argument; the hint is a separate statement that borrows it.
+            if (args.len != 2) boxyLowerInvariant("list_prefetched reached boxy lowering with the wrong arity");
+            const lowered = try self.lowerExprsToTemps(args);
+            defer self.parent.allocator.free(lowered);
+            const alias = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .local = lowered[0] },
+                .next = next,
+            } }, self.origin);
+            const hint = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = try self.parent.addLocal(.zst),
+                .op = .list_prefetch,
+                .rc_effect = LIR.LowLevel.list_prefetch.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(lowered),
+                .next = alias,
+            } }, self.origin);
+            return try self.loweredExprsChain(args, lowered, hint);
+        }
+
         switch (op) {
             .box_box,
             .box_unbox,
             => return try self.beginBoxBoundaryLowLevel(target, result_ty, op, args, next),
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .list_map_can_reuse => return try self.beginListMapCanReuse(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
@@ -20352,8 +20615,9 @@ const ProcBodyBuilder = struct {
         // ABI: each variant's payload in its own argument's representation.
         // Boxy stores `Try` payloads in erased storage, so compute the builtin
         // into that concrete ABI and cross the explicit descriptor-guided
-        // representation boundary afterwards.
-        if (Plan.builtinTryArgs(self.module.checked_types, result_ty) != null) {
+        // representation boundary afterwards. `compare` likewise writes the
+        // closed `[Before, Same, After]` that Boxy keeps as an open row.
+        if (Plan.builtinTryArgs(self.module.checked_types, result_ty) != null or op == .compare) {
             const result_rep = self.repForType(result_ty);
             const concrete_rep = self.parent.plan.hostRepFor(result_rep);
             const concrete_layout = self.workerRuntimeLayoutForRep(concrete_rep).layoutIdx();
@@ -20394,6 +20658,32 @@ const ProcBodyBuilder = struct {
                 } }, self.origin);
             }
             return try self.loweredExprsChain(args, lowered, continuation);
+        }
+
+        // list_sort_with calls its comparator through a fixed ABI whose
+        // ordering result is the closed `[Before, Same, After]`. A comparator
+        // written as a callback returns that union open, so cross into the
+        // comparator's exact ABI representation before the call.
+        if (op == .list_sort_with) {
+            if (lowered.len != 2) boxyLowerInvariant("list_sort_with did not take a list and a comparator");
+            const boxed_comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);
+            const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
+            const abi_rep = self.parent.plan.sortComparatorAbiRep(comparator_rep);
+            if (!try self.parent.plan.repsStructurallyIdentical(self.parent.allocator, abi_rep, comparator_rep)) {
+                const abi_comparator = try self.addFrameBoundaryTargetLocalForRep(abi_rep);
+                const arg_locals = [_]LIR.LocalId{ lowered[0], abi_comparator };
+                var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = op,
+                    .rc_effect = op.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&arg_locals),
+                    .next = result_next,
+                } }, self.origin);
+                // A boxed callable is stored as the callable itself, so the
+                // boundary wraps the callable in an adapter for its ABI result.
+                continuation = try self.assignRepresentationBoundaryConsumingSource(abi_comparator, lowered[1], abi_rep, comparator_rep, continuation);
+                return try self.loweredExprsChain(args, lowered, continuation);
+            }
         }
 
         // list_sublist's { start, len } argument has a fixed concrete ABI; a
@@ -20957,7 +21247,7 @@ const ProcBodyBuilder = struct {
             .imported_const,
             => |const_use| try self.beginRestoreConstUse(target, checked_ty, const_use, next),
             .platform_required_const => |required| try self.beginRestoreConstUse(target, checked_ty, required.const_use, next),
-            .platform_required_checked_error => exprDone(try self.lowerUnexecutableDispatchInto("platform requirement failed checking")),
+            .platform_required_checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("platform requirement failed checking")),
             .local_proc => try self.beginProcedureValueRef(target, expr_id, checked_ty, ref_id, next),
             .top_level_proc,
             .imported_proc,
@@ -21967,6 +22257,10 @@ const ProcBodyBuilder = struct {
             .crash => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
             } }, self.scaffoldOrigin())),
+            .checked_error => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
+            } }, self.scaffoldOrigin())),
             .list => |items| try self.beginRestoreConstList(target, store_module, type_module, items, checked_ty, next),
             .box => |payload| try self.beginRestoreConstBox(target, store_module, type_module, payload, checked_ty, next),
             .tuple => |items| try self.beginRestoreConstTuple(target, store_module, type_module, items, checked_ty, next),
@@ -22020,7 +22314,7 @@ const ProcBodyBuilder = struct {
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing_node = switch (store_module.const_store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
                     };
                     const backing_local = try self.addFrameLocalForRep(backing_rep);
                     const assign = try self.assignRepresentationBoundary(
@@ -22041,7 +22335,7 @@ const ProcBodyBuilder = struct {
                 while (true) switch (store_module.const_store.get(bool_node)) {
                     .nominal => |nominal| bool_node = nominal.backing,
                     .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
-                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
                 };
             },
             .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
@@ -22054,6 +22348,10 @@ const ProcBodyBuilder = struct {
             .str => |str| exprDone(try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next)),
             .crash => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+            } }, self.scaffoldOrigin())),
+            .checked_error => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
             } }, self.scaffoldOrigin())),
             .list => |items| try self.beginRestoreStoredConstList(target, store_module, items, stored_type, rep_id, next),
             .box => |payload| try self.beginRestoreStoredConstBox(target, store_module, payload, stored_type, rep_id, next),
@@ -22902,10 +23200,10 @@ const ProcBodyBuilder = struct {
         const static_fn = planned orelse
             boxyLowerInvariant("stored function value had no producer-selected static plan");
         const worker = self.parent.plan.workers.items[@intFromEnum(static_fn.worker)];
-        return try self.beginWorkerValueWithCallDictionaryArgs(
+        return try self.beginWorkerValueWithValueRep(
             target,
             worker.checked_type,
-            self.parent.plan.representations.items[@intFromEnum(static_fn.rep)].source_type,
+            static_fn.rep,
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
@@ -23024,7 +23322,6 @@ const ProcBodyBuilder = struct {
         const static_fn = planned orelse
             boxyLowerInvariant("ConstStore function value had no producer-selected static plan");
         const worker = self.parent.plan.workers.items[@intFromEnum(static_fn.worker)];
-        const planned_type = self.parent.plan.representations.items[@intFromEnum(static_fn.rep)].source_type;
         const callable_target = if (static_fn.rep == requested_rep)
             target
         else
@@ -23039,10 +23336,10 @@ const ProcBodyBuilder = struct {
                 static_fn.rep,
                 next,
             );
-        return try self.beginWorkerValueWithCallDictionaryArgs(
+        return try self.beginWorkerValueWithValueRep(
             callable_target,
             worker.checked_type,
-            planned_type,
+            static_fn.rep,
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
@@ -23395,10 +23692,25 @@ const ProcBodyBuilder = struct {
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
+        return try self.beginWorkerValueWithValueRep(target, worker_type, self.repForTypeRef(call_type), source, maybe_expr, stored_capture_sources, hidden_desc_args, hidden_dict_args, next);
+    }
+
+    fn beginWorkerValueWithValueRep(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        worker_type: Plan.CheckedTypeIdentity,
+        value_rep: Plan.TypeRepId,
+        source: Plan.WorkerSource,
+        maybe_expr: ?checked.CheckedExprId,
+        stored_capture_sources: []const Plan.StoredCallableCaptureSource,
+        hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
         const worker_id = self.parent.plan.workerForSourceType(source, worker_type) orelse
             boxyLowerInvariant("planned callable value had no worker for its source type");
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
-        const value_function = self.functionChildrenForRep(self.repForTypeRef(call_type)) orelse
+        const value_function = self.functionChildrenForRep(value_rep) orelse
             boxyLowerInvariant("boxy callable value type was not an erased-callable representation");
         const worker_function = self.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("boxy callable worker was not an erased-callable representation");
@@ -23521,7 +23833,7 @@ const ProcBodyBuilder = struct {
                         if (source_capture_index >= source_captures.len) {
                             boxyLowerInvariant("boxy callable capture plan had more value captures than the source closure");
                         }
-                        field_local.* = self.localForPattern(source_captures[source_capture_index].pattern);
+                        field_local.* = self.sourceCaptureLocal(source, maybe_expr, source_capture_index, source_captures[source_capture_index]);
                         source_capture_index += 1;
                     }
                 },
@@ -24401,7 +24713,7 @@ const ProcBodyBuilder = struct {
 
         const out_desc = self.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| {
-            if (self.descriptorTemplateForLocal(local) == null) {
+            if (self.descriptorTemplateForLocal(local) == null and !self.repIsOpenRecord(callee_function.ret)) {
                 try self.recordDescriptorLocalTemplate(
                     local,
                     try self.descriptorMaterializationForExactRep(callee_function.ret),
@@ -24580,7 +24892,7 @@ const ProcBodyBuilder = struct {
 
             for (root_indices.items) |param_index| {
                 const param = params.items[param_index];
-                const materialization = if (overrides.items.len != 0)
+                const materialization = if (overrides.items.len != 0 and !self.repIsOpenRecord(param.rep))
                     try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items)
                 else if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                     DescriptorMaterialization{ .desc = desc }
@@ -24677,6 +24989,22 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString(message) },
+        } }, self.origin);
+    }
+
+    /// A checked `runtime_error` is code checking rejected and already
+    /// reported; reaching it crashes with the checked-error message.
+    fn lowerCheckedRuntimeError(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerCheckedErrorDispatchInto("runtime error");
+    }
+
+    fn lowerCheckedErrorDispatchInto(
+        self: *ProcBodyBuilder,
+        comptime message: []const u8,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = .{ .literal = try self.parent.result.store.insertString(message) },
+            .checked_error = true,
         } }, self.origin);
     }
 
@@ -25506,7 +25834,8 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("planned boxy call adapter had no source descriptor");
         var target_desc_prerequisites = std.ArrayList(DescriptorArgLocal).empty;
         defer target_desc_prerequisites.deinit(self.parent.allocator);
-        const planned_target_desc_info = if (self.repIsBareDynamic(self.descriptorStorageRep(target_rep)))
+        const planned_target_desc_info = if (self.repIsBareDynamic(self.descriptorStorageRep(target_rep)) or
+            self.repIsOpenRecord(target_rep))
             ResultDescriptorSource{ .desc = source_desc, .preserves_source_desc = true }
         else
             try self.adapterDescriptorForCallBoundary(
@@ -26191,7 +26520,7 @@ const ProcBodyBuilder = struct {
         // allocation, so its descriptor must remain the exact source
         // descriptor. Structurally constrained dynamic boxes continue through
         // target descriptor specialization below.
-        const target_is_bare_dynamic = self.repIsBareDynamic(target_rep);
+        const target_is_bare_dynamic = self.repIsBareDynamic(target_rep) or self.repIsOpenRecord(target_rep);
         if (target_is_bare_dynamic and target_is_box and !source_is_box) {
             var result = source_desc_info;
             result.preserves_source_desc = true;
@@ -28070,7 +28399,10 @@ const ProcBodyBuilder = struct {
             null;
         const unboxed_receiver_desc_info: ResultDescriptorSource = switch (receiver_layout) {
             .concrete => .{},
-            .dynamic_box => try self.storageDescriptorForRepIfNeeded(receiver_rep),
+            .dynamic_box => if (self.repIsOpenRecord(access.record_rep))
+                try self.openRecordViewDescriptorSource(access.record_rep)
+            else
+                try self.storageDescriptorForRepIfNeeded(receiver_rep),
         };
         const record_desc = unboxed_receiver_desc_info.desc orelse receiver_desc;
         const read_source = switch (receiver_layout) {
@@ -28114,13 +28446,41 @@ const ProcBodyBuilder = struct {
             next
         else
             try self.assignRepresentationBoundary(target, read_target, target_rep, access.field_rep, next);
+        const read_source_layout = self.parent.result.store.getLocal(read_source).layout_idx;
+        const read_struct_layout = self.parent.result.layouts.getLayout(read_source_layout);
+        const physical_field_layout = self.parent.result.layouts.getStructFieldLayoutByOriginalIndex(
+            read_struct_layout.getStruct().idx,
+            access.field_idx,
+        );
+        const read_target_layout = self.parent.result.store.getLocal(read_target).layout_idx;
+        const stored_field_local = if (physical_field_layout == read_target_layout)
+            read_target
+        else
+            try self.addFrameLocal(physical_field_layout);
+        const after_stored_field_read = if (stored_field_local == read_target)
+            after_read
+        else blk: {
+            // A field read borrows the exact stored field. Any conversion to
+            // its worker representation is an explicit owned materialization.
+            const field_desc = self.parent.result.store.getLocal(read_target).boxy_desc;
+            if (field_desc) |desc| self.parent.result.store.setLocalBoxyDesc(stored_field_local, desc);
+            break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                .target = read_target,
+                .source = stored_field_local,
+                .adapter = try self.internAdapter(.materialize, physical_field_layout, read_target_layout, false),
+                .source_desc = field_desc,
+                .target_desc = field_desc,
+                .source_mode = .borrow,
+                .next = after_read,
+            } }, self.origin);
+        };
         const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = read_target,
+            .target = stored_field_local,
             .op = .{ .field = .{
                 .source = read_source,
                 .field_idx = access.field_idx,
             } },
-            .next = after_read,
+            .next = after_stored_field_read,
         } }, self.origin);
         const before_read = if (field_desc_local) |desc_local| blk: {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) break :blk read;
@@ -28135,16 +28495,21 @@ const ProcBodyBuilder = struct {
         const after_receiver = switch (receiver_layout) {
             .concrete => before_read,
             .dynamic_box => blk: {
-                const unbox = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
-                    .target = read_source,
-                    .source = receiver_local,
-                    .source_desc = receiver_desc orelse
-                        boxyLowerInvariant("dynamic record field unbox had no source descriptor"),
-                    .target_desc = unboxed_receiver_desc_info.desc,
-                    .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
-                    .source_mode = .borrow,
-                    .next = before_read,
-                } }, self.origin);
+                const unbox = try self.parent.result.store.addCFStmt(.{
+                    .assign_boxy_unbox = .{
+                        .target = read_source,
+                        .source = receiver_local,
+                        .source_desc = receiver_desc orelse
+                            boxyLowerInvariant("dynamic record field unbox had no source descriptor"),
+                        .target_desc = unboxed_receiver_desc_info.desc,
+                        .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
+                        // This read materializes a field view. Conversion can
+                        // allocate fields, so the view owns its result; copying
+                        // retains only fields that still share the source.
+                        .source_mode = .copy,
+                        .next = before_read,
+                    },
+                }, self.origin);
                 break :blk try self.prependOptionalDescriptorMaterialization(unboxed_receiver_desc_info.materialize, unbox);
             },
         };
@@ -28511,7 +28876,10 @@ const ProcBodyBuilder = struct {
             };
             if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
-                .decl => |decl| if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
+                .decl => |decl| {
+                    if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern);
+                    try self.reserveClosureCaptureSnapshots(decl.expr);
+                },
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
                 .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
@@ -29467,7 +29835,10 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("dynamic record pattern source had no descriptor payload layout");
                 const payload = try self.addFrameLocal(payload_layout);
                 const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
-                const target_desc_info = try self.storageDescriptorForRepIfNeeded(record_rep);
+                const target_desc_info = if (self.repIsOpenRecord(record_rep))
+                    try self.openRecordViewDescriptorSource(record_rep)
+                else
+                    try self.storageDescriptorForRepIfNeeded(record_rep);
                 // A `.dynamic`-rep record reports no static storage descriptor, but
                 // when its unboxed payload carries an `erased_box` the value
                 // must be reference-counted through a descriptor. The unboxed payload
@@ -30694,7 +31065,7 @@ const ProcBodyBuilder = struct {
                         return assign;
                     },
                     .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
@@ -30724,7 +31095,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -31531,6 +31902,9 @@ const ProcBodyBuilder = struct {
         const allocator = self.parent.allocator;
         const current_rep_identity = self.descriptorStorageRep(rep_id);
         if (current_rep_identity == target_rep_id) return true;
+        // An open record's descriptor describes the complete record its value
+        // holds, whose nested positions its row's fields do not determine.
+        if (self.repIsOpenRecord(current_rep_identity)) return false;
 
         const active_entry = try active.getOrPut(current_rep_identity);
         if (active_entry.found_existing) return false;
@@ -31652,6 +32026,7 @@ const ProcBodyBuilder = struct {
         nested_rep_id: Plan.TypeRepId,
     ) Allocator.Error!?u32 {
         const target_rep = self.descriptorStorageRep(nested_rep_id);
+        if (self.repIsOpenRecord(parent_rep_id)) return null;
         var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
         defer slots.deinit(self.parent.allocator);
         try self.parent.appendNestedDescriptorSlots(
@@ -31780,6 +32155,9 @@ const ProcBodyBuilder = struct {
         result_rep: Plan.TypeRepId,
         out_desc: ?LIR.LocalId,
     ) Allocator.Error!ResultDescriptorSource {
+        // An open record result is described by the record the callee
+        // returns, which the caller's types do not determine.
+        if (self.repIsOpenRecord(result_rep)) return .{};
         if (out_desc) |local| {
             if (self.descriptorTemplateForLocal(local)) |template| {
                 return try self.adapterDescriptorFromMaterialization(template);
@@ -32097,7 +32475,8 @@ const ProcBodyBuilder = struct {
     ) bool {
         const identity_worker_rep = self.descriptorStorageRep(arg.worker_rep);
         const worker_rep = self.parent.plan.representations.items[@intFromEnum(identity_worker_rep)];
-        return worker_rep.kind == .dynamic and worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0;
+        return (worker_rep.kind == .dynamic and worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) or
+            self.repIsOpenRecord(identity_worker_rep);
     }
 
     fn bindDirectCallHiddenDescriptorLocals(
@@ -32634,7 +33013,30 @@ const ProcBodyBuilder = struct {
         overrides: []const DescriptorTemplateOverride,
     ) Allocator.Error!DescriptorMaterialization {
         if (overrides.len == 0) return try self.descriptorMaterializationForKnownRep(rep_id);
+        return try self.descriptorTemplateMaterializationForRep(rep_id, overrides);
+    }
 
+    /// The static-field view of an open record: the record its row names,
+    /// which a field read or update projects the complete record onto.
+    fn openRecordViewDescriptorSource(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!ResultDescriptorSource {
+        const materialization = try self.descriptorTemplateMaterializationForRep(rep_id, &.{});
+        if (materialization.captures.len == 0) return .{ .desc = materialization.desc };
+        const local = try self.addFrameLocal(.opaque_ptr);
+        return .{
+            .desc = .{ .local = local },
+            .materialize = .{
+                .local = local,
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
+            },
+        };
+    }
+
+    fn descriptorTemplateMaterializationForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        overrides: []const DescriptorTemplateOverride,
+    ) Allocator.Error!DescriptorMaterialization {
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
         var captures = std.ArrayList(LIR.LocalId).empty;
         defer captures.deinit(self.parent.allocator);
@@ -37972,6 +38374,7 @@ const ProcBodyBuilder = struct {
                         continue;
                     }
 
+                    if (self.repIsOpenRecord(identity_rep)) break;
                     var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
                     defer slots.deinit(allocator);
                     try self.parent.appendNestedDescriptorSlots(
@@ -38163,6 +38566,13 @@ const ProcBodyBuilder = struct {
     /// erased box holds the supplying payload as the source describes it.
     fn constructedFieldStorageRep(self: *const ProcBodyBuilder, field: AggregateDescriptorField) Plan.TypeRepId {
         return if (self.repIsBareDynamic(field.target_rep)) field.source_rep else field.target_rep;
+    }
+
+    /// A record whose row is still open. Its box holds the complete record
+    /// the value was built from, which only the value's own descriptor
+    /// describes; the representation's fields are a view of that record.
+    fn repIsOpenRecord(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        return self.parent.plan.repIsOpenRecord(self.descriptorStorageRep(rep_id));
     }
 
     /// A bare dynamic representation carries no structural payload shape of
@@ -38653,7 +39063,7 @@ const ProcBodyBuilder = struct {
                         try self.descriptorRefForRepIfNeeded(identity_target_rep)
                     else
                         null;
-                    const desc_for_payload = if (rep_payload_desc != null and !self.repIsBareDynamic(identity_target_rep))
+                    const desc_for_payload = if (rep_payload_desc != null and !self.repIsBareDynamic(identity_target_rep) and !self.repIsOpenRecord(identity_target_rep))
                         rep_payload_desc.?
                     else
                         source_desc;
@@ -38980,6 +39390,9 @@ const ProcBodyBuilder = struct {
         const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
         if (source_record.kind != .dynamic) return null;
+        // An open record's fields beyond its row are known only to its
+        // runtime descriptor, which the unboxing boundary reads them through.
+        if (self.repIsOpenRecord(source_record_rep)) return null;
         switch (target_record.kind) {
             .record => {},
             .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
@@ -39040,6 +39453,9 @@ const ProcBodyBuilder = struct {
             if (target_layout == source_layout) return null;
         }
 
+        // The runtime descriptor of an open record owns its complete field set.
+        // Its row's named fields cannot describe that source payload.
+        if (self.repIsOpenRecord(source_record_rep)) return null;
         const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
         switch (source_record.kind) {
@@ -40555,6 +40971,13 @@ const ProcBodyBuilder = struct {
         const target_env = self.localDescriptorEnvironmentForLocal(target) orelse return next;
         const source_env = self.localDescriptorEnvironmentForLocal(source) orelse return next;
         var continuation = next;
+        // One descriptor local can serve several bindings (a nominal and its
+        // backing share their descriptor), so each target local is written
+        // once, from the source binding of any representation it serves.
+        var written = std.ArrayList(LIR.LocalId).empty;
+        defer written.deinit(self.parent.allocator);
+        var unmatched = std.ArrayList(LIR.LocalId).empty;
+        defer unmatched.deinit(self.parent.allocator);
         for (target_env.bindings) |target_binding| {
             var source_local: ?LIR.LocalId = null;
             for (source_env.bindings) |source_binding| {
@@ -40568,8 +40991,12 @@ const ProcBodyBuilder = struct {
                 }
                 source_local = source_binding.local;
             }
-            const value = source_local orelse
-                boxyLowerInvariant("boxy local descriptor transfer source was missing a target binding");
+            const value = source_local orelse {
+                try unmatched.append(self.parent.allocator, target_binding.local);
+                continue;
+            };
+            if (std.mem.findScalar(LIR.LocalId, written.items, target_binding.local) != null) continue;
+            try written.append(self.parent.allocator, target_binding.local);
             if (value == target_binding.local) continue;
             if (self.localIsReadOnlyDescriptorInput(target_binding.local)) {
                 boxyLowerInvariant("boxy local descriptor transfer targeted a read-only descriptor input");
@@ -40580,6 +41007,11 @@ const ProcBodyBuilder = struct {
                 .mode = mode,
                 .next = continuation,
             } }, self.glueOrigin());
+        }
+        for (unmatched.items) |local| {
+            if (std.mem.findScalar(LIR.LocalId, written.items, local) == null) {
+                boxyLowerInvariant("boxy local descriptor transfer source was missing a target binding");
+            }
         }
         return continuation;
     }
@@ -40953,7 +41385,9 @@ const ProcBodyBuilder = struct {
             try self.addFrameLocalForRepWithFreshDescriptor(function.ret)
         else
             try self.addFrameLocalForRep(function.ret);
-        if (fresh_descriptor) {
+        // An open record result is described by the value the body returns,
+        // which no template over the row's own fields can describe.
+        if (fresh_descriptor and !self.repIsOpenRecord(function.ret)) {
             if (self.parent.result.store.getLocal(local).boxy_desc) |desc| {
                 if (desc.localOrNull()) |desc_local| {
                     const materialization = try self.descriptorMaterializationForExactResultRep(function.ret);
@@ -41511,6 +41945,10 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         if (self.descriptor_slots.len == 0) return continuation;
 
+        // A slot's template may capture another slot, so the static
+        // initializers, which capture nothing, run before all the others.
+        var static_inits = std.ArrayList(struct { local: LIR.LocalId, desc: LIR.BoxyDescRef }).empty;
+        defer static_inits.deinit(self.parent.allocator);
         var index = self.descriptor_slots.len;
         while (index > 0) {
             index -= 1;
@@ -41520,14 +41958,38 @@ const ProcBodyBuilder = struct {
             if (outer) |snapshot| {
                 if (snapshot.slots[index] == local and snapshot.slot_reps[index] == slot_rep) continue;
             }
-            if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) continue;
-            if (self.descriptorBindingIsBoundForRep(slot_rep)) continue;
+            // A write mark comes from a statement that may execute after code
+            // that already reads this slot, so only evidence binds, which are
+            // initialized before anything that observes them, skip the slot.
+            if (self.descriptorBindingIsEvidenceBoundForRep(slot_rep)) continue;
             if (self.localIsReadOnlyDescriptorInput(local)) continue;
-            const materialization = try self.descriptorMaterializationForKnownRep(slot_rep);
+            // A slot a body statement writes is read by templates initialized
+            // here before that write executes. When its representation's
+            // descriptor is static, it is initialized here as well.
+            const runtime_initialized = std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null;
+            const materialization = if (runtime_initialized)
+                try self.descriptorMaterializationForKnownRepExcludingLocal(slot_rep, local)
+            else
+                try self.descriptorMaterializationForKnownRep(slot_rep);
+            if (materialization.captures.len == 0 and materialization.desc == .static) {
+                try static_inits.append(self.parent.allocator, .{ .local = local, .desc = materialization.desc });
+                continue;
+            }
+            if (runtime_initialized) continue;
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
                 .desc = materialization.desc,
                 .captures = materialization.captures,
+                .next = continuation,
+            } }, self.glueOrigin());
+        }
+        var static_index = static_inits.items.len;
+        while (static_index > 0) {
+            static_index -= 1;
+            const static_init = static_inits.items[static_index];
+            continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = static_init.local,
+                .desc = static_init.desc,
                 .next = continuation,
             } }, self.glueOrigin());
         }
@@ -44148,7 +44610,6 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
             .module_idx = 0,
             .module_name = module_name,
             .display_module_name = module_name,
-            .qualified_module_name = module_name,
             .kind = .package,
         },
         .checking_context_identity = .{},
@@ -45195,7 +45656,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             try std.testing.expectEqual(LIR.BoxyTransferMode.move, adapt.source_mode);
             break :blk .{ adapt.target, adapt.next };
         },
-        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = returned[0] } }, out.lir_result.store.getCFStmt(returned[1]));
 
@@ -45703,7 +46164,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
-test "boxy lowerer emits checked runtime error expressions as terminal runtime_error" {
+test "boxy lowerer emits checked runtime error expressions as checked-error crashes" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45771,10 +46232,11 @@ test "boxy lowerer emits checked runtime error expressions as terminal runtime_e
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    try std.testing.expectEqual(LIR.CFStmt.runtime_error, out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult));
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    try std.testing.expect(body == .crash and body.crash.checked_error);
 }
 
-test "boxy lowerer emits checked runtime error statements as terminal runtime_error" {
+test "boxy lowerer emits checked runtime error statements as checked-error crashes" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45858,7 +46320,8 @@ test "boxy lowerer emits checked runtime error statements as terminal runtime_er
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    try std.testing.expectEqual(LIR.CFStmt.runtime_error, out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult));
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    try std.testing.expect(body == .crash and body.crash.checked_error);
 }
 
 test "boxy lowerer emits checked while statements as join-backed loops" {
@@ -51125,7 +51588,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
                 try std.testing.expect(debug.message != construct_nominal.target);
                 break;
             },
-            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -51332,7 +51795,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
                 try std.testing.expect(ret.value != seed.target);
                 break;
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -51774,7 +52237,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const first = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -51787,7 +52250,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const second = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -51799,7 +52262,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const list = out.lir_result.store.getCFStmt(cursor).assign_list;
@@ -52343,7 +52806,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const from_arg = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52365,7 +52828,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
                 if (uses_source_desc) descriptor_materialization_target = assign.target;
                 break :blk assign.next;
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const reused = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -53121,7 +53584,6 @@ fn testModuleIdentity() checked.ModuleIdentity {
         .module_idx = 0,
         .module_name = @enumFromInt(fixtureTableIndex(0)),
         .display_module_name = @enumFromInt(fixtureTableIndex(0)),
-        .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
         .kind = .module,
     };
 }
@@ -53382,7 +53844,7 @@ fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId
     while (true) {
         cursor = switch (store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
         };
     }
 }

@@ -297,6 +297,12 @@ pub const InterfaceConstraints = struct {
         nodes: std.ArrayList(Node) = .empty,
         open_nodes: std.ArrayList(OpenNode) = .empty,
         kinds: std.ArrayList(Kind) = .empty,
+        /// Frame stacks and item lists no capture walk is using, and the
+        /// stacks its shareability and neutrality scans run on.
+        spare_capture_stacks: std.ArrayList(std.ArrayList(Capture.CaptureFrame)) = .empty,
+        spare_capture_items: std.ArrayList(std.ArrayList(Capture.CaptureItem)) = .empty,
+        neutral_scan: Capture.NeutralScan.Eval.Scratch = .{},
+        shareability_scan: Capture.Shareability.Eval.Scratch = .{},
 
         pub fn init(allocator: Allocator) CaptureScratch {
             return .{
@@ -327,6 +333,12 @@ pub const InterfaceConstraints = struct {
             self.nodes.deinit(allocator);
             self.open_nodes.deinit(allocator);
             self.kinds.deinit(allocator);
+            for (self.spare_capture_stacks.items) |*stack| stack.deinit(allocator);
+            self.spare_capture_stacks.deinit(allocator);
+            for (self.spare_capture_items.items) |*items| items.deinit(allocator);
+            self.spare_capture_items.deinit(allocator);
+            self.neutral_scan.deinit(allocator);
+            self.shareability_scan.deinit(allocator);
         }
     };
 
@@ -364,6 +376,7 @@ pub const InterfaceConstraints = struct {
             .retained = &retained,
             .graph = graph,
             .allocator = allocator,
+            .scratch = scratch,
             .holes = hole_roots,
             .hole_classes = hole_classes,
             .node_ids = scratch.node_ids,
@@ -778,6 +791,14 @@ pub const InterfaceConstraints = struct {
             }
             self.bytes.appendSliceAssumeCapacity(bytes);
         }
+        /// One byte, which is what nearly every index, length and tag
+        /// encodes to; it needs no slice copy.
+        inline fn byte(self: *IdentityWriter, value: u8) Allocator.Error!void {
+            if (self.bytes.items.len == self.bytes.capacity) {
+                try self.bytes.ensureUnusedCapacity(self.graph.allocator, @max(1, self.bytes.capacity));
+            }
+            self.bytes.appendAssumeCapacity(value);
+        }
         fn text(self: *IdentityWriter, bytes: []const u8) Allocator.Error!void {
             try self.write(u64, @intCast(bytes.len));
             try self.raw(bytes);
@@ -834,9 +855,10 @@ pub const InterfaceConstraints = struct {
                 .int => {
                     // Local indices, lengths, and enum tags are predominantly
                     // small. A minimal varint keeps exact topology compact.
+                    var bits: u64 = @intCast(value);
+                    if (bits < 0x80) return self.byte(@intCast(bits));
                     var encoded: [10]u8 = undefined;
                     var len: usize = 0;
-                    var bits: u64 = @intCast(value);
                     while (bits >= 0x80) : (bits >>= 7) {
                         encoded[len] = @as(u8, @truncate(bits)) | 0x80;
                         len += 1;
@@ -844,7 +866,7 @@ pub const InterfaceConstraints = struct {
                     encoded[len] = @intCast(bits);
                     try self.raw(encoded[0 .. len + 1]);
                 },
-                .bool => try self.raw(&.{if (value) 1 else 0}),
+                .bool => try self.byte(if (value) 1 else 0),
                 .void => {},
                 .noreturn,
                 .float,
@@ -876,6 +898,8 @@ pub const InterfaceConstraints = struct {
         shareable: collections.DenseMap(NodeId, bool),
         share_seen: collections.DenseMap(NodeId, void),
         related_ids: std.AutoHashMap(RelatedKey, u32),
+        /// The graph's capture scratch, for the walk's own stacks.
+        scratch: *CaptureScratch,
         /// Settled leaves already captured, by representation digest. Classes
         /// holding one settled type are captured as one leaf, so the
         /// interface relates them as the same type whichever checked
@@ -908,13 +932,17 @@ pub const InterfaceConstraints = struct {
         /// recursive capture reached them.
         fn node(self: *Capture, raw: NodeId) Allocator.Error!NodeId {
             const allocator = self.graph.allocator;
-            var frames: std.ArrayList(CaptureFrame) = .empty;
+            var stack: std.ArrayList(CaptureFrame) = self.scratch.spare_capture_stacks.pop() orelse .empty;
+            const frames = &stack;
             defer {
-                for (frames.items) |*frame| frame.items.deinit(allocator);
-                frames.deinit(allocator);
+                while (frames.items.len > 0) {
+                    self.releaseCaptureItems(&frames.items[frames.items.len - 1].items);
+                    frames.items.len -= 1;
+                }
+                self.scratch.spare_capture_stacks.append(allocator, stack) catch stack.deinit(allocator);
             }
-            if (try self.beginNode(raw)) |frame| {
-                try frames.append(allocator, frame);
+            if (try self.beginNode(raw)) |open| {
+                try self.pushCaptureFrame(frames, open);
             } else return self.node_ids.get(self.graph.find(raw)).?;
             while (frames.items.len != 0) {
                 const top = &frames.items[frames.items.len - 1];
@@ -930,14 +958,14 @@ pub const InterfaceConstraints = struct {
                         }
                     }
                     try self.finishNode(top);
-                    var finished = frames.pop().?;
-                    finished.items.deinit(allocator);
+                    self.releaseCaptureItems(&top.items);
+                    frames.items.len -= 1;
                     continue;
                 }
                 const item = top.items.items[top.next];
                 top.next += 1;
                 switch (item) {
-                    .node => |child| if (try self.beginNode(child)) |frame| try frames.append(allocator, frame),
+                    .node => |child| if (try self.beginNode(child)) |open| try self.pushCaptureFrame(frames, open),
                     .kind => |raw_kind| {
                         const root_kind = self.graph.findFieldKind(raw_kind);
                         if (self.kind_ids.contains(root_kind)) continue;
@@ -957,7 +985,7 @@ pub const InterfaceConstraints = struct {
                         var lookup = CaptureLookup{ .capture = self, .allocator = self.allocator };
                         self.kinds.items[@intFromEnum(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = source.cells });
                     },
-                    .source => |source| if (try self.beginNode(source)) |frame| try frames.append(allocator, frame),
+                    .source => |source| if (try self.beginNode(source)) |open| try self.pushCaptureFrame(frames, open),
                 }
             }
             return self.node_ids.get(self.graph.find(raw)).?;
@@ -987,7 +1015,7 @@ pub const InterfaceConstraints = struct {
 
         /// Give `raw`'s class an id, or find its existing one; the frame that
         /// captures its content when it is a new open node.
-        fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?CaptureFrame {
+        fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?OpenStart {
             const root = self.graph.find(raw);
             if (self.node_ids.contains(root)) return null;
             const id: NodeId = @enumFromInt(self.nodes.items.len);
@@ -1025,10 +1053,32 @@ pub const InterfaceConstraints = struct {
             const open_index: u32 = @intCast(self.open_nodes.items.len);
             self.nodes.items[@intFromEnum(id)] = .{ .open = open_index };
             try self.open_nodes.append(self.graph.allocator, undefined);
-            var frame = CaptureFrame{ .raw = raw, .root = root, .open_index = open_index };
-            errdefer frame.items.deinit(self.graph.allocator);
-            try collectCaptureRefs(self.graph.allocator, InstNode, self.graph.content(root), &frame.items);
-            return frame;
+            return .{ .raw = raw, .root = root, .open_index = open_index };
+        }
+
+        /// A new open node whose content is still to be captured.
+        const OpenStart = struct { raw: NodeId, root: NodeId, open_index: u32 };
+
+        /// Push the frame that captures `open`'s content, written in place:
+        /// a frame carries the node's whole capture, so it is never copied.
+        /// The stack owns the frame's item list before anything can fail.
+        fn pushCaptureFrame(self: *Capture, frames: *std.ArrayList(CaptureFrame), open: OpenStart) Allocator.Error!void {
+            const frame = try frames.addOne(self.graph.allocator);
+            frame.* = .{ .raw = open.raw, .root = open.root, .open_index = open.open_index, .items = self.acquireCaptureItems() };
+            try collectCaptureRefs(self.graph.allocator, InstNode, self.graph.content(open.root), &frame.items);
+        }
+
+        /// An empty item list, reusing a released list's capacity.
+        fn acquireCaptureItems(self: *Capture) std.ArrayList(CaptureItem) {
+            return self.scratch.spare_capture_items.pop() orelse .empty;
+        }
+
+        /// Keep a frame's item list for the next frame; when the spare list
+        /// cannot grow, the list's capacity is released instead.
+        fn releaseCaptureItems(self: *Capture, items: *std.ArrayList(CaptureItem)) void {
+            items.clearRetainingCapacity();
+            self.scratch.spare_capture_items.append(self.graph.allocator, items.*) catch items.deinit(self.graph.allocator);
+            items.* = undefined;
         }
 
         /// Record an open node's capture once its content and request source
@@ -1081,8 +1131,11 @@ pub const InterfaceConstraints = struct {
         /// `mapValue` maps them. The walk follows `T`'s structure, whose depth
         /// is fixed by the type, never by the graph.
         fn collectCaptureRefs(allocator: Allocator, comptime T: type, value: T, out: *std.ArrayList(CaptureItem)) Allocator.Error!void {
-            if (T == NodeId) return try out.append(allocator, .{ .node = value });
-            if (T == FieldKindId) return try out.append(allocator, .{ .kind = value });
+            if (T == NodeId or T == FieldKindId) {
+                if (out.items.len == out.capacity) try out.ensureUnusedCapacity(allocator, 1);
+                out.appendAssumeCapacity(if (T == NodeId) .{ .node = value } else .{ .kind = value });
+                return;
+            }
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.fields) |field| try collectCaptureRefs(allocator, field.type, @field(value, field.name), out),
                 .@"union" => |info| inline for (info.fields) |field| {
@@ -1130,7 +1183,7 @@ pub const InterfaceConstraints = struct {
         /// source-interface or constructor evidence, or iterator identity.
         fn holeIsRepresentationNeutral(self: *Capture, raw: NodeId) Allocator.Error!bool {
             self.share_seen.clearRetainingCapacity();
-            var scan = NeutralScan{ .graph = self.graph, .seen = &self.share_seen };
+            var scan = NeutralScan{ .graph = self.graph, .seen = &self.share_seen, .scratch = &self.scratch.neutral_scan };
             return try scan.node(raw);
         }
 
@@ -1139,11 +1192,12 @@ pub const InterfaceConstraints = struct {
         const NeutralScan = struct {
             graph: *InstGraph,
             seen: *collections.DenseMap(NodeId, void),
+            scratch: *Eval.Scratch,
 
             const Eval = AnyAll.Evaluation(ScanLeaf, NeutralScan);
 
             fn node(self: *NeutralScan, raw: NodeId) Allocator.Error!bool {
-                return try Eval.run(self.graph.allocator, self, .{ .node = raw });
+                return try Eval.runWith(self.graph.allocator, self.scratch, self, .{ .node = raw });
             }
 
             pub fn enter(self: *NeutralScan, items: Eval.Items, leaf: ScanLeaf) Allocator.Error!Eval.Expansion {
@@ -1255,7 +1309,7 @@ pub const InterfaceConstraints = struct {
         fn canShare(self: *Capture, root: NodeId) Allocator.Error!bool {
             if (self.shareable.get(root)) |known| return known;
             self.share_seen.clearRetainingCapacity();
-            var scan = Shareability{ .capture = self, .seen = &self.share_seen };
+            var scan = Shareability{ .capture = self, .seen = &self.share_seen, .scratch = &self.scratch.shareability_scan };
             const result = try scan.node(root);
             if (result) {
                 var it = scan.seen.keyIterator();
@@ -1270,11 +1324,12 @@ pub const InterfaceConstraints = struct {
         const Shareability = struct {
             capture: *Capture,
             seen: *collections.DenseMap(NodeId, void),
+            scratch: *Eval.Scratch,
 
             const Eval = AnyAll.Evaluation(ScanLeaf, Shareability);
 
             fn node(self: *Shareability, raw: NodeId) Allocator.Error!bool {
-                return try Eval.run(self.capture.graph.allocator, self, .{ .node = raw });
+                return try Eval.runWith(self.capture.graph.allocator, self.scratch, self, .{ .node = raw });
             }
 
             pub fn enter(self: *Shareability, items: Eval.Items, leaf: ScanLeaf) Allocator.Error!Eval.Expansion {
@@ -1941,6 +1996,10 @@ pub const InstGraph = struct {
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
+    /// Class roots whose inhabitance proof can no longer hold: a `may` scan
+    /// answered false for them without assuming anything about a node on its
+    /// path. That answer is permanent (see `mayFinalizeAsUninhabited`).
+    never_uninhabited: std.AutoHashMapUnmanaged(NodeId, void) = .empty,
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
@@ -1957,6 +2016,16 @@ pub const InstGraph = struct {
     identity_leaves_scratch: std.ArrayList(Type.TypeId) = .empty,
     /// Maps and lists borrowed by every `InterfaceConstraints.capture`.
     capture_scratch: InterfaceConstraints.CaptureScratch,
+    /// Frame stacks no seal is running on and the part lists a finished
+    /// build leaves behind, kept for their capacity across seals. Each seal
+    /// takes its own stack, since a step can begin another seal.
+    spare_seal_stacks: std.ArrayList(std.ArrayList(GraphTypeFinals.SealFrame)) = .empty,
+    spare_seal_lists: std.ArrayList(GraphTypeFinals.SealLists) = .empty,
+    /// The stack the uninhabitedness scans run on, kept between scans.
+    uninhabited_scan_scratch: GraphUninhabitedScan.Eval.Scratch = .{},
+    /// Emptied arenas that keep their buffers, for work that needs a
+    /// short-lived arena many times over.
+    spare_arenas: std.ArrayList(std.heap.ArenaAllocator) = .empty,
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
     /// union (a concrete class always wins over a variable), every content
@@ -2096,6 +2165,7 @@ pub const InstGraph = struct {
         while (containment_entries.next()) |entry| entry.deinit(self.allocator);
         self.containment_cache.clearRetainingCapacity();
         self.resolved_roots.clearRetainingCapacity();
+        self.never_uninhabited.clearRetainingCapacity();
         self.resolved_epoch = 0;
         self.structure_epoch = 0;
         self.snapshot_free_types.clearRetainingCapacity();
@@ -2158,9 +2228,17 @@ pub const InstGraph = struct {
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
         self.current_durable.deinit();
+        self.uninhabited_scan_scratch.deinit(allocator);
+        for (self.spare_arenas.items) |*spare| spare.deinit();
+        self.spare_arenas.deinit(allocator);
+        for (self.spare_seal_stacks.items) |*stack| stack.deinit(allocator);
+        self.spare_seal_stacks.deinit(allocator);
+        for (self.spare_seal_lists.items) |*lists| lists.deinit(allocator);
+        self.spare_seal_lists.deinit(allocator);
         self.snapshot_free_types.deinit();
         self.resolved_roots.deinit();
         self.node_set_pool.deinit();
+        self.never_uninhabited.deinit(self.allocator);
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
         self.row_label_right_generation.deinit(self.allocator);
@@ -3239,13 +3317,33 @@ pub const InstGraph = struct {
         return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
     }
 
+    /// An empty arena, reusing a released arena's buffers when one is spare.
+    pub fn acquireArena(self: *InstGraph) std.heap.ArenaAllocator {
+        return self.spare_arenas.pop() orelse std.heap.ArenaAllocator.init(self.allocator);
+    }
+
+    /// Empty an arena from `acquireArena` and keep its buffers for the next
+    /// one. An arena that grew large is freed instead, as is one the spare
+    /// list has no room for.
+    pub fn releaseArena(self: *InstGraph, used: std.heap.ArenaAllocator) void {
+        var released = used;
+        if (released.queryCapacity() > spare_arena_capacity or !released.reset(.retain_capacity)) {
+            released.deinit();
+            return;
+        }
+        self.spare_arenas.append(self.allocator, released) catch released.deinit();
+    }
+
+    const spare_arena_capacity = 256 * 1024;
+
     fn mayFinalizeAsUninhabitedInner(
         self: *InstGraph,
         raw_node: NodeId,
         visiting: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         var scan = GraphUninhabitedScan{ .graph = self, .mode = .may, .visiting = visiting };
-        return try GraphUninhabitedScan.Eval.run(self.allocator, &scan, raw_node);
+        defer scan.entered_hits.deinit(self.allocator);
+        return try GraphUninhabitedScan.Eval.runWith(self.allocator, &self.uninhabited_scan_scratch, &scan, raw_node);
     }
 
     /// Whether frozen graph structure proves that no runtime value can inhabit
@@ -3265,7 +3363,7 @@ pub const InstGraph = struct {
         visiting: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         var scan = GraphUninhabitedScan{ .graph = self, .mode = .finalizes, .visiting = visiting };
-        return try GraphUninhabitedScan.Eval.run(self.allocator, &scan, raw_node);
+        return try GraphUninhabitedScan.Eval.runWith(self.allocator, &self.uninhabited_scan_scratch, &scan, raw_node);
     }
 
     /// Node ids are permanent, including recursive placeholders after union.
@@ -6372,9 +6470,13 @@ pub const InstGraph = struct {
         const root_content = self.nodes.items[@intFromEnum(root)];
         if (root_content != .record) Common.invariant("instantiation flattened a non-record row");
         const row = root_content.record;
+        // The row lists below live only for this call and are usually short,
+        // so they start in a buffer on this frame.
+        var stack_first = std.heap.stackFallback(2048, self.allocator);
+        const row_allocator = stack_first.get();
         var fields = std.ArrayList(InstField).empty;
-        defer fields.deinit(self.allocator);
-        try fields.appendSlice(self.allocator, row.fields);
+        defer fields.deinit(row_allocator);
+        try fields.appendSlice(row_allocator, row.fields);
 
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
@@ -6401,7 +6503,7 @@ pub const InstGraph = struct {
             try seen.put(ext, {});
             switch (self.nodes.items[@intFromEnum(ext)]) {
                 .record => |tail| {
-                    try fields.appendSlice(self.allocator, tail.fields);
+                    try fields.appendSlice(row_allocator, tail.fields);
                     ext = self.find(tail.ext);
                 },
                 .named => |named| {
@@ -6474,19 +6576,23 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        // The row lists below live only for this call and are usually short,
+        // so they start in a buffer on this frame.
+        var stack_first = std.heap.stackFallback(2048, self.allocator);
+        const row_allocator = stack_first.get();
         const flat_left = try self.flattenTagRow(left);
         const flat_right = try self.flattenTagRow(right);
 
         var merged = std.ArrayList(InstTag).empty;
-        defer merged.deinit(self.allocator);
+        defer merged.deinit(row_allocator);
         var only_left = std.ArrayList(InstTag).empty;
-        defer only_left.deinit(self.allocator);
+        defer only_left.deinit(row_allocator);
         var only_right = std.ArrayList(InstTag).empty;
-        defer only_right.deinit(self.allocator);
+        defer only_right.deinit(row_allocator);
 
         // Flattened rows are sorted and unique. Partition
         // both spans in one pass without building per-relation label indexes.
-        try merged.ensureTotalCapacity(self.allocator, flat_left.tags.len + flat_right.tags.len);
+        try merged.ensureTotalCapacity(row_allocator, flat_left.tags.len + flat_right.tags.len);
         var left_index: usize = 0;
         var right_index: usize = 0;
         while (left_index < flat_left.tags.len and right_index < flat_right.tags.len) {
@@ -6504,18 +6610,18 @@ pub const InstGraph = struct {
                 right_index += 1;
             } else if (instTagLessThan(self.name_store, left_tag, right_tag)) {
                 merged.appendAssumeCapacity(left_tag);
-                try only_left.append(self.allocator, left_tag);
+                try only_left.append(row_allocator, left_tag);
                 left_index += 1;
             } else {
                 merged.appendAssumeCapacity(right_tag);
-                try only_right.append(self.allocator, right_tag);
+                try only_right.append(row_allocator, right_tag);
                 right_index += 1;
             }
         }
         merged.appendSliceAssumeCapacity(flat_left.tags[left_index..]);
         merged.appendSliceAssumeCapacity(flat_right.tags[right_index..]);
-        try only_left.appendSlice(self.allocator, flat_left.tags[left_index..]);
-        try only_right.appendSlice(self.allocator, flat_right.tags[right_index..]);
+        try only_left.appendSlice(row_allocator, flat_left.tags[left_index..]);
+        try only_right.appendSlice(row_allocator, flat_right.tags[right_index..]);
 
         if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .tag_union) or
             self.rowAdditionConflicts(flat_right.ext, only_left.items.len, .tag_union))
@@ -6540,9 +6646,9 @@ pub const InstGraph = struct {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_left.items);
-                try rest.appendSlice(self.allocator, only_right.items);
+                defer rest.deinit(row_allocator);
+                try rest.appendSlice(row_allocator, only_left.items);
+                try rest.appendSlice(row_allocator, only_right.items);
                 try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, row_width, pending);
             } else {
                 try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, row_width, pending);
@@ -6599,15 +6705,19 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        // The row lists below live only for this call and are usually short,
+        // so they start in a buffer on this frame.
+        var stack_first = std.heap.stackFallback(2048, self.allocator);
+        const row_allocator = stack_first.get();
         const flat_left = try self.flattenRecordRow(left);
         const flat_right = try self.flattenRecordRow(right);
 
         var merged = std.ArrayList(InstField).empty;
-        defer merged.deinit(self.allocator);
+        defer merged.deinit(row_allocator);
         var only_left = std.ArrayList(InstField).empty;
-        defer only_left.deinit(self.allocator);
+        defer only_left.deinit(row_allocator);
         var only_right = std.ArrayList(InstField).empty;
-        defer only_right.deinit(self.allocator);
+        defer only_right.deinit(row_allocator);
 
         // Both rows indexed by label id so each side pairs with the other in
         // one pass; the first row position wins for a repeated label.
@@ -6643,7 +6753,7 @@ pub const InstGraph = struct {
                     resolved.defaultIdentity()
                 else
                     left_field.default orelse right_field.default;
-                try merged.append(self.allocator, .{
+                try merged.append(row_allocator, .{
                     .name = left_field.name,
                     .ty = left_field.ty,
                     .value_ty = left_field.value_ty orelse right_field.value_ty,
@@ -6653,14 +6763,14 @@ pub const InstGraph = struct {
                 shared = true;
             }
             if (!shared) {
-                try merged.append(self.allocator, left_field);
-                try only_left.append(self.allocator, left_field);
+                try merged.append(row_allocator, left_field);
+                try only_left.append(row_allocator, left_field);
             }
         }
         for (flat_right.fields) |right_field| {
             if (self.row_label_left_generation.items[@intFromEnum(right_field.name)] == generation) continue;
-            try merged.append(self.allocator, right_field);
-            try only_right.append(self.allocator, right_field);
+            try merged.append(row_allocator, right_field);
+            try only_right.append(row_allocator, right_field);
         }
 
         const left_absorbs_right = self.closedRecordAbsorbsFields(flat_left.ext, only_right.items, row_width);
@@ -6686,9 +6796,9 @@ pub const InstGraph = struct {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, add_to_left);
-                try rest.appendSlice(self.allocator, add_to_right);
+                defer rest.deinit(row_allocator);
+                try rest.appendSlice(row_allocator, add_to_left);
+                try rest.appendSlice(row_allocator, add_to_right);
                 try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, row_width, pending);
             } else {
                 try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, new_ext, row_width, pending);
@@ -7283,13 +7393,21 @@ const GraphUninhabitedScan = struct {
         finalizes,
     },
     visiting: *collections.DenseMap(NodeId, void),
+    /// Re-entries of a node already on the path, whose answer was assumed.
+    path_hits: usize = 0,
+    /// `path_hits` when each node on the path was entered, innermost last.
+    entered_hits: std.ArrayList(usize) = .empty,
 
     const Eval = AnyAll.Evaluation(NodeId, GraphUninhabitedScan);
 
     pub fn enter(scan: *GraphUninhabitedScan, items: Eval.Items, raw_node: NodeId) Allocator.Error!Eval.Expansion {
         const graph = scan.graph;
         const node = graph.find(raw_node);
-        if (scan.visiting.contains(node)) return .{ .value = false };
+        if (scan.visiting.contains(node)) {
+            scan.path_hits += 1;
+            return .{ .value = false };
+        }
+        if (scan.mode == .may and graph.never_uninhabited.contains(node)) return .{ .value = false };
         const expansion: Eval.Expansion = switch (graph.nodes.items[@intFromEnum(node)]) {
             .redirect => unreachable,
             .empty_tag_union => .{ .value = true },
@@ -7341,12 +7459,19 @@ const GraphUninhabitedScan = struct {
             .zst,
             => .{ .value = false },
         };
-        if (expansion == .group) try scan.visiting.put(node, {});
+        if (expansion == .group) {
+            try scan.visiting.put(node, {});
+            if (scan.mode == .may) try scan.entered_hits.append(graph.allocator, scan.path_hits);
+        }
         return expansion;
     }
 
-    pub fn exit(scan: *GraphUninhabitedScan, raw_node: NodeId, _: ?bool) std.mem.Allocator.Error!void {
-        _ = scan.visiting.remove(scan.graph.find(raw_node));
+    pub fn exit(scan: *GraphUninhabitedScan, raw_node: NodeId, result: ?bool) std.mem.Allocator.Error!void {
+        const node = scan.graph.find(raw_node);
+        _ = scan.visiting.remove(node);
+        if (scan.mode != .may) return;
+        const hits_before = scan.entered_hits.pop() orelse return;
+        if (result == false and scan.path_hits == hits_before) try scan.graph.never_uninhabited.put(scan.graph.allocator, node, {});
     }
 };
 
@@ -7475,7 +7600,7 @@ pub const GraphTypeFinals = struct {
         return switch (try self.typeEntry(ty)) {
             .done => |sealed| sealed,
             .node => |raw_node| try self.sealNode(raw_node),
-            .build => |source| try self.runSeal(.{ .build = try self.newSealBuild(source) }),
+            .build => |source| try self.runSeal(.{ .build = source }),
             .transaction => |source| try self.sealInTransaction(source),
         };
     }
@@ -7484,7 +7609,7 @@ pub const GraphTypeFinals = struct {
         return switch (try self.nodeEntry(raw_node)) {
             .done => |sealed| sealed,
             .node => unreachable,
-            .build => |source| try self.runSeal(.{ .build = try self.newSealBuild(source) }),
+            .build => |source| try self.runSeal(.{ .build = source }),
             .transaction => |source| try self.sealInTransaction(source),
         };
     }
@@ -7500,7 +7625,7 @@ pub const GraphTypeFinals = struct {
             self.evictTransactionSealed();
         }
 
-        const speculative = try self.runSeal(.{ .build = try self.newSealBuild(source) });
+        const speculative = try self.runSeal(.{ .build = source });
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
         defer result.deinit();
         try self.remapSealedTypes(result);
@@ -7586,9 +7711,7 @@ pub const GraphTypeFinals = struct {
         node: NodeId,
         /// A component type reached from a build.
         ty: Type.TypeId,
-        /// Stored by pointer: a build holds a node's whole content, and
-        /// frames copy their task.
-        build: *SealBuild,
+        build: SealBuild,
     };
 
     /// One component a build seals, or a span it adds, in order.
@@ -7621,88 +7744,98 @@ pub const GraphTypeFinals = struct {
         task: SealTask,
     };
 
-    fn runSeal(self: *GraphTypeFinals, root: SealTask) Allocator.Error!Type.TypeId {
-        const allocator = self.graph.allocator;
-        var frames: std.ArrayList(SealFrame) = .empty;
-        defer frames.deinit(allocator);
-        errdefer {
-            // Store marks nest, so the innermost build restores first.
-            var index = frames.items.len;
-            while (index > 0) {
-                index -= 1;
-                self.releaseSealFrame(&frames.items[index]);
-            }
+    /// A build's lists, pooled on the graph between builds.
+    const SealLists = struct {
+        parts: std.ArrayList(SealPart) = .empty,
+        results: std.ArrayList(Type.TypeId) = .empty,
+        spans: std.ArrayList(Type.Span) = .empty,
+
+        fn deinit(self: *SealLists, allocator: Allocator) void {
+            self.parts.deinit(allocator);
+            self.results.deinit(allocator);
+            self.spans.deinit(allocator);
         }
-        try self.pushSealFrame(&frames, root);
+    };
+
+    /// What a step asks to seal next. A build's frame is written in place
+    /// from its source, so a call names only that source.
+    const SealCall = union(enum) {
+        node: NodeId,
+        ty: Type.TypeId,
+        build: SealSource,
+    };
+
+    fn setSealTask(frame: *SealFrame, call: SealCall) void {
+        switch (call) {
+            .node => |raw_node| frame.task = .{ .node = raw_node },
+            .ty => |ty| frame.task = .{ .ty = ty },
+            .build => |source| frame.task = .{ .build = .{ .source = source } },
+        }
+    }
+
+    fn runSeal(self: *GraphTypeFinals, root: SealCall) Allocator.Error!Type.TypeId {
+        const allocator = self.graph.allocator;
+        // Store marks nest, so an unfinished innermost build restores
+        // first.
+        var stack: std.ArrayList(SealFrame) = self.graph.spare_seal_stacks.pop() orelse .empty;
+        const frames = &stack;
+        defer {
+            while (frames.items.len > 0) {
+                self.releaseSealFrame(&frames.items[frames.items.len - 1]);
+                frames.items.len -= 1;
+            }
+            self.graph.spare_seal_stacks.append(allocator, stack) catch stack.deinit(allocator);
+        }
+        setSealTask(try frames.addOne(allocator), root);
         var input: ?Type.TypeId = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             const step = try self.stepSeal(frame, input);
             input = null;
             switch (step) {
-                .call => try self.pushSealFrame(&frames, step.call),
-                .tail => frame.task = step.tail,
-                .ret => {
-                    self.releaseSealFrame(&frames.items[frames.items.len - 1]);
+                .call => |call| setSealTask(try frames.addOne(allocator), call),
+                .tail => |call| setSealTask(frame, call),
+                .ret => |sealed| {
+                    self.releaseSealFrame(frame);
                     frames.items.len -= 1;
-                    if (frames.items.len == 0) return step.ret;
-                    input = step.ret;
+                    if (frames.items.len == 0) return sealed;
+                    input = sealed;
                 },
             }
         }
     }
 
-    /// Push `task`'s frame; a task whose frame cannot be pushed is released.
-    fn pushSealFrame(self: *GraphTypeFinals, frames: *std.ArrayList(SealFrame), task: SealTask) Allocator.Error!void {
-        const frame = frames.addOne(self.graph.allocator) catch |err| {
-            var unstarted: SealFrame = .{ .task = task };
-            self.releaseSealFrame(&unstarted);
-            return err;
-        };
-        frame.* = .{ .task = task };
-    }
-
     const SealStep = union(enum) {
-        call: SealTask,
-        tail: SealTask,
+        call: SealCall,
+        tail: SealCall,
         ret: Type.TypeId,
     };
 
     fn releaseSealFrame(self: *GraphTypeFinals, frame: *SealFrame) void {
         switch (frame.task) {
-            .build => |build| {
-                const allocator = self.graph.allocator;
+            .build => |*build| {
                 if (build.slot) |slot| self.graph.types.abortRecursive(slot);
                 build.slot = null;
-                build.parts.deinit(allocator);
-                build.results.deinit(allocator);
-                build.spans.deinit(allocator);
-                allocator.destroy(build);
+                self.releaseSealLists(build);
             },
             .node, .ty => {},
         }
     }
 
-    fn newSealBuild(self: *GraphTypeFinals, source: SealSource) Allocator.Error!*SealBuild {
-        const build = try self.graph.allocator.create(SealBuild);
-        build.* = .{ .source = source };
-        return build;
-    }
-
-    fn entryStep(self: *GraphTypeFinals, entry: SealEntry) Allocator.Error!SealStep {
+    fn entryStep(entry: SealEntry) SealStep {
         return switch (entry) {
             .done => |sealed| .{ .ret = sealed },
             .node => |raw_node| .{ .tail = .{ .node = raw_node } },
-            .build => |source| .{ .tail = .{ .build = try self.newSealBuild(source) } },
+            .build => |source| .{ .tail = .{ .build = source } },
             .transaction => Common.invariant("nested Monotype sealing began a store transaction"),
         };
     }
 
     fn stepSeal(self: *GraphTypeFinals, frame: *SealFrame, input: ?Type.TypeId) Allocator.Error!SealStep {
         return switch (frame.task) {
-            .node => |raw_node| try self.entryStep(try self.nodeEntry(raw_node)),
-            .ty => |ty| try self.entryStep(try self.typeEntry(ty)),
-            .build => |build| self.stepSealBuild(build, input),
+            .node => |raw_node| entryStep(try self.nodeEntry(raw_node)),
+            .ty => |ty| entryStep(try self.typeEntry(ty)),
+            .build => |*build| self.stepSealBuild(build, input),
         };
     }
 
@@ -7736,6 +7869,29 @@ pub const GraphTypeFinals = struct {
         return .{ .ret = slot.ty };
     }
 
+    /// Take a build's lists from the pool, or start them empty.
+    fn acquireSealLists(self: *GraphTypeFinals, build: *SealBuild) void {
+        const lists = self.graph.spare_seal_lists.pop() orelse SealLists{};
+        build.parts = lists.parts;
+        build.results = lists.results;
+        build.spans = lists.spans;
+    }
+
+    /// Keep a build's lists for the next build; when the pool cannot grow,
+    /// their capacity is released instead.
+    fn releaseSealLists(self: *GraphTypeFinals, build: *SealBuild) void {
+        // A build that found its answer before listing parts took no lists.
+        if (build.parts.capacity == 0 and build.results.capacity == 0 and build.spans.capacity == 0) return;
+        var lists = SealLists{ .parts = build.parts, .results = build.results, .spans = build.spans };
+        build.parts = .empty;
+        build.results = .empty;
+        build.spans = .empty;
+        lists.parts.clearRetainingCapacity();
+        lists.results.clearRetainingCapacity();
+        lists.spans.clearRetainingCapacity();
+        self.graph.spare_seal_lists.append(self.graph.allocator, lists) catch lists.deinit(self.graph.allocator);
+    }
+
     /// Reserve the build's type and list its components; an existing answer
     /// when the source is already sealed.
     fn beginSealBuild(self: *GraphTypeFinals, build: *SealBuild) Allocator.Error!?Type.TypeId {
@@ -7748,6 +7904,7 @@ pub const GraphTypeFinals = struct {
                 }
                 const slot = try self.graph.types.beginRecursive();
                 build.slot = slot;
+                self.acquireSealLists(build);
                 // Recorded before the put so a failed put leaves at worst a
                 // recorded key with no map entry, which eviction tolerates
                 // and commit never sees; the reverse order could strand a
@@ -7763,6 +7920,7 @@ pub const GraphTypeFinals = struct {
                 if (self.sealed_types.get(ty)) |existing| return existing;
                 const slot = try self.graph.types.beginRecursive();
                 build.slot = slot;
+                self.acquireSealLists(build);
                 // See the node case for the record-before-put order.
                 if (self.active_transaction != null) {
                     try self.transaction_sealed_types.append(allocator, ty);
@@ -7774,8 +7932,9 @@ pub const GraphTypeFinals = struct {
         return null;
     }
 
-    fn addSealPart(self: *GraphTypeFinals, build: *SealBuild, part: SealPart) Allocator.Error!void {
-        try build.parts.append(self.graph.allocator, part);
+    inline fn addSealPart(self: *GraphTypeFinals, build: *SealBuild, part: SealPart) Allocator.Error!void {
+        if (build.parts.items.len == build.parts.capacity) try build.parts.ensureUnusedCapacity(self.graph.allocator, 1);
+        build.parts.appendAssumeCapacity(part);
     }
 
     /// List a span of component nodes followed by its span marker.
@@ -10105,6 +10264,27 @@ test "reset starts an unrelated graph while retaining its stores" {
     try graph.freezeRelations();
     const sealed = try graph.sealNode(second);
     try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed));
+}
+
+test "reset discards inhabitance answers before reusing node ids" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const inhabited_payload = try graph.newNode(.{ .primitive = .u64 });
+    const first = try graph.newNode(.{ .box = inhabited_payload });
+    try std.testing.expect(!try graph.mayFinalizeAsUninhabited(first));
+
+    graph.reset();
+
+    const empty_payload = try graph.newNode(.empty_tag_union);
+    const second = try graph.newNode(.{ .box = empty_payload });
+    try std.testing.expectEqual(first, second);
+    try std.testing.expect(try graph.mayFinalizeAsUninhabited(second));
 }
 
 test "reset discards nominal relationships and constructor evidence before reusing node ids" {

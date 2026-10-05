@@ -91,7 +91,7 @@ const max_rounds: u32 = 48;
 /// Bound on collected facts along one path.
 const max_facts: usize = 1024;
 /// Bound on symbolic value nodes per proc round.
-const max_nodes: usize = 1 << 14;
+const max_nodes: usize = 1 << 18;
 /// Bound on nodes touched by one inequality query.
 const query_visit_cap: usize = 64;
 
@@ -437,6 +437,13 @@ const MeetBound = struct {
     assumed: u64 = 0,
 };
 
+/// Best slack a bounds query has found to one root, with the pending
+/// assumptions the path that found it touched.
+const QueryBest = struct {
+    c: i128,
+    assumed: u64 = 0,
+};
+
 /// Bound on synthesized upper bounds per met local.
 const meet_bound_cap: usize = 6;
 
@@ -501,6 +508,26 @@ const LoopBounds = struct {
 };
 
 /// Fixed-capacity list of synthesized bounds.
+/// Roots a bounds query can reach before normalization; wider than a meet
+/// keeps, so the constant bound among them is never crowded out.
+const query_bound_cap: usize = 32;
+
+const QueryBounds = struct {
+    items: [query_bound_cap]MeetBound = undefined,
+    len: usize = 0,
+
+    fn append(self: *QueryBounds, bound: MeetBound) void {
+        if (self.len < query_bound_cap) {
+            self.items[self.len] = bound;
+            self.len += 1;
+        }
+    }
+
+    fn slice(self: *const QueryBounds) []const MeetBound {
+        return self.items[0..self.len];
+    }
+};
+
 const MeetBounds = struct {
     items: [meet_bound_cap]MeetBound = undefined,
     len: usize = 0,
@@ -601,7 +628,7 @@ const StableFact = struct {
 };
 
 /// Bound on persisted facts per loop join.
-const loop_fact_cap: usize = 64;
+const loop_fact_cap: usize = 256;
 
 const LoopFacts = struct {
     items: [loop_fact_cap]StableFact = undefined,
@@ -688,10 +715,11 @@ const Pass = struct {
     /// those meet as scalars at a merge. A list field keeps its value's
     /// length term and must not be replaced by a met scalar.
     int_fields: std.AutoHashMap(u64, void),
-    /// The node each loop parameter was bound to when its body was seeded
-    /// this round. A back edge carrying that very value brings the
-    /// parameter back unchanged, so the entry edges' bounds hold on it too.
-    seeded_param_roots: collections.DenseMap(LocalId, NodeId),
+    /// The node each loop parameter was bound to when its join's body was
+    /// seeded this round, keyed by `loopBoundKey(join, param)`. A back edge
+    /// into that same join carrying that very value brings the parameter
+    /// back unchanged, so the join's entry edges' bounds hold on it too.
+    seeded_param_roots: std.AutoHashMap(u64, NodeId),
     /// Roots of those nodes, so merges keep a parameter's identity even
     /// before any fact mentions it.
     seeded_param_root_set: collections.DenseMap(NodeId, void),
@@ -737,7 +765,9 @@ const Pass = struct {
     progress_epoch: u32,
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
-    query_best: collections.DenseMap(NodeId, i128),
+    /// Reachable statements and predecessors for the loop-cycle scans.
+    loop_scan: LoopScan,
+    query_best: collections.DenseMap(NodeId, QueryBest),
     /// Scratch for `dedupeFacts`.
     fact_seen: std.AutoHashMap(FactKey, void),
     /// Assumption bits of the facts the current fact-graph query relaxed
@@ -788,7 +818,7 @@ const Pass = struct {
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
             .int_fields = std.AutoHashMap(u64, void).init(allocator),
-            .seeded_param_roots = collections.DenseMap(LocalId, NodeId).init(allocator),
+            .seeded_param_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .sums = .empty,
@@ -805,7 +835,8 @@ const Pass = struct {
             .progress_epoch = 0,
             .max_join_id = 0,
             .scratch = .empty,
-            .query_best = collections.DenseMap(NodeId, i128).init(allocator),
+            .loop_scan = LoopScan.init(allocator),
+            .query_best = collections.DenseMap(NodeId, QueryBest).init(allocator),
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
             .rewrites = 0,
             .proof_records = .empty,
@@ -859,6 +890,7 @@ const Pass = struct {
         self.enclosing_join.deinit();
         self.join_parent.deinit();
         self.scratch.deinit(self.allocator);
+        self.loop_scan.deinit(self.allocator);
         self.query_best.deinit();
         self.fact_seen.deinit();
         self.proof_records.deinit(self.allocator);
@@ -1085,7 +1117,7 @@ const Pass = struct {
     /// edges forward: from `r <= x + c` and a bound on `x`, `r` is bounded.
     fn hiConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(start, 0);
+        try self.query_best.put(start, .{ .c = 0 });
         var best: i128 = self.nodes.items[start].hi;
         var steps: usize = 0;
         var changed = true;
@@ -1093,11 +1125,11 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     const through = clampSlack(self.nodes.items[fact.b].hi + next_acc);
                     if (through < best) best = through;
@@ -1112,7 +1144,7 @@ const Pass = struct {
     /// edges backward: from `x <= r + c` and a bound on `x`, `r` is bounded.
     fn loConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(start, 0);
+        try self.query_best.put(start, .{ .c = 0 });
         var best: i128 = self.nodes.items[start].lo;
         var steps: usize = 0;
         var changed = true;
@@ -1120,11 +1152,11 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.a);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.a, next_acc);
+                    try self.query_best.put(fact.a, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     const through = clampSlack(self.nodes.items[fact.a].lo - next_acc);
                     if (through > best) best = through;
@@ -1149,25 +1181,25 @@ const Pass = struct {
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(ra, 0);
+        try self.query_best.put(ra, .{ .c = 0 });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     changed = true;
                 }
             }
         }
         if (self.query_best.get(rb)) |acc| {
-            if (acc <= m) return true;
+            if (acc.c <= m) return true;
         }
 
         // Constant route: every value of ra is at most every value of rb + m.
@@ -1194,25 +1226,25 @@ const Pass = struct {
         const shift = self.offHiOf(a) - self.offLoOf(b);
         if (ra == rb) return shift;
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(ra, 0);
+        try self.query_best.put(ra, .{ .c = 0 });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     changed = true;
                 }
             }
         }
         const acc = self.query_best.get(rb) orelse return null;
-        return acc + shift;
+        return acc.c + shift;
     }
 
     /// Node for the mathematical sum of two dynamic values, or null when they
@@ -1463,6 +1495,10 @@ const Pass = struct {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
+                .assign_boxy_record_update => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
                 .assign_boxy_reuse_box => |s| {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
@@ -1570,6 +1606,7 @@ const Pass = struct {
             }
         }
         try self.scanJoinNesting(proc.body.?);
+        if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.?);
         var loop_it = self.body_joins.iterator();
         while (loop_it.next()) |kv| try self.scanLoopAssigned(kv.value_ptr.*, kv.key_ptr.*);
     }
@@ -1676,6 +1713,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -1718,36 +1756,89 @@ const Pass = struct {
         }
     }
 
-    /// Record the locals assigned on the cycle of loop `join_id`: statements
-    /// reachable from its body from which a jump back to it is reachable.
-    /// A local written only after the loop exits, even lexically inside the
-    /// join's body, keeps its entry value for every iteration.
-    fn scanLoopAssigned(self: *Pass, join_id: JoinPointId, body: CFStmtId) ResourceError!void {
-        var members = std.ArrayList(CFStmtId).empty;
-        defer members.deinit(self.allocator);
-        var index_of = collections.DenseMap(CFStmtId, u32).init(self.allocator);
-        defer index_of.deinit();
-        var successors = std.ArrayList(CFStmtId).empty;
-        defer successors.deinit(self.allocator);
+    /// Every reachable statement of a procedure, numbered, with its
+    /// predecessors on the successor relation the loop scans follow, the
+    /// reachable jumps to each join, and the join-nesting tree numbered so
+    /// that whether a join's body encloses another join is an interval test.
+    /// Built once per procedure; each loop's scan reuses it.
+    const LoopScan = struct {
+        stmts: std.ArrayList(CFStmtId) = .empty,
+        index_of: collections.DenseMap(CFStmtId, u32),
+        successors: std.ArrayList(CFStmtId) = .empty,
+        edges: std.ArrayList(LoopEdge) = .empty,
+        pred_start: std.ArrayList(u32) = .empty,
+        preds: std.ArrayList(u32) = .empty,
+        jumps_to: collections.DenseMap(JoinPointId, std.ArrayList(u32)),
+        join_order: collections.DenseMap(JoinPointId, JoinOrder),
+        /// `mark[i] == generation` when node `i` is on the current loop's cycle.
+        mark: std.ArrayList(u32) = .empty,
+        generation: u32 = 0,
+        pending: std.ArrayList(u32) = .empty,
+        cycle: std.ArrayList(u32) = .empty,
 
-        // The join statement is the loop header: a path around the loop
-        // closes at a jump to the join, never by passing through the header
-        // again, so traversal stops there.
-        const header = self.join_stmts.get(join_id);
-        try members.append(self.allocator, body);
-        try index_of.put(body, 0);
-        var cursor: usize = 0;
-        while (cursor < members.items.len) : (cursor += 1) {
-            const stmt = members.items[cursor];
-            if (header != null and stmt == header.?) continue;
+        const LoopEdge = struct { from: u32, to: u32 };
+        const JoinOrder = struct { pre: u32, post: u32 };
+
+        fn init(allocator: Allocator) LoopScan {
+            return .{
+                .index_of = collections.DenseMap(CFStmtId, u32).init(allocator),
+                .jumps_to = collections.DenseMap(JoinPointId, std.ArrayList(u32)).init(allocator),
+                .join_order = collections.DenseMap(JoinPointId, JoinOrder).init(allocator),
+            };
+        }
+
+        fn deinit(self: *LoopScan, allocator: Allocator) void {
+            self.stmts.deinit(allocator);
+            self.index_of.deinit();
+            self.successors.deinit(allocator);
+            self.edges.deinit(allocator);
+            self.pred_start.deinit(allocator);
+            self.preds.deinit(allocator);
+            var jumps = self.jumps_to.iterator();
+            while (jumps.next()) |entry| entry.value_ptr.deinit(allocator);
+            self.jumps_to.deinit();
+            self.join_order.deinit();
+            self.mark.deinit(allocator);
+            self.pending.deinit(allocator);
+            self.cycle.deinit(allocator);
+        }
+
+        fn node(self: *LoopScan, allocator: Allocator, stmt: CFStmtId) ResourceError!u32 {
+            const entry = try self.index_of.getOrPut(stmt);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(self.stmts.items.len);
+                try self.stmts.append(allocator, stmt);
+            }
+            return entry.value_ptr.*;
+        }
+
+        /// Whether `outer`'s body encloses `inner`'s.
+        fn encloses(self: *const LoopScan, outer: JoinPointId, inner: JoinPointId) bool {
+            const o = self.join_order.get(outer) orelse return false;
+            const i = self.join_order.get(inner) orelse return false;
+            return o.pre <= i.pre and i.post <= o.post;
+        }
+    };
+
+    /// Build `loop_scan` for a procedure whose join nesting is recorded.
+    fn buildLoopScan(self: *Pass, body: CFStmtId) ResourceError!void {
+        const scan = &self.loop_scan;
+        const gpa = self.allocator;
+        const successors = &scan.successors;
+        _ = try scan.node(gpa, body);
+        var cursor: u32 = 0;
+        while (cursor < scan.stmts.items.len) : (cursor += 1) {
+            const stmt = scan.stmts.items[cursor];
             successors.clearRetainingCapacity();
             switch (self.store.getCFStmt(stmt)) {
                 .jump => |j| {
-                    if (j.target == join_id) continue;
                     const target_stmt = self.join_stmts.get(j.target) orelse continue;
-                    try successors.append(self.allocator, self.store.getCFStmt(target_stmt).join.body);
+                    const entry = try scan.jumps_to.getOrPut(j.target);
+                    if (!entry.found_existing) entry.value_ptr.* = .empty;
+                    try entry.value_ptr.append(gpa, cursor);
+                    try successors.append(gpa, self.store.getCFStmt(target_stmt).join.body);
                 },
-                .join => |j| try successors.append(self.allocator, j.remainder),
+                .join => |j| try successors.append(gpa, j.remainder),
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -1757,6 +1848,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -1790,94 +1882,118 @@ const Pass = struct {
                 .loop_break,
                 .ret,
                 .crash,
-                => try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, stmt, self.allocator),
+                => try BodyClone.appendSuccessorsWithAllocator(self.store, successors, stmt, gpa),
             }
             for (successors.items) |next| {
-                if (index_of.contains(next)) continue;
-                try index_of.put(next, @intCast(members.items.len));
-                try members.append(self.allocator, next);
+                try scan.edges.append(gpa, .{ .from = cursor, .to = try scan.node(gpa, next) });
             }
         }
 
-        // A member is on the cycle when a jump back to the join is reachable
-        // from it; jumps to other joins continue through those joins' bodies.
-        const on_cycle = try self.allocator.alloc(bool, members.items.len);
-        defer self.allocator.free(on_cycle);
-        @memset(on_cycle, false);
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (members.items, 0..) |stmt, i| {
-                if (on_cycle[i]) continue;
-                if (header != null and stmt == header.?) continue;
-                var reaches = false;
-                successors.clearRetainingCapacity();
-                switch (self.store.getCFStmt(stmt)) {
-                    .jump => |j| {
-                        if (j.target == join_id) {
-                            reaches = true;
-                        } else if (self.join_stmts.get(j.target)) |target_stmt| {
-                            try successors.append(self.allocator, self.store.getCFStmt(target_stmt).join.body);
-                        }
-                    },
-                    .join => |j| try successors.append(self.allocator, j.remainder),
-                    .init_uninitialized,
-                    .assign_ref,
-                    .assign_literal,
-                    .assign_call,
-                    .assign_call_erased,
-                    .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_reuse_box,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .assign_call_dict,
-                    .assign_low_level,
-                    .assign_list,
-                    .assign_struct,
-                    .assign_tag,
-                    .store_struct,
-                    .store_tag,
-                    .set_local,
-                    .debug,
-                    .expect,
-                    .expect_err,
-                    .runtime_error,
-                    .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
-                    .incref,
-                    .decref,
-                    .decref_if_initialized,
-                    .free,
-                    .switch_stmt,
-                    .switch_initialized_payload,
-                    .str_match,
-                    .str_match_set,
-                    .boxy_tag_match,
-                    .loop_continue,
-                    .loop_break,
-                    .ret,
-                    .crash,
-                    => try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, stmt, self.allocator),
-                }
-                for (successors.items) |next| {
-                    const ni = index_of.get(next) orelse continue;
-                    if (on_cycle[ni]) reaches = true;
-                }
-                if (reaches) {
-                    on_cycle[i] = true;
-                    changed = true;
+        const count = scan.stmts.items.len;
+        try scan.pred_start.resize(gpa, count + 1);
+        const pred_start = scan.pred_start.items;
+        @memset(pred_start, 0);
+        for (scan.edges.items) |edge| pred_start[edge.to + 1] += 1;
+        for (1..pred_start.len) |i| pred_start[i] += pred_start[i - 1];
+        try scan.preds.resize(gpa, scan.edges.items.len);
+        try scan.pending.resize(gpa, count);
+        const fill = scan.pending.items;
+        @memcpy(fill, pred_start[0..count]);
+        for (scan.edges.items) |edge| {
+            scan.preds.items[fill[edge.to]] = edge.from;
+            fill[edge.to] += 1;
+        }
+        scan.pending.clearRetainingCapacity();
+        try scan.mark.resize(gpa, count);
+        @memset(scan.mark.items, 0);
+
+        // Number the join-nesting tree in depth-first order: a join's body
+        // encloses exactly the joins numbered within its interval.
+        var children = collections.DenseMap(JoinPointId, std.ArrayList(JoinPointId)).init(gpa);
+        defer {
+            var it = children.iterator();
+            while (it.next()) |entry| entry.value_ptr.deinit(gpa);
+            children.deinit();
+        }
+        var roots = std.ArrayList(JoinPointId).empty;
+        defer roots.deinit(gpa);
+        var joins = self.join_stmts.iterator();
+        while (joins.next()) |entry| {
+            const id = entry.key_ptr.*;
+            if (self.join_parent.get(id)) |parent| {
+                const kids = try children.getOrPut(parent);
+                if (!kids.found_existing) kids.value_ptr.* = .empty;
+                try kids.value_ptr.append(gpa, id);
+            } else {
+                try roots.append(gpa, id);
+            }
+        }
+        const NestingFrame = struct { id: JoinPointId, next: u32 };
+        var stack = std.ArrayList(NestingFrame).empty;
+        defer stack.deinit(gpa);
+        var clock: u32 = 0;
+        for (roots.items) |root| {
+            try scan.join_order.put(root, .{ .pre = clock, .post = clock });
+            clock += 1;
+            try stack.append(gpa, .{ .id = root, .next = 0 });
+            while (stack.items.len != 0) {
+                const top = &stack.items[stack.items.len - 1];
+                const kids: []const JoinPointId = if (children.getPtr(top.id)) |list| list.items else &.{};
+                if (top.next < kids.len) {
+                    const child = kids[top.next];
+                    top.next += 1;
+                    try scan.join_order.put(child, .{ .pre = clock, .post = clock });
+                    clock += 1;
+                    try stack.append(gpa, .{ .id = child, .next = 0 });
+                } else {
+                    scan.join_order.getPtr(top.id).?.post = clock;
+                    _ = stack.pop();
                 }
             }
         }
+    }
+
+    /// Record the locals assigned on the cycle of loop `join_id`: statements
+    /// reachable from its body from which a jump back to it is reachable.
+    /// A local written only after the loop exits, even lexically inside the
+    /// join's body, keeps its entry value for every iteration.
+    ///
+    /// The cycle is found backward from the jumps to the join that its body
+    /// encloses. The body is entered only by jumps to the join, so the walk
+    /// stops at the body's first statement and never passes the join
+    /// statement itself; every statement it reaches lies within the body, and
+    /// a statement within the body is reachable from the procedure exactly
+    /// when it is reachable from the body.
+    fn scanLoopAssigned(self: *Pass, join_id: JoinPointId, body: CFStmtId) ResourceError!void {
+        const scan = &self.loop_scan;
+        scan.generation += 1;
+        const generation = scan.generation;
+        scan.pending.clearRetainingCapacity();
+        scan.cycle.clearRetainingCapacity();
+        const header = self.join_stmts.get(join_id);
+        const body_node = scan.index_of.get(body);
+        if (scan.jumps_to.getPtr(join_id)) |jumps| {
+            for (jumps.items) |jump| {
+                const owner = self.enclosing_join.get(scan.stmts.items[jump]) orelse continue;
+                if (owner != join_id and !scan.encloses(join_id, owner)) continue;
+                if (scan.mark.items[jump] == generation) continue;
+                scan.mark.items[jump] = generation;
+                try scan.pending.append(self.allocator, jump);
+            }
+        }
+        while (scan.pending.pop()) |current| {
+            try scan.cycle.append(self.allocator, current);
+            if (body_node != null and current == body_node.?) continue;
+            for (scan.preds.items[scan.pred_start.items[current]..scan.pred_start.items[current + 1]]) |pred| {
+                if (scan.mark.items[pred] == generation) continue;
+                if (header != null and scan.stmts.items[pred] == header.?) continue;
+                scan.mark.items[pred] = generation;
+                try scan.pending.append(self.allocator, pred);
+            }
+        }
         var back: u32 = 0;
-        for (members.items, 0..) |stmt, i| {
-            if (!on_cycle[i]) continue;
+        for (scan.cycle.items) |node| {
+            const stmt = scan.stmts.items[node];
             switch (self.store.getCFStmt(stmt)) {
                 .jump => |j| {
                     if (j.target == join_id) back += 1;
@@ -1892,6 +2008,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -1964,6 +2081,7 @@ const Pass = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -2153,6 +2271,7 @@ const Pass = struct {
             }
             state.facts.shrinkRetainingCapacity(keep);
 
+            const seed_join = self.body_joins.get(head);
             for (state.env.items) |*meet| {
                 if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0) continue;
                 const binding = self.path_env.get(meet.local);
@@ -2161,14 +2280,18 @@ const Pass = struct {
                 else
                     null;
                 if (node_id) |nid| {
-                    // A loop parameter arriving as the very value its body
-                    // was seeded with is unchanged around the loop: the
-                    // entry edges' meet already describes it.
+                    // A loop parameter arriving at its own join as the very
+                    // value that join's body was seeded with is unchanged
+                    // around the loop: the entry edges' meet already
+                    // describes it. Any other merge meets every edge, since
+                    // its other edges may carry narrower values.
                     if (meet.field == null) {
-                        if (self.seeded_param_roots.get(meet.local)) |seed_node| {
-                            const seeded = self.nodes.items[seed_node];
-                            const arriving = self.nodes.items[nid];
-                            if (seeded.root == arriving.root and seeded.off_lo == arriving.off_lo and seeded.off_hi == arriving.off_hi) continue;
+                        if (seed_join) |join_id| {
+                            if (self.seeded_param_roots.get(loopBoundKey(join_id, meet.local))) |seed_node| {
+                                const seeded = self.nodes.items[seed_node];
+                                const arriving = self.nodes.items[nid];
+                                if (seeded.root == arriving.root and seeded.off_lo == arriving.off_lo and seeded.off_hi == arriving.off_hi) continue;
+                            }
                         }
                     }
                     const node = self.nodes.items[nid];
@@ -2297,7 +2420,7 @@ const Pass = struct {
                         try self.seedLoopParam(join_id, param);
                         if (self.lookup(param) == null) try self.bindFresh(param);
                         if (self.lookup(param)) |b| {
-                            try self.seeded_param_roots.put(param, b.node);
+                            try self.seeded_param_roots.put(loopBoundKey(join_id, param), b.node);
                             try self.seeded_param_root_set.put(self.rootOf(b.node), {});
                         }
                     }
@@ -3142,27 +3265,30 @@ const Pass = struct {
     /// path facts, found by walking fact edges forward from its root.
     fn reachableBounds(self: *Pass, node_id: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
-        var bounds: MeetBounds = .{};
         const node = self.nodes.items[node_id];
-        bounds.append(.{ .root = node.root, .c = node.off_hi });
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(node.root, 0);
+        try self.query_best.put(node.root, .{ .c = 0 });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
-                    bounds.append(.{ .root = fact.b, .c = next_acc + node.off_hi, .assumed = self.query_used });
                     changed = true;
                 }
             }
+        }
+        // One bound per reached root, at the tightest slack the walk found.
+        var bounds: QueryBounds = .{};
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            bounds.append(.{ .root = entry.key_ptr.*, .c = entry.value_ptr.c + node.off_hi, .assumed = entry.value_ptr.assumed });
         }
         return try self.normalizeUpperBounds(bounds, node);
     }
@@ -3178,9 +3304,12 @@ const Pass = struct {
         return id;
     }
 
-    fn normalizeUpperBounds(self: *Pass, bounds: MeetBounds, node: Node) ResourceError!MeetBounds {
-        const zero = (try self.constantRoot()) orelse return bounds;
+    fn normalizeUpperBounds(self: *Pass, bounds: QueryBounds, node: Node) ResourceError!MeetBounds {
         var out: MeetBounds = .{};
+        const zero = (try self.constantRoot()) orelse {
+            for (bounds.slice()) |bound| out.append(bound);
+            return out;
+        };
         var best: ?i128 = null;
         var best_assumed: u64 = 0;
         for (bounds.slice()) |bound| {
@@ -3191,8 +3320,6 @@ const Pass = struct {
                     best = c;
                     best_assumed = bound.assumed;
                 }
-            } else {
-                out.append(bound);
             }
         }
         const root = self.nodes.items[node.root];
@@ -3203,13 +3330,22 @@ const Pass = struct {
                 best_assumed = 0;
             }
         }
+        // The constant bound goes first: a meet keeps only a few bounds, and
+        // this is the one every edge can share.
         if (best) |c| out.append(.{ .root = zero, .c = c, .assumed = best_assumed });
+        for (bounds.slice()) |bound| {
+            const bound_root = self.nodes.items[bound.root];
+            if (bound_root.lo != bound_root.hi) out.append(bound);
+        }
         return out;
     }
 
-    fn normalizeLowerBounds(self: *Pass, bounds: MeetBounds, node: Node) ResourceError!MeetBounds {
-        const zero = (try self.constantRoot()) orelse return bounds;
+    fn normalizeLowerBounds(self: *Pass, bounds: QueryBounds, node: Node) ResourceError!MeetBounds {
         var out: MeetBounds = .{};
+        const zero = (try self.constantRoot()) orelse {
+            for (bounds.slice()) |bound| out.append(bound);
+            return out;
+        };
         var best: ?i128 = null;
         var best_assumed: u64 = 0;
         for (bounds.slice()) |bound| {
@@ -3220,8 +3356,6 @@ const Pass = struct {
                     best = c;
                     best_assumed = bound.assumed;
                 }
-            } else {
-                out.append(bound);
             }
         }
         // The node's own range floor is a constant lower bound too.
@@ -3233,7 +3367,12 @@ const Pass = struct {
                 best_assumed = 0;
             }
         }
+        // The constant bound goes first, as in `normalizeUpperBounds`.
         if (best) |c| out.append(.{ .root = zero, .c = c, .assumed = best_assumed });
+        for (bounds.slice()) |bound| {
+            const bound_root = self.nodes.items[bound.root];
+            if (bound_root.lo != bound_root.hi) out.append(bound);
+        }
         return out;
     }
 
@@ -3242,27 +3381,30 @@ const Pass = struct {
     /// term's root. Smaller `c` is the stronger claim.
     fn lenLowerBounds(self: *Pass, len_node: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
-        var bounds: MeetBounds = .{};
         const node = self.nodes.items[len_node];
-        bounds.append(.{ .root = node.root, .c = -node.off_lo });
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(node.root, -node.off_lo);
+        try self.query_best.put(node.root, .{ .c = -node.off_lo });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.a);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.a, next_acc);
+                    try self.query_best.put(fact.a, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
-                    bounds.append(.{ .root = fact.a, .c = next_acc, .assumed = self.query_used });
                     changed = true;
                 }
             }
+        }
+        // One bound per reached root, at the tightest slack the walk found.
+        var bounds: QueryBounds = .{};
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            bounds.append(.{ .root = entry.key_ptr.*, .c = entry.value_ptr.c, .assumed = entry.value_ptr.assumed });
         }
         return try self.normalizeLowerBounds(bounds, node);
     }
@@ -3356,6 +3498,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3409,6 +3552,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3510,6 +3654,7 @@ const Pass = struct {
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -3803,6 +3948,11 @@ const Pass = struct {
                         current = s.next;
                     },
                     .assign_boxy_box => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_record_update => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -4187,6 +4337,10 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            // A hint with no result to describe.
+            .list_prefetch => try self.bindFresh(s.target),
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_capacity => {
                 // A list's capacity is a non-negative count with no tighter
                 // statically known bound.
@@ -4248,7 +4402,23 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            .list_set, .list_set_in_place_unsafe => {
+            .list_map_cast_unsafe => {
+                // An in-place map's storage keeps every slot, so the cast
+                // output has the input's length.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |in_node| {
+                        if (self.len_terms.get(self.rootOf(in_node))) |len_term| {
+                            if (try self.unknownFor(self.localLayout(s.target))) |out_node| {
+                                try self.len_terms.put(out_node, len_term);
+                                try self.bind(s.target, .{ .node = out_node });
+                                return;
+                            }
+                        }
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
+            .list_set, .list_set_in_place_unsafe, .list_map_write_unsafe => {
                 // Replacing one element preserves the list's length on every
                 // continuing path, so the result shares the input's length
                 // term.
@@ -4499,9 +4669,7 @@ const Pass = struct {
             .list_split_first,
             .list_split_last,
             .list_map_can_reuse,
-            .list_map_cast_unsafe,
             .list_map_extract_unsafe,
-            .list_map_write_unsafe,
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,
@@ -5402,6 +5570,7 @@ const RangeProveCertify = struct {
                 .assign_boxy_desc_ref => |t| try list.append(allocator, t.next),
                 .assign_boxy_dict_ref => |t| try list.append(allocator, t.next),
                 .assign_boxy_box => |t| try list.append(allocator, t.next),
+                .assign_boxy_record_update => |t| try list.append(allocator, t.next),
                 .assign_boxy_reuse_box => |t| try list.append(allocator, t.next),
                 .assign_boxy_unbox => |t| try list.append(allocator, t.next),
                 .assign_boxy_adapt => |t| try list.append(allocator, t.next),

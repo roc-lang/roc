@@ -1321,11 +1321,9 @@ pub fn repeatC(
 
     const count = std.math.cast(usize, count_u64) orelse {
         roc_ops.crash("Str.repeat count exceeds the platform address space");
-        unreachable;
     };
     const repeated_len = std.math.mul(usize, count, bytes_len) catch {
         roc_ops.crash("Str.repeat result length overflowed");
-        unreachable;
     };
     const bytes_ptr = string.asU8ptr();
     var ret_string = RocStr.allocate(repeated_len, roc_ops);
@@ -1724,7 +1722,8 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
     return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
 }
 
-/// TODO: Document fromUtf8Lossy.
+/// Convert borrowed bytes to an owned string, replacing invalid UTF-8 with U+FFFD.
+/// Valid UTF-8 shares the input allocation without copying.
 pub fn fromUtf8Lossy(
     list: RocList,
     roc_ops: *RocOps,
@@ -1733,7 +1732,10 @@ pub fn fromUtf8Lossy(
         return RocStr.empty();
     }
 
-    // PERF: we could try to reuse the input list if it's already valid utf-8, similar to fromUtf8
+    const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
+    if (isValidUnicode(bytes)) {
+        return fromValidUtf8List(list, .Immutable, roc_ops);
+    }
 
     var it = Utf8Iterator.init(list);
 
@@ -1771,11 +1773,7 @@ pub fn fromUtf8(
     const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
 
     if (isValidUnicode(bytes)) {
-        // Borrowed-call semantics: the returned string must own its bytes
-        // independently of the caller's list value. Increment first so
-        // `fromSubListUnsafe` cannot take over a unique list allocation.
-        list.incref(1, false, roc_ops);
-        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
+        const string = fromValidUtf8List(list, update_mode, roc_ops);
         return FromUtf8Try{
             .is_ok = true,
             .string = string,
@@ -1792,6 +1790,14 @@ pub fn fromUtf8(
             .problem_code = temp.problem,
         };
     }
+}
+
+/// Retain a validated, nonempty byte list for an independently owned string.
+fn fromValidUtf8List(list: RocList, update_mode: UpdateMode, roc_ops: *RocOps) RocStr {
+    // Increment first so `fromSubListUnsafe` cannot take over a unique
+    // allocation that still belongs to the caller's borrowed list.
+    list.incref(1, false, roc_ops);
+    return RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
 }
 
 fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8ByteProblem } {
@@ -3931,6 +3937,96 @@ test "fromUtf8Lossy: ascii, emoji" {
     const expected = RocStr.fromSlice("r💖c", test_env.getOps());
     defer expected.decref(test_env.getOps());
     try std.testing.expect(expected.eql(res));
+}
+
+test "fromUtf8Lossy: valid input shares allocation and outlives borrowed list" {
+    const inputs = [_][]const u8{ "a", "r💖c", "a long ASCII string exceeding inline capacity", "héllo wörld 💖 héllo wörld 💖" };
+    for (inputs) |raw| {
+        var test_env = TestEnv.init(std.testing.allocator);
+        defer test_env.deinit();
+        const ops = test_env.getOps();
+        const list = RocList.fromSlice(u8, raw, false, ops);
+        const res = fromUtf8Lossy(list, ops);
+        defer res.decref(ops);
+
+        try testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+        try testing.expectEqual(@intFromPtr(list.bytes.?), @intFromPtr(res.asU8ptr()));
+        try testing.expect(!list.isUnique(ops));
+        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+        try testing.expectEqualStrings(raw, res.asSlice());
+    }
+}
+
+test "fromUtf8Lossy: valid seamless slice retains original allocation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    const raw = "héllo wörld 💖 héllo wörld 💖";
+    const list = RocList.fromSlice(u8, "prefix:" ++ raw ++ ":suffix", false, ops);
+    const slice = @import("list.zig").listSublistBorrowed(list, 1, 7, raw.len, false, ops);
+    const res = fromUtf8Lossy(slice, ops);
+    defer res.decref(ops);
+
+    try testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+    try testing.expectEqual(@intFromPtr(slice.bytes.?), @intFromPtr(res.asU8ptr()));
+    try testing.expect(res.isSeamlessSlice());
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+    try testing.expectEqualStrings(raw, res.asSlice());
+}
+
+test "fromUtf8Lossy: shared input survives releasing result" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    const raw = "héllo wörld 💖 héllo wörld 💖";
+    const list = RocList.fromSlice(u8, raw, false, ops);
+    list.incref(1, false, ops);
+    const res = fromUtf8Lossy(list, ops);
+    try testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+    try testing.expectEqual(@intFromPtr(list.bytes.?), @intFromPtr(res.asU8ptr()));
+    res.decref(ops);
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+    try testing.expectEqualStrings(raw, list.bytes.?[0..list.len()]);
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+    try testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "fromUtf8Lossy: uppercase preserves borrowed bytes and seamless slices" {
+    const inputs = [_][]const u8{ "abc", "abcdefghijklmnopqrstuvwxyz0123456789" };
+    for (inputs) |raw| {
+        for ([_]bool{ false, true }) |sliced| {
+            var test_env = TestEnv.init(std.testing.allocator);
+            defer test_env.deinit();
+            const ops = test_env.getOps();
+            const list = RocList.fromSlice(u8, raw, false, ops);
+            defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+            const bytes = if (sliced)
+                @import("list.zig").listSublistBorrowed(list, 1, 1, raw.len - 2, false, ops)
+            else
+                list;
+            const expected = if (sliced) raw[1 .. raw.len - 1] else raw;
+            const uppercased = strWithAsciiUppercased(fromUtf8Lossy(bytes, ops), .Immutable, ops);
+            defer uppercased.decref(ops);
+
+            try testing.expectEqualStrings(raw, list.bytes.?[0..list.len()]);
+            const original = fromUtf8Lossy(bytes, ops);
+            defer original.decref(ops);
+            try testing.expectEqualStrings(expected, original.asSlice());
+            try testing.expectEqual(expected.len, uppercased.len());
+            for (expected, uppercased.asSlice()) |before, after| {
+                try testing.expectEqual(ascii.toUpper(before), after);
+            }
+        }
+    }
+}
+
+test "fromUtf8Lossy: empty input does not allocate" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const res = fromUtf8Lossy(RocList.empty(), test_env.getOps());
+    defer res.decref(test_env.getOps());
+    try testing.expectEqualStrings("", res.asSlice());
+    try testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 fn expectErr(

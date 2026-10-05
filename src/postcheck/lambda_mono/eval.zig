@@ -134,9 +134,8 @@ pub const ComptimeProducer = struct {
     root_index: usize,
 };
 
-/// Consumer policy and exact root declarations supplied by the harness.
+/// Exact root declarations supplied by the harness.
 pub const Inputs = struct {
-    inline_expects_enabled: bool,
     comptime_producers: []const ComptimeProducer,
 };
 
@@ -149,7 +148,6 @@ pub const Evaluator = struct {
     arena: std.heap.ArenaAllocator,
     inputs: Inputs,
     root_states: []RootState,
-    executing_comptime: bool,
 
     /// Rendered dbg messages in execution order (arena-owned bytes).
     dbg_events: std.ArrayList([]const u8),
@@ -190,7 +188,6 @@ pub const Evaluator = struct {
         return .{
             .inputs = inputs,
             .root_states = states,
-            .executing_comptime = false,
             .gpa = gpa,
             .program = program,
             .arena = std.heap.ArenaAllocator.init(gpa),
@@ -241,9 +238,6 @@ pub const Evaluator = struct {
         }
         self.root_states[index] = .active;
         errdefer self.root_states[index] = .pending;
-        const saved_comptime = self.executing_comptime;
-        self.executing_comptime = true;
-        defer self.executing_comptime = saved_comptime;
         const outcome = try self.runRootBody(index);
         self.root_states[index] = .{ .completed = outcome };
         return outcome;
@@ -383,7 +377,6 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
-            .inline_expects_enabled => return .{ .bool_ = self.executing_comptime or self.inputs.inline_expects_enabled },
             .comptime_value => |value| return self.readComptimeValue(self.program.getComptimeValueRoot(value.root)),
             .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
@@ -496,7 +489,7 @@ pub const Evaluator = struct {
             .try_record_sequence => |seq| return try self.evalTryRecordSequence(frame, expr.ty, seq),
             .comptime_branch_taken => |taken| return self.evalExpr(frame, taken.body),
             .comptime_exhaustiveness_failed => return self.comptimeExhaustAbort(),
-            .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
+            .crash, .checked_error => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
             .dbg => |child| {
                 const value = try self.evalExpr(frame, child);
                 const bytes = self.alloc().dupe(u8, value.str) catch return error.OutOfMemory;
@@ -868,7 +861,7 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(expr_id);
                 return error.Returned;
             },
-            .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
+            .crash, .checked_error => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
         }
     }
 
@@ -1573,6 +1566,7 @@ pub const Evaluator = struct {
             .list_len,
             .list_capacity,
             .list_get_unsafe,
+            .list_prefetched,
             .list_append_unsafe,
             .list_concat,
             .list_with_capacity,
@@ -1946,6 +1940,7 @@ pub const Evaluator = struct {
             .list_slack_unique,
             .list_owned_unique,
             .list_set_in_place_unsafe,
+            .list_prefetch,
             => |op_tag| self.evalConversionOrUnsupported(op_tag, args, arg_types, result_ty),
         };
     }
@@ -2821,6 +2816,7 @@ pub const Evaluator = struct {
         const ListOp = enum {
             list_len,
             list_get_unsafe,
+            list_prefetched,
             list_append_unsafe,
             list_prepend,
             list_concat,
@@ -2851,6 +2847,8 @@ pub const Evaluator = struct {
         const arena = self.alloc();
         switch (list_op) {
             .list_len => return self.canonicalInt(.u64, @intCast(args[0].list.len)),
+            // The same list; the hint means nothing at compile time.
+            .list_prefetched => return args[0],
             .list_get_unsafe => {
                 const index = readInt(u64, args[1]);
                 const list = args[0].list;
@@ -3232,17 +3230,17 @@ pub const Evaluator = struct {
                 .roc_realloc = rocReallocFn,
                 .roc_dbg = rocNoopBytesFn,
                 .roc_expect_failed = rocNoopBytesFn,
-                .roc_crashed = rocNoopBytesFn,
+                .roc_crashed = rocCrashedFn,
                 .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             };
         }
         return &self.roc_ops.?;
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *Evaluator = @ptrCast(@alignCast(ops.env));
-        const ptr = allocAligned(self.alloc(), length, alignment) orelse return null;
-        self.ops_alloc_sizes.put(@intFromPtr(ptr), length) catch return null;
+        const ptr = allocAligned(self.alloc(), length, alignment) orelse outOfMemory();
+        self.ops_alloc_sizes.put(@intFromPtr(ptr), length) catch outOfMemory();
         return @ptrCast(ptr);
     }
 
@@ -3251,9 +3249,9 @@ pub const Evaluator = struct {
         _ = self.ops_alloc_sizes.remove(@intFromPtr(ptr));
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *Evaluator = @ptrCast(@alignCast(ops.env));
-        const new_ptr = allocAligned(self.alloc(), new_length, alignment) orelse return null;
+        const new_ptr = allocAligned(self.alloc(), new_length, alignment) orelse outOfMemory();
         const old_size = self.ops_alloc_sizes.get(@intFromPtr(ptr)) orelse 0;
         const copy = @min(old_size, new_length);
         if (copy > 0) {
@@ -3261,11 +3259,24 @@ pub const Evaluator = struct {
             @memcpy(new_ptr[0..copy], src[0..copy]);
         }
         _ = self.ops_alloc_sizes.remove(@intFromPtr(ptr));
-        self.ops_alloc_sizes.put(@intFromPtr(new_ptr), new_length) catch return null;
+        self.ops_alloc_sizes.put(@intFromPtr(new_ptr), new_length) catch outOfMemory();
         return @ptrCast(new_ptr);
     }
 
+    /// Builtins write through every allocation they receive, so a failed
+    /// one cannot be reported back to them.
+    fn outOfMemory() noreturn {
+        @panic("Lambda Mono evaluator ran out of memory in a builtin allocation");
+    }
+
     fn rocNoopBytesFn(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+
+    /// The builtins this evaluator calls only format and decode values; none
+    /// of them crashes, and `roc_crashed` never returns, so reaching this is a
+    /// bug in the evaluator.
+    fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        std.debug.panic("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
+    }
 };
 
 // free helpers
@@ -3607,13 +3618,13 @@ test "oracle demands declared roots once without executing representation witnes
     var program = Ast.Program.init(allocator, check.CheckedNames.NameStore.init(allocator), .empty, .empty, .empty);
     defer program.deinit();
     const bool_ty = try program.types.add(.{ .primitive = .bool });
-    const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const produced = try program.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
     const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
     // Neither checked identity nor descriptor-table ordinal is a producer index.
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
-    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
+    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = produced }, .ret = bool_ty });
     // Oracle execution consumes fn_id; source requests and linker symbols are unread.
     try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined, .owner = .first });
     const root_id = try program.addComptimeValueRoot(root);
@@ -3621,13 +3632,9 @@ test "oracle demands declared roots once without executing representation witnes
     const consumer_index = program.rootCount();
     const consumer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = read }, .ret = bool_ty });
     try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined, .owner = .first });
-    const policy_index = program.rootCount();
-    const policy_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
-    try program.roots.append(allocator, .{ .fn_id = policy_fn, .request = undefined, .owner = .first });
-    for ([_]bool{ false, true }) |enabled| {
-        var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = enabled, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    {
+        var evaluator = try Evaluator.init(allocator, &program, .{ .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
         defer evaluator.deinit();
-        try std.testing.expectEqual(enabled, (try evaluator.runRoot(policy_index)).value.bool_);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
         try std.testing.expect(evaluator.root_states[producer_index] == .completed);
@@ -3636,18 +3643,18 @@ test "oracle demands declared roots once without executing representation witnes
         changed.body = .{ .roc = witness };
         program.setFn(producer_fn, changed);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
-        changed.body = .{ .roc = policy };
+        changed.body = .{ .roc = produced };
         program.setFn(producer_fn, changed);
     }
     var cyclic = program.getFn(producer_fn);
     cyclic.body = .{ .roc = read };
     program.setFn(producer_fn, cyclic);
-    var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = false, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    var evaluator = try Evaluator.init(allocator, &program, .{ .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
     defer evaluator.deinit();
     const failure = (try evaluator.runRoot(consumer_index)).aborted;
     try std.testing.expectEqual(AbortKind.crash, failure.kind);
     try std.testing.expectEqualStrings("cyclic compile-time value dependency", failure.message);
-    cyclic.body = .{ .roc = policy };
+    cyclic.body = .{ .roc = produced };
     program.setFn(producer_fn, cyclic);
     try std.testing.expectEqualStrings(failure.message, (try evaluator.runRoot(consumer_index)).aborted.message);
 }

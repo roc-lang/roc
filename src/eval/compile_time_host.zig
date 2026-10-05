@@ -397,7 +397,7 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
     @panic("compile-time host failure escaped without an active crash boundary");
 }
 
-fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const alloc_len = @max(length, 1);
     const arena_allocator = self.arena.allocator();
@@ -417,7 +417,7 @@ fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     };
 }
 
-fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
         @panic("compile-time RocOps reallocated unknown pointer");

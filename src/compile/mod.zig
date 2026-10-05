@@ -41,7 +41,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: []const u8, _: []const u8, _: std.Io) Allocator.Error!?CleanupThread {
+    pub fn startBackgroundCleanup(_: []const u8, _: std.Io) Allocator.Error!?CleanupThread {
         return null;
     }
 
@@ -190,8 +190,11 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11670_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11666_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11922_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11943_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11217_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11236_test.zig"));
+    std.testing.refAllDecls(@import("test/source_single_use_inline_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11249_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11263_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11286_test.zig"));
@@ -205,11 +208,13 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/shared_expect_lowering_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11289_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11300_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12041_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11301_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11303_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11310_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11311_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11312_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11923_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11338_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11369_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11358_test.zig"));
@@ -236,6 +241,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/match_lowering_test.zig"));
     std.testing.refAllDecls(@import("test/specialization_epoch_test.zig"));
     std.testing.refAllDecls(@import("test/range_prove_test.zig"));
+    std.testing.refAllDecls(@import("test/list_prefetched_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_fusion_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_spec_constr_test.zig"));
     std.testing.refAllDecls(@import("test/native_artifact_parallel_test.zig"));

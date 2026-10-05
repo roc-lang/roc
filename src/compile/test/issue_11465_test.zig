@@ -178,10 +178,10 @@ test "issue 11465: record-builder suffix resolves a type imported under another 
     try expectNoErrors(&.{
         .{ .path = "Builder.roc", .source = builder_type_module },
         .{ .path = "App.roc", .source =
-        \\import Builder exposing [Builder as B]
+        \\import Builder as B
         \\
         \\App :: [].{
-        \\    built = { first: Builder.one, second: Builder.two, third: Builder.three }.B
+        \\    built = { first: B.one, second: B.two, third: B.three }.B
         \\}
         \\
         },
