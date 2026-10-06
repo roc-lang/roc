@@ -1348,6 +1348,30 @@ const DeadFilesDetector = struct {
 
         try detector.recordQuotedZigPaths(gpa, file.path, file.text, "@import(\"", false);
         try detector.recordQuotedZigPaths(gpa, file.path, file.text, "b.path(\"", true);
+        // The build scripts also name source roots as plain repository paths:
+        // the module table's `.root = "src/..."` entries and the paths
+        // build.zig passes to its helpers.
+        if (std.mem.eql(u8, file.path, "build.zig") or std.mem.eql(u8, file.path, "src/build/modules.zig")) {
+            try detector.recordRepoPathLiterals(gpa, file.path, file.text);
+        }
+    }
+
+    /// Record each string literal in `text` that is a repository path to a
+    /// Zig file under src/ or test/.
+    fn recordRepoPathLiterals(detector: *DeadFilesDetector, gpa: Allocator, file_path: []const u8, text: []const u8) Allocator.Error!void {
+        var rest: []const u8 = text;
+        for (0..16384) |_| {
+            const open = std.mem.indexOfScalar(u8, rest, '"') orelse return;
+            rest = rest[open + 1 ..];
+            const close = std.mem.indexOfScalar(u8, rest, '"') orelse return;
+            const literal = rest[0..close];
+            rest = rest[close + 1 ..];
+            if (!std.mem.endsWith(u8, literal, ".zig")) continue;
+            if (!std.mem.startsWith(u8, literal, "src/") and !std.mem.startsWith(u8, literal, "test/")) continue;
+            (try detector.fileState(gpa, literal)).import_count += 1;
+        } else {
+            std.debug.panic("file with too many string literals: {s}", .{file_path});
+        }
     }
 
     fn finish(detector: *DeadFilesDetector, errors: *Errors) void {

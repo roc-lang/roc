@@ -7363,8 +7363,6 @@ const CheckedTypeKeyDigester = struct {
     fn keyInfo(self: *CheckedTypeKeyDigester, source: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         // A failed request can leave partial classes behind.
         errdefer self.engine.reset();
-        self.adapter.request_root = @intFromEnum(source);
-        defer self.adapter.request_root = null;
         return keyInfoOf(try self.engine.summarize(&self.adapter, @intFromEnum(source)));
     }
 
@@ -7373,10 +7371,8 @@ const CheckedTypeKeyDigester = struct {
     fn buildKeyInfo(self: *CheckedTypeKeyDigester, payload: CheckedTypePayloadBuild) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const node: u32 = @intCast(self.adapter.store.payloadCount());
         self.adapter.build = .{ .node = node, .payload = payload };
-        self.adapter.request_root = node;
         defer {
             self.adapter.build = null;
-            self.adapter.request_root = null;
             self.engine.reset();
         }
         return keyInfoOf(try self.engine.summarize(&self.adapter, node));
@@ -7430,9 +7426,6 @@ const CheckedTypeKeyAdapter = struct {
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
     build: ?struct { node: u32, payload: CheckedTypePayloadBuild } = null,
-    /// The node a key request summarizes. Every other stored root free of
-    /// identity variables is described by its stored key; see `describe`.
-    request_root: ?u32 = null,
     field_rank_scratch: base.TextRankCache,
     tag_rank_scratch: base.TextRankCache,
     field_ranks: []const u32 = &.{},
@@ -7521,17 +7514,6 @@ const CheckedTypeKeyAdapter = struct {
             if (node == build.node) return try self.describeBuild(sink, build.payload);
         }
         const id: CheckedTypeId = @enumFromInt(node);
-        // A stored root free of identity variables lies outside the
-        // requested node's component and defines no variables, so the walk
-        // writes it as exactly these bytes: a reference to its key. Writing
-        // them as a leaf keeps every key the same without describing the
-        // root's own structure again. A key request never summarizes such a
-        // root itself: substitution keys only roots that reach a formal.
-        if (self.request_root) |request_root| if (node != request_root and !self.store.rootContainsIdentityVariables(id)) {
-            try sink.byte(canonical_type_keys.key_engine_tags.child_key);
-            try sink.bytes(&self.store.roots.items[node].key.bytes);
-            return .leaf;
-        };
         return switch (self.storedPayload(id)) {
             .flex => |variable| try self.describeIdentity(sink, .flex, variable),
             .rigid => |variable| try self.describeIdentity(sink, .rigid, variable),
