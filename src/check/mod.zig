@@ -128,6 +128,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11948_test.zig"));
     std.testing.refAllDecls(@import("test/rejected_relation_owner_test.zig"));
     std.testing.refAllDecls(@import("test/erroneous_source_binder_test.zig"));
+    std.testing.refAllDecls(@import("test/deferred_rejection_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12016_test.zig"));
     std.testing.refAllDecls(@import("test/value_binding_generalization_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11214_test.zig"));

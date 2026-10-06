@@ -2059,9 +2059,15 @@ expect {
 						(if-branch
 							(e-lookup-local
 								(p-assign (ident "num")))
-							(e-runtime-error (tag "erroneous_value_expr"))))
+							(e-block
+								(s-dbg
+									(e-runtime-error (tag "ident_not_in_scope")))
+								(e-runtime-error (tag "ident_not_in_scope")))))
 					(if-else
-						(e-runtime-error (tag "erroneous_value_expr")))))))
+						(e-block
+							(s-dbg
+								(e-num (value "123")))
+							(e-runtime-error (tag "ident_not_in_scope"))))))))
 	(d-let
 		(p-assign (ident "me"))
 		(e-lambda
@@ -2150,7 +2156,9 @@ expect {
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(s-runtime-error (tag "erroneous_value_expr"))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

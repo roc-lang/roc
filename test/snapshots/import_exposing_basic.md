@@ -123,7 +123,23 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "data"))
+				(e-record
+					(fields
+						(field (name "name")
+							(e-string
+								(e-literal (string "Alice"))))
+						(field (name "age")
+							(e-num (value "30"))))))
+			(s-let
+				(p-assign (ident "encoded"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(s-let
+				(p-assign (ident "decoded"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
@@ -133,7 +149,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "_a"))))
 ~~~

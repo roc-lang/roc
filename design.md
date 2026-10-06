@@ -832,6 +832,34 @@ checker recovery. The recovery rules:
   `match`, so its name is erroneous too. A lambda parameter binds from no
   value at its definition; the call that supplies an erroneous argument is
   retired instead (Erroneous Call Operand Retirement).
+- A value's rejection can be decided after the names bound from it were
+  checked: a literal's conversion is a dispatch on the literal's own type,
+  which only a later relation determines (`"abc"?` relates the literal to
+  `Try`, a branch pattern or a destructure relates it to the pattern's shape,
+  and a literal no relation determines gets its definition's default). No
+  checking step decides it early; instead every name records, as explicit
+  producer data, the value it was bound from (`binder_source_exprs`: an
+  unannotated local assignment's own name and every name a local destructure
+  binds from the right-hand side, every name a `match` branch pattern binds
+  from the scrutinee, and every name a `for` pattern binds from the
+  iterable). `Check.valueIsErroneous` follows these links from a use of a
+  name, through any chain of aliases and destructures, and a value is
+  erroneous when any expression on that path is erroneous or any binder on it
+  binds nothing; every binder on such a path is then recorded erroneous, so
+  the erroneous-use sweep retires each of its uses, including uses checked
+  before the rejection. The query is consulted wherever a consumer decides
+  whether its operand is erroneous: a use of a name, a call-like consumer's
+  operands (Erroneous Call Operand Retirement), a `match` scrutinee (at the
+  start of the `match` and again once its branches are checked, so a `match`
+  whose scrutinee was rejected meanwhile binds nothing and is retired), a
+  `for` iterable, and the settled-state ambiguity verdicts, where a receiver
+  read only from names that bind nothing is retired without a report of its
+  own. Erroneousness only grows and the verdicts are applied at the settled
+  state, so which relation decided the rejection, and when, does not change
+  what is reported. A defaulted literal whose default a requirement then
+  rejects is reported once, as the `undetermined_type` problem for its class
+  (Diagnostics About Defaulted Types), and the warning that announced the
+  default is withdrawn once every problem is recorded.
 - An uninitialized `var` whose annotation contains an error binds nothing:
   its binders are erroneous and the declaration is a runtime error.
 - An expression statement whose expression's checked type contains an error
@@ -880,10 +908,27 @@ checker recovery. The recovery rules:
 - A conditional's or match's branch whose value is erroneous (its expression
   is in `call_operand_type_error_exprs`) is retired on its own and does not
   join the enclosing expression's result, whose type comes from the other
-  branches. Joining it would write the error into the class every branch
+  branches. The same holds for every other value that flows into a result: a
+  `return` whose value is erroneous introduces no return relation, a function
+  body whose value is erroneous is not related to its annotated result
+  (`Check.relateResultValue`), a branch body is not checked against an
+  expected result (`Check.checkBranchBodyAgainstExpected`), and an annotation
+  is related to an erroneous value without reporting a mismatch. An erroneous
+  value already owns its report, so no report relates it to anything else and
+  no report prints the erroneous type. Lowering a `return` of a checked
+  runtime error is the crash itself. Joining it would write the error into the class every branch
   shares and retire the whole expression, so a branch that is never taken
   would crash. A checked runtime error produces no value, so lowering gives it
   its consumer's representation rather than its own type.
+- A block whose final value is erroneous (its final expression is in
+  `call_operand_type_error_exprs`) retires only that final expression, by the
+  same rule as an erroneous branch: the final value does not join the block's
+  result, whose type stays unconstrained like a block that diverges in a
+  statement. Joining it would write the error into the block's type, and from
+  there into an enclosing function's return type or a binding's type, which
+  retires the whole block, function, or binding, so the block's earlier
+  statements would never run. The statements run and the program crashes
+  where the erroneous final value is evaluated.
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
   runtime error. The rejected relation has no lowering.
@@ -13544,10 +13589,13 @@ its plan:
   direct payload index.
 - `checked_error`—checking rejected the site; executing it anyway (running a
   program with reported errors) evaluates the call's receiver and arguments
-  and then crashes explicitly (rejected calls evaluate their operands, below).
+  and then crashes explicitly (dispatches that cannot run evaluate their
+  operands, below).
 - `unreachable`—the dispatcher is a constrained variable no
   specialization edge can ever supply and no default applies: the dispatch is
-  statically unreachable and lowers to an explicit crash.
+  statically unreachable, and reaching it anyway evaluates its receiver and
+  arguments and then crashes explicitly (dispatches that cannot run evaluate
+  their operands, below).
 
 Checking records `checked_error` on the equivalence class of the static-dispatch
 constraint function variable that owns the rejected edge, as the descriptor
@@ -13672,27 +13720,46 @@ the crash observed if `roc run` continues after reporting the missing method and
 execution reaches the rejected dispatch. For `unreachable`, the crash
 represents the path that checking proved cannot receive a dispatcher value.
 
-Rejected calls evaluate their operands. A call that dispatches to a rejected
-method (`checked_error`, by any of its routes) uses strict evaluation in
-every lowering mode: its receiver and arguments evaluate first, in their normal
-order and with every `dbg`, effect, and crash inside them, and then the call
-crashes with the checked-error crash (`method dispatch failed to check`). An
-operand that crashes ends the sequence, so its crash is the one observed. The
-dispatch stays explicit through lowering: Monotype lowers its operands as
-discarded statements before the `checked_error` crash (`RejectedDispatchTask`),
-and Boxy lowers them into discarded locals before the same crash
-(`beginRejectedDispatch`), exactly as a call through a dictionary slot filled
-with a crashing method evaluates its arguments before the slot crashes. A
-generated interpolation iterator operand evaluates the interpolation's segments
-and values; a generated numeral or quote operand is literal source text with
-nothing to evaluate. A `for` loop's implicit calls follow the same rule: a
-rejected `iter` evaluates the iterable first, and a rejected `next` crashes
-once `iter` has produced the iterator it receives. A derived equality or hash
-whose component reaches a rejected method has already evaluated its operands,
-because every derivation binds its operands to locals, each evaluated once and
-in order, before any component comparison or hash runs. This is distinct from
-call-operand retirement, where an operand is itself erroneous: evaluating that
-operand already crashes.
+Dispatches that cannot run evaluate their operands. A call that dispatches to a
+rejected method (`checked_error`, by any of its routes) or through an edge no
+value can reach (`unreachable`) uses strict evaluation in every lowering mode:
+its receiver and arguments evaluate first, in their normal order and with every
+`dbg`, effect, and crash inside them, and then the call crashes with its
+dispatch crash (`method dispatch failed to check`, or `dispatch on a value that
+can never exist`). An operand that crashes ends the sequence, so its crash is
+the one observed. The dispatch stays explicit through lowering: Monotype lowers
+its operands as discarded statements before the crash (`OperandSequenceTask`
+with a `dispatch_crash` tail), and Boxy lowers them into discarded locals
+before the same crash (`beginCrashingDispatch`), exactly as a call through a
+dictionary slot filled with a crashing method evaluates its arguments before
+the slot crashes. A generated interpolation iterator operand evaluates the
+interpolation's segments and values; a generated numeral or quote operand is
+literal source text with nothing to evaluate. A `for` loop's implicit calls
+follow the same rule: an `iter` that cannot run evaluates the iterable first,
+and a `next` that cannot run crashes once `iter` has produced the iterator it
+receives. A derived equality or hash whose component reaches a rejected method
+has already evaluated its operands, because every derivation binds its operands
+to locals, each evaluated once and in order, before any component comparison or
+hash runs.
+
+Boxy plans such a dispatch from its resolution alone. Planning
+(`pushCrashingDispatchOperands`) records the source operands the crash
+evaluates and nothing else: the dispatch selects no method worker, records no
+dictionary use for the enclosing worker, and adds no hidden dictionary
+parameter to it. A dispatch that cannot run has no dispatcher whose
+dictionary any caller could supply.
+
+Divergent expressions evaluate their earlier operands. Monotype lowers an
+expression that checking marked divergent without asking for its value, and
+that lowering keeps strict evaluation: a call (callee, then arguments), tuple,
+list, record (its update base, then its fields in source order), tag,
+interpolation, string, equality, hash, low-level operation, or dispatch
+evaluates each operand in order, for its effect, up to and including the first
+operand the divergence column marks divergent, and nothing after it
+(`divergentOperandsStep`). Operands before the divergence point are observable
+(`dbg`, effects, an earlier crash) and evaluate exactly as Boxy evaluates them.
+Only the divergent path does this work: a value that does not diverge lowers
+through the ordinary operand lowering.
 
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
@@ -15906,7 +15973,32 @@ instantiation, not the target's generic declared callable, supplies the method
 worker's hidden descriptors and its nested dictionaries, so a generic target
 such as `List.is_eq` reached for `List(Str)` receives `Str`'s dictionary. A
 dictionary's method evidence entries are one contiguous span even when planning
-one of them plans a nested dictionary first.
+one of them plans a nested dictionary first. Where the target's declared
+position names variables of the target's own scheme and the requirement's
+position is written only in variables the call binds (the dispatcher and the
+calling edge's instantiated variables), the method is called at the
+requirement's position with those variables replaced: relating the target's
+declared position to it binds the target's variables, as checking would at an
+evidence edge. `U64.from_numeral`, whose checked result's error row is open,
+reached for a requirement `Try(b, [InvalidNumeral(Str)])` is called at
+`Try(U64, [InvalidNumeral(Str)])`. The plan builds that representation by
+replacing the bound variables in the requirement's representation (a nominal
+use's actuals are its replaced arguments, and its backing template stays
+shared), once per position and bindings.
+
+Boxy derives callable-derived evidence (no checked evidence vector for the
+call, a `from_callable` slot, or an evidence node whose nested evidence is
+`from_callable`) as Monotype does. A receiver reachable through the callable's
+own type is the call's type at that position. A receiver checking reached only
+through another requirement's constraint callable (`constraint_callable`, such
+as the literal in `|c| c.count + 1`, whose type only `plus`'s signature
+relates to `c.count`) is the parameter's checked path walked over the call
+types of the method the same call selected for the requirement owning that
+constraint callable, which is planned earlier in the call. The call's
+requirement substitution then names that receiver, so its dictionary's
+adapter describes requirement positions written in it, and the worker's
+descriptor for the receiver is the representation its dictionary was planned
+at.
 
 Derived `is_eq` and `to_hash` compare and hash each component with that
 component type's own method, exactly as a direct comparison would, which is

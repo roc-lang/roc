@@ -220,7 +220,8 @@ NO CHANGE
 													(p-assign (ident "x"))))
 											(rhs
 												(e-num (value "1"))))
-										(e-runtime-error (tag "erroneous_value_expr"))))
+										(e-block
+											(e-runtime-error (tag "control_flow_in_expect")))))
 								(if-else
 									(e-empty_record))))
 						(e-method-eq (negated "false")
@@ -279,7 +280,8 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "I64") (builtin))))))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(e-runtime-error (tag "control_flow_in_expect")))))
 ~~~
 # TYPES
 ~~~clojure

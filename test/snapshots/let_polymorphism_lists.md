@@ -413,7 +413,20 @@ main = |_| {
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "len1"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "len2"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "len3"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -429,7 +442,7 @@ main = |_| {
 		(patt (type "_arg -> List(_a)"))
 		(patt (type "List(_a)"))
 		(patt (type "List(_a)"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "List(_a)"))
 		(expr (type "List(Dec)"))
@@ -441,5 +454,5 @@ main = |_| {
 		(expr (type "_arg -> List(_a)"))
 		(expr (type "List(_a)"))
 		(expr (type "List(_a)"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

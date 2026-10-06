@@ -19871,6 +19871,9 @@ const ProcBodyBuilder = struct {
         }
 
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error produces no value, so returning it is the
+        // crash itself; its own checked type has no representation.
+        if (expr.data == .runtime_error) return exprDone(try self.lowerCheckedRuntimeError());
         const expr_rep = self.repForType(expr.ty);
         const expr_layout = self.workerRuntimeLayoutForRep(expr_rep).layoutIdx();
         const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
@@ -20033,8 +20036,7 @@ const ProcBodyBuilder = struct {
                 .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
-            .checked_error => return try self.beginRejectedDispatch(dispatch),
-            .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+            .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(dispatch),
         }
 
         if (self.capturingLocalProcDispatchTarget(dispatch)) |local| {
@@ -20363,8 +20365,7 @@ const ProcBodyBuilder = struct {
             .structural,
             => try self.beginDispatchCall(target, plan.expr, maybe_plan, self.module.checked_bodies.expr(plan.expr).ty, next),
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .checked_error => try self.beginRejectedDispatch(plan),
-            .@"unreachable" => exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+            .checked_error, .@"unreachable" => try self.beginCrashingDispatch(plan),
         };
     }
 
@@ -20467,11 +20468,11 @@ const ProcBodyBuilder = struct {
                 const plan_id = task.for_.plan orelse
                     boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
                 const plan = self.iteratorForPlan(plan_id);
-                // A rejected `iter` call evaluates the iterable it receives
-                // and then crashes; a rejected `next` call crashes once
-                // `iter` has produced the iterator it receives.
+                // An `iter` call that cannot run evaluates the iterable it
+                // receives and then crashes; a `next` call that cannot run
+                // crashes once `iter` has produced the iterator it receives.
                 switch (plan.iter.resolution) {
-                    .checked_error => {
+                    .checked_error, .@"unreachable" => {
                         const iterable = self.module.checked_bodies.expr(plan.iterable);
                         const discarded = if (iterable.data == .runtime_error)
                             try self.addFrameLocal(.zst)
@@ -20479,15 +20480,14 @@ const ProcBodyBuilder = struct {
                             try self.addFrameLocalForType(iterable.ty);
                         const chain_items = try self.parent.allocator.alloc(ExprChainItem, 1);
                         chain_items[0] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = plan.iterable, .next = undefined } } };
-                        return exprChain(chain_items, try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"));
+                        return exprChain(chain_items, try self.lowerDispatchCrashInto(plan.iter.resolution));
                     },
-                    .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
                     .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
                     .direct_closed, .direct_parametric, .evidence_dependent => {},
                     .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
                 }
                 switch (plan.next.resolution) {
-                    .checked_error => {
+                    .checked_error, .@"unreachable" => {
                         const iterator_type = if (self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker)) |call_plan|
                             call_plan.ret_type
                         else
@@ -20500,10 +20500,9 @@ const ProcBodyBuilder = struct {
                             .plan = plan,
                             .call = plan.iter,
                             .loop_iterator = null,
-                            .next = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+                            .next = try self.lowerDispatchCrashInto(plan.next.resolution),
                         } } };
                     },
-                    .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
                     .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
                     .direct_closed, .direct_parametric, .evidence_dependent => {},
                     .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
@@ -25808,6 +25807,17 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The crash a dispatch that cannot run ends in: checking rejected it
+    /// (`checked_error`), or no value can reach its dispatcher
+    /// (`unreachable`).
+    fn lowerDispatchCrashInto(self: *ProcBodyBuilder, resolution: static_dispatch.CheckedCallResolution) Allocator.Error!LIR.CFStmtId {
+        return switch (resolution) {
+            .checked_error => try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+            .@"unreachable" => try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+            .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => boxyLowerInvariant("a runnable dispatch reached dispatch crash lowering"),
+        };
+    }
+
     fn lowerUnexecutableDispatchInto(
         self: *ProcBodyBuilder,
         comptime message: []const u8,
@@ -25823,15 +25833,14 @@ const ProcBodyBuilder = struct {
         return try self.lowerCheckedErrorDispatchInto("runtime error");
     }
 
-    /// A call to a rejected method (`checked_error`) uses strict evaluation:
-    /// its receiver and arguments evaluate in order, each into a
-    /// discarded local, and then the call crashes with the checked-error
-    /// message. An interpolation's generated segments operand
-    /// evaluates the interpolation's segments and values; a generated numeral or quote
+    /// A dispatch that cannot run (`checked_error` or `unreachable`) uses
+    /// strict evaluation: its receiver and arguments evaluate in order, each
+    /// into a discarded local, and then the call crashes. An interpolation's generated segments operand evaluates the
+    /// interpolation's segments and values; a generated numeral or quote
     /// operand is literal source text with nothing to evaluate. A checked
     /// runtime error produces no value, so its discarded local is
     /// zero-sized.
-    fn beginRejectedDispatch(
+    fn beginCrashingDispatch(
         self: *ProcBodyBuilder,
         dispatch: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error!ExprStep {
@@ -25852,7 +25861,7 @@ const ProcBodyBuilder = struct {
             },
             .generated_numeral, .generated_quote => {},
         };
-        const crash = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check");
+        const crash = try self.lowerDispatchCrashInto(dispatch.resolution);
         if (exprs.items.len == 0) return exprDone(crash);
         // Chain items run from the last to the first.
         const chain_items = try self.parent.allocator.alloc(ExprChainItem, exprs.items.len);

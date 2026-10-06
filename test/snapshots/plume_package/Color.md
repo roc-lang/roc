@@ -1094,14 +1094,37 @@ is_named_color = |str| {
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))
+								(e-block
+									(s-let
+										(p-assign (ident "#interp_2"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(s-let
+										(p-assign (ident "#interp_3"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(s-let
+										(p-assign (ident "#interp_4"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(e-runtime-error (tag "erroneous_value_expr")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))
+								(e-block
+									(s-let
+										(p-assign (ident "#interp_5"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(s-let
+										(p-assign (ident "#interp_6"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(s-let
+										(p-assign (ident "#interp_7"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(s-let
+										(p-assign (ident "#interp_8"))
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(e-runtime-error (tag "erroneous_value_expr")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

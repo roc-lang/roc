@@ -3904,6 +3904,17 @@ pub fn analyzeCheckedTypes(
     }, options);
 }
 
+/// Hash-map context for keys that are sequences of ids.
+const U32SliceContext = struct {
+    pub fn hash(_: U32SliceContext, key: []const u32) u64 {
+        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key));
+    }
+
+    pub fn eql(_: U32SliceContext, a: []const u32, b: []const u32) bool {
+        return std.mem.eql(u32, a, b);
+    }
+};
+
 const Builder = struct {
     const BodyExprVisit = struct {
         expr: CheckedExprIdentity,
@@ -4011,6 +4022,10 @@ const Builder = struct {
     /// Variable slots of hosted declarations, each bound to the representation
     /// its worker already uses for that slot.
     host_slot_reps: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
+    /// Static dictionary method call representations, keyed by what they are
+    /// built from (`requirementPositionAtCall`, `staticMethodCallRep`), so a
+    /// planning pass repeated toward its fixpoint builds each one once.
+    static_method_call_reps: std.HashMapUnmanaged([]const u32, TypeRepId, U32SliceContext, std.hash_map.default_max_load_percentage) = .{},
     host_nominals: std.HashMapUnmanaged(HostNominalKey, HostNominalEntry, HostNominalKey.Context, 80) = .{},
 
     const HostTypeKey = struct {
@@ -4087,6 +4102,9 @@ const Builder = struct {
         self.host_nominals.deinit(self.allocator);
         self.host_bindings.deinit(self.allocator);
         self.host_slot_reps.deinit(self.allocator);
+        var static_call_keys = self.static_method_call_reps.keyIterator();
+        while (static_call_keys.next()) |key| self.allocator.free(key.*);
+        self.static_method_call_reps.deinit(self.allocator);
         self.host_types.deinit(self.allocator);
         self.host_optional_slots.deinit(self.allocator);
         self.hosted_host_requests.deinit(self.allocator);
@@ -6806,6 +6824,35 @@ const Builder = struct {
         }
     }
 
+    /// A dispatch that cannot run (`checked_error` or `unreachable`) calls no
+    /// method: it evaluates its operands and then crashes. Its plan is the
+    /// source operands it evaluates, exactly the expressions its lowering
+    /// evaluates; it selects no worker and binds no dictionary.
+    fn pushCrashingDispatchOperands(
+        self: *Builder,
+        actions: *std.ArrayList(PlanAction),
+        view: ModuleView,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!void {
+        const start = beginPlanSequence(actions);
+        defer finishPlanSequence(actions, start);
+        for (plan.argsSlice(view.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try actions.append(self.allocator, exprAction(view, expr)),
+            .generated_interpolation_segments => |expr| {
+                const interpolation = switch (view.checked_bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("crashing interpolation segments referenced a non-interpolation expression"),
+                };
+                try actions.append(self.allocator, exprAction(view, interpolation.segments[0]));
+                for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                    try actions.append(self.allocator, exprAction(view, value));
+                    try actions.append(self.allocator, exprAction(view, segment));
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+    }
+
     fn stepDispatchPlanTypes(self: *Builder, actions: *std.ArrayList(PlanAction), view: ModuleView, maybe_plan: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         const plan_id = maybe_plan orelse
             boxyPlanInvariant("checked dispatch expression reached boxy planning without a dispatch plan");
@@ -6814,6 +6861,7 @@ const Builder = struct {
             boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
         }
         const plan = view.static_dispatch_plans.plans[raw];
+        if (dispatchCannotRun(plan.resolution)) return try self.pushCrashingDispatchOperands(actions, view, plan);
         _ = try self.analyzeType(view, plan.dispatcher_ty);
         _ = try self.analyzeType(view, plan.callable_ty);
         const operands = plan.argsSlice(view.static_dispatch_plans);
@@ -6843,6 +6891,9 @@ const Builder = struct {
             boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
+        // A dispatch that cannot run has no method target or dictionary; its
+        // operands were planned by `pushCrashingDispatchOperands`.
+        if (dispatchCannotRun(dispatch.resolution)) return;
         const dispatcher_rep = try self.analyzeType(view, dispatch.dispatcher_ty);
         // A transparent alias dispatches through its backing, so the
         // dispatcher's dictionaries are those of its alias-unwrapped
@@ -14077,7 +14128,7 @@ const Builder = struct {
         var index: usize = 0;
         while (index < self.plan.derived_component_calls.items.len) : (index += 1) {
             const call = self.plan.derived_component_calls.items[index];
-            const planned_hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, &call.arg_types, &call.arg_types, call.ret_type);
+            const planned_hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, &call.arg_types, &call.arg_types, call.ret_type, call.hidden_dict_args);
             self.plan.derived_component_calls.items[index].hidden_desc_args = planned_hidden_desc_args;
         }
     }
@@ -14255,6 +14306,7 @@ const Builder = struct {
                 evidence.view,
                 evidence.entries,
                 self.directCallSchemeSubstitution(direct),
+                direct.hidden_dict_args,
             );
             self.plan.direct_calls.items[direct_index].hidden_desc_args = hidden_desc_args;
         }
@@ -14278,6 +14330,7 @@ const Builder = struct {
                 if (use.stored_fn != null) try self.storedUseSchemeRepSubstitutions(worker.rep, self.plan.repForSourceType(use.callable_ty) orelse
                     boxyPlanInvariant("boxy stored callable use type was not analyzed")) else null,
                 stored_capture_substitutions.items,
+                use.hidden_dict_args,
             );
         }
         for (self.plan.nested_callable_uses.items) |*use| {
@@ -14293,6 +14346,7 @@ const Builder = struct {
                 self.useSchemeSubstitution(use.worker, use.use),
                 null,
                 &.{},
+                use.hidden_dict_args,
             );
         }
 
@@ -14318,6 +14372,7 @@ const Builder = struct {
                 if (edge) |known| self.evidenceEdgeSchemeSubstitution(construct.worker, known) else null,
                 null,
                 &.{},
+                construct.hidden_dict_args,
             );
         }
 
@@ -14387,6 +14442,7 @@ const Builder = struct {
                 if (method.kind == .inspect) try self.inspectUseSchemeSubstitution(method, &bindings) else null,
                 null,
                 &.{},
+                method.hidden_dict_args,
             );
             self.plan.descriptor_methods.items[index].hidden_desc_args = hidden_desc_args;
         }
@@ -14401,6 +14457,7 @@ const Builder = struct {
         scheme_substitution: ?SchemeCallSubstitution,
         stored_substitution: ?Span,
         stored_capture_substitutions: []const CallDescriptorRepSubstitution,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("boxy callable use type was not analyzed for descriptor captures");
@@ -14423,6 +14480,7 @@ const Builder = struct {
             scheme_substitution,
             stored_substitution,
             stored_capture_substitutions,
+            dictionary_args,
         );
     }
 
@@ -14612,7 +14670,7 @@ const Builder = struct {
                 },
                 .procedure_template, .procedure_use, .nested_expr, .generated_codec, .generated_field_iterator => {},
             }
-            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(root.worker, arg_types, arg_types, ret_type, null, null, null, null, stored_capture_substitutions.items);
+            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(root.worker, arg_types, arg_types, ret_type, null, null, null, null, stored_capture_substitutions.items, root.hidden_dict_args);
             self.plan.roots.items[root_index].hidden_desc_args = hidden_desc_args;
             // A root instantiates its worker's scheme at the root's own
             // type, so a quantified variable no host type determines is
@@ -14709,6 +14767,7 @@ const Builder = struct {
                 null,
                 try self.storedUseSchemeRepSubstitutions(worker.rep, static_fn.rep),
                 stored_capture_substitutions.items,
+                .{},
             );
         }
     }
@@ -14735,7 +14794,7 @@ const Builder = struct {
         var index: usize = 0;
         while (index < self.plan.const_eval_calls.items.len) : (index += 1) {
             const call = self.plan.const_eval_calls.items[index];
-            const planned_hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, &.{}, &.{}, call.ret_substitution.call_type);
+            const planned_hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, &.{}, &.{}, call.ret_substitution.call_type, call.hidden_dict_args);
             self.plan.const_eval_calls.items[index].hidden_desc_args = planned_hidden_desc_args;
         }
     }
@@ -14755,6 +14814,7 @@ const Builder = struct {
                 call_view,
                 checked_evidence,
                 if (call.evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(call.worker, edge) else null,
+                call.hidden_dict_args,
             );
             self.plan.generated_codec_calls.items[index].hidden_desc_args = planned_hidden_desc_args;
         }
@@ -14797,7 +14857,7 @@ const Builder = struct {
             defer self.allocator.free(operand_types);
             const call_types = try self.callSubstitutionTypes(call.arg_substitutions, .call);
             defer self.allocator.free(call_types);
-            const planned_hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, call_types, operand_types, call.ret_substitution.call_type);
+            const planned_hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, call_types, operand_types, call.ret_substitution.call_type, call.hidden_dict_args);
             self.plan.iterator_calls.items[call_index].hidden_desc_args = planned_hidden_desc_args;
         }
     }
@@ -15398,34 +15458,17 @@ const Builder = struct {
         call_arg_types: []const CheckedTypeIdentity,
         operand_arg_types: []const CheckedTypeIdentity,
         ret_type: CheckedTypeIdentity,
-    ) Allocator.Error!Span {
-        return try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
-            worker_id,
-            call_arg_types,
-            operand_arg_types,
-            ret_type,
-            null,
-            null,
-        );
-    }
-
-    fn materializeWorkerCallHiddenDescriptorArgsWithEvidence(
-        self: *Builder,
-        worker_id: WorkerPlanId,
-        call_arg_types: []const CheckedTypeIdentity,
-        operand_arg_types: []const CheckedTypeIdentity,
-        ret_type: CheckedTypeIdentity,
-        evidence_view: ?ModuleView,
-        evidence: ?[]const static_dispatch.CheckedEvidence,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
             worker_id,
             call_arg_types,
             operand_arg_types,
             ret_type,
-            evidence_view,
-            evidence,
             null,
+            null,
+            null,
+            dictionary_args,
         );
     }
 
@@ -15438,6 +15481,7 @@ const Builder = struct {
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: ?SchemeCallSubstitution,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         return try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(
             worker_id,
@@ -15449,6 +15493,7 @@ const Builder = struct {
             scheme_substitution,
             null,
             &.{},
+            dictionary_args,
         );
     }
 
@@ -15463,6 +15508,7 @@ const Builder = struct {
         scheme_substitution: ?SchemeCallSubstitution,
         stored_substitution: ?Span,
         stored_capture_substitutions: []const CallDescriptorRepSubstitution,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         if (call_arg_types.len != operand_arg_types.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping saw mismatched function arity");
@@ -15492,9 +15538,14 @@ const Builder = struct {
             scheme_substitution,
             stored_substitution,
             stored_capture_substitutions,
+            dictionary_args,
         );
     }
 
+    /// `dictionary_args` are this call's planned hidden dictionary arguments
+    /// (empty when the worker takes none): a requirement whose receiver the
+    /// call derives from its callable takes the representation its dictionary
+    /// was planned at.
     fn materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
         self: *Builder,
         worker_id: WorkerPlanId,
@@ -15508,6 +15559,7 @@ const Builder = struct {
         scheme_substitution: ?SchemeCallSubstitution,
         stored_substitution: ?Span,
         stored_capture_substitutions: []const CallDescriptorRepSubstitution,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         return try self.materializeWorkerHiddenDescriptorArgsWithStoredCaptures(
             worker_id,
@@ -15521,6 +15573,7 @@ const Builder = struct {
             scheme_substitution,
             stored_substitution,
             stored_capture_substitutions,
+            dictionary_args,
         );
     }
 
@@ -15542,6 +15595,7 @@ const Builder = struct {
         scheme_substitution: ?SchemeCallSubstitution,
         stored_substitution: ?Span,
         stored_capture_substitutions: []const CallDescriptorRepSubstitution,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         if (call_arg_reps.len != operand_arg_reps.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping saw mismatched operand arity");
@@ -15670,6 +15724,7 @@ const Builder = struct {
             evidence_view,
             evidence,
             substitutions.entries.items[0..substitutions.scheme_entries_len],
+            dictionary_args,
             &pending,
         );
         if (pending.items.len != params.len) {
@@ -15694,6 +15749,7 @@ const Builder = struct {
         maybe_view: ?ModuleView,
         maybe_evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: []const CallDescriptorRepSubstitution,
+        dictionary_args: Span,
         pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
     ) Allocator.Error!void {
         const mappings = self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs);
@@ -15718,6 +15774,7 @@ const Builder = struct {
                 ret_type,
                 maybe_view,
                 maybe_evidence,
+                dictionary_args,
             );
             if (mapping.hidden_desc_index < evidence_only_start and
                 !self.callDescriptorRepsAgreeAcrossPresenceSlot(
@@ -15752,6 +15809,7 @@ const Builder = struct {
                     ret_type,
                     maybe_view,
                     maybe_evidence,
+                    dictionary_args,
                 );
                 if (source_rep) |existing| {
                     if (existing != source.rep) {
@@ -15815,6 +15873,7 @@ const Builder = struct {
         ret_type: CheckedTypeIdentity,
         maybe_view: ?ModuleView,
         maybe_evidence: ?[]const static_dispatch.CheckedEvidence,
+        dictionary_args: Span,
     ) Allocator.Error!EvidenceDescriptorCallSource {
         if (call_arg_types.len != call_arg_reps.len) {
             boxyPlanInvariant("worker evidence descriptor call source saw mismatched argument metadata");
@@ -15825,6 +15884,24 @@ const Builder = struct {
             boxyPlanInvariant("worker evidence descriptor index exceeded its checked parameter vector");
         }
         const param = worker_evidence.params[evidence_index];
+        // A receiver reached only through another requirement's constraint
+        // callable has no path over this call's types; when the call derives
+        // its evidence from the callable, the receiver is the one its
+        // dictionary was planned at.
+        const callable_derived = if (maybe_evidence) |evidence|
+            evidence_index < evidence.len and evidence[evidence_index].resolution == .from_callable
+        else
+            true;
+        if (param.source == .constraint_callable and callable_derived) {
+            const rep = self.callDictionaryRepForEvidence(worker, evidence_index, dictionary_args);
+            return .{
+                .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+                .rep = rep,
+                .source_arg_index = null,
+                .source_value_rep = null,
+                .whole_operand = false,
+            };
+        }
         const path_view = worker_evidence.view;
         var path_steps = std.ArrayListUnmanaged(static_dispatch.EvidencePathStep).empty;
         defer path_steps.deinit(self.allocator);
@@ -15857,6 +15934,25 @@ const Builder = struct {
             .whole_operand = source_arg_index != null and
                 call_path[call_path.len - 1].stepKind() == .fn_arg,
         };
+    }
+
+    /// The representation this call planned the dictionary of the worker's
+    /// evidence parameter `evidence_index` at.
+    fn callDictionaryRepForEvidence(
+        self: *const Builder,
+        worker: WorkerPlan,
+        evidence_index: u32,
+        dictionary_args: Span,
+    ) TypeRepId {
+        if (dictionary_args.len != worker.hidden_dicts.len) {
+            boxyPlanInvariant("callable-derived evidence descriptor had no planned dictionary arguments for its call");
+        }
+        for (self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts), 0..) |hidden, index| {
+            const key = hidden.scheme_param orelse continue;
+            if (hidden.evidence_index != evidence_index or key.callable_contract != null) continue;
+            return self.plan.direct_call_hidden_dict_args.items[dictionary_args.start + index].rep;
+        }
+        boxyPlanInvariant("callable-derived evidence descriptor had no dictionary for its requirement");
     }
 
     fn evidenceCallRepAtPath(
@@ -16356,6 +16452,9 @@ const Builder = struct {
         pending: std.ArrayList(DirectCallHiddenDictionaryArg) = .empty,
         next_evidence: usize = 0,
         param_index: usize = 0,
+        /// `requirement_substitution` names receivers this call derived from
+        /// its callable, which no checked substitution supplied.
+        derived_receivers: bool = false,
         stage: union(enum) {
             next_param,
             /// Waiting on the parameter's evidence source.
@@ -16617,6 +16716,82 @@ const Builder = struct {
         return false;
     }
 
+    /// The representation of a requirement whose receiver checking reached
+    /// only through another requirement's constraint callable, when the call
+    /// derives its evidence from the callable (no checked evidence vector, or
+    /// a `from_callable` slot). The receiver is the checked path walked over
+    /// the call types of the method this call selected for the requirement
+    /// owning that constraint callable. Null for every other requirement.
+    fn constraintCallableDerivedRep(
+        self: *Builder,
+        state: *const DictionaryCallArgs,
+        param: HiddenDictionaryParam,
+        evidence_source: CallableEvidenceSource,
+    ) Allocator.Error!?TypeRepId {
+        if (evidence_source.rep != null or evidence_source.bound_evidence != null) return null;
+        const evidence_index = param.evidence_index orelse return null;
+        const scheme_param = param.scheme_param orelse return null;
+        if (scheme_param.callable_contract != null) return null;
+        if (state.evidence) |entries| {
+            if (evidence_index >= entries.len or entries[evidence_index].resolution != .from_callable) return null;
+        }
+        const worker = self.plan.workers.items[@intFromEnum(state.worker_id)];
+        const schema = self.workerEvidenceParams(worker.source) orelse
+            boxyPlanInvariant("evidence-indexed worker dictionary had no checked evidence parameters");
+        if (evidence_index >= schema.params.len) {
+            boxyPlanInvariant("worker dictionary evidence index exceeded its checked parameter vector");
+        }
+        const schema_param = schema.params[evidence_index];
+        const root = switch (schema_param.source) {
+            .constraint_callable => |root| root,
+            .scheme_callable, .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => return null,
+        };
+        var path_steps = std.ArrayListUnmanaged(static_dispatch.EvidencePathStep).empty;
+        defer path_steps.deinit(self.allocator);
+        const path = try schema.view.checked_procedure_templates.evidenceParamPath(self.allocator, schema_param, &path_steps);
+        if (path.len == 0) boxyPlanInvariant("constraint-callable evidence parameter had no checked path");
+
+        // The requirement owning the constraint callable is planned earlier
+        // in this call; its selected method's call types instantiate the
+        // callable the path is written against.
+        const root_fn_ty = typeRef(schema.view, root.callable_ty);
+        for (state.pending.items, 0..) |arg, arg_index| {
+            const hidden = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + arg_index];
+            for (self.plan.dictionarySlice(hidden.dictionaries), 0..) |requirement, method_index| {
+                if (!typeRefEql(requirement.fn_ty, root_fn_ty)) continue;
+                if (arg.method_evidence.len != hidden.dictionaries.len) {
+                    boxyPlanInvariant("constraint callable owner had no method selected at this call");
+                }
+                const method = self.plan.dictionary_method_evidence.items[arg.method_evidence.start + method_index];
+                switch (method.resolution) {
+                    .worker, .builtin_numeral => {},
+                    .structural, .constraint, .checked_error, .unreachable_value => boxyPlanInvariant("constraint callable owner's method had no concrete call types"),
+                }
+                const instantiated = method.instantiation_rep != null or method.instantiation_ret_type != null;
+                const shape = try self.dictionaryMethodCallShape(method, instantiated);
+                defer self.allocator.free(shape.arg_reps);
+                const start = switch (path[0].stepKind()) {
+                    .fn_arg => if (path[0].data < shape.arg_reps.len)
+                        shape.arg_reps[path[0].data]
+                    else
+                        boxyPlanInvariant("constraint-callable evidence path argument exceeded its method's arity"),
+                    .fn_ret => shape.ret_rep,
+                    .alias_arg,
+                    .alias_backing,
+                    .nominal_arg,
+                    .nominal_backing,
+                    .tuple_elem,
+                    .record_field,
+                    .tag_payload_tag,
+                    .tag_payload_index,
+                    => boxyPlanInvariant("constraint-callable evidence path did not begin at its callable boundary"),
+                };
+                return try self.walkEvidenceRepPath(schema.view, start, path[1..]);
+            }
+        }
+        boxyPlanInvariant("constraint-callable requirement preceded the requirement owning its constraint callable");
+    }
+
     /// Plan the current parameter's dictionary once its evidence source is
     /// known.
     fn continueDictionaryParam(
@@ -16640,7 +16815,21 @@ const Builder = struct {
             state.param_index += 1;
             return;
         }
-        const substituted_rep = state.substitutions.get(param.rep);
+        const derived_rep = try self.constraintCallableDerivedRep(state, param, evidence_source);
+        if (derived_rep) |rep| {
+            // The receiver is one of the callee's scheme variables, which
+            // requirement types are written in; the call's substitution now
+            // names it.
+            const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+            try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, state.requirement_substitution.len + 1);
+            for (0..state.requirement_substitution.len) |index| {
+                self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[state.requirement_substitution.start + index]);
+            }
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(.{ .scheme_rep = param.rep, .site_rep = rep });
+            state.requirement_substitution = .{ .start = start, .len = state.requirement_substitution.len + 1 };
+            state.derived_receivers = true;
+        }
+        const substituted_rep = derived_rep orelse state.substitutions.get(param.rep);
         if (state.param_index < state.body_param_start and substituted_rep == null and evidence_source.rep == null) {
             boxyPlanInvariant("boxy callable dictionary parameter had no checked call substitution or dispatch evidence");
         }
@@ -16705,13 +16894,18 @@ const Builder = struct {
         planned_method_evidence: Span,
     ) Allocator.Error!void {
         const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.param_index];
-        if (self.active_stored_substitution) |stored| {
-            // A stored function's use relates the worker's variables
-            // to the use's types exactly as a checked site substitution
-            // does, so its dictionaries' adapters read the same pairs.
+        // A stored function's use relates the worker's variables to the use's
+        // types exactly as a checked site substitution does, and a call that
+        // derives receivers from its callable names them the same way, so its
+        // dictionaries' adapters read the same pairs.
+        const call_substitution: ?Span = if (state.derived_receivers)
+            state.requirement_substitution
+        else
+            self.active_stored_substitution;
+        if (call_substitution) |substitution| {
             for (0..planned_method_evidence.len) |index| {
                 const method = &self.plan.dictionary_method_evidence.items[planned_method_evidence.start + index];
-                if (method.requirement_substitution.len == 0) method.requirement_substitution = stored;
+                if (method.requirement_substitution.len == 0) method.requirement_substitution = substitution;
             }
         }
         try self.registerStructuralDictionaryDerivations(state.caller_id, source_rep, source_env, planned_method_evidence);
@@ -16852,7 +17046,12 @@ const Builder = struct {
                         worker,
                         callable_type,
                         view,
-                        view.static_dispatch_plans.nestedEvidence(node),
+                        // A target reached through a procedure alias derives
+                        // its evidence from its callable.
+                        switch (node.nested) {
+                            .resolved => view.static_dispatch_plans.nestedEvidence(node),
+                            .from_callable => null,
+                        },
                         evidence_edge,
                         state.caller_id,
                     ) orelse {
@@ -16958,7 +17157,7 @@ const Builder = struct {
         worker_id: WorkerPlanId,
         callable_type: CheckedTypeIdentity,
         evidence_view: ModuleView,
-        evidence: []const static_dispatch.CheckedEvidence,
+        evidence: ?[]const static_dispatch.CheckedEvidence,
         evidence_edge: DictionaryMethodEvidence.EvidenceEdge,
         caller_id: ?WorkerPlanId,
     ) Allocator.Error!?Span {
@@ -17086,6 +17285,7 @@ const Builder = struct {
                     .resolution = .{ .worker = worker },
                     .instantiation_arg_types = instantiation.arg_types,
                     .instantiation_ret_type = instantiation.ret_type,
+                    .instantiation_rep = instantiation.rep,
                 };
                 state.awaiting = .{ .method = method, .requirement_substitution = checked_substitution };
                 const nested = try self.beginDictionaryCallArgs(machine, .{
@@ -18377,6 +18577,7 @@ const Builder = struct {
         worker_id: WorkerPlanId,
         boundary_type: CheckedTypeIdentity,
         evidence_edge: ?DictionaryMethodEvidence.EvidenceEdge,
+        dictionary_args: Span,
     ) Allocator.Error!Span {
         const boundary_rep = self.plan.repForSourceType(boundary_type) orelse
             boxyPlanInvariant("dictionary method descriptor boundary type was not analyzed");
@@ -18399,6 +18600,7 @@ const Builder = struct {
             null,
             null,
             if (evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(worker_id, edge) else null,
+            dictionary_args,
         );
     }
 
@@ -18708,12 +18910,12 @@ const Builder = struct {
                     const arg_types = try self.allocator.alloc(CheckedTypeIdentity, call_shape.arg_reps.len);
                     defer self.allocator.free(arg_types);
                     for (call_shape.arg_reps, arg_types) |rep, *ty| ty.* = self.plan.representations.items[@intFromEnum(rep)].source_type;
-                    break :blk try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(worker, call_shape.arg_reps, call_shape.arg_reps, call_shape.ret_rep, arg_types, self.plan.representations.items[@intFromEnum(call_shape.ret_rep)].source_type, null, null, null, null, &.{});
+                    break :blk try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(worker, call_shape.arg_reps, call_shape.arg_reps, call_shape.ret_rep, arg_types, self.plan.representations.items[@intFromEnum(call_shape.ret_rep)].source_type, null, null, null, null, &.{}, method.nested_dict_args);
                 } else if (method.instantiation_ret_type) |ret_type| blk: {
                     const arg_types = try self.allocator.dupe(CheckedTypeIdentity, self.plan.dictionaryMethodCallTypeSlice(method.instantiation_arg_types));
                     defer self.allocator.free(arg_types);
-                    break :blk try self.materializeWorkerCallHiddenDescriptorArgs(worker, arg_types, arg_types, ret_type);
-                } else try self.dictionaryMethodWorkerDescriptorArgs(worker, method.callable_type, method.evidence_edge);
+                    break :blk try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(worker, arg_types, arg_types, ret_type, null, null, null, method.nested_dict_args);
+                } else try self.dictionaryMethodWorkerDescriptorArgs(worker, method.callable_type, method.evidence_edge, method.nested_dict_args);
                 const requirement_plan = try self.dictionaryMethodRequirementDescriptorSources(
                     method.requirement_type,
                     call_shape.arg_reps,
@@ -18756,6 +18958,10 @@ const Builder = struct {
     const StaticDictionaryMethodInstantiation = struct {
         arg_types: Span,
         ret_type: CheckedTypeIdentity,
+        /// The call's argument and result representations, when a position
+        /// is the requirement's own position at this call
+        /// (`requirementPositionAtCall`), which no checked type names.
+        rep: ?TypeRepId = null,
     };
 
     /// The types a dictionary built for `source_rep_id` calls its method at:
@@ -18784,20 +18990,229 @@ const Builder = struct {
         if (target.arg_count != function.arg_count) {
             boxyPlanInvariant("static dictionary method target arity disagreed with its requirement");
         }
-        var arg_types = std.ArrayList(CheckedTypeIdentity).empty;
-        defer arg_types.deinit(self.allocator);
-        for (0..function.arg_count) |index| {
-            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(function.rep)].children.start + function.args_start + index];
-            const target_child = self.plan.children.items[self.plan.representations.items[@intFromEnum(target.rep)].children.start + target.args_start + index];
-            try arg_types.append(self.allocator, try self.instantiatedRequirementType(call, dispatcher_rep, source_type, child.rep, target_child.rep));
+        // One type and one representation per argument, then the result.
+        var position_types = std.ArrayList(CheckedTypeIdentity).empty;
+        defer position_types.deinit(self.allocator);
+        var position_reps = std.ArrayList(TypeRepId).empty;
+        defer position_reps.deinit(self.allocator);
+        var any_at_call = false;
+        for (0..function.arg_count + 1) |index| {
+            const is_ret = index == function.arg_count;
+            const child_rep = if (is_ret) function.ret else self.plan.children.items[self.plan.representations.items[@intFromEnum(function.rep)].children.start + function.args_start + index].rep;
+            const target_child_rep = if (is_ret) target.ret else self.plan.children.items[self.plan.representations.items[@intFromEnum(target.rep)].children.start + target.args_start + index].rep;
+            const position_type = try self.instantiatedRequirementType(call, dispatcher_rep, source_type, child_rep, target_child_rep);
+            try position_types.append(self.allocator, position_type);
+            if (try self.requirementPositionAtCall(call, dispatcher_rep, source_rep_id, child_rep, target_child_rep)) |at_call| {
+                any_at_call = true;
+                try position_reps.append(self.allocator, at_call);
+            } else {
+                try position_reps.append(self.allocator, self.plan.repForSourceType(position_type) orelse
+                    boxyPlanInvariant("static dictionary method instantiation type was not analyzed"));
+            }
         }
-        const ret_type = try self.instantiatedRequirementType(call, dispatcher_rep, source_type, function.ret, target.ret);
         const start: u32 = @intCast(self.plan.dictionary_method_call_types.items.len);
-        try self.plan.dictionary_method_call_types.appendSlice(self.allocator, arg_types.items);
+        try self.plan.dictionary_method_call_types.appendSlice(self.allocator, position_types.items[0..function.arg_count]);
         return .{
             .arg_types = .{ .start = start, .len = function.arg_count },
-            .ret_type = ret_type,
+            .ret_type = position_types.items[function.arg_count],
+            .rep = if (any_at_call) try self.staticMethodCallRep(requirement.fn_ty, position_reps.items) else null,
         };
+    }
+
+    /// The requirement's own position at this call, when the selected
+    /// target's declared position names variables of the target's scheme
+    /// and the requirement's position is written only in variables this call
+    /// binds: the dispatcher at the dictionary's type and every other
+    /// variable at the calling edge's instantiation. Relating the target's
+    /// declared position to it binds the target's variables, so the target
+    /// is called there. Null for every other position.
+    fn requirementPositionAtCall(
+        self: *Builder,
+        call: RequirementCallInstantiation,
+        dispatcher_rep: TypeRepId,
+        source_rep_id: TypeRepId,
+        rep_id: TypeRepId,
+        target_rep_id: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        if (rep_id == dispatcher_rep) return null;
+        if (!try self.plan.namesTypeVariable(self.allocator, target_rep_id)) return null;
+        if (call.get(&self.plan, rep_id) != null) return null;
+        if (!try self.plan.namesTypeVariable(self.allocator, rep_id)) return null;
+
+        // The key is the position followed by each of its variables and the
+        // representation this call binds it to.
+        var key = std.ArrayList(u32).empty;
+        defer key.deinit(self.allocator);
+        try key.appendSlice(self.allocator, &.{ 0, @intFromEnum(rep_id) });
+        var pending = std.ArrayList(TypeRepId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        defer seen.deinit(self.allocator);
+        try pending.append(self.allocator, rep_id);
+        while (pending.pop()) |current| {
+            if ((try seen.getOrPut(self.allocator, current)).found_existing) continue;
+            if (self.repIsBareVariable(current)) {
+                const site = if (current == dispatcher_rep)
+                    source_rep_id
+                else
+                    call.get(&self.plan, current) orelse return null;
+                try key.appendSlice(self.allocator, &.{ @intFromEnum(current), @intFromEnum(site) });
+                continue;
+            }
+            // A nominal's backing is written in its declaration's formals,
+            // which its arguments instantiate.
+            for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(current)].children)) |child| {
+                if (child.role == .nominal_backing) continue;
+                try pending.append(self.allocator, child.rep);
+            }
+        }
+        if (self.static_method_call_reps.get(key.items)) |existing| return existing;
+
+        var bindings = std.AutoHashMapUnmanaged(TypeRepId, TypeRepId).empty;
+        defer bindings.deinit(self.allocator);
+        var binding_index: usize = 2;
+        while (binding_index < key.items.len) : (binding_index += 2) {
+            try bindings.put(self.allocator, @enumFromInt(key.items[binding_index]), @enumFromInt(key.items[binding_index + 1]));
+        }
+        const rep = try self.substitutedRep(rep_id, &bindings);
+        try self.putStaticMethodCallRep(key.items, rep);
+        return rep;
+    }
+
+    /// `root` with each variable `bindings` names replaced by its binding:
+    /// every representation on the way to a replaced variable is copied with
+    /// the replaced children, and one naming no replaced variable is shared.
+    /// A nominal's backing template stays shared; its use's actuals are the
+    /// replaced arguments.
+    fn substitutedRep(
+        self: *Builder,
+        root: TypeRepId,
+        bindings: *const std.AutoHashMapUnmanaged(TypeRepId, TypeRepId),
+    ) Allocator.Error!TypeRepId {
+        var replaced = std.AutoHashMapUnmanaged(TypeRepId, TypeRepId).empty;
+        defer replaced.deinit(self.allocator);
+        var expanding = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        defer expanding.deinit(self.allocator);
+        const Frame = struct { rep: TypeRepId, expanded: bool };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, .{ .rep = root, .expanded = false });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const rep_id = frame.rep;
+            if (replaced.contains(rep_id)) {
+                _ = frames.pop();
+                continue;
+            }
+            if (bindings.get(rep_id)) |binding| {
+                try replaced.put(self.allocator, rep_id, binding);
+                _ = frames.pop();
+                continue;
+            }
+            if (!try self.plan.namesTypeVariable(self.allocator, rep_id)) {
+                try replaced.put(self.allocator, rep_id, rep_id);
+                _ = frames.pop();
+                continue;
+            }
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            if (!frame.expanded) {
+                if ((try expanding.getOrPut(self.allocator, rep_id)).found_existing) {
+                    boxyPlanInvariant("a substituted representation reached itself through its own variables");
+                }
+                frame.expanded = true;
+                for (0..rep.children.len) |index| {
+                    const child = self.plan.children.items[rep.children.start + index];
+                    if (child.role == .nominal_backing) continue;
+                    try frames.append(self.allocator, .{ .rep = child.rep, .expanded = false });
+                }
+                continue;
+            }
+            _ = frames.pop();
+            var copy = rep;
+            copy.descriptor = null;
+            copy.sealed_default = null;
+            copy.contains_dynamic = false;
+            const children_start: u32 = @intCast(self.plan.children.items.len);
+            // Read by index: appending grows the child table.
+            for (0..rep.children.len) |index| {
+                var child = self.plan.children.items[rep.children.start + index];
+                if (child.role != .nominal_backing) child.rep = replaced.get(child.rep).?;
+                try self.plan.children.append(self.allocator, child);
+            }
+            copy.children = .{ .start = children_start, .len = rep.children.len };
+            const variants_start: u32 = @intCast(self.plan.tag_variants.items.len);
+            for (0..rep.tag_variants.len) |index| {
+                var variant = self.plan.tag_variants.items[rep.tag_variants.start + index];
+                variant.payloads.start = variant.payloads.start - rep.children.start + children_start;
+                try self.plan.tag_variants.append(self.allocator, variant);
+            }
+            copy.tag_variants = .{ .start = variants_start, .len = rep.tag_variants.len };
+            if (rep.nominal_backing_arg_substitutions.len != 0) {
+                const uses_start: u32 = @intCast(self.plan.nominal_backing_uses.items.len);
+                try self.plan.nominal_backing_uses.append(self.allocator, self.plan.nominal_backing_uses.items[rep.nominal_backing_arg_substitutions.start]);
+                for (0..rep.nominal_backing_arg_substitutions.len) |index| {
+                    const actual: TypeRepId = @enumFromInt(self.plan.nominal_backing_uses.items[rep.nominal_backing_arg_substitutions.start + 1 + index]);
+                    // Each actual is one of the use's argument children.
+                    const substituted = replaced.get(actual) orelse if (!try self.plan.namesTypeVariable(self.allocator, actual))
+                        actual
+                    else
+                        boxyPlanInvariant("a substituted nominal use's actual was not one of its arguments");
+                    try self.plan.nominal_backing_uses.append(self.allocator, @intFromEnum(substituted));
+                }
+                copy.nominal_backing_arg_substitutions = .{ .start = uses_start, .len = rep.nominal_backing_arg_substitutions.len };
+            }
+            if (rep.is_open_tag_row) {
+                // A row whose extension is now closed is a closed row.
+                const extension = self.plan.representations.items[@intFromEnum(replaced.get(self.openRowExtensionRep(rep)).?)];
+                switch (extension.kind) {
+                    .empty_tag_union => {
+                        copy.kind = .tag_union;
+                        copy.is_open_tag_row = false;
+                    },
+                    .dynamic => {},
+                    .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union => boxyPlanInvariant("a substituted open tag row's extension was not a closed empty row or a row variable"),
+                }
+            }
+            const id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+            try self.plan.representations.append(self.allocator, copy);
+            try replaced.put(self.allocator, rep_id, id);
+        }
+        return replaced.get(root).?;
+    }
+
+    fn putStaticMethodCallRep(self: *Builder, key: []const u32, rep: TypeRepId) Allocator.Error!void {
+        const owned = try self.allocator.dupe(u32, key);
+        errdefer self.allocator.free(owned);
+        try self.static_method_call_reps.put(self.allocator, owned, rep);
+    }
+
+    /// A function representation of `fn_type` whose arguments and result are
+    /// `position_reps`, the result last.
+    fn staticMethodCallRep(self: *Builder, fn_type: CheckedTypeIdentity, position_reps: []const TypeRepId) Allocator.Error!TypeRepId {
+        var key = std.ArrayList(u32).empty;
+        defer key.deinit(self.allocator);
+        try key.appendSlice(self.allocator, &.{ 1, @intFromEnum(self.plan.repForSourceType(fn_type) orelse
+            boxyPlanInvariant("static dictionary requirement type was not analyzed")) });
+        for (position_reps) |rep| try key.append(self.allocator, @intFromEnum(rep));
+        if (self.static_method_call_reps.get(key.items)) |existing| return existing;
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
+        const arg_count = position_reps.len - 1;
+        for (position_reps, 0..) |rep, index| {
+            try children.append(self.allocator, .{
+                .role = if (index == arg_count) .function_ret else .{ .function_arg = @intCast(index) },
+                .rep = rep,
+                .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+            });
+        }
+        const id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = fn_type,
+            .kind = .erased_callable,
+            .children = try self.commitPendingChildren(children.items),
+        });
+        try self.putStaticMethodCallRep(key.items, id);
+        return id;
     }
 
     fn instantiatedRequirementType(
@@ -22127,6 +22542,16 @@ fn selectedDispatchCallableType(
     return switch (node.instantiation) {
         .callable => |callable_ty| typeRef(site_view, callable_ty),
         .monomorphic => typeRef(target_view, node.target.callable_ty),
+    };
+}
+
+/// Whether checking resolved a dispatch to a crash instead of a method:
+/// rejected (`checked_error`) or with no value that can reach its dispatcher
+/// (`unreachable`).
+fn dispatchCannotRun(resolution: static_dispatch.CheckedCallResolution) bool {
+    return switch (resolution) {
+        .checked_error, .@"unreachable" => true,
+        .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => false,
     };
 }
 
