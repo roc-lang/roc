@@ -53,10 +53,18 @@ This implies that Roc has no concept of [value identity](https://en.wikipedia.or
 
 ### [Reference Counting](#reference-counting) {#reference-counting}
 
-Heap-allocated Roc values are automatically [reference-counted](https://en.wikipedia.org/wiki/Reference_counting) ([atomically](https://en.wikipedia.org/wiki/Linearizability#Primitive_atomic_instructions), for thread-safety).
+Heap-allocated Roc values are automatically [reference-counted](https://en.wikipedia.org/wiki/Reference_counting).
 
 Heap-allocated values include strings, lists, boxes, and recursive tag unions. Numbers,
-records, tuples, and non-recursive tag unions are stack-allocated, and so are not reference counted.
+records, tuples, and non-recursive tag unions are stored inline (for example, directly on
+the stack, or directly inside a list's elements), and so are not reference counted. (A record
+can still _contain_ a string, of course, and that string has its own reference count.)
+
+The platform's host may share Roc values between threads, so reference counts on values the
+host can see are updated [atomically](https://en.wikipedia.org/wiki/Linearizability#Primitive_atomic_instructions),
+for thread-safety. Atomic updates are slower than ordinary ones, so when the compiler can tell
+that a value never reaches the host (for example, a list that a function builds up and then
+only uses internally), it updates that value's reference count without atomic instructions.
 
 ### [Reference Cycles](#reference-cycles) {#reference-cycles}
 
@@ -70,6 +78,31 @@ Roc's compiler does _opportunistic mutation_ using the [Perceus](https://www.mic
 - When their reference counts are greater than 1, they will be shallowly cloned first, and then the clone will be updated and returned.
 
 For example, when [`List.set`](../List#set) is passed a unique list (reference count is 1), then that list will have the given element replaced. When it's given a shared list (reference count is not 1), it will first shallowly clone the list, and then replace the given element in the clone. Either way, the modified list will be returned—regardless of whether the clone or the original was the one modified.
+
+This means that whether an update is fast (changing one element in place) or slow (copying the
+whole list first) depends on whether anything else still needs the old value. For example:
+
+```roc
+updated = list.set(0, 42)
+
+# If `list` is never used after this point, the set happened in place.
+```
+
+```roc
+updated = list.set(0, 42)
+
+List.len(list) # `list` is still used here, so the set had to copy it first.
+```
+
+In the second example, the compiler can't change `list` in place, because the later
+`List.len(list)` call needs to see the original. So when you're updating a large
+collection in a loop or a recursive function, make sure you aren't holding onto the
+old version anywhere.
+
+> Note that this applies to values the compiler can't see at compile time. Values that are
+> known at compile time get [evaluated during compilation](#compile-time-evaluation)
+> and embedded in the compiled program, and they're never freed. If you update one of
+> those at runtime, the update starts with a copy.
 
 ## [Block Expressions](#block-expressions) {#block-expressions}
 
@@ -147,7 +180,7 @@ crashes. See [Code With Errors](compile-time#code-with-errors).
 Note that functions are values! If you define a top-level function by calling other
 top-level functions, all of that work will be done at compile time:
 
-```
+```roc
 make_adder = |amount_to_add| |num| num + amount_to_add
 
 add_one = make_adder(1)
