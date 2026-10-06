@@ -287,6 +287,8 @@ fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: boo
     };
     const cache = try ctx.gpa.create(CompileTimeObjectCache);
     cache.* = .{ .allocator = ctx.gpa, .io = ctx.io.std_io, .store = store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
+    // One heap-owned collection supplies both lookup offers and splice artifacts.
+    // Runtime sharing must retain this exact provider, not merely its host domain.
     build_env.setCompileTimeObjectCache(.{
         .spec_cache = cache.packs.specCacheLookup(),
         .splice_source = cache.packs.spliceSource(),

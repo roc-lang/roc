@@ -374,6 +374,12 @@ pub const SpecCacheLookup = struct {
     context: *anyopaque,
     find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
 
+    /// Session capability identity, not a persistent cache key. Equal providers
+    /// expose the same immutable offer and artifact collection to both readers.
+    pub fn sameProvider(self: SpecCacheLookup, other: SpecCacheLookup) bool {
+        return self.context == other.context and self.find == other.find;
+    }
+
     pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
         return self.find(self.context, key, current_relation);
     }

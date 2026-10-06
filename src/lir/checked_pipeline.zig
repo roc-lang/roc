@@ -925,10 +925,10 @@ pub const CodeProvision = enum {
         return self != .source_bodies;
     }
 
-    /// A shared producer may erase bodies only when every consumer can use
-    /// the same objects. Other native targets keep source bodies in CTFE's
-    /// producer and may splice their own objects during their continuation.
-    pub fn sharedProducer(self: CodeProvision, other: CodeProvision) CodeProvision {
+    /// Domain compatibility is necessary but not sufficient for shared body
+    /// elision: the session must also prove both readers own the same provider.
+    /// Other targets may still splice objects in their own continuation.
+    pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
         return if (self == .host_dev_objects and other == .host_dev_objects)
             .host_dev_objects
         else
@@ -1386,8 +1386,8 @@ test "shared producer native provision requires every consumer in the host dev d
     for (std.enums.values(CodeProvision)) |host| {
         for (std.enums.values(CodeProvision)) |runtime| {
             const expected: CodeProvision = if (host == .host_dev_objects and runtime == .host_dev_objects) .host_dev_objects else .source_bodies;
-            try std.testing.expectEqual(expected, host.sharedProducer(runtime));
-            try std.testing.expectEqual(expected, runtime.sharedProducer(host));
+            try std.testing.expectEqual(expected, host.sharedDomain(runtime));
+            try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }
     }
 }

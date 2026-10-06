@@ -623,6 +623,12 @@ consumers require the shared body; it is lowered once, while CTFE may still
 splice native code in its own LIR consumer. A target-specific native provision
 does not authorize host-native CTFE body elision.
 
+Matching native domains are not proof of artifact availability. Shared elision
+also requires the same non-null lookup capability (context and callback), whose
+owner supplies both readers the same immutable offers and splice artifacts.
+This is session-local provider identity, never a persistent cache-key input.
+Separate providers retain source bodies and their independent late native hits.
+
 An early cache offer carries the full-body producer's platform-requirement
 dependency summary. An independent entry is reusable across app fillings;
 a dependent entry names its exact relation and is admitted only for that

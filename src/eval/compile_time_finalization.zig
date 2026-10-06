@@ -579,26 +579,74 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
 /// Name every reader before a shared Monotype producer can erase bodies.
 /// Boxy runtime lowering has its own producer and does not read this one.
 fn sharedProducerProvision(
-    host: lir.CheckedPipeline.CodeProvision,
+    host: lir.CheckedPipeline.TargetConfig,
     runtime: ?lir.CheckedPipeline.TargetConfig,
 ) lir.CheckedPipeline.CodeProvision {
-    const consumer = runtime orelse return host;
-    return if (consumer.specialization_strategy == .lss)
-        host.sharedProducer(consumer.code_provision)
-    else
-        host;
+    const consumer = runtime orelse return host.code_provision;
+    if (consumer.specialization_strategy != .lss) return host.code_provision;
+    const host_provider = host.spec_cache orelse return .source_bodies;
+    const runtime_provider = consumer.spec_cache orelse return .source_bodies;
+    if (!host_provider.sameProvider(runtime_provider)) return .source_bodies;
+    return host.code_provision.sharedDomain(consumer.code_provision);
+}
+
+test "shared producer requires the exact non-null provider capability" {
+    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
+    const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
+    const Callbacks = struct {
+        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+            return null;
+        }
+        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+            // Distinct behavior keeps optimized builds from merging callbacks.
+            const count: *u8 = @ptrCast(context);
+            count.* += 1;
+            return null;
+        }
+    };
+    var contexts = [_]u8{ 0, 0 };
+    const provider: Lookup = .{ .context = &contexts[0], .find = Callbacks.first };
+    const Provision = lir.CheckedPipeline.CodeProvision;
+    for (std.enums.values(Provision)) |host_domain| {
+        const host: lir.CheckedPipeline.TargetConfig = .{ .code_provision = host_domain, .spec_cache = provider };
+        for (std.enums.values(Provision)) |runtime_domain| {
+            for ([_]?Lookup{
+                provider,
+                .{ .context = &contexts[1], .find = Callbacks.first },
+                .{ .context = &contexts[0], .find = Callbacks.second },
+                null,
+            }, 0..) |lookup, index| {
+                const runtime: lir.CheckedPipeline.TargetConfig = .{
+                    .specialization_strategy = .lss,
+                    .code_provision = runtime_domain,
+                    .spec_cache = lookup,
+                };
+                try std.testing.expectEqual(
+                    if (index == 0) host_domain.sharedDomain(runtime_domain) else Provision.source_bodies,
+                    sharedProducerProvision(host, runtime),
+                );
+                var boxy = runtime;
+                boxy.specialization_strategy = .boxy;
+                try std.testing.expectEqual(host_domain, sharedProducerProvision(host, boxy));
+                var missing_host = host;
+                missing_host.spec_cache = null;
+                try std.testing.expectEqual(Provision.source_bodies, sharedProducerProvision(missing_host, runtime));
+            }
+        }
+        try std.testing.expectEqual(host_domain, sharedProducerProvision(host, null));
+    }
 }
 
 test "declared consumers choose shared producer provision before discovery" {
     const Provision = lir.CheckedPipeline.CodeProvision;
     for (std.enums.values(Provision)) |host| {
-        try std.testing.expectEqual(host, sharedProducerProvision(host, null));
+        try std.testing.expectEqual(host, sharedProducerProvision(.{ .code_provision = host }, null));
         for (std.enums.values(Provision)) |runtime| {
-            try std.testing.expectEqual(host.sharedProducer(runtime), sharedProducerProvision(host, .{
+            try std.testing.expectEqual(Provision.source_bodies, sharedProducerProvision(.{ .code_provision = host }, .{
                 .specialization_strategy = .lss,
                 .code_provision = runtime,
             }));
-            try std.testing.expectEqual(host, sharedProducerProvision(host, .{
+            try std.testing.expectEqual(host, sharedProducerProvision(.{ .code_provision = host }, .{
                 .specialization_strategy = .boxy,
                 .code_provision = runtime,
             }));
@@ -679,7 +727,7 @@ pub fn finalizeProgram(
         var host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
         // All readers of this producer are declared before any cache hit can
         // erase a source body. CTFE still owns its native late-splice policy.
-        host_target.code_provision = sharedProducerProvision(host_target.code_provision, runtime_target);
+        host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
         // Counting work observes the evaluation without shaping it.
         if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
