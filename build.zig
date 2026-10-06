@@ -5987,11 +5987,9 @@ fn addMachineCodeShimLib(
         const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
         for ([_][]const u8{
             "int.zig",                 "udivmod.zig",             "arm.zig",
-            "udivmoddi4_test.zig",     "udivmodti4_test.zig",     "divti3_test.zig",
-            "modti3_test.zig",         "floatundidf.zig",         "floatundisf.zig",
-            "fixdfdi.zig",             "fixunsdfdi.zig",          "fixsfdi.zig",
-            "fixunssfdi.zig",          "float_from_int.zig",      "int_from_float.zig",
-            "float_from_int_test.zig", "int_from_float_test.zig",
+            "udivmodsi4_test.zig",     "udivmoddi4_test.zig",     "udivmodti4_test.zig",
+            "divti3_test.zig",         "modti3_test.zig",         "float_from_int.zig",
+            "int_from_float.zig",      "float_from_int_test.zig", "int_from_float_test.zig",
         }) |file| {
             _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
         }
