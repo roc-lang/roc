@@ -166,6 +166,7 @@ pub const LiteralCallEdge = union(enum) {
     dictionary_method: struct { caller: ?WorkerPlanId, method: u32 },
     literal_initializer: u32,
     generated_callable: GeneratedCallableKey,
+    context_construct: u32,
 };
 
 const CheckedPatternIdentity = struct {
@@ -3476,6 +3477,7 @@ const LiteralPlanner = struct {
             }
         }
         for (plan.derived_component_calls.items, 0..) |*call, index| call.hidden_dict_args = try self.expandArguments(call.frame, call.hidden_dict_args, self.call_edges.get(.{ .derived = @intCast(index) }).?);
+        for (plan.context_constructs.items, 0..) |*construct, index| construct.hidden_dict_args = try self.expandArguments(construct.caller, construct.hidden_dict_args, self.call_edges.get(.{ .context_construct = @intCast(index) }).?);
         inline for (.{ .{ "roots", "root" }, .{ "const_eval_calls", "const_eval" } }) |channel| {
             for (@field(plan, channel[0]).items, 0..) |*call, index| call.hidden_dict_args = try self.expandArguments(null, call.hidden_dict_args, self.call_edges.get(@unionInit(LiteralCallEdge, channel[1], @intCast(index))).?);
         }
@@ -3680,6 +3682,16 @@ const LiteralPlanner = struct {
         for (plan.derived_component_calls.items, 0..) |call, index| {
             try self.addCall(.{ .derived = @intCast(index) }, call.frame, call.worker, call.hidden_desc_args, call.hidden_dict_args, .{});
             try self.addDictionaries(call.frame, call.hidden_dict_args);
+        }
+        // A context argument's callable is constructed in its caller's frame,
+        // which supplies the constructed worker's literal parameters.
+        for (plan.context_constructs.items, 0..) |construct, index| {
+            const scheme = if (construct.evidence_edge) |edge|
+                try self.builder.evidenceEdgeSchemeRepSubstitutions(construct.worker, construct.callable_type, edge)
+            else
+                Span{};
+            try self.addCall(.{ .context_construct = @intCast(index) }, construct.caller, construct.worker, construct.hidden_desc_args, construct.hidden_dict_args, scheme);
+            try self.addDictionaries(construct.caller, construct.hidden_dict_args);
         }
         inline for (.{ .{ "roots", "root" }, .{ "const_eval_calls", "const_eval" } }) |channel| {
             for (@field(plan, channel[0]).items, 0..) |call, index| {
@@ -12647,7 +12659,26 @@ const Builder = struct {
     /// from its callable (`directCallCallableDerivedSubstitution`).
     fn directCallSchemeRepSubstitutions(self: *Builder, direct: DirectCallPlan) Allocator.Error!Span {
         if (self.directCallSchemeSubstitution(direct)) |substitution| return try self.appendSchemeRepSubstitutions(substitution);
-        return try self.directCallCallableDerivedSubstitution(direct) orelse .{};
+        const relation = try self.directCallCallableDerivedSubstitution(direct) orelse return .{};
+        // Variables only the callee's requirements name, such as the parts of
+        // an interpolation in its body, are bound by the pairs its planned
+        // dictionaries derived (`DirectCallHiddenDictionaryArg.derived_substitution`).
+        const derived = for (self.plan.directCallHiddenDictionaryArgSlice(direct.hidden_dict_args)) |arg| {
+            if (arg.derived_substitution.len != 0) break arg.derived_substitution;
+        } else return relation;
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, relation.len + derived.len);
+        for (relation.start..relation.start + relation.len) |index| {
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[index]);
+        }
+        derived: for (derived.start..derived.start + derived.len) |index| {
+            const pair = self.plan.scheme_rep_substitutions.items[index];
+            for (self.plan.scheme_rep_substitutions.items[start..]) |bound| {
+                if (bound.scheme_rep == pair.scheme_rep) continue :derived;
+            }
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(pair);
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
     }
 
     /// For a dispatch whose target derives its evidence from its callable,
@@ -16471,6 +16502,10 @@ const Builder = struct {
         /// `requirement_substitution` relates the worker's types to the
         /// call's (`DictionaryCallRequest.relation`).
         relates_types: bool = false,
+        /// Static methods planned for this call that read its requirement
+        /// substitution, which grows while the call's parameters are planned;
+        /// each reads the complete substitution once planning finishes.
+        substitution_methods: std.ArrayList(u32) = .empty,
         stage: union(enum) {
             next_param,
             /// Waiting on the parameter's evidence source.
@@ -16483,6 +16518,7 @@ const Builder = struct {
             allocator.free(self.arg_types);
             self.substitutions.deinit(allocator);
             self.pending.deinit(allocator);
+            self.substitution_methods.deinit(allocator);
         }
     };
 
@@ -16697,6 +16733,9 @@ const Builder = struct {
                 }
             }
             if (state.binds_requirement_variables) try self.bindRequirementVariables(state);
+            for (state.substitution_methods.items) |method_id| {
+                self.plan.dictionary_method_evidence.items[method_id].requirement_substitution = state.requirement_substitution;
+            }
             if (state.derived_receivers) {
                 for (state.pending.items) |*arg| arg.derived_substitution = state.requirement_substitution;
             }
@@ -16803,6 +16842,34 @@ const Builder = struct {
         self.plan.scheme_rep_substitutions.appendSliceAssumeCapacity(added.items);
         state.requirement_substitution = .{ .start = start, .len = state.requirement_substitution.len + @as(u32, @intCast(added.items.len)) };
         state.derived_receivers = true;
+
+        // A static method was instantiated when it was planned, before these
+        // variables were bound, so a position written in one of them took
+        // the selected target's declared type. With every variable now bound,
+        // that position is the requirement's own position at this call.
+        for (state.pending.items, 0..) |arg, arg_index| {
+            if (arg.source != .static_rep) continue;
+            const hidden = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + arg_index];
+            if (arg.method_evidence.len != hidden.dictionaries.len) continue;
+            for (0..hidden.dictionaries.len) |method_index| {
+                const requirement = self.plan.dictionaries.items[hidden.dictionaries.start + method_index];
+                const method_id = arg.method_evidence.start + method_index;
+                const method = self.plan.dictionary_method_evidence.items[method_id];
+                if (method.resolution != .worker or method.instantiation_rep != null or method.instantiation_ret_type == null) continue;
+                const instantiation = try self.staticDictionaryMethodInstantiation(self.requirementCallInstantiation(state), arg.rep, requirement, method.callable_type);
+                if (instantiation.rep == null) continue;
+                // Nested dictionaries are planned at the method's
+                // instantiation, and a method's own positions bind none of
+                // the variables only its caller's requirements name.
+                if (method.nested_dict_args.len != 0) {
+                    boxyPlanInvariant("static dictionary method with nested dictionaries changed instantiation after its requirement variables were bound");
+                }
+                const updated = &self.plan.dictionary_method_evidence.items[method_id];
+                updated.instantiation_arg_types = instantiation.arg_types;
+                updated.instantiation_ret_type = instantiation.ret_type;
+                updated.instantiation_rep = instantiation.rep;
+            }
+        }
     }
 
     /// The representation of a requirement whose receiver checking reached
@@ -16988,10 +17055,12 @@ const Builder = struct {
         // checked site substitution does, so its dictionaries' adapters read
         // the same pairs.
         if (state.derived_receivers or state.relates_types) {
-            const substitution = state.requirement_substitution;
             for (0..planned_method_evidence.len) |index| {
-                const method = &self.plan.dictionary_method_evidence.items[planned_method_evidence.start + index];
-                if (method.requirement_substitution.len == 0) method.requirement_substitution = substitution;
+                const method_id: u32 = @intCast(planned_method_evidence.start + index);
+                const method = &self.plan.dictionary_method_evidence.items[method_id];
+                if (method.requirement_substitution.len != 0) continue;
+                method.requirement_substitution = state.requirement_substitution;
+                try state.substitution_methods.append(self.allocator, method_id);
             }
         }
         try self.registerStructuralDictionaryDerivations(state.caller_id, source_rep, source_env, planned_method_evidence);
@@ -18584,14 +18653,25 @@ const Builder = struct {
             arg_type.* = arg.source_type;
         }
         const ret_type = self.plan.representations.items[@intFromEnum(boundary_function.ret)].source_type;
-        return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
+        const scheme_substitution = if (evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(worker_id, edge) else null;
+        // A target deriving its evidence from its callable has no checked
+        // substitution; its type related to the boundary names its variables.
+        const relation = if (scheme_substitution != null)
+            null
+        else if (evidence_edge) |edge|
+            try self.evidenceEdgeCallableRelation(worker_id, boundary_type, edge)
+        else
+            null;
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(
             worker_id,
             arg_types,
             arg_types,
             ret_type,
             null,
             null,
-            if (evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(worker_id, edge) else null,
+            scheme_substitution,
+            relation,
+            &.{},
             dictionary_args,
         );
     }
@@ -18604,9 +18684,21 @@ const Builder = struct {
     /// (`evidenceEdgeCallableRelation`).
     fn dictionaryMethodSchemeRepSubstitutions(self: *Builder, method: DictionaryMethodEvidence) Allocator.Error!Span {
         const edge = method.evidence_edge orelse return .{};
-        const worker = method.resolution.worker;
+        return try self.evidenceEdgeSchemeRepSubstitutions(method.resolution.worker, method.callable_type, edge);
+    }
+
+    /// The scheme representation pairs an evidence edge binds on the worker
+    /// it selected: its checked substitution, or the relation of a target
+    /// that derives its evidence from its callable
+    /// (`evidenceEdgeCallableRelation`).
+    fn evidenceEdgeSchemeRepSubstitutions(
+        self: *Builder,
+        worker: WorkerPlanId,
+        callable_type: CheckedTypeIdentity,
+        edge: DictionaryMethodEvidence.EvidenceEdge,
+    ) Allocator.Error!Span {
         if (self.evidenceEdgeSchemeSubstitution(worker, edge)) |substitution| return try self.appendSchemeRepSubstitutions(substitution);
-        return try self.evidenceEdgeCallableRelation(worker, method.callable_type, edge) orelse .{};
+        return try self.evidenceEdgeCallableRelation(worker, callable_type, edge) orelse .{};
     }
 
     /// For an evidence edge whose target derives its evidence from its
@@ -18916,9 +19008,43 @@ const Builder = struct {
     }
 
     fn materializeDictionaryMethodDescriptorSources(self: *Builder) Allocator.Error!void {
-        for (self.plan.dictionary_method_evidence.items) |*method| {
+        var live = try self.plannedDictionaryMethods();
+        defer live.deinit(self.allocator);
+        for (self.plan.dictionary_method_evidence.items, 0..) |*method, index| {
+            if (!live.isSet(index)) continue;
             try self.materializeDictionaryMethodDescriptorSource(method);
         }
+    }
+
+    /// The dictionary methods the planned calls pass, directly or nested in
+    /// another passed method. Dictionary planning repeats until it reaches a
+    /// fixpoint and replans each call's dictionaries on every pass, so the
+    /// method table also holds the records of passes that a later pass
+    /// replaced, planned before their workers' dictionary parameters were
+    /// known; no call passes those.
+    fn plannedDictionaryMethods(self: *Builder) Allocator.Error!std.DynamicBitSetUnmanaged {
+        var live = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.plan.dictionary_method_evidence.items.len);
+        errdefer live.deinit(self.allocator);
+        var pending = std.ArrayList(Span).empty;
+        defer pending.deinit(self.allocator);
+        inline for (.{
+            "roots",                  "direct_calls",            "callable_uses",
+            "nested_callable_uses",   "context_constructs",      "descriptor_methods",
+            "const_eval_calls",       "iterator_calls",          "generated_codec_calls",
+            "derived_component_calls", "static_fns",
+        }) |field| {
+            for (@field(self.plan, field).items) |record| try pending.append(self.allocator, record.hidden_dict_args);
+        }
+        while (pending.pop()) |args| {
+            for (self.plan.directCallHiddenDictionaryArgSlice(args)) |arg| {
+                for (arg.method_evidence.start..arg.method_evidence.start + arg.method_evidence.len) |method_index| {
+                    if (live.isSet(method_index)) continue;
+                    live.set(method_index);
+                    try pending.append(self.allocator, self.plan.dictionary_method_evidence.items[method_index].nested_dict_args);
+                }
+            }
+        }
+        return live;
     }
 
     fn materializeDictionaryMethodDescriptorSource(self: *Builder, method: *DictionaryMethodEvidence) Allocator.Error!void {

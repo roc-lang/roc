@@ -16076,7 +16076,23 @@ substitution names these variables, so its dictionaries' adapters describe
 requirement positions written in them, and each of the call's planned
 dictionary arguments records that substitution
 (`DirectCallHiddenDictionaryArg.derived_substitution`), which the call's
-hidden descriptors read as they read a checked substitution.
+hidden descriptors read as they read a checked substitution. These variables
+are bound only after every dictionary of the call is planned, so each static
+method the call planned then reads the complete substitution, and a method
+position written in one of them (the parts of an interpolation, `List(b)` in
+`from_interpolation`'s requirement) is re-instantiated at the requirement's
+own position at the call. The call's literal demand edge binds the derived
+pairs as well. A target reached through an evidence edge whose nested evidence
+is `from_callable` relates its type to the edge's callable type for its hidden
+descriptors, as its dictionaries do.
+
+A context construct (a callable a context-specialized worker captures, built
+in its caller's frame) is a literal demand edge from that frame to the
+constructed worker, so the worker's literal parameters are supplied there.
+Dictionary planning replans every call's dictionaries on each pass until it
+reaches a fixpoint, so method records a later pass replaced stay in the
+table; descriptor sources are materialized only for the methods a planned
+call passes, directly or nested.
 
 Derived `is_eq` and `to_hash` compare and hash each component with that
 component type's own method, exactly as a direct comparison would, which is
