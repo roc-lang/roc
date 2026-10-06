@@ -2785,6 +2785,7 @@ test "golden help: roc --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                         Print help
         \\
     );
@@ -2826,6 +2827,7 @@ test "golden help: roc run --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                     Print help
         \\
     );
@@ -2854,6 +2856,7 @@ test "golden help: roc install --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                     Print help
         \\
     );
@@ -2897,6 +2900,7 @@ test "golden help: roc build --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                         Print help
         \\
     );
@@ -2963,6 +2967,7 @@ test "golden help: roc test --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                          Print help
         \\
     );
@@ -3058,6 +3063,7 @@ test "golden help: roc check --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help         Print help
         \\
     );
@@ -3077,6 +3083,7 @@ test "golden help: roc docs --help" {
         \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
         \\      --serve          Start an HTTP server to view the documentation
         \\      --with-lang-ref  Include the language reference articles from docs/langref
+        \\      --builtins       Document the builtins of this roc compiler instead of a .roc file
         \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
         \\      --no-cache       Disable caching
         \\      --verbose        Enable verbose output including cache statistics
@@ -3086,6 +3093,7 @@ test "golden help: roc docs --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help           Print help
         \\
     );
@@ -3111,6 +3119,7 @@ test "golden help: roc deps --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                   Print help
         \\
     );
@@ -3138,6 +3147,7 @@ test "golden help: roc bump --help" {
         \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
+        \\                               Also caps each platform bundle during extraction
         \\  -h, --help                 Print help
         \\
         \\Both the old and new package must compile with this compiler. Only the

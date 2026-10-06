@@ -4,7 +4,6 @@
 //! Roc expressions compiled to WebAssembly via the Bytebox runtime.
 
 const std = @import("std");
-const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");

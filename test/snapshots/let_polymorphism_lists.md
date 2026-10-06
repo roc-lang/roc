@@ -426,10 +426,23 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(s-runtime-error (tag "erroneous_value_expr"))
-				(s-runtime-error (tag "erroneous_value_expr"))
-				(s-runtime-error (tag "erroneous_value_expr"))
-				(e-runtime-error (tag "erroneous_value_expr"))))))
+				(s-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(s-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(s-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

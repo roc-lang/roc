@@ -17,7 +17,6 @@
 //! - CC: Calling convention constants
 
 const std = @import("std");
-const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");

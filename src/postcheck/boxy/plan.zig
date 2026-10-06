@@ -12638,7 +12638,7 @@ const Builder = struct {
             .str_from_quote => |quote| quote.plan,
             .interpolation => |interpolation| interpolation.plan,
             .numeral => |numeral| numeral.plan,
-            else => boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call"),
         };
     }
 

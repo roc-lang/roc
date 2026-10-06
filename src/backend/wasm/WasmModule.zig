@@ -5,7 +5,6 @@
 //! for surgical linking.
 
 const std = @import("std");
-const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const shim_symbols = @import("builtins").shim_symbols;
 const Allocator = std.mem.Allocator;

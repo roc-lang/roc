@@ -29347,7 +29347,7 @@ fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error
         .e_field_access => |field| try pool.append(self.gpa, field.receiver),
         .e_tuple_access => |access| try pool.append(self.gpa, access.tuple),
         .e_for => |for_| try pool.append(self.gpa, for_.expr),
-        else => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_empty_list, .e_match, .e_if, .e_empty_record, .e_block, .e_zero_argument_tag, .e_closure, .e_lambda, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_hosted_lambda => {},
     }
 }
 

@@ -3470,7 +3470,7 @@ This section governs the raw-byte boundaries: the paths that persist a value by
 copying its in-memory representation rather than encoding it field by field, which
 is how the checked module cache, the baked builtin `CheckedModule` blob, and the
 `SafeList` and `SafeMultiList` tables they hold are written, and how a persisted
-LirImage and the Boxy sidecar copy their tables into an executable. Other
+LirImage and the Boxy sidecar copy their tables into an executable binary. Other
 serialized forms in the compiler encode explicitly and are not bound by the rules
 here.
 
@@ -5402,13 +5402,13 @@ order up to and including the first erroneous one: a call's callee then its
 arguments, a method call's receiver then its arguments, a binary operator's
 two operands, an interpolation's parts, a tuple's, list's, or tag's items, a
 record's update base then its fields in source order, and a `for` loop's
-iterable. The erroneous-value sweep publishes that sequence as the runtime
+iterable. The erroneous-value sweep records that sequence as the runtime
 error's `evaluated` operands (`CIR.Expr.e_runtime_error.evaluated`, checked
 `CheckedRuntimeError.evaluated`) and keeps those operands' subtrees live;
 only the operands after the erroneous one are invalidated. An operand whose
 solved type contains an error by sweep time is itself erroneous, so the
-published sequence ends before it. A statement retired for such a value
-expression publishes as an expression statement of that runtime error, so
+recorded sequence ends before it. A statement retired for such a value
+expression becomes an expression statement of that runtime error, so
 the value is still evaluated where the statement runs. A record update with
 an erroneous field value does not relate that value into its base's row and
 is retired the same way. Monotype lowers a runtime error with `evaluated`
@@ -20692,9 +20692,9 @@ outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
 
 The producer of a copied LirImage states which of two byte contracts the image
-has. A *persisted* image is one whose bytes are written into an artifact that
+has. A *persisted* image is one whose bytes are written into a file that
 outlives the compiler process, as `roc build --opt=interpreter` embeds one in the
-executable it links. It is a raw-byte boundary under "Fully Defined Persisted
+executable binary it links. It is a raw-byte boundary under "Fully Defined Persisted
 Bytes": every scrubbable table item is canonicalized in the image's own copy,
 never in the store it was copied from, and the producer supplies a zero-filled
 image buffer so the bytes between allocations are defined too. A persisted image
@@ -20762,7 +20762,7 @@ Every intermediate file a build writes, such as generated bitcode and objects,
 extracted runtime objects, and linker scratch files, lies in a scratch
 directory that only that build writes to. The build removes the directory when
 it finishes unless `--keep-temp` is given. A directory that builds share holds
-only content-addressed cache entries. A build publishes such an entry by
+only content-addressed cache entries. A build adds such an entry by
 writing it in full inside its own scratch directory and renaming it into place,
 so no build ever reads a file that another build is still writing or a file
 that belongs to a different program.
@@ -20791,7 +20791,7 @@ No code compiled into a platform archive or shim reads or writes a
 thread-local. The thread-local scope that names the current `RocOps` belongs to
 the compiler's in-process host alone: entering it from a platform build is a
 compile error, and every builtin the interpreter calls receives the
-interpreter's `RocOps` as an explicit argument. An interpreter-mode executable
+interpreter's `RocOps` as an explicit argument. An interpreter-mode executable binary
 therefore runs every program the interpreter run path runs, including in a
 process that has no thread-local storage.
 

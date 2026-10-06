@@ -94,19 +94,17 @@ test "pathHasUnbundleErr - Windows reserved names" {
 
 test "pathHasUnbundleErr - backslash handling" {
     const builtin = @import("builtin");
-    const attacks = [_]struct { path: []const u8, windows_reason: unbundle.PathValidationReason }{
-        .{ .path = "..\\x", .windows_reason = .path_traversal },
-        .{ .path = "a\\..\\..\\x", .windows_reason = .path_traversal },
-        .{ .path = "a\\.\\x", .windows_reason = .current_directory_reference },
-        .{ .path = "a/..\\x", .windows_reason = .path_traversal },
+    // Components end at either separator on every host, so `..` and `.`
+    // cannot hide behind a backslash.
+    const attacks = [_]struct { path: []const u8, reason: unbundle.PathValidationReason }{
+        .{ .path = "..\\x", .reason = .path_traversal },
+        .{ .path = "a\\..\\..\\x", .reason = .path_traversal },
+        .{ .path = "a\\.\\x", .reason = .current_directory_reference },
+        .{ .path = "a/..\\x", .reason = .path_traversal },
     };
     for (attacks) |attack| {
         const err = unbundle.pathHasUnbundleErr(attack.path).?;
-        if (builtin.os.tag == .windows) {
-            try testing.expectEqual(attack.windows_reason, err.reason);
-        } else {
-            try testing.expect(err.reason == .contained_backslash_on_unix);
-        }
+        try testing.expectEqual(attack.reason, err.reason);
     }
 
     const ordinary = unbundle.pathHasUnbundleErr("path\\with\\backslash");

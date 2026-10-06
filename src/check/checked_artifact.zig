@@ -16234,7 +16234,6 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .method_eq,
         .type_dispatch_call,
         .tuple_access,
-        .runtime_error,
         .crash,
         .dbg,
         .expect_err,
@@ -16246,6 +16245,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .for_,
         => {},
         inline .str, .list, .tuple => |items| allocator.free(items),
+        .runtime_error => |runtime_error| allocator.free(runtime_error.evaluated),
         // `branches` is an owned array of range-form branches; the patterns and
         // binder remaps they reference live in the copier's match-branch pools.
         .match_ => |match| allocator.free(match.branches),

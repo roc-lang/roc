@@ -19557,10 +19557,10 @@ const ProcBodyBuilder = struct {
             .runtime_error,
             => null,
         };
-        if (rhs) |expr| switch (self.module.checked_bodies.expr(expr).data) {
-            .runtime_error => |runtime_error| return try self.beginRuntimeError(runtime_error.evaluated),
-            else => {},
-        };
+        if (rhs) |expr| {
+            const data = self.module.checked_bodies.expr(expr).data;
+            if (data == .runtime_error) return try self.beginRuntimeError(data.runtime_error.evaluated);
+        }
         return switch (statement.data) {
             // A dangling annotation, such as a derived method marker of a
             // type declared in this body, has no runtime value to bind.
