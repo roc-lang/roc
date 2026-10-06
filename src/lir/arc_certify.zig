@@ -119,6 +119,12 @@
 //!   values, so records their target cannot distinguish have the same effect
 //!   under every frame. Computing that summary also checks every unit the
 //!   record carries reaches the target.
+//! - Arrivals are deduplicated by their walk and frame summary. Versions
+//!   only grow, so a walk covering a repeated arrival covers the earlier
+//!   one too, and every replay or terminal check against the repeat is the
+//!   earlier one's again. A chain of joins each forwarding to the previous
+//!   one would otherwise collect one arrival per join below it at every
+//!   level, costing the square of the chain's length.
 //!
 //! A unit carried through a region by a frame local is checked where that
 //! local is summarized: at the enclosing region's jumps and terminals.
@@ -1813,6 +1819,12 @@ const JoinGroup = struct {
     /// and the summary its target computes for it, so jumps the target
     /// cannot tell apart replay once.
     record_lookup: std.AutoHashMapUnmanaged(FrameRecordKey, u32) = .empty,
+    /// One arrival per walk and frame summary. An arrival repeating an
+    /// earlier one's walk and frame summary is covered by every walk that
+    /// covers the earlier one (versions only grow), and each replay or
+    /// terminal check against it repeats the earlier one's exactly, so it is
+    /// not registered.
+    arrival_lookup: std.AutoHashMapUnmanaged(ArrivalKey, void) = .empty,
     /// Highest version of a walk of this group that reached a terminal.
     /// Every frame such a walk covers must already be balanced there.
     terminal_version: ?u32 = null,
@@ -1820,6 +1832,11 @@ const JoinGroup = struct {
 
 const FrameRecordKey = struct {
     target: u32,
+    digest: u64,
+};
+
+const ArrivalKey = struct {
+    walk: u32,
     digest: u64,
 };
 
@@ -2292,6 +2309,7 @@ const Certifier = struct {
                 group.arrivals.deinit(self.allocator);
                 group.records.deinit(self.allocator);
                 group.record_lookup.deinit(self.allocator);
+                group.arrival_lookup.deinit(self.allocator);
             }
             record.groups.deinit(self.allocator);
         }
@@ -5559,6 +5577,9 @@ const Certifier = struct {
         }
         if (entry) {
             const frame = try self.buildArrivalFrame(state);
+            const key = ArrivalKey{ .walk = walk_index, .digest = summaryDigest(record.body, try self.summarize(&frame)) };
+            const seen = try record.groups.items[group_index].arrival_lookup.getOrPut(self.allocator, key);
+            if (seen.found_existing) return;
             try self.addArrival(work, target, group_index, .{ .walk = walk_index, .frame = frame, .version = record.groups.items[group_index].version });
         }
     }
