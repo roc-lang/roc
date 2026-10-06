@@ -52,7 +52,7 @@ fn free(context: *anyopaque, memory: []u8, alignment: Alignment, return_address:
 
 test "growth allocates identically on every run" {
     const Probe = struct {
-        fn run(gpa: Allocator) !usize {
+        fn run(gpa: Allocator) Allocator.Error!usize {
             var failing = std.testing.FailingAllocator.init(gpa, .{});
             var list: std.ArrayList(u64) = .empty;
             defer list.deinit(failing.allocator());
