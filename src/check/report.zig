@@ -1800,7 +1800,7 @@ pub const ReportBuilder = struct {
             try D.renderSlice(&.{
                 D.bytes("Use an explicit"),
                 D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("to reconstruct each error variant in the return type, or wrap the original error in a tag of that type. Forwarding the unchanged error payload does not convert it."),
+                D.bytes("to reconstruct each error variant in the return type, or wrap the original error in a tag of that type. Reconstructed payloads must also match the expected payload types. Forwarding the unchanged error payload does not convert it."),
             }, self, &report);
         } else {
             try D.renderSlice(&.{
@@ -1846,7 +1846,7 @@ pub const ReportBuilder = struct {
                     }
                     cursor = row.ext;
                 },
-                else => return false,
+                .box, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
             }
         }
         if (!has_tags) return false;

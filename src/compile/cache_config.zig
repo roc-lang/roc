@@ -287,7 +287,8 @@ pub const Constants = struct {
     /// 134: Hoisted roots record an unannotated top-level value that always
     ///      crashes as a valueless binding.
     /// 135: Module environments persist diagnostic host-return provenance.
-    pub const CACHE_VERSION = 135;
+    /// 136: Hosted Try errors no longer widen implicitly at question operators.
+    pub const CACHE_VERSION = 136;
 };
 
 /// Configuration for the Roc cache system.

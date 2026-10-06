@@ -28,6 +28,39 @@ test "host error diagnostic follows a question forwarding wrapper" {
     , .hosted);
 }
 
+test "host error diagnostic rejects implicit widening through a direct hosted question" {
+    try checkHostErrorDiagnostic(
+        \\line! = |s| {
+        \\    Host.stdout_line!(s)?
+        \\    Ok({})
+        \\}
+    , .hosted);
+}
+
+test "host error diagnostic follows a saved result in an imported question wrapper" {
+    try checkHostErrorDiagnostic(
+        \\line! = |s| {
+        \\    result = Host.stdout_line!(s)
+        \\    result?
+        \\    Ok({})
+        \\}
+    , .hosted);
+}
+
+test "host error diagnostic does not blame a saved unrelated host result" {
+    try checkHostErrorDiagnostic(
+        \\line! = |s| {
+        \\    hosted_result = Host.stdout_line!(s)
+        \\    _ = hosted_result
+        \\    close : Try({}, [StdoutErr(Str)]) -> Try({}, [StdoutErr(Str)])
+        \\    close = |value| value
+        \\    result = close(Err(StdoutErr("local")))
+        \\    result?
+        \\    Ok({})
+        \\}
+    , .ordinary);
+}
+
 test "host error diagnostic stops at explicit reconstruction" {
     try checkHostErrorDiagnostic(
         \\line! = |s| match Host.stdout_line!(s) {

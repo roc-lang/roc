@@ -1136,8 +1136,10 @@ local_type_context_depths: std.AutoHashMapUnmanaged(CIR.Statement.Idx, u32) = .e
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
 /// The right-hand side of each local declaration, by binding pattern. Built on
-/// first use, and only in a module that declares a method in a function body.
+/// first use by local method resolution or diagnostic provenance tracing.
 local_decl_expr_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+/// Whether the declaration index has been built, including an empty index.
+local_decl_exprs_indexed: bool = false,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -4974,7 +4976,7 @@ fn moduleDeclaresLocalMethodNamed(self: *Self, name: Ident.Idx) Allocator.Error!
 
 /// The right-hand side of the local declaration binding `pattern`.
 fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Expr.Idx {
-    if (self.local_decl_expr_by_pattern.count() == 0) {
+    if (!self.local_decl_exprs_indexed) {
         var raw_node: u32 = 0;
         const node_count: u32 = @intCast(self.cir.store.nodes.len());
         while (raw_node < node_count) : (raw_node += 1) {
@@ -4982,6 +4984,7 @@ fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Erro
             const decl = self.cir.store.getStatement(@enumFromInt(raw_node)).s_decl;
             try self.local_decl_expr_by_pattern.put(self.gpa, decl.pattern, decl.expr);
         }
+        self.local_decl_exprs_indexed = true;
     }
     return self.local_decl_expr_by_pattern.get(pattern);
 }
@@ -11864,9 +11867,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.rejectEffectfulCompileTimeExecutableRoots();
     // Publish diagnostic origins while the producer still owns its private
     // imports. Consumers use these summaries, never transitively reopen them.
+    var hosted_origins = HostedErrorOrigins.init(self.gpa);
+    defer hosted_origins.deinit();
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        if (try self.tryHostedErrorOrigin(def.expr, true)) |origin| {
+        if (try self.traceHostedErrorOrigin(def.expr, true, &hosted_origins)) |origin| {
             try self.cir.setDiagnosticHostedReturn(def_idx, origin);
         }
     }
@@ -29117,10 +29122,6 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 if (!try_result.isEstablished()) {
                     state.has_invalid_try = true;
                     state.had_type_error = true;
-                } else if (self.currentExpectedReturnResult()) |expected_return| {
-                    if (self.tryConditionIsDirectHostedCall(match.cond)) {
-                        try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
-                    }
                 }
             }
             if (!match.is_try_suffix and !match.skip_exhaustiveness) {
@@ -30806,21 +30807,6 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
     }
 }
 
-/// Whether a `?` condition is a direct call of a hosted function—the only
-/// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening") applies to. The callee is statically resolved from the call's
-/// function expression (the local or external lookup canonicalization
-/// produced); dispatch calls and value-carried functions are never direct
-/// hosted calls, so `?` on them gets no widening.
-fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(cond_idx);
-    if (expr != .e_call) return false;
-    const call = expr.e_call;
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
-}
-
 /// Both forms of `?` are marked is_try_suffix. Only the plain form returns
 /// the matched error binder unchanged; `lhs ? handler` constructs/calls a
 /// conversion. Compare explicit binder identities rather than source syntax.
@@ -30833,7 +30819,7 @@ fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR
     const backing = switch (result) {
         .e_nominal => |nominal| nominal.backing_expr,
         .e_nominal_external => |nominal| nominal.backing_expr,
-        else => return null,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     };
     const tag = module.store.getExpr(backing);
     if (tag != .e_tag) return null;
@@ -30848,7 +30834,7 @@ fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR
     const pattern_backing = switch (pattern) {
         .nominal => |nominal| nominal.backing_pattern,
         .nominal_external => |nominal| nominal.backing_pattern,
-        else => return null,
+        .assign, .var_assign, .as, .applied_tag, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return null,
     };
     const tag_pattern = module.store.getPattern(pattern_backing);
     if (tag_pattern != .applied_tag) return null;
@@ -30862,6 +30848,16 @@ fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR
 /// host from a type's shape or reuse this walk to admit a widening relation.
 /// Constructors, dispatch, and value-carried callables end the known path.
 fn tryHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool) Allocator.Error!?Ident.Idx {
+    return self.traceHostedErrorOrigin(condition, called, null);
+}
+
+// Each expression has separate value and called-result origins. A null slot
+// is unvisited; Ident.Idx.NONE records a completed walk with no hosted origin.
+const HostedErrorOrigins = collections.DenseMap(CIR.Expr.Idx, [2]?Ident.Idx);
+
+/// Share completed walks only during the final immutable definition pass.
+/// Earlier diagnostic walks cannot cache across changes to lambda summaries.
+fn traceHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool, memo: ?*HostedErrorOrigins) Allocator.Error!?Ident.Idx {
     const Position = struct {
         expr: CIR.Expr.Idx,
         called: bool,
@@ -30869,276 +30865,76 @@ fn tryHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool) Allo
     var position = Position{ .expr = condition, .called = called };
     var visited = collections.DenseMap(CIR.Expr.Idx, u2).init(self.gpa);
     defer visited.deinit();
-    var local_bindings = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx).init(self.gpa);
-    defer local_bindings.deinit();
-    while (true) {
+    const resolved_origin: ?Ident.Idx = walk: while (true) {
+        if (memo) |cache| {
+            if (cache.get(position.expr)) |origins| {
+                if (origins[@intFromBool(position.called)]) |known| {
+                    break :walk if (known.isNone()) null else known;
+                }
+            }
+        }
         const bit: u2 = if (position.called) 2 else 1;
         const seen = visited.get(position.expr) orelse 0;
-        if (seen & bit != 0) return null;
+        if (seen & bit != 0) break :walk null;
         try visited.put(position.expr, seen | bit);
         const expr = self.cir.store.getExpr(position.expr);
         switch (expr) {
             .e_call => |call| {
-                if (position.called) return null;
+                if (position.called) break :walk null;
                 position.expr = call.func;
                 position.called = true;
             },
             .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {
                 if (expr == .e_lookup_local) {
-                    if (local_bindings.get(expr.e_lookup_local.pattern_idx)) |value| {
-                        position.expr = value;
-                        continue;
+                    const pattern = expr.e_lookup_local.pattern_idx;
+                    if (self.cir.store.getPattern(pattern) == .assign) {
+                        if (try self.localDeclExprForPattern(pattern)) |value| {
+                            position.expr = value;
+                            continue;
+                        }
                     }
                 }
-                const target = self.hoistedCallableDefForExpr(self.cir, position.expr) orelse return null;
+                const target = self.hoistedCallableDefForExpr(self.cir, position.expr) orelse break :walk null;
                 if (target.module != self.cir) {
-                    const origin = target.module.diagnosticHostedReturn(target.def) orelse return null;
-                    if (!position.called) return null;
-                    return try self.cir.insertIdent(Ident.for_text(target.module.getIdent(origin)));
+                    const origin = target.module.diagnosticHostedReturn(target.def) orelse break :walk null;
+                    if (!position.called) break :walk null;
+                    break :walk try self.cir.insertIdent(Ident.for_text(target.module.getIdent(origin)));
                 }
                 position.expr = target.module.store.getDef(target.def).expr;
             },
             .e_lambda => |lambda| {
-                if (!position.called) return null;
-                if (self.try_lambda_host_origins.get(position.expr)) |origin| return origin;
+                if (!position.called) break :walk null;
+                if (self.try_lambda_host_origins.get(position.expr)) |origin| break :walk origin;
                 position.expr = lambda.body;
                 position.called = false;
             },
             .e_closure => |closure| {
-                if (!position.called) return null;
+                if (!position.called) break :walk null;
                 position.expr = closure.lambda_idx;
             },
-            .e_block => |block| {
-                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                    const stmt = self.cir.store.getStatement(stmt_idx);
-                    if (stmt == .s_decl and self.cir.store.getPattern(stmt.s_decl.pattern) == .assign) {
-                        try local_bindings.put(stmt.s_decl.pattern, stmt.s_decl.expr);
-                    }
-                }
-                position.expr = block.final_expr;
-            },
+            .e_block => |block| position.expr = block.final_expr,
             .e_return => |ret| position.expr = ret.expr,
             .e_hosted_lambda => |hosted| {
-                if (!position.called) return null;
+                if (!position.called) break :walk null;
                 const name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{
                     self.cir.module_name,
                     self.cir.getIdent(hosted.symbol_name),
                 });
                 defer self.gpa.free(name);
-                return try self.cir.insertIdent(Ident.for_text(name));
+                break :walk try self.cir.insertIdent(Ident.for_text(name));
             },
-            else => return null,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_break, .e_for, .e_run_low_level => break :walk null,
+        }
+    };
+    if (memo) |cache| {
+        var entries = visited.iterator();
+        while (entries.next()) |entry| {
+            const result = try cache.getOrPutValue(entry.key_ptr.*, .{ null, null });
+            if (entry.value_ptr.* & 1 != 0) result.value_ptr[0] = resolved_origin orelse Ident.Idx.NONE;
+            if (entry.value_ptr.* & 2 != 0) result.value_ptr[1] = resolved_origin orelse Ident.Idx.NONE;
         }
     }
-}
-
-/// The hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening"): `?` on a direct call of a hosted function widens the condition
-/// to a fresh `Try` at the enclosing annotated return's error row when every
-/// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row—the host
-/// ABI's shape—is what checking outputs for the callee itself. For every
-/// other callee, a closed error row meeting an open annotated row stays a
-/// type error (issue #9798's program is rejected by design); the caller gates
-/// on `tryConditionIsDirectHostedCall`.
-///
-/// This is a typing mechanism, not the host ABI's protection. What a hosted
-/// extern is emitted at is decided at the producer: Monotype lowering admits
-/// only the hosted declaration's own type at an extern boundary and stops the
-/// build otherwise (`requireHostedExternAtDeclaredAbi`,
-/// src/postcheck/monotype/lower.zig, and design.md "Host Symbol ABI"). Widening
-/// the condition here therefore changes which programs typecheck and which
-/// caller-side adapter lowering generates; it cannot change the boundary. Judge
-/// changes to this rewrite as type-semantics choices on that basis.
-fn widenTryConditionForExpectedReturn(
-    self: *Self,
-    cond_var: Var,
-    expected_return: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!void {
-    const actual_try = self.tryArgsFromVar(cond_var) orelse return;
-    const expected_try = self.tryArgsFromVar(expected_return) orelse return;
-
-    if (!try self.tryErrorRowNeedsUseSiteWidening(actual_try.err, expected_try.err)) {
-        return;
-    }
-
-    // Ordinary tag-union unification rejects closed-vs-open rigid rows; this
-    // use-site rewrite runs only after proving the callee's visible errors are
-    // included in the expected row.
-    const widened_try_var = try self.freshFromContent(
-        try self.mkTryContent(actual_try.ok, expected_try.err),
-        env,
-        region,
-    );
-    const cond_root = self.types.resolveVar(cond_var).var_;
-    if (cond_root != widened_try_var) {
-        try self.types.dangerousSetVarRedirect(.hosted_try_question_widening, cond_root, widened_try_var);
-    }
-}
-
-fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    // The shortcut below declines the rule when ordinary unification already
-    // relates the pair. That is sound only when taking it is observationally
-    // the same as applying the rule, and it is not when the relation is bought
-    // by GROUNDING the expected row's still-open extension: rolling the probe
-    // back and then performing that same binding for real publishes a CLOSED
-    // row from an annotation that reads open, so two definitions with
-    // byte-identical annotations stop being interchangeable for their callers
-    // (design.md "Polarity"). So when the expected row still ends open, the
-    // declared condition—every visible error in the callee's row is included
-    // in the expected row—decides on its own. Widening then targets the
-    // annotated row itself, which leaves the extension unbound and hands
-    // lowering the same adapter request an annotation listing strictly more
-    // tags already produces.
-    if (!self.tryErrorRowEndsOpen(expected_err) and
-        try self.probeCanUseAs(expected_err, actual_err))
-    {
-        return false;
-    }
-
-    var visited_actual = collections.DenseMap(Var, void).init(self.gpa);
-    defer visited_actual.deinit();
-    return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
-}
-
-/// Whether an error row's extension chain still ends in an unbound extension.
-/// The expected row here is always an annotated return's error row
-/// (`expected_result` is set only for an annotated lambda), so an unbound tail
-/// is the annotation's implicitly opened extension (design.md "Polarity") and
-/// unifying a closed row into it would ground it rather than flow through it.
-/// A rigid tail (a written `..others`) and an already-closed row are both
-/// bound, so both read as not-open. This walks explicit row topology produced
-/// by checking; it inspects no source syntax.
-fn tryErrorRowEndsOpen(self: *Self, err_var: Var) bool {
-    var current = err_var;
-    var guard = types_mod.debug.IterationGuard.init("tryErrorRowEndsOpen");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| current = tag_union.ext,
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .flex => return true,
-            .rigid, .field_presence, .err => return false,
-        }
-    }
-}
-
-fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
-}
-
-fn actualTagRowIsIncludedInExpected(
-    self: *Self,
-    actual_var: Var,
-    expected_var: Var,
-    visited_actual: *collections.DenseMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    // Follow the actual row through aliases and extensions.
-    var current = actual_var;
-    while (true) {
-        const actual_resolved = self.types.resolveVar(current);
-        if (visited_actual.contains(actual_resolved.var_)) return true;
-        try visited_actual.put(actual_resolved.var_, {});
-
-        switch (actual_resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .empty_tag_union => return true,
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    const names = tags.items(.name);
-                    const args_ranges = tags.items(.args);
-                    for (names, args_ranges) |name, args| {
-                        const actual_tag = types_mod.Tag{ .name = name, .args = args };
-                        if (!try self.expectedTagRowContainsTag(expected_var, actual_tag)) {
-                            return false;
-                        }
-                    }
-                    current = tag_union.ext;
-                },
-                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
-            },
-            .err => return true,
-            .flex, .rigid, .field_presence => return false,
-        }
-    }
-}
-
-fn expectedTagRowContainsTag(
-    self: *Self,
-    expected_var: Var,
-    actual_tag: types_mod.Tag,
-) std.mem.Allocator.Error!bool {
-    var visited_expected = collections.DenseMap(Var, void).init(self.gpa);
-    defer visited_expected.deinit();
-
-    const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
-    return try self.tagsCanUseSamePayloads(expected_tag, actual_tag);
-}
-
-fn findVisibleTagInRow(
-    self: *Self,
-    row_var: Var,
-    tag_name: Ident.Idx,
-    visited: *collections.DenseMap(Var, void),
-) std.mem.Allocator.Error!?types_mod.Tag {
-    // Follow the row through aliases and extensions.
-    var current = row_var;
-    while (true) {
-        const row_resolved = self.types.resolveVar(current);
-        if (visited.contains(row_resolved.var_)) return null;
-        try visited.put(row_resolved.var_, {});
-
-        switch (row_resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    const names = tags.items(.name);
-                    const args_ranges = tags.items(.args);
-                    for (names, args_ranges) |name, args| {
-                        if (name.eql(tag_name)) {
-                            return types_mod.Tag{ .name = name, .args = args };
-                        }
-                    }
-                    current = tag_union.ext;
-                },
-                .empty_tag_union => return null,
-                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
-            },
-            .err, .flex, .rigid, .field_presence => return null,
-        }
-    }
-}
-
-fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: types_mod.Tag) std.mem.Allocator.Error!bool {
-    if (expected_tag.args.len() != actual_tag.args.len()) return false;
-
-    var expected_args = self.types.iterVars(expected_tag.args);
-    var actual_args = self.types.iterVars(actual_tag.args);
-    while (expected_args.next()) |expected_arg| {
-        const actual_arg = actual_args.next().?;
-        if (!try self.probeCanUseAs(expected_arg, actual_arg)) {
-            return false;
-        }
-    }
-    return true;
+    return resolved_origin;
 }
 
 // match //
@@ -39573,11 +39369,6 @@ fn pushReturnConstraintFrame(
         .body_result = body_result,
         .expected_result = expected_result,
     });
-}
-
-fn currentExpectedReturnResult(self: *const Self) ?Var {
-    if (self.return_constraint_frames.items.len == 0) return null;
-    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
 }
 
 fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {

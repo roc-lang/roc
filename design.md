@@ -8247,14 +8247,10 @@ identically. The first reconstructs the hosted error with a `match`, so the
 is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`; the host's row is closed, so unifying it into the
 annotation's extension would bind that extension to `[]` and close the row.
-Hosted Try Question Widening covers exactly that forwarding, so the fixture is
-GREEN: a `?` on a direct hosted call does not decline the rule merely
-because ordinary unification could relate the pair by GROUNDING the
-annotation's own still-open extension.
-Closing-by-body itself is unchanged, and row subsumption is still what
-replaces it: Hosted Try Question Widening is gated on a direct hosted call, so
-a NON-hosted forwarder's row still closes behind an identical open
-annotation.
+With the hosted widening exception removed, that forwarding closes the row.
+The fixture remains an acceptance witness for the deferred subsumption design,
+but its question-forwarding case is expected to expose the removed exception's
+compatibility cost. The match-reconstructing case keeps its open row.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -8594,33 +8590,12 @@ That adapter is wired to template completion for dispatch plans, so the one
 open question is whether a value coerced inside an ordinary body needs a
 re-tag it does not reach there.
 
-Subsumption deletes the CHECKER half of Hosted Try Question Widening: the
-use-site redirect that widens a `?` condition, together with the guard that
-keeps that redirect's decline shortcut from grounding the expected row's own
-extension. The LOWERING half is permanent, because the host ABI is fixed by
-something other than typing—a widened request at a host boundary is always
-served by a generated adapter that calls the declared-type boundary and
-re-tags its result, never by specializing the boundary at the widened layout.
-The two halves cannot be deferred together: `..` is rejected at host
-boundaries by rule, so a host error row is closed BY DECLARATION rather than
-by inference, and "a closed row meets a caller who wants it wider" arises at
-every host boundary rather than in rare corners.
-
-Two things bound what may be left unrepaired while the deferral stands, and
-both are about mistaking general machinery for scaffolding. First, a rule may
-be declined early by a shortcut only where taking the shortcut is
-observationally the same as applying the rule. Ordinary unification relating
-the two rows is not such a case: on the exact pair Hosted Try Question
-Widening exists for, it relates them only by GROUNDING the annotation's own
-still-open extension, which is a different outcome. A shortcut narrower than
-the rule it guards is an accident rather than a declared boundary, and
-removing one removes an exclusion rather than adding a host-specific special
-case—so it is not work subsumption later undoes, and it comes out with the
-checker half in the same sweep. Second, the widening machinery is not
-host-specific scaffolding awaiting deletion: the Result-Row Widening Adapter
-serves a CLOSED checked result row at a wider requested row with no host in
-the picture (`test/cli/WidenClosedImpl.roc` and its siblings), and the host
-case is one instance of it.
+The host-specific checker rewrite has been removed before subsumption is
+implemented (Hosted Try Question Widening Removed). Roc wrappers must explicitly
+reconstruct hosted errors when composing direct calls with wider error rows.
+The general adapter remains for admitted generic dispatch requests, including
+those selecting hosted implementations, and for non-hosted closed implementations
+(`test/cli/WidenClosedImpl.roc` and its siblings).
 
 Two questions are settled in the same pass, because each asks what a closed
 row means at a boundary. A bounded row refuses exactly the relations that
@@ -8630,82 +8605,41 @@ changes what the bound refuses with it.
 still-open extensions to `[]`, and cross-module widening of annotated weak
 values waits on this same coercion rather than on a lowering default.
 
-The acceptance bar is that no fixture is edited: a program this design says
-should typecheck must typecheck as written. The hosted instance already meets
-it (`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
-spells a NON-hosted closed forwarder, so subsumption needs a fixture of its
-own.
+Future subsumption must accept closed forwarders without requiring source
+reconstruction. The direct hosted forwarding rejection in
+`src/compile/test/hosted_error_diagnostic_test.zig` pins the current limitation;
+non-hosted closed forwarding needs its own subsumption fixture.
 
-### Hosted Try Question Widening
+### Hosted Try Question Widening Removed
 
-`?` unwraps a `Try` condition and re-raises its error row into the enclosing
-function's return row. When the callee's error row is closed and the
-enclosing annotated return's row is open (a rigid extension), ordinary
-unification rejects the pair, and that mismatch is a type error by design: a
-closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected). Under polarity a non-hosted callee's
-annotated error row is itself implicitly open, but until row subsumption
-replaces closing-by-body (see Deferred: Row Subsumption) a body that forwards
-a closed value still leaves the row closed, so the pairing is not confined to
-host rows.
-At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
-error row is closed by declaration rather than by inference, and every hosted
-call whose caller wants a wider row meets it.
+The checker no longer has a special widening rule for `?` on direct hosted
+calls. A hosted result keeps its declared closed error row, and `?` relates
+that row to the enclosing return through ordinary return-row composition and
+unification. Matching rows can still relate; a wider incompatible row is a
+type error. Forwarding into an implicitly open annotation may close that row,
+just as forwarding any other closed value does until row subsumption exists.
 
-The one declared exception is a direct call of a hosted function. A hosted
-function's boundary type is an ABI contract keyed by its declared closed row
-(see Host Symbol ABI), so the hosted callee cannot adopt the caller's wider
-row, and requiring callers to re-tag hosted errors by hand would make hosted
-functions unusable with `?`. When the `?` condition is a direct call of a
-hosted function—the call's function expression resolves statically to an
-`e_hosted_lambda` def; dispatch calls and value-carried functions never
-qualify—and every visible error in the callee's row is included in the
-expected row (same tag names, mutually usable payloads), the checker widens
-the condition at the use site: the condition's root is redirected to a fresh
-`Try` at the expected row (`widenTryConditionForExpectedReturn`, cited as
-`RedirectRule.hosted_try_question_widening`), leaving the hosted callee's own
-declared type untouched. Monotype lowering gives a widened hosted
-specialization request a generated Roc adapter at the requested type that
-calls the declared-type boundary and re-tags the error into the wider row,
-so the extern boundary itself is always emitted at the declared row.
+This removes the use-site redirect and its subset/payload probes. There is no
+`RedirectRule` for hosted question widening. Hosted error provenance remains
+purely diagnostic and does not affect acceptance.
 
-This rule decides which programs typecheck, and that is all it decides. It is
-not what keeps the host ABI intact: the extern boundary is pinned by the
-producer-side check in Monotype lowering (see Host Symbol ABI), which admits
-only the declared type no matter what a use site's type turned out to be. So
-the rule can be tightened, loosened, or replaced on typing grounds alone.
+Hosted lowering has no host-specific widening graph relation or expected-result
+request rewrite. The general Result-Row Widening Adapter remains for generic
+dispatch, including requests that select hosted implementations. Such requests
+are admitted by the ordinary where-method use rules; the adapter calls an inner
+hosted specialization at its declared ABI. The declared host ABI checks remain
+independently in force. Rejecting only widened hosted selections in the checker
+would require carrying individual body-use row requirements through generic
+constraints and imports; the bounded where requirement alone does not record
+those widened uses.
 
-The rule has two halves with different lifetimes. The LOWERING half (a widened
-request is served by a generated adapter that calls the declared-type
-boundary and re-tags its result, never by specializing the boundary at the
-widened layout) is PERMANENT, because the host ABI is fixed by something other
-than typing. Hosted Try Question Widening is the instance of Result-Row
-Widening Adapter in which the declared row is the host ABI. The CHECKER half
-is exactly what general row subsumption subsumes, and is the part to delete
-once subsumption lands. It is the use-site redirect that widens the `?`
-condition, plus the roughly fifty lines that keep that redirect's decline
-shortcut from grounding the expected row's own extension
-(`tryErrorRowEndsOpen` and the guard on `tryErrorRowNeedsUseSiteWidening`'s
-early return, both in `Check.zig`); the two come out in one sweep. The two
-halves cannot be deferred together:
-because `..` is rejected at host boundaries, a host error row is closed BY
-RULE rather than by inference, so "a closed row meets a caller who wants it
-wider" arises at every host boundary and the general mechanism cannot be
-half-built.
-
-Both sides are pinned by tests: accepted—
-test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
-inside an open-row platform function builds and the host's Ok is observed as
-Ok) and test/cli/SpecConstrInlineScopeRebaseGrowth.roc (the same forwarding
-one level deeper, through a second wrapper); both were red under the decline
-shortcut described above and are green since 2026-09-16;
-rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
-hosted `?` whose enclosing annotation omits the hosted error is a type
-error). The non-hosted side of issue #9798 is superseded by polarity: a
-non-hosted callee's annotated error row is implicitly open, so `?` flows it
-into the enclosing row through ordinary unification, and the enclosing
-annotation's audit rejects an error it does not list (pinned by the
-"polarity - try" tests in src/check/test/type_checking_integration.zig).
+Roc wrappers that combine hosted errors with a wider return row must explicitly
+match and reconstruct each error variant (or wrap the error in a new tag).
+Forwarding `Err(err)` does not reconstruct the inner error union. The accepted
+side is pinned by explicit reconstruction in the host diagnostic tests,
+`FallibleChannels.roc`, `FallibleAlias.roc`, issue #11286 on both specialization
+strategies, and the wasm32 host ABI fixture. The rejected side is pinned by
+`host error diagnostic rejects implicit widening through a direct hosted question`.
 
 ### Hosted Error Diagnostics
 
@@ -8714,12 +8648,17 @@ the original condition for each generated `Err` return occurrence, including
 projected return contributions. On a mismatch, reporting context follows exact
 CIR references through function aliases and unchanged result forwarding to a
 hosted declaration. Plain `?` contributes its unchanged error origin to the
-owning lambda; an error handler does not. Each module publishes definition-indexed
+owning lambda; an error handler does not. Each module stores definition-indexed
 origin names in its serialized diagnostic column, so imported aliases consume
 producer-authored origins without accessing private transitive imports.
 Constructing a new error ends that path. A known host origin adds its name and fixed-ABI explanation to the closed-row widening hint;
 ordinary closed rows keep that same hint without host attribution. This evidence
-never controls unification or eligibility for Hosted Try Question Widening.
+never controls unification or permits a host result to widen. The final module
+summary pass memoizes both known and absent origins by expression and whether
+the expression is being called, so shared forwarding chains are walked once.
+Earlier diagnostic walks do not reuse this cache while lambda summaries are
+still changing. Local declaration indexing records completion even for an empty
+index, so modules without local bindings do not repeatedly scan their CIR.
 
 ### Try Return-Row Composition
 
@@ -8855,9 +8794,9 @@ adds nothing to that function unless the function returns the closure's
 result. Pinned by `src/check/test/issue_11640_test.zig`.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
-return context emitted by canonicalization. Annotated returns retain the Hosted
-Try Question Widening policy above, including its ordinary non-hosted
-closed-to-open rejection; composition does not widen a condition type. The
+return context emitted by canonicalization. Annotated returns reject incompatible
+closed-to-open relations, including hosted errors; composition does not widen
+a condition type. The
 checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
@@ -8918,9 +8857,10 @@ a row that INCLUDES it—the same tags with usable payloads, plus others.
 The request is related component-wise WITHOUT unifying the two rows, the
 template is specialized at its own declared row, and a generated
 `.checked_generated` adapter at the requested row calls that specialization
-and re-tags its result. Hosted Try Question Widening is the instance of this
-rule where the declared row is the host ABI; the extern boundary is still
-emitted at the declared row, as Host Symbol ABI requires.
+and re-tags its result. This also supports hosted implementations selected by
+generic dispatch: the adapter keeps the inner hosted call at its declared ABI.
+This lowering facility does not itself make a source-level widening typecheck
+and does not widen a direct hosted call based on its expected result.
 
 Only two positions are adapted: the template's DIRECT result row, and the
 ERROR row of a `Try` result. A `Try`'s ok row is not adapted—the adapter
@@ -11081,8 +11021,6 @@ site to any family below must classify it here.
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
 
-- `widenTryConditionForExpectedReturn`—policy: Hosted Try Question
-  Widening (above).
 - `closeTagRowsForDerivationHelp`'s marker arm
   (`RedirectRule.derivation_marker_ext_closure`)—policy: Polarity /
   `closeTagRowsForDerivation` (below). A polarity marker rigid in tag-ext
@@ -11400,9 +11338,7 @@ at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
 method-acceptance rule of static dispatch, with accepted/missing-method/
 signature-mismatch branches each pinned by tests;
 `numeralCandidateStructurallyRefuted` implements no rule of its own and is
-witness-asserted against the probe it pre-filters in safety builds;
-`probeCanUseAs`/`tryErrorRowNeedsUseSiteWidening` are the gating probes for
-Hosted Try Question Widening.
+witness-asserted against the probe it pre-filters in safety builds.
 
 ## Runtime Lowering Strategy
 
@@ -14233,8 +14169,7 @@ type the lowered call produces. A read that carries an expected result cell
 relates it to the shared request the way a fresh instantiation would. Requests
 whose interface depends on the read itself are never shared: an iterator
 procedure's request may be replaced by a generated private interface chosen
-from its argument evidence, a hosted `Try` request may be widened by the
-expected result's error labels, and an expected cell carrying generated-private
+from its argument evidence, and an expected cell carrying generated-private
 evidence becomes the request's own result.
 
 Every expression's result type is likewise instantiated once per lowered body
@@ -21544,10 +21479,11 @@ requirement solutions (see Platform/App Relation)—the one sanctioned
 transformation. The compiler never emits a hosted extern at any other type: not
 at a caller's widened error row, not at a narrowed one, and not at a
 producer-selected representation that differs from the declared one. A use site
-whose own type legitimately differs gets a generated Roc adapter at the
-requested type that calls the declared-type boundary and converts around it, so
-the boundary itself stays declared-typed; the Hosted Try Question Widening
-rule's adapter is one such generated caller.
+of a direct hosted call that needs a wider error row must explicitly reconstruct
+the error in Roc. Generic dispatch uses the general Result-Row Widening Adapter
+when its checked request requires a wider result; the inner extern still uses
+the declared type. Representation conversions for generic hosted variable slots
+follow the separate rules below.
 
 Every type reachable from a hosted or provided signature must have closed
 record and tag-union rows and must contain no runtime-optional (`?:`) record

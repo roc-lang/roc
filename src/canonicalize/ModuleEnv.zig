@@ -5685,6 +5685,7 @@ pub fn diagnosticHostedReturn(self: *const Self, def: CIR.Def.Idx) ?Ident.Idx {
     return if (origin.isNone()) null else origin;
 }
 
+/// Record the diagnostic-only hosted origin of an unchanged forwarded return.
 pub fn setDiagnosticHostedReturn(self: *Self, def: CIR.Def.Idx, origin: Ident.Idx) Allocator.Error!void {
     const index = @intFromEnum(def);
     while (self.diagnostic_hosted_returns.len() <= index) {
