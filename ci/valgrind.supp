@@ -70,3 +70,21 @@
    ...
    fun:realpath
 }
+
+# LLVM 22 compiles `content == .named and content.named.backing != null` in
+# `Lowerer.runtimeBackingType` branchlessly. It loads the optional's presence
+# byte from the Lambda Mono type slot before testing the union tag, branches
+# on it, and then discards the result with a conditional move unless the tag is
+# `.named`. When the stored type is any other variant, that byte lies in the
+# unused part of the union payload and is genuinely uninitialized, but the
+# program never uses what it read. Disassembling the optimized build shows the
+# speculated `testb`/`je` followed by `cmp $1; cmovne`. This does not indicate
+# that Roc used uninitialized program memory, and the older toolchain's branchy
+# code did not trigger it.
+{
+   llvm-speculated-named-backing-presence-read
+   Memcheck:Cond
+   fun:runtimeBackingType
+   fun:stepTypedBoundary
+   ...
+}
