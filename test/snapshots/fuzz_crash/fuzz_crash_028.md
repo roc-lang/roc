@@ -3195,21 +3195,47 @@ EndOfFile,
 								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "t"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-for
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-block
-						(e-runtime-error (tag "erroneous_value_expr"))))
+						(e-runtime-error (tag "erroneous_value_expr")
+							(e-runtime-error (tag "erroneous_value_expr")))))
 				(s-let
 					(p-assign (ident "rd"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "H")))
+						(e-lookup-local
+							(p-assign (ident "tag")))
+						(e-tag (name "Ok")
+							(args
+								(e-lookup-local
+									(p-assign (ident "world")))))
+						(e-runtime-error (tag "ident_not_in_scope"))))
 				(s-let
 					(p-assign (ident "tuple"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "World")))
+						(e-lookup-local
+							(p-assign (ident "tag")))
+						(e-tag (name "Ok")
+							(args
+								(e-lookup-local
+									(p-assign (ident "world")))))
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "mle"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "World")))
+						(e-runtime-error (tag "ident_not_in_scope"))))
 				(s-let
 					(p-assign (ident "b"))
 					(e-if

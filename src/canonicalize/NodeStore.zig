@@ -1450,6 +1450,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
             const p = payload.malformed;
             return CIR.Statement{ .s_runtime_error = .{
                 .diagnostic = @enumFromInt(p.diagnostic),
+                .evaluated = .{ .span = .{ .start = p.evaluated_start, .len = p.evaluated_len } },
             } };
         },
     }
@@ -2028,6 +2029,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
             const p = payload.malformed;
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(p.diagnostic),
+                .evaluated = .{ .span = .{ .start = p.evaluated_start, .len = p.evaluated_len } },
             } };
         },
     }
@@ -2561,9 +2563,21 @@ pub fn replaceExprWithRuntimeError(
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
+    try store.replaceExprWithRuntimeErrorAfter(expr_idx, diagnostic_idx, .{ .span = .{ .start = 0, .len = 0 } });
+}
+
+/// Replaces an existing expression with an in-place runtime error node that
+/// evaluates `evaluated` (`CIR.Expr.e_runtime_error.evaluated`) before it
+/// crashes.
+pub fn replaceExprWithRuntimeErrorAfter(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx, evaluated);
 }
 
 /// Replaces an existing statement with an in-place runtime error node after
@@ -2573,8 +2587,9 @@ pub fn replaceStatementWithRuntimeError(
     store: *NodeStore,
     stmt_idx: CIR.Statement.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
 ) Allocator.Error!void {
-    try store.replaceSourceNodeWithRuntimeError(@enumFromInt(@intFromEnum(stmt_idx)), diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(@enumFromInt(@intFromEnum(stmt_idx)), diagnostic_idx, evaluated);
 }
 
 /// Replace a rejected literal leaf while retaining the surrounding definition
@@ -2587,7 +2602,7 @@ pub fn replacePatternWithRuntimeError(
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx, .{ .span = .{ .start = 0, .len = 0 } });
 }
 
 /// Keep the node being replaced in `replaced_source_nodes` and put a runtime
@@ -2598,6 +2613,7 @@ fn replaceSourceNodeWithRuntimeError(
     store: *NodeStore,
     node_idx: Node.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
 ) Allocator.Error!void {
     const replaced = store.nodes.get(node_idx);
     const source_node_plus_one: u32 = if (replaced.tag == .malformed)
@@ -2608,6 +2624,8 @@ fn replaceSourceNodeWithRuntimeError(
     node.setPayload(.{ .malformed = .{
         .diagnostic = @intFromEnum(diagnostic_idx),
         .source_node_plus_one = source_node_plus_one,
+        .evaluated_start = evaluated.span.start,
+        .evaluated_len = evaluated.span.len,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -3429,6 +3447,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .malformed;
             node.setPayload(.{ .malformed = .{
                 .diagnostic = @intFromEnum(s.diagnostic),
+                .evaluated_start = s.evaluated.span.start,
+                .evaluated_len = s.evaluated.span.len,
             } });
         },
     }
@@ -3750,6 +3770,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .malformed;
             node.setPayload(.{ .malformed = .{
                 .diagnostic = @intFromEnum(e.diagnostic),
+                .evaluated_start = e.evaluated.span.start,
+                .evaluated_len = e.evaluated.span.len,
             } });
         },
         .e_crash => |c| {

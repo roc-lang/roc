@@ -945,7 +945,8 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
             },
             .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+            .s_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
         }
     }
 
@@ -1127,8 +1128,8 @@ const DemandAnalyzer = struct {
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
-            .e_runtime_error,
             => {},
+            .e_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
         }
     }
 
@@ -1749,7 +1750,8 @@ pub fn collectNameReferences(
                             try scratch_stack.append(allocator, loop_stmt.body);
                         },
                         .s_return => |ret| try scratch_stack.append(allocator, ret.expr),
-                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+                        .s_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
+                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
                     }
                 }
                 try scratch_stack.append(allocator, block.final_expr);
@@ -1815,8 +1817,8 @@ pub fn collectNameReferences(
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
-            .e_runtime_error,
             => {},
+            .e_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
         }
     }
 }
