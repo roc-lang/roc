@@ -104,9 +104,7 @@ outer = |value| {
 			(args
 				(p-assign (ident "value")))
 			(e-block
-				(s-let
-					(p-assign (ident "inner"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)

@@ -288,30 +288,14 @@ main = {
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
-			(s-let
-				(p-assign (ident "client"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "parser"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "helper"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "result1"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "result2"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "result3"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "result4"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
-			(s-let
-				(p-assign (ident "combined"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "json.Json")
 		(exposes))

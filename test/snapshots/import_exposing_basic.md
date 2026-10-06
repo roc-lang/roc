@@ -133,12 +133,8 @@ main = {
 								(e-literal (string "Alice"))))
 						(field (name "age")
 							(e-num (value "30"))))))
-			(s-let
-				(p-assign (ident "encoded"))
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(s-let
-				(p-assign (ident "decoded"))
-				(e-runtime-error (tag "erroneous_value_expr")))
+			(s-runtime-error (tag "erroneous_value_expr"))
+			(s-runtime-error (tag "erroneous_value_expr"))
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "json.Json")
 		(exposes

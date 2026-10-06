@@ -92,9 +92,7 @@ main = {
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
-			(s-let
-				(p-assign (ident "x"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "json.Json")
 		(exposes))

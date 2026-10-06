@@ -417,15 +417,9 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(s-let
-					(p-assign (ident "len1"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-let
-					(p-assign (ident "len2"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-let
-					(p-assign (ident "len3"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
+				(s-runtime-error (tag "erroneous_value_expr"))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES

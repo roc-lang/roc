@@ -130,9 +130,7 @@ main! = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(s-let
-					(p-assign (ident "result"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(e-runtime-error (tag "erroneous_value_expr")))))
 	(s-import (mod "pf.Stdout")
 		(exposes))
