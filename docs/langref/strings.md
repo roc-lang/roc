@@ -280,3 +280,58 @@ displays it visibly, like `<U+202E RLO>`.
 These are the characters that aren't allowed: U+061C, U+200E–U+200F, U+202A–U+202E, and
 U+2066–U+2069. `roc fmt` won't format a file that contains any of them; it leaves the file
 unchanged instead.
+
+## Performance
+
+### Memory Layout
+
+A `Str` is 24 bytes on a 64-bit target (12 bytes on a 32-bit target), made up of three
+pointer-sized pieces: a pointer to the string's bytes, the string's length, and its _capacity_
+(how many bytes it has room for before it needs more memory).
+
+Short strings don't need a pointer, though. If a string's UTF-8 bytes fit in 23 bytes or fewer
+on a 64-bit target (11 or fewer on a 32-bit target), the bytes are stored right there in the
+`Str` itself, and no heap allocation happens at all. This is called the _small string
+optimization_. Lots of strings in practice are short (names, keys, identifiers, short labels,
+and so on), so this saves lots of allocations.
+
+Longer strings store their bytes in a heap allocation, which is
+[reference counted](expressions#reference-counting).
+
+### Substrings
+
+Operations that return part of a string, like [`split_on`](../Str#split_on),
+[`drop_prefix`](../Str#drop_prefix), and [`trim`](../Str#trim), don't copy the bytes. Instead,
+they return a _slice_: a `Str` whose pointer points into the middle of the original string's
+heap allocation. That makes them fast, regardless of how long the string is.
+
+The tradeoff is that a slice keeps the whole original allocation alive. So if you read a
+100-megabyte file into a string, split it into lines, and then keep just one of those lines
+around, the whole 100 megabytes stays in memory as long as that one line does. If that's a
+problem, you can make an independent copy of the line with `"".concat(line)`, which copies the
+line's bytes into a new allocation.
+
+### Building Strings
+
+Like [lists](expressions#opportunistic-mutation), strings get updated in place when they're
+unique. So appending to a string in a loop doesn't copy the whole string each time:
+
+```roc
+var $text = Str.with_capacity(1024)
+
+for word in words {
+    $text = $text.concat(word).concat(" ")
+}
+```
+
+Since `$text` is the only reference to the string, each `concat` adds bytes to the end of the
+existing allocation (getting more memory when it runs out of room).
+[`Str.with_capacity`](../Str#with_capacity) and [`Str.reserve`](../Str#reserve) let you allocate
+enough room up front, if you know roughly how big the string will get.
+
+### Equality
+
+Comparing two strings with `==` compares their bytes, so it takes time proportional to the
+length of the strings. It can stop early, though. Strings with different lengths are never
+equal, and two strings that share the same memory (for example, because one was passed around
+and compared with itself) are always equal, so neither case needs to look at the bytes at all.
