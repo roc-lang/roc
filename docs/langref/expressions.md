@@ -83,19 +83,20 @@ This means that whether an update is fast (changing one element in place) or slo
 whole list first) depends on whether anything else still needs the old value. For example:
 
 ```roc
-updated = list.set(0, 42)
+updated = list.append(42)
 
-# If `list` is never used after this point, the set happened in place.
+# If `list` is never used after this point, the append happened in place.
 ```
 
 ```roc
-updated = list.set(0, 42)
+updated = list.append(42)
 
-List.len(list) # `list` is still used here, so the set had to copy it first.
+List.len(list) # `list` is still used here, so the append had to copy it first.
 ```
 
 In the second example, the compiler can't change `list` in place, because the later
-`List.len(list)` call needs to see the original. So when you're updating a large
+`List.len(list)` call needs to see the original. (See [Lists](lists#performance) for more on
+how this works with lists.) So when you're updating a large
 collection in a loop or a recursive function, make sure you aren't holding onto the
 old version anywhere.
 
