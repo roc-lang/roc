@@ -12893,7 +12893,9 @@ test "generated iterator index preserves evidence, argument classes, unions and 
             try std.testing.expectEqual(@as(u32, 2), graph.generated_iterator_index.count());
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+    // Heap-layout dependent remaps would vary the allocation count between runs.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Scenario.run, .{});
 }
 
 test "iterator-free finalization performs no graph resolutions" {

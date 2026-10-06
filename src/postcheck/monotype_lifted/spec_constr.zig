@@ -17106,8 +17106,10 @@ test "staged SpecConstr shard allocation failures release output and scratch own
     defer program.deinit();
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
+    // Heap-layout dependent remaps would vary the allocation count between runs.
+    var deterministic = @import("base").DeterministicAllocator.init(allocator);
     for ([_]Phase{ .discovery, .iterator_fusion, .unused_loop_results }) |phase| {
-        try std.testing.checkAllAllocationFailures(allocator, checkSpecConstrShardAllocationFailure, .{ &pass, fixture.fn_id, phase });
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), checkSpecConstrShardAllocationFailure, .{ &pass, fixture.fn_id, phase });
     }
 }
 

@@ -4271,6 +4271,9 @@ test "inspectable backing unification isolates the structural type variable once
     solver.program = &program;
     solver.active_unifications = UnifyPairSet.init(allocator);
     defer solver.active_unifications.deinit();
+    // `unify` resets this set when its stack drains, so it must be real storage.
+    solver.active_private_evidence_relations = UnifyPairSet.init(allocator);
+    defer solver.active_private_evidence_relations.deinit();
     solver.lift_count = 0;
     solver.preserving_lifted_roots = false;
     solver.unify_stack = .empty;
@@ -4335,6 +4338,9 @@ test "inspectable backing unification never redirects an owned backing to its no
     solver.lifted = undefined;
     solver.active_unifications = UnifyPairSet.init(allocator);
     defer solver.active_unifications.deinit();
+    // `unify` resets this set when its stack drains, so it must be real storage.
+    solver.active_private_evidence_relations = UnifyPairSet.init(allocator);
+    defer solver.active_private_evidence_relations.deinit();
     solver.lift_count = 0;
     solver.preserving_lifted_roots = false;
     solver.unify_stack = .empty;
