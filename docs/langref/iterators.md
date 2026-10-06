@@ -191,3 +191,5 @@ at exactly the right size. If it's `Unknown` (for example, after a `keep_if`, si
 in advance how many items will be kept), the list starts small and grows as items are added.
 
 So when you write a custom iterator, it's worth passing `Known(count)` whenever you know the count.
+Just make sure the count is exact, because collecting relies on the iterator producing exactly
+that many items.
