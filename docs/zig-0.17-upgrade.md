@@ -9,7 +9,66 @@ steps, and the native, generated Zig glue, and small WASM gates below pass.
 A published roc-bootstrap release is still pending. ReleaseFast measurements
 and their source checkpoint are recorded below.
 
-## Full local validation in progress
+## Final-source validation record
+
+Product code is identical from `6725e3f56a` onward. Later commits change only
+`ci/valgrind.supp` and an error-set annotation in a test helper. Each result
+below names the commit it ran on and is not relabeled. All used the complete
+LLVM 22.1.8 bundle built at roc-bootstrap `a4c0cd54b` (archive SHA-256
+`318e03220555bbe4f14e5d9ac3ad89f949dee7dc28a7925ef3b3c08d39e82657`). A Nix
+garbage collection removed the original store path mid-run; the contents were
+restored from the retained release archive, whose hash matches, and gates after
+that point used the restored directory.
+
+| Gate | Commit | Result |
+| --- | --- | --- |
+| Full ReleaseSafe, Debug, ReleaseFast units | `6725e3f56a` | 411/411 steps each; 7,123, 7,126 and 7,123 of 7,135 tests passed (12, 9 and 12 skipped) |
+| Full eval, all four backends | `9ab1d44e21` | 2,540 of 2,582 passed, 42 skipped, no failures, crashes or timeouts |
+| Full CLI | `9ab1d44e21` | 2,865 of 2,880 passed, 15 skipped (13 inherited plus the two ZigGlue cases below), no failures |
+| Host effects, playground, wasm/dylib/archive/echo/REPL/serialization/bake, shim archive contract | `9ab1d44e21` | pass (106/106 and 8/8 where counted) |
+| Lambda-mono and integer SIMD differentials, source/codegen checks | `9ab1d44e21` | pass |
+| Release artifact, static inspection, native smoke | `6725e3f56a` | fully static x86_64 ELF (246.8 MB), no interpreter or shared libraries |
+| x86_64 and ARM64 musl cross builds, FX specs | `6725e3f56a` | 123/123 each, build only; integer apps assert target architecture; no foreign execution |
+| Valgrind: string and integer platforms, 1,329 snapshots | `6725e3f56a` build | 0 errors with the documented suppression |
+| Tracy 0.11 graph, nix development shell | `6725e3f56a` | 502/502 and 513/513 steps |
+| Cache and identity controls (20 gates) | `6725e3f56a` | all pass |
+| Instrumented campaigns, 300 s each | `042d3669f4` | tokenize 8,780,914 executions, canonicalize 211,913, typecheck 11,542, build 9,488: no saved crashes or hangs |
+
+Problems found and fixed while validating:
+
+* The 32-bit Linux machine-code shim copied compiler-rt files that Zig 0.17
+  renamed or merged. It now uses the toolchain's public conversion helpers and
+  its own AAPCS wrappers; the ARM archive keeps the six conversion helpers local.
+* An unused Xtensa LLVM binding broke linking the LLVM backend tests in Debug.
+* Two allocation-failure sweeps and a ReleaseFast-only crash in the lambda-solved
+  tests were test defects exposed by Zig 0.17 (heap-layout dependent remaps; a
+  solver built from `undefined` without a set that `unify` resets).
+* The parse fuzz harness treated the formatter's deliberate `ParsingFailed` as an
+  unexpected error, so all 16 saved crashes of the earlier campaign were harness
+  aborts.
+* LLVM 22 compiles the named-backing presence test in `runtimeBackingType`
+  branchlessly, so Valgrind reports a branch on an unused, uninitialized union
+  byte. One narrow, documented suppression covers that helper.
+
+Known limits and findings that are not fixed here:
+
+* ZigGlue does not support SIMD vectors inside extern aggregates with Zig 0.17.
+  Only the two Zig layout-probe runtime cases are excluded, with the reason
+  recorded; C and Rust glue still exercise the vector contract.
+* The parse campaign saved three crashes where formatting the formatter's own
+  output drops a trailing call. The pre-upgrade nightly reproduces it, so it is
+  not an upgrade regression.
+* The build-errors campaign saved four aborts (`erroneous checked type reached
+  Monotype instantiation`). A reproducer built from pristine main `c34079d4cd`
+  with Zig 0.16 aborts identically, so it is not an upgrade regression.
+* Every `roc build` adds one application-cache file and never changes an existing
+  one, on both the upgraded compiler and the pre-upgrade nightly.
+* Default self-hosted x86_64 coverage remains excluded: libdw 0.190, 0.194 and
+  0.195 reproduce nine or ten compile-unit failures and zero Roc coverage.
+* Default compiler CI still depends on publishing compatible bootstrap bundles;
+  the eight published URLs and hashes remain on LLVM 21.
+
+## Earlier full local validation (frozen `73cb`)
 
 The earlier ReleaseSafe unit aggregate at `52f60bd7ca` completed 332 of
 352 build steps, with 6,555 passed tests and 10 skips. Nine compilation
@@ -123,10 +182,8 @@ retained under
 `executions/parallel-eval-all-backends-attempt-final-1/`,
 `executions/cli-all-suites-all-backends-attempt-final-1/`, and
 `cli-failure-probes/`. These correctness runs do not update the earlier
-ReleaseFast performance measurements. Debug/Fast aggregates, remaining
-source/codegen and snapshot gates, full echo/REPL WASM, five remaining
-instrumented campaigns, Tracy, Valgrind, and final application-cache controls
-are still pending.
+ReleaseFast performance measurements. The remaining gates listed here as
+pending at that point are recorded in the final-source section above.
 
 ## Earlier upstream integration
 
