@@ -845,7 +845,7 @@ checker recovery. The recovery rules:
   the item type every later item meets; and a conditional's or match's
   branch join reads that branch, and the branches before it only when every
   one of them is erroneous, since an erroneous branch joins nothing. A
-  dispatch obligation records the relation whose checking queued it, and the
+  dispatch requirement records the relation whose checking queued it, and the
   problems its resolution reports belong to that relation. Because checking
   replaces rejected expressions with runtime errors, each expression's operands
   are captured when its checking begins (`relation_operands`). A relation is
@@ -952,7 +952,7 @@ checker recovery. The recovery rules:
   inferred for the binding from its right-hand side or from its uses
   (`recordValuelessTopLevelValue`). Its right-hand side is still evaluated
   once, at compile time, by a selected root of its own
-  (`hoist_roots.Body.valueless_binding`, published as a `hoisted_validation`
+  (`hoist_roots.Body.valueless_binding`, output as a `hoisted_validation`
   root): the root evaluates the right-hand side for its effects up to where
   it crashes and archives nothing, so its result is unit-valued like any
   validation root's, and no erroneous type is lowered. The binding's own
@@ -5361,13 +5361,13 @@ order up to and including the first erroneous one: a call's callee then its
 arguments, a method call's receiver then its arguments, a binary operator's
 two operands, an interpolation's parts, a tuple's, list's, or tag's items, a
 record's update base then its fields in source order, and a `for` loop's
-iterable. The erroneous-value sweep publishes that sequence as the runtime
+iterable. The erroneous-value sweep outputs that sequence as the runtime
 error's `evaluated` operands (`CIR.Expr.e_runtime_error.evaluated`, checked
 `CheckedRuntimeError.evaluated`) and keeps those operands' subtrees live;
 only the operands after the erroneous one are invalidated. An operand whose
 solved type contains an error by sweep time is itself erroneous, so the
-published sequence ends before it. A statement retired for such a value
-expression publishes as an expression statement of that runtime error, so
+output sequence ends before it. A statement retired for such a value
+expression is output as an expression statement of that runtime error, so
 the value is still evaluated where the statement runs. A record update with
 an erroneous field value does not relate that value into its base's row and
 is retired the same way. Monotype lowers a runtime error with `evaluated`
