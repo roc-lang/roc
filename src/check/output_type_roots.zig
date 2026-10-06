@@ -89,6 +89,17 @@ pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR
 /// The roots of the module's recorded codec requirements, scheme-use
 /// substitutions, and generated codec derivations.
 pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
+    for (module_env.inspect_demand_records.items.items) |record| {
+        switch (record.recordKind()) {
+            .scheme_demands => try visitor.visit(@enumFromInt(record.key)),
+            .type_decision => {
+                try visitor.visit(@enumFromInt(record.key));
+                if (record.data != ModuleEnv.InspectDemandRecord.none) try visitor.visit(@enumFromInt(record.data));
+            },
+            .override_demands, .conditional_override, .use_terms => {},
+        }
+        for (module_env.inspectDemandVars(record)) |demand| try visitor.visit(@enumFromInt(demand.var_));
+    }
     for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
         const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
         try visitor.visit(@enumFromInt(requirement.receiver_var));

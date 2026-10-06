@@ -1240,12 +1240,14 @@ pub const Interpreter = struct {
             value: Value,
             value_layout: layout_mod.Idx,
             desc: *const LirProgram.BoxyTypeDesc,
+            method_owner: *const LirProgram.BoxyTypeDesc,
         ) Error!boxy_runtime.InspectCallResult {
             const prepared = try self.interp.boxy_runtime.prepareInspectCall(
                 self,
                 self.interp.arena.allocator(),
                 method,
                 .{ .value = value, .layout = value_layout, .source_desc = desc },
+                method_owner,
             );
             const proc = self.interp.store.getProcSpec(prepared.proc);
             if (prepared.arg_values.len == 0) {

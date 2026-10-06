@@ -411,6 +411,17 @@ pub const BoxyTypeDesc = struct {
     /// One descriptor: this value in the storage of `inspect_method`'s
     /// worker parameter, instantiated at this descriptor's type arguments.
     inspect_arg_descs: BoxySpan = .{},
+    /// When `inspect_method` is null, the descriptor whose inspect method
+    /// inspection uses for this value: a use's descriptor of the same type in
+    /// its own storage, whose inspection that use decided (design.md "Inspect
+    /// Overrides"). The method's worker receives this value converted to its
+    /// parameter's storage.
+    inspect_from: ?BoxyDescRef = null,
+    /// When non-empty, the dictionaries `inspect_method`'s worker receives, in
+    /// worker parameter order, in place of its slot's: the method is a local
+    /// procedure whose enclosing requirements the frame that built this
+    /// descriptor supplied (design.md "Inspect Overrides").
+    inspect_hidden_dicts: BoxySpan = .{},
     debug_checked_type: ?checked.CheckedTypeId = null,
     /// Set for static descriptors once lowering has produced every descriptor;
     /// a descriptor built at runtime reads runtime context.
@@ -874,6 +885,11 @@ pub const Result = struct {
         defer worklist.deinit(allocator);
         for (descs, 0..) |*desc, desc_index| {
             var class: BoxyDescClosure = .closed;
+            for (self.boxy_dict_refs.items[desc.inspect_hidden_dicts.start..][0..desc.inspect_hidden_dicts.len]) |dict_ref| switch (dict_ref) {
+                .static => {},
+                .local => class = @enumFromInt(@max(@intFromEnum(class), @intFromEnum(BoxyDescClosure.captures))),
+                .runtime => class = .context,
+            };
             var refs = self.boxyDescRefIterator(desc.*);
             while (refs.next()) |ref| switch (ref) {
                 .static => |child| {

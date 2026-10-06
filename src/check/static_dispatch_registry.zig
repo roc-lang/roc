@@ -737,6 +737,22 @@ pub const MethodRegistryEntry = struct {
     /// The evidence of inspection's use of this override at
     /// `inspect_override`, published with the module's dispatch evidence.
     inspect_evidence: ?EvidenceNodeId = null,
+    /// A `to_inspect` method inspection uses at some instantiations of its
+    /// owner only: each concrete type's decision is an `InspectTypeDecision`
+    /// of the module whose checking reached that type (design.md "Inspect
+    /// Overrides").
+    inspect_override_conditional: bool = false,
+};
+
+/// Inspection's decision for one concrete application of a conditional
+/// override's owner (design.md "Inspect Overrides"): the method is used at
+/// `dispatcher_ty -> Str` exactly when `callable_ty` is present, through the
+/// use whose evidence is `evidence`.
+pub const InspectTypeDecision = struct {
+    owner: MethodOwner,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: ?CheckedTypeId = null,
+    evidence: ?EvidenceNodeId = null,
 };
 
 /// The `to_inspect` method generic inspection calls for an owner, the checked
@@ -790,6 +806,16 @@ pub const MethodRegistry = struct {
             .evidence = found.inspect_evidence orelse
                 std.debug.panic("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
         };
+    }
+
+    /// The `to_inspect` target of `key.owner` when it is a conditional
+    /// override, decided per concrete type (`InspectTypeDecision`).
+    pub fn lookupConditionalInspectOverride(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
+        var normalized = key;
+        collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
+        if (!found.inspect_override_conditional) return null;
+        return found.target;
     }
 
     /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
@@ -922,14 +948,14 @@ pub const MethodRegistry = struct {
                     .callable_ty = callable_ty,
                     .reached_through_alias = reached_through_alias,
                 },
-                // Inspection calls an override from rendering workers and
-                // generic code that never hold a local procedure's declaration
-                // context, so only a procedure can be one.
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    std.meta.activeTag(target_kind) == .procedure)
+                    std.meta.activeTag(target_kind) != .structural)
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
                     null,
+                .inspect_override_conditional = entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                    std.meta.activeTag(target_kind) != .structural and
+                    module_env.inspectOverrideIsConditional(def_idx),
             });
         }
 
@@ -1695,6 +1721,10 @@ pub const EvidenceNode = struct {
     /// this edge, in the target scheme's `scheme_vars` order. Empty for a
     /// monomorphic target.
     subst: artifact_serialize.Span = .{},
+    /// Range into `StaticDispatchPlanTable.site_substitutions`: this edge's
+    /// instance of each of the target scheme's inspect terms
+    /// (`CheckedProcedureTemplate.inspect_terms`), in that order.
+    inspect_terms: artifact_serialize.Span = .{},
 };
 
 /// Public `SiteEvidenceEntry` declaration.
@@ -1716,6 +1746,10 @@ pub const SiteEvidenceEntry = extern struct {
     /// For a stored nested-function use, `@intFromEnum` of the checked type of
     /// the instance the containing value stores; `no_site_instance` otherwise.
     instance_ty: u32 = no_site_instance,
+    /// Range into `StaticDispatchPlanTable.site_substitutions`: this site's
+    /// instance of each of the instantiated scheme's inspect terms, in order.
+    inspect_start: u32 = 0,
+    inspect_len: u32 = 0,
 
     pub const no_site_instance = std.math.maxInt(u32);
 };
@@ -2128,6 +2162,9 @@ pub const StaticDispatchPlanTable = struct {
     generated_codec_derivations: []GeneratedCodecDerivation = &.{},
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
     generated_codec_calls: []GeneratedCodecCall = &.{},
+    /// Inspection's decisions for the concrete applications of conditional
+    /// overrides' owners this module's checking reached.
+    inspect_type_decisions: []InspectTypeDecision = &.{},
 
     pub const Serialized = extern struct {
         plans: SerializedSlice(StaticDispatchCallPlan) = .{},
@@ -2149,11 +2186,12 @@ pub const StaticDispatchPlanTable = struct {
         template_root_evidence: SerializedSlice(?artifact_serialize.Span) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
+        inspect_type_decisions: SerializedSlice(InspectTypeDecision) = .{},
 
         comptime {
-            // 19 side lists → 19 base-pointer fixups on deserialize, never a
+            // 20 side lists → 20 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -2785,6 +2823,20 @@ pub const StaticDispatchPlanTable = struct {
         return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
     }
 
+    /// One instantiation site's instance of each inspect term of the scheme
+    /// it instantiates (`SiteEvidenceEntry.inspect_start`).
+    pub fn siteInspectTerms(self: *const StaticDispatchPlanTable, expr: CheckedExprId) []const CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return &.{};
+        return self.site_substitutions[found.inspect_start .. found.inspect_start + found.inspect_len];
+    }
+
+    /// One evidence edge's instance of each inspect term of its target's
+    /// scheme (`EvidenceNode.inspect_terms`).
+    pub fn edgeInspectTerms(self: *const StaticDispatchPlanTable, node_id: EvidenceNodeId) []const CheckedTypeId {
+        const node = self.evidenceNode(node_id);
+        return self.site_substitutions[node.inspect_terms.start .. node.inspect_terms.start + node.inspect_terms.len];
+    }
+
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
@@ -2811,6 +2863,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(@constCast(self.template_root_evidence));
         allocator.free(self.generated_codec_derivations);
         allocator.free(self.generated_codec_calls);
+        allocator.free(self.inspect_type_decisions);
         self.* = .{};
     }
 };
@@ -3388,7 +3441,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 19);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 20);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

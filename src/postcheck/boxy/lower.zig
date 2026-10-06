@@ -2930,7 +2930,12 @@ const ProcedureBuilder = struct {
         }
         const inspect = frame.inspect.?;
         const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
-        const hidden_dict_args = self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args);
+        // A local procedure's dictionaries come from each inspected
+        // descriptor (`inspect_hidden_dicts`); the shared slot names none.
+        const hidden_dict_args = if (self.plan.inspectDictionariesFromDescriptor(inspect))
+            &.{}
+        else
+            self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args);
         if (frame.nested_dict_refs.items.len < hidden_dict_args.len) {
             const arg = hidden_dict_args[frame.nested_dict_refs.items.len];
             const source_rep = switch (arg.source) {
@@ -6555,6 +6560,9 @@ const ProcedureBuilder = struct {
     }
 
     fn descriptorIdentityRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        // Every occurrence of a worker's inspect term is described by the
+        // term's own descriptor.
+        if (self.plan.inspect_term_occurrences.get(rep_id)) |term| return term;
         var current = rep_id;
         while (true) {
             if (self.plan.inspectMethodForRep(current) != null) return current;
@@ -7080,7 +7088,17 @@ const ProcedureBuilder = struct {
             try self.collectDescriptorGraphRefs(desc.nested_descs, parent, captures, parents);
             try self.collectDescriptorGraphRefs(desc.inspect_hidden_descs, parent, captures, parents);
             try self.collectDescriptorGraphRefs(desc.inspect_arg_descs, parent, captures, parents);
+            for (self.result.boxy_dict_refs.items[desc.inspect_hidden_dicts.start..][0..desc.inspect_hidden_dicts.len]) |dict_ref| {
+                const local = dict_ref.localOrNull() orelse continue;
+                const set = &captures[@intFromEnum(parent)];
+                if (std.mem.findScalar(LIR.LocalId, set.items, local) == null) {
+                    try set.append(self.allocator, local);
+                }
+            }
             if (desc.tag_ext_desc) |desc_ref| {
+                try self.collectDescriptorGraphRef(desc_ref, parent, captures, parents);
+            }
+            if (desc.inspect_from) |desc_ref| {
                 try self.collectDescriptorGraphRef(desc_ref, parent, captures, parents);
             }
 
@@ -7484,6 +7502,11 @@ const ProcedureBuilder = struct {
         if (!job.erased) {
             proc.erased_argument_descriptors = true;
             header.body_source = try self.bodySourceForWorker(resolved, proc);
+            // Descriptors the header builds may read the worker's
+            // dictionaries (an inspect method's enclosing requirements), so
+            // the dictionary parameters are bound before the descriptor ones
+            // while keeping their parameter order.
+            try proc.reserveHiddenDictionaryArgs();
             try proc.bindHiddenDescriptorArgs();
             try proc.bindHiddenDictionaryArgs();
             try proc.bindWorkerDictionaryDescriptors();
@@ -15486,6 +15509,9 @@ const ProcedureBuilder = struct {
 
 const ProcBodyBuilder = struct {
     literal_locals: std.ArrayList(LIR.LocalId) = .empty,
+    /// The hidden descriptor this worker received for each of its inspect
+    /// terms (design.md "Inspect Overrides").
+    inspect_term_locals: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.LocalId) = .empty,
     literal_initializer: ?u32 = null,
     parent: *ProcedureBuilder,
     module: ProcedureModuleView,
@@ -15493,6 +15519,9 @@ const ProcBodyBuilder = struct {
     synthetic_adapter: bool,
     erased_argument_descriptors: bool,
     arg_locals: std.ArrayList(LIR.LocalId),
+    /// Hidden dictionary parameter locals created before their place in
+    /// `arg_locals` (`reserveHiddenDictionaryArgs`).
+    reserved_dictionary_args: std.ArrayList(LIR.LocalId) = .empty,
     lambda_arg_patterns: []const checked.CheckedPatternId,
     lambda_arg_binding_locals: []LIR.LocalId,
     lambda_arg_worker_reps: []Plan.TypeRepId,
@@ -16026,6 +16055,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn deinit(self: *ProcBodyBuilder) void {
+        self.inspect_term_locals.deinit(self.parent.allocator);
         for (self.closure_capture_snapshots.items) |snapshot| self.parent.allocator.free(snapshot.locals);
         self.closure_capture_snapshots.deinit(self.parent.allocator);
         self.literal_locals.deinit(self.parent.allocator);
@@ -16065,6 +16095,7 @@ const ProcBodyBuilder = struct {
         self.parent.allocator.free(self.lambda_arg_binding_locals);
         self.frame_locals.deinit(self.parent.allocator);
         self.arg_locals.deinit(self.parent.allocator);
+        self.reserved_dictionary_args.deinit(self.parent.allocator);
         self.* = undefined;
     }
 
@@ -16248,6 +16279,9 @@ const ProcBodyBuilder = struct {
             try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
             if (self.repOwnsDescriptor(param.rep, param.desc)) {
                 try self.bindDescriptorIdentityLocalForRep(param.rep, local, true);
+            }
+            if (self.parent.plan.inspect_term_reps.contains(param.rep)) {
+                try self.inspect_term_locals.put(self.parent.allocator, param.rep, local);
             }
         }
         try self.prepareHiddenDescriptorArgumentRoots(params);
@@ -16442,6 +16476,28 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    /// Create the worker's hidden dictionary parameter locals and bind its
+    /// dictionaries to them; `bindHiddenDictionaryArgs` places them in the
+    /// parameter list.
+    fn reserveHiddenDictionaryArgs(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const params = self.parent.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
+        if (params.len == 0) return;
+        try self.ensureDictionaryLocals();
+        for (params) |param| {
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try self.reserved_dictionary_args.append(self.parent.allocator, local);
+            if (param.literal_parameter != null) continue;
+            var dict_offset: u32 = 0;
+            while (dict_offset < param.dictionaries.len) : (dict_offset += 1) {
+                const dict_index: usize = @intCast(param.dictionaries.start + dict_offset);
+                self.dictionary_slots[dict_index] = local;
+                self.dictionary_locals[dict_index] = local;
+                self.dictionary_bound[dict_index] = true;
+            }
+        }
+    }
+
     fn bindHiddenDictionaryArgs(self: *ProcBodyBuilder) Allocator.Error!void {
         const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
         const params = self.parent.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
@@ -16452,12 +16508,19 @@ const ProcBodyBuilder = struct {
         if (params.len == 0) return;
 
         try self.ensureDictionaryLocals();
-        for (params, layouts) |param, runtime_layout| {
+        if (self.reserved_dictionary_args.items.len != 0 and self.reserved_dictionary_args.items.len != params.len) {
+            boxyLowerInvariant("boxy reserved hidden dictionary args disagreed with the worker's params");
+        }
+        for (params, layouts, 0..) |param, runtime_layout, param_index| {
             const layout_idx = runtime_layout.layoutIdx();
             if (layout_idx != .opaque_ptr) {
                 boxyLowerInvariant("boxy hidden dictionary arg layout was not opaque_ptr");
             }
-            const local = try self.addArgLocal(layout_idx);
+            const local = if (self.reserved_dictionary_args.items.len != 0) blk: {
+                const reserved = self.reserved_dictionary_args.items[param_index];
+                try self.arg_locals.append(self.parent.allocator, reserved);
+                break :blk reserved;
+            } else try self.addArgLocal(layout_idx);
             if (param.literal_parameter) |index| {
                 std.debug.assert(index == self.literal_locals.items.len);
                 try self.literal_locals.append(self.parent.allocator, local);
@@ -16524,6 +16587,9 @@ const ProcBodyBuilder = struct {
                     try self.bindDescriptorRequirementLocalForRep(desc, capture.rep, local, true);
                     if (self.repOwnsDescriptor(capture.rep, desc)) {
                         try self.bindDescriptorIdentityLocalForRep(capture.rep, local, true);
+                    }
+                    if (self.parent.plan.inspect_term_reps.contains(capture.rep)) {
+                        try self.inspect_term_locals.put(self.parent.allocator, capture.rep, local);
                     }
                 },
                 .hidden_dict => {
@@ -23993,6 +24059,8 @@ const ProcBodyBuilder = struct {
         // Each planned source is described by the enclosing frame.
         for (captures, field_locals, capture_desc_sources, hidden_desc_initializers) |capture, field_local, desc_source, *hidden_desc_initializer| {
             if (capture.kind != .hidden_desc) continue;
+            // An inspect term is described once its parts are bound below.
+            if (self.parent.plan.inspect_term_reps.contains(capture.rep)) continue;
             const materialization = try self.descriptorMaterializationForSourceRep(desc_source.rep);
             hidden_desc_initializer.* = .{
                 .local = field_local,
@@ -24011,6 +24079,22 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy hidden descriptor erased capture had no descriptor requirement");
             self.markDescriptorRequirementBoundForRep(desc, capture.rep);
             self.markDescriptorRequirementBoundForRep(desc, desc_source.rep);
+        }
+        // A worker's inspect term: the term as the worker stores it, whose
+        // inspection is the one this use's instance carries.
+        for (captures, field_locals, capture_desc_sources, hidden_desc_initializers) |capture, field_local, desc_source, *hidden_desc_initializer| {
+            if (capture.kind != .hidden_desc) continue;
+            if (!self.parent.plan.inspect_term_reps.contains(capture.rep)) continue;
+            const materialization = try self.descriptorMaterializationForKnownRepExcludingLocal(
+                self.descriptorStorageRep(capture.rep),
+                field_local,
+            );
+            const wrapped = try self.withInspectFrom(materialization, try self.inspectTermUseDescriptor(desc_source.rep));
+            hidden_desc_initializer.* = .{
+                .local = field_local,
+                .materialize = wrapped.desc,
+                .captures = wrapped.captures,
+            };
         }
 
         try self.prepareErasedPackedCapturedValueFieldDescriptors(
@@ -25713,6 +25797,8 @@ const ProcBodyBuilder = struct {
         try self.bindDirectCallHiddenDescriptorLocals(hidden_desc_args, hidden_desc_locals, true);
         const hidden_dict_locals = try self.lowerDirectCallHiddenDictionaryArgs(hidden_dict_args);
         defer self.parent.allocator.free(hidden_dict_locals);
+        const inspect_term_locals = try self.lowerInspectTermArgs(hidden_desc_args, hidden_desc_locals, hidden_dict_args, hidden_dict_locals);
+        defer self.parent.allocator.free(inspect_term_locals);
 
         const call_locals = try self.parent.allocator.alloc(LIR.LocalId, adapted_args.len + hidden_desc_locals.len + hidden_dict_locals.len);
         defer self.parent.allocator.free(call_locals);
@@ -25848,6 +25934,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy direct call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
+        continuation = try self.prependHiddenDescriptorArgMaterialization(inspect_term_locals, continuation);
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
         // Hidden descriptors read only the original operands and the caller
         // frame, so they are initialized before the operands are adapted and
@@ -28108,6 +28195,12 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!void {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         const desc = rep.descriptor orelse return;
+        // A value of one of the worker's inspect terms is described by the
+        // term's hidden descriptor, whose inspection its use decided.
+        if (self.boundInspectTermDescriptorLocal(self.parent.descriptorIdentityRep(rep_id))) |term_local| {
+            self.parent.result.store.setLocalBoxyDesc(target, .{ .local = term_local });
+            return;
+        }
         if (self.parent.result.store.getLocal(target).boxy_desc) |target_desc| {
             if (target_desc.localOrNull()) |target_desc_local| {
                 if (!self.localIsReadOnlyDescriptorInput(target_desc_local)) {
@@ -31831,6 +31924,20 @@ const ProcBodyBuilder = struct {
                 local.* = .{ .local = lowered[source_index].local, .from_source_value = true };
                 continue;
             }
+            // A worker's inspect term is described below, once the
+            // descriptors it is instantiated with are bound.
+            if (self.parent.plan.inspect_term_reps.contains(arg.worker_rep)) {
+                local.* = .{ .local = try self.addFrameLocal(.opaque_ptr) };
+                continue;
+            }
+            // A value of this worker's own inspect term is described by the
+            // term's hidden descriptor.
+            if (self.boundInspectTermDescriptorLocal(self.parent.descriptorIdentityRep(arg.rep))) |term_local| {
+                if (self.descriptorStorageRep(arg.rep) == self.descriptorStorageRep(self.parent.descriptorIdentityRep(arg.rep))) {
+                    local.* = .{ .local = term_local };
+                    continue;
+                }
+            }
             // A bare type parameter receives the descriptor of the caller
             // type the call substitutes for it: the operand's own descriptor
             // when the plan names one, otherwise the caller frame's. A
@@ -31880,6 +31987,10 @@ const ProcBodyBuilder = struct {
         for (hidden_args, lowered) |arg, *local| {
             if (local.from_source_value) continue;
             if (self.localIsReadOnlyDescriptorInput(local.local)) continue;
+
+            // A worker's inspect term is described once the call's
+            // dictionaries are too (`lowerInspectTermArgs`).
+            if (self.parent.plan.inspect_term_reps.contains(arg.worker_rep)) continue;
 
             if (local.materialize == null and self.directCallHiddenDescriptorUsesCallShape(arg)) {
                 const identity_call_rep = self.descriptorStorageRep(arg.rep);
@@ -32654,10 +32765,122 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         arg: Plan.DirectCallHiddenDescriptorArg,
     ) bool {
+        // A worker's inspect term takes the use's own instance whole.
+        if (self.parent.plan.inspect_term_reps.contains(arg.worker_rep)) return true;
         const identity_worker_rep = self.descriptorStorageRep(arg.worker_rep);
         const worker_rep = self.parent.plan.representations.items[@intFromEnum(identity_worker_rep)];
         return (worker_rep.kind == .dynamic and worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) or
             self.repIsOpenRecord(identity_worker_rep);
+    }
+
+    /// Describe a call's arguments for its callee's inspect terms: each term
+    /// as the callee stores it, whose inspection is the one the call's
+    /// instance carries. An instance of a type declared in a function body may
+    /// name that function's variables, whose descriptors and dictionaries are
+    /// the call's own hidden arguments, so the call's dictionaries are bound
+    /// while the instance is described; the returned initializers run after
+    /// theirs.
+    fn lowerInspectTermArgs(
+        self: *ProcBodyBuilder,
+        hidden_desc_args: []const Plan.DirectCallHiddenDescriptorArg,
+        hidden_desc_locals: []DescriptorArgLocal,
+        hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg,
+        hidden_dict_locals: []const DictionaryArgLocal,
+    ) Allocator.Error![]DescriptorArgLocal {
+        var terms = std.ArrayList(DescriptorArgLocal).empty;
+        errdefer terms.deinit(self.parent.allocator);
+        var has_term = false;
+        for (hidden_desc_args) |arg| {
+            if (self.parent.plan.inspect_term_reps.contains(arg.worker_rep)) has_term = true;
+        }
+        if (!has_term) return try terms.toOwnedSlice(self.parent.allocator);
+
+        try self.ensureDictionaryLocals();
+        const saved_locals = try self.parent.allocator.dupe(?LIR.LocalId, self.dictionary_locals);
+        defer self.parent.allocator.free(saved_locals);
+        const saved_bound = try self.parent.allocator.dupe(bool, self.dictionary_bound);
+        defer self.parent.allocator.free(saved_bound);
+        defer {
+            @memcpy(self.dictionary_locals, saved_locals);
+            @memcpy(self.dictionary_bound, saved_bound);
+        }
+        for (hidden_dict_args, hidden_dict_locals) |arg, local| {
+            for (0..arg.worker_dictionaries.len) |offset| {
+                const dict_index: usize = @intCast(arg.worker_dictionaries.start + offset);
+                self.dictionary_locals[dict_index] = local.local;
+                self.dictionary_bound[dict_index] = true;
+            }
+        }
+
+        for (hidden_desc_args, hidden_desc_locals) |arg, *local| {
+            if (!self.parent.plan.inspect_term_reps.contains(arg.worker_rep)) continue;
+            const materialization = try self.descriptorMaterializationForKnownRepExcludingLocal(
+                self.descriptorStorageRep(arg.worker_rep),
+                local.local,
+            );
+            const decided = try self.inspectTermUseDescriptor(arg.rep);
+            const wrapped = try self.withInspectFrom(materialization, decided);
+            try terms.append(self.parent.allocator, .{
+                .local = local.local,
+                .materialize = wrapped.desc,
+                .captures = wrapped.captures,
+            });
+        }
+        return try terms.toOwnedSlice(self.parent.allocator);
+    }
+
+    /// The hidden descriptor this worker received for one of its inspect
+    /// terms, when `rep_id` is one.
+    fn boundInspectTermDescriptorLocal(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) ?LIR.LocalId {
+        return self.inspect_term_locals.get(rep_id);
+    }
+
+    /// The descriptor carrying the inspection a use decided for its instance
+    /// of a worker's inspect term: the caller's own inspect term's hidden
+    /// descriptor, or the descriptor of a concrete instance. An instance of a
+    /// type declared in a function body may name that function's variables,
+    /// which the call's own hidden descriptors bind.
+    fn inspectTermUseDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!DescriptorMaterialization {
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        if (self.boundInspectTermDescriptorLocal(identity_rep)) |local| return .{ .desc = .{ .local = local } };
+        return try self.descriptorMaterializationForKnownRep(identity_rep);
+    }
+
+    /// `materialization` with its inspection taken from `inspect_from_source`.
+    fn withInspectFrom(
+        self: *ProcBodyBuilder,
+        materialization: DescriptorMaterialization,
+        inspect_from_source: DescriptorMaterialization,
+    ) Allocator.Error!DescriptorMaterialization {
+        const inspect_from = inspect_from_source.desc;
+        const template_id = switch (materialization.desc) {
+            .static => |id| id,
+            // A descriptor already bound in this frame is the term's own.
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => return materialization,
+        };
+        var copy = self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
+        copy.inspect_method = null;
+        copy.inspect_hidden_descs = .{};
+        copy.inspect_arg_descs = .{};
+        copy.inspect_hidden_dicts = .{};
+        copy.inspect_from = inspect_from;
+        const copy_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, copy);
+        if (inspect_from.localOrNull() == null and inspect_from_source.captures.len == 0) return .{
+            .desc = .{ .static = copy_id },
+            .captures = materialization.captures,
+        };
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(self.parent.allocator);
+        for ([_]LIR.LocalSpan{ materialization.captures, inspect_from_source.captures }) |span| {
+            const existing = self.parent.result.store.getLocalSpan(span);
+            for (0..GuardedList.borrowLen(existing)) |index| try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(existing, index));
+        }
+        if (inspect_from.localOrNull()) |from_local| try appendUniqueLocal(self.parent.allocator, &captures, from_local);
+        return .{
+            .desc = .{ .static = copy_id },
+            .captures = try self.parent.result.store.addLocalSpan(captures.items),
+        };
     }
 
     fn bindDirectCallHiddenDescriptorLocals(
@@ -33559,6 +33782,7 @@ const ProcBodyBuilder = struct {
         field_names: LIR.BoxySpan = .{},
         inspect_method: ?LirProgram.BoxyMethodSlotId = null,
         inspect_hidden_descs: LIR.BoxySpan = .{},
+        inspect_hidden_dicts: LIR.BoxySpan = .{},
         refs: std.ArrayList(LIR.BoxyDescRef) = .empty,
         slots: std.ArrayList(ProcedureBuilder.NestedDescriptorSlot) = .empty,
         index: usize = 0,
@@ -33653,6 +33877,14 @@ const ProcBodyBuilder = struct {
         captures: *std.ArrayList(LIR.LocalId),
         context: *DescriptorTemplateContext,
     ) Allocator.Error!?LIR.BoxyDescRef {
+        // A worker's inspect term is described by its hidden descriptor,
+        // whose inspection its use decided, wherever the term appears.
+        if (self.boundInspectTermDescriptorLocal(self.parent.descriptorIdentityRep(root_rep_id))) |term_local| {
+            if (context.excluded_local != term_local) {
+                try appendUniqueLocal(self.parent.allocator, captures, term_local);
+                return .{ .local = term_local };
+            }
+        }
         var rep_id = root_rep_id;
         while (true) {
             const exact_rep = self.descriptorTemplateExactRep(rep_id, context);
@@ -33673,7 +33905,10 @@ const ProcBodyBuilder = struct {
         const exact_payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id);
         const identity_payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(identity_rep);
         const shares_identity_storage = exact_payload_layout == identity_payload_layout;
-        const may_reuse_whole_descriptor = !context.exact_storage or self.repIsBareDynamic(rep_id);
+        // A worker's inspect term is described whole by its use, which
+        // describes the term's own storage.
+        const may_reuse_whole_descriptor = !context.exact_storage or self.repIsBareDynamic(rep_id) or
+            self.parent.plan.inspect_term_reps.contains(identity_rep);
         // A local named by representation describes it under the bindings
         // where it was made. A nominal's backing is shared by every
         // instantiation, so a nested instantiation of the same nominal (a
@@ -33975,6 +34210,7 @@ const ProcBodyBuilder = struct {
                     return .{ .request = arg.rep };
                 }
                 frame.inspect_hidden_descs = if (args.len == 0) .{} else try self.parent.appendStaticHiddenDescRefs(frame.refs.items);
+                frame.inspect_hidden_dicts = try self.inspectHiddenDictRefs(rep_id);
                 frame.phase = .inspect_arg_begin;
             },
             .inspect_arg_begin => {
@@ -34004,6 +34240,25 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The dictionaries this frame supplies to the inspect method of a
+    /// descriptor it builds for `rep_id`, when that method is a local
+    /// procedure: its enclosing requirements' dictionaries are this frame's.
+    fn inspectHiddenDictRefs(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
+        if (!self.parent.plan.inspectDictionariesFromDescriptor(inspect)) return .{};
+        const args = self.parent.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args);
+        const refs = try self.parent.allocator.alloc(LIR.BoxyDictRef, args.len);
+        defer self.parent.allocator.free(refs);
+        for (args, refs) |arg, *ref| {
+            const dictionary = try self.dictionaryRefForPlannedSource(arg);
+            if (dictionary.captures.len != 0) {
+                boxyLowerInvariant("boxy inspect dictionary supplied by a descriptor read frame locals through a template");
+            }
+            ref.* = dictionary.dict;
+        }
+        return try self.parent.appendStaticHiddenDictRefs(refs);
+    }
+
     /// Store the finished descriptor and leave its descent's bindings.
     fn finishTemplateDesc(
         self: *ProcBodyBuilder,
@@ -34028,6 +34283,7 @@ const ProcBodyBuilder = struct {
             .inspect_method = frame.inspect_method,
             .inspect_hidden_descs = frame.inspect_hidden_descs,
             .inspect_arg_descs = inspect_arg_descs,
+            .inspect_hidden_dicts = frame.inspect_hidden_dicts,
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };

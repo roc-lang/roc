@@ -8986,71 +8986,145 @@ type mismatch without `CheckedModule` construction panicking).
 ### Inspect Overrides
 
 Inspection (`Str.inspect`, `dbg`, and `expect` failure reports) renders every
-value. A nominal type's `to_inspect` method replaces the default rendering only
-when it is an eligible inspect override. A method named `to_inspect` is still an
-ordinary method: it may have any type, and explicit calls and `where` clauses
-dispatch to it like any other method. Inspection calls the method at
-`T -> Str`, where `T` is the owning nominal applied to distinct type variables
-that carry no `where` constraints. The method is an inspect override exactly
-when it can be used there: its scheme, annotated or inferred and however
-general, has an instance at `T -> Str` whose requirements the owner's types
-satisfy. Whether the method is a lambda or a value alias (`to_inspect =
-render`), and whether it is annotated, makes no difference. A method of a type
-declared in a function body that checking did not promote is a local procedure
-whose declaration context is enclosing type variables: inspection calls an
-override from rendering workers, specialized generic code, and erased
-descriptor slots, none of which hold that context, so such a method is not an
-inspect override. `Wrap(a) -> Str` qualifies, and so do an unannotated method
-whose argument is a record its owner's backing matches (`|c| "N(${c.count.to_str()})"`
-for an owner backed by `{ count : U64 }`) and an unannotated method whose
-result is a string literal: its declared result is a variable constrained by
-`from_quote` or `from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
-`Pair(a, a) -> Str`,
-`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
-extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
-a rigid variable), and results that are `Str` only when one of `T`'s variables
-is (interpolating a payload of type `a`) do not. Inspection ignores an
-ineligible method and renders the value's default form; per the method-naming
-principle in Core Principles, this is never reported.
+value. A nominal type's `to_inspect` method replaces the default rendering of a
+value of type `T` exactly when the method can be used at `T -> Str`: its scheme,
+annotated or inferred and however general, has an instance at that type whose
+requirements `T` satisfies. A method named `to_inspect` is still an ordinary
+method: it may have any type, and explicit calls and `where` clauses dispatch to
+it like any other method. Whether the method is a lambda or a value alias
+(`to_inspect = render`), and whether it is annotated, makes no difference.
+Inspection ignores a method it cannot use at a type and renders that value's
+default form; per the method-naming principle in Core Principles, this is never
+reported. Inspection places no requirement on the inspected type that a user
+can see: a generic function that inspects its argument has the type it would
+have without inspection, and no `where` clause can name what inspection needs.
 
-Checking forms that instance once per `to_inspect` declaration
+`Nullable(a) := [Null, NotNull(a)]` with `to_inspect : Nullable(a) -> Str where
+[a.to_str : a -> Str]` therefore renders `Nullable(U64)` through the method and
+`Nullable(NoStr)` in its default form, wherever inspection meets the value:
+directly, inside a record, list, tag payload, or nominal backing, or through a
+generic helper in any module. Results `Str` cannot be (a numeral, `I64`, a rigid
+variable), extra arguments, and effectful functions make a method unusable at
+every type; an unannotated method whose result is a string literal is usable,
+because its declared result is a variable constrained by `from_quote` or
+`from_interpolation`, which `Str` satisfies.
+
+**Classification.** Checking classifies each `to_inspect` declaration once
 (`recordInspectOverrideInstances`): it instantiates the method's scheme as a
 dispatch target, unifies the copy's argument with the owner applied to fresh
 type variables and its result with `Str`, and satisfies every requirement the
 copy carries exactly as the dispatch pass does, repeating as satisfying one
 binds further variables—a numeral by a builtin number type that fits it, a
-quote or interpolation conversion by `Str` (an interpolation's parts by
-becoming `Str`), any other requirement by its receiver's method. The method's
-own type is never changed. When the instance exists, is pure, and still takes
-the owner over distinct type variables that carry no requirements, checking
-records it as inspection's use of the method
-(`ModuleEnv.inspect_override_instances`) with its scheme-use record,
-so CheckedModule construction derives that use's evidence like a dispatch
-target's.
+quote or interpolation conversion by `Str`, any other requirement by its
+receiver's method. The method's own type is never changed.
 
-Eligibility is a property of the declaration alone, so it holds at every
-instantiation of the owner. Inspection therefore places no requirement on the
-inspected type: a generic function that inspects its argument carries none, and
-inspection reached through a record, list, tag payload, generic helper, or
-nominal backing can never select an override it cannot call. The checked method
-registry records the decision once per `to_inspect` entry:
-`MethodRegistryEntry.inspect_override` is the instance's checked callable type
-when `MethodRegistry.fromModule` finds the method's target is a procedure and
-the instance is `T -> Str`, and `inspect_evidence` is
-the use's evidence node, produced by the evidence pass. Monotype and Boxy
-planning and lowering select the declaring view exactly as method dispatch does
-and consume that decision through `MethodRegistry.lookupInspectOverride`; they
-never re-examine the method's type. Monotype requests the method at `T -> Str`.
-Boxy plans its worker at the instance type and supplies the worker's hidden
-descriptors and dictionaries from the use's evidence, as it does for a resolved
-dispatch. The use leaves the owner's type variables free, so each inspected
-value binds them in that substitution to its own type arguments.
+- When no such instance exists, the method is never used.
+- When the instance is pure and still takes the owner over distinct type
+  variables that carry no requirements, the method is an *unconditional
+  override*: usable at every instantiation of the owner. Checking records the
+  instance as inspection's use of the method
+  (`ModuleEnv.inspect_override_instances`) with its scheme-use record, so
+  CheckedModule construction derives that use's evidence like a dispatch
+  target's, and `MethodRegistryEntry.inspect_override` is the instance's
+  checked callable type, with `inspect_evidence` the use's evidence node.
+- Otherwise the method is a *conditional override*
+  (`MethodRegistryEntry.inspect_override_conditional`): whether it is used
+  depends on the owner's type arguments, and each concrete type is decided on
+  its own.
 
-This is deliberately the simplest rule, adopted to see how it works in
-practice. Later versions may admit overrides with `where` clauses, with type
-arguments bound to one another, or with concrete type arguments. Each of those
-makes eligibility depend on the instantiation, which would move the decision
-from the declaration to each inspected type.
+**Demands.** A conditional override is decided at a concrete type, but a
+generic function that inspects a value of its own type variable does not know
+that type. Checking therefore computes, once per module after solving
+(`recordInspectDemands`), each scheme's *inspect demands*: the types whose
+rendering depends on how the scheme is instantiated. Walking an inspected type
+from an inspection site (`Str.inspect`'s argument, `dbg`, `expect` reports):
+
+- a type variable a scheme quantifies is a demand of that scheme;
+- an application of a conditional override's owner is a *closed term* when it
+  names no quantified variable, and is decided right there; otherwise it is an
+  open term, a demand of the scheme owning its variables, and its default form
+  is walked as well, since a use may decide against the override;
+- an application of an unconditional override's owner contributes the
+  override's own demands at the application's arguments (an override inspects
+  values of its owner's type arguments too);
+- an owner without an override, a record, tuple, tag union, list, or box
+  contributes its parts.
+
+Every scheme use (a value use, a nested function use, or a dispatch target)
+substitutes its target's demands with the use's instantiation; a substituted
+demand is walked the same way, so it is decided where it becomes closed and
+otherwise becomes a demand of the scheme around the use. The demands are the
+least fixpoint over every use, so the order in which uses are visited does not
+matter, and annotations play no part. Imported schemes carry their demands
+(`ImportedScheme.inspect_demands_*`), and a scheme use in an importing module
+substitutes them like its own.
+
+**Decisions.** A closed term is decided once per structurally equal type
+(`decideClosedInspectOverride`): checking instantiates the override at
+`T -> Str` exactly as classification does, with every type variable the term
+still names held fixed, and the decision is the instance when every requirement
+the instance carries settles to a concrete receiver or to a type variable of
+the function the owner is declared in (below). The decision is recorded with
+the instance (`InspectDemandRecord.type_decision`). A decision commits only
+fresh instance variables joined to the decided type; it changes no existing
+type.
+
+**Checked output.** CheckedModule construction outputs, for each procedure
+template and each generalized local scope, its *inspect terms*: the open-term
+demands of its scheme (`CheckedProcedureTemplate.inspect_terms`, and the
+`inspect_terms` of a generalized scope's dispatch record). Each scheme use
+records its instance of each of its target's terms
+(`InspectDemandRecord.use_terms`, output with the use's site evidence), and
+every closed decision is output with its instance's checked callable type and
+evidence node (`StaticDispatchPlanTable.inspect_type_decisions`). A procedure
+that may inspect a value whose type mentions one of its scheme's variables
+records it (`CheckedProcedureTemplate.inspects_scheme_types`). Programs with no
+conditional override have no inspect terms and no decisions.
+
+**Monotype.** Every inspected type is concrete. Monotype consumes an
+unconditional override through `MethodRegistry.lookupInspectOverride`, and a
+conditional one through the decision checking made for the concrete type
+(`conditionalInspectDecision`), requesting the method at the decision's
+instance; it never re-examines the method's type. A specialization that
+inspects its scheme's types, requested from a body whose declaration contexts
+include a local inspect override, lowers with the requesting body's
+declaration contexts, like a specialization whose evidence selects a local
+procedure.
+
+**Boxy.** A descriptor carries the inspection its type was decided for: the
+override's worker slot (`BoxyTypeDesc.inspect_method`), the worker's hidden
+descriptors, its argument descriptor, and, for a requirement on a variable of
+the function the owner is declared in, its dictionaries. A static descriptor of
+a concrete type carries its closed decision. A worker receives one hidden
+descriptor per inspect term; the caller supplies its own instance's
+descriptor, whose inspection is the decision the caller made (its own term's
+hidden descriptor, or the static descriptor of its concrete instance). The
+worker describes the term's values as it stores them and takes their
+inspection from the supplied descriptor (`BoxyTypeDesc.inspect_from`). The
+worker of an unconditional override binds the owner's type variables to each
+inspected value's type arguments, as the instance's substitution leaves them
+free.
+
+**Types declared in function bodies.** A type declared in a function body may
+name that function's type variables in its backing. Every application shares
+them: opening the backing substitutes only the declaration's formals and keeps
+every other variable (`Instantiator.RigidBehavior.substitute_rigids_sharing`,
+`CheckedTypeSubstitution.shares_unsubstituted_variables`), and inspection's
+instance of such a type's method shares the enclosing definitions' variables
+(`localTypeEnclosingVars`) rather than copying them. A requirement the instance
+places on one of those variables is the enclosing function's own, supplied by
+its `where` clause; it settles a decision as a concrete receiver does, and the
+decision records that it reads the enclosing function
+(`InspectDemandRecord.formals_len` on a `type_decision`). Only the frame
+inspecting the value holds that function's evidence, so the decision's
+evidence names such a requirement `from_callable`, and Boxy supplies its
+dictionary from the frame that builds the inspected value's descriptor
+(`BoxyTypeDesc.inspect_hidden_dicts`); a call that supplies an inspect term of
+such a type binds the callee's dictionaries and descriptors from its own
+hidden arguments while describing the term. A method that names the enclosing
+function's variables only through its owner is promoted like any other
+context-free local function; one that names them in its own type is a local
+procedure whose declaration context is those variables.
 
 ### Pending Dispatch Requirements In Type Schemes
 
@@ -10647,6 +10721,16 @@ Other solved-graph mutations:
   The method's own solved type is never written. Accepted and rejected sides
   are pinned by test/cli/InspectUnannotatedOverride.roc and
   test/cli/InspectIneligibleOverride.roc.
+- `decideClosedInspectOverride` (`probeInspectOverrideAt`)—policy: Inspect
+  Overrides (above). One commit-probe per structurally distinct closed term
+  instantiates a conditional override at the term `-> Str` with the term's
+  remaining variables held fixed, and is committed only when every
+  requirement the instance carries settles to a concrete receiver or to a type
+  variable of the function the owner is declared in; the commit joins fresh
+  instance variables to the term and changes no existing type. Accepted and
+  rejected sides are pinned by test/echo/to_inspect_per_type_imported.roc,
+  test/echo/to_inspect_local_types.roc, and
+  test/cli/InspectIneligibleOverride.roc.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
@@ -11163,7 +11247,11 @@ the operations needed for a value representation:
   nominal inspection after the value has been erased. The slot is shared by
   every instantiation of the owning nominal, so the descriptor also carries its
   own instantiation's descriptors for that call: the adapted receiver argument
-  and the worker's hidden descriptors
+  and the worker's hidden descriptors, and, for a requirement on a variable of
+  the function a local owner is declared in, the worker's dictionaries
+  (Inspect Overrides)
+- an optional `inspect_from` reference to the descriptor carrying the
+  inspection a use decided for this value's type (Inspect Overrides)
 
 The exact field order and encoding of `TypeDesc` is LIR-owned static data.
 Every descriptor has an explicit id in the lowered program. Backends and the
@@ -13314,9 +13402,9 @@ Inspection is the one deliberate exception. When a type's custom `to_inspect`
 is rejected, `Str.inspect` (and `dbg` and `expect` reports) render values of
 that type in the default structural form, at every nesting depth, in both
 specialize=yes and specialize=no. Inspection is never a dispatch to
-`to_inspect`: it calls the method only when the declaration is an inspect
-override (Inspect Overrides), and a rejected declaration has no callable type
-to be one. `MethodRegistry.fromModule` records that decision on the rejected
+`to_inspect`: it calls the method only where the method can be used at the
+inspected type (Inspect Overrides), and a rejected declaration has no callable
+type to be used. `MethodRegistry.fromModule` records that decision on the rejected
 key itself (`inspect_override = null` beside `target = null`), and Monotype and
 Boxy consume it through `lookupInspectOverride` exactly as they consume an
 ineligible method's decision; neither stage branches on `rejected` to choose

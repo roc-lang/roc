@@ -5344,6 +5344,7 @@ pub const CheckedTypeStore = struct {
 
         var substitution = CheckedTypeSubstitution.init(allocator, names, self, formals_copy, actuals_copy);
         defer substitution.deinit();
+        substitution.shares_unsubstituted_variables = true;
         return try self.cloneCheckedTypeRootSubstituting(allocator, declaration.backing, &substitution);
     }
 
@@ -5382,6 +5383,7 @@ pub const CheckedTypeStore = struct {
 
         var substitution = CheckedTypeSubstitution.init(allocator, names, self, formals_copy, actuals_copy);
         defer substitution.deinit();
+        substitution.shares_unsubstituted_variables = true;
         for (padding_copy, 0..) |padding_ty, i| {
             out[i] = try self.cloneCheckedTypeRootSubstituting(allocator, padding_ty, &substitution);
         }
@@ -5556,6 +5558,10 @@ pub const CheckedTypeStore = struct {
             if (source == formal) return .{ .done = actual };
         }
         if (substitution.images.get(source)) |existing| return .{ .done = existing };
+        if (substitution.shares_unsubstituted_variables) switch (self.payload(source)) {
+            .flex, .rigid => return .{ .done = source },
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
+        };
 
         const source_index: usize = @intFromEnum(source);
         if (source_index >= self.payloads.items.len or source_index >= self.roots.items.len) {
@@ -6742,6 +6748,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
 
             var substitution = CheckedTypeSubstitution.init(allocator, names, store, formals, actual_args);
             defer substitution.deinit();
+            substitution.shares_unsubstituted_variables = true;
             const backing = try store.cloneCheckedTypeRootSubstituting(allocator, alias.backing, &substitution);
 
             // The payload owns `payload_args` and releases it on failure.
@@ -7625,6 +7632,11 @@ const CheckedTypeKeyDigester = struct {
 pub const CheckedTypeSubstitution = struct {
     images: collections.DenseMap(CheckedTypeId, CheckedTypeId),
     keys: CheckedTypeKeyDigester,
+    /// Keep every variable the substitution does not name, rather than
+    /// minting a distinct one: a declaration's backing names only its formals
+    /// and the type variables of the function the type is declared in, which
+    /// every application shares.
+    shares_unsubstituted_variables: bool = false,
 
     /// `formals` and `actuals` must outlive the substitution.
     pub fn init(
@@ -18411,6 +18423,10 @@ pub const DispatchRefScope = struct {
     /// The scope scheme's quantified variables in canonical identity order (a
     /// range into `CheckedProcedureTemplateTable.scheme_vars_pool`).
     scheme_vars: artifact_serialize.Span = .{},
+    /// The scope scheme's inspect terms (a range into
+    /// `CheckedProcedureTemplateTable.scheme_vars_pool`; see
+    /// `CheckedProcedureTemplate.inspect_terms`).
+    inspect_terms: artifact_serialize.Span = .{},
 };
 
 /// Stable identity of a generalized-local dispatch scope within a checked
@@ -18917,6 +18933,12 @@ const EvidencePass = struct {
     names: *canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
     checked_bodies: *CheckedBodyStore,
+    /// Set while publishing an inspect type decision whose instance's
+    /// requirements name type variables of the function the owner is
+    /// declared in (design.md "Inspect Overrides"): such a requirement's
+    /// dispatcher is a rigid variable no chain here binds, and the frame that
+    /// inspects the value supplies it from the instance's callable.
+    frame_supplies_rigid_dispatchers: bool = false,
     /// Only actual rejected sites request diagnostic propagation. This flag
     /// gates recovery work; it never suppresses independent compile-time roots.
     rejected_dispatches: bool = false,
@@ -19167,6 +19189,8 @@ const EvidencePass = struct {
                 const schema = try self.publishScheme(scheme_var);
                 template.scheme_vars = schema.vars;
                 template.evidence_params = schema.params;
+                template.inspect_terms = try self.appendSchemeInspectTerms(scheme_var);
+                template.inspects_scheme_types = self.module.moduleEnvConst().inspectDemandRecord(.scheme_demands, @intFromEnum(self.types.resolveVar(scheme_var).var_)) != null;
             } else {
                 // Constant-evaluation wrappers retain the value's type variables,
                 // but have no caller-supplied dispatch parameters of their own.
@@ -19178,6 +19202,7 @@ const EvidencePass = struct {
             const schema = try self.publishScheme(scope.scheme_var);
             scope.scheme_vars = schema.vars;
             scope.evidence_params = schema.params;
+            scope.inspect_terms = try self.appendSchemeInspectTerms(scope.scheme_var);
         }
         self.templates.evidence_params_pool = try self.evidence_params_pool.toOwnedSlice(self.allocator);
         self.templates.evidence_path_nodes = try self.evidence_path_nodes.toOwnedSlice(self.allocator);
@@ -19260,6 +19285,7 @@ const EvidencePass = struct {
         }
 
         try self.publishInspectOverrideEvidence();
+        try self.publishInspectTypeDecisions();
 
         if (self.template_root_evidence.len != self.templates.templates.items.len) {
             checkedArtifactInvariant("template root evidence output and procedure template tables had different lengths", .{});
@@ -19349,6 +19375,8 @@ const EvidencePass = struct {
                     .subst_start = spans.subst.start,
                     .subst_len = spans.subst.len,
                     .instance_ty = self.siteInstanceType(deferred.record_idx),
+                    .inspect_start = spans.inspect_terms.start,
+                    .inspect_len = spans.inspect_terms.len,
                 });
             }
         }
@@ -19446,6 +19474,36 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("scheme quantified variable type was not published", .{}));
         }
         return .{ .start = start, .len = @intCast(identity_vars.len) };
+    }
+
+    /// The inspect terms of the scheme `scheme_root`: the applications of
+    /// conditional overrides' owners among its inspect demands, in order.
+    fn appendSchemeInspectTerms(self: *EvidencePass, scheme_root: Var) Allocator.Error!artifact_serialize.Span {
+        const module_env = self.module.moduleEnvConst();
+        const root = self.types.resolveVar(scheme_root).var_;
+        const record = module_env.inspectDemandRecord(.scheme_demands, @intFromEnum(root)) orelse return .{};
+        const start: u32 = @intCast(self.scheme_vars_pool.items.len);
+        for (module_env.inspectDemandVars(record)) |demand| {
+            switch (self.types.resolveVar(@enumFromInt(demand.var_)).desc.content) {
+                .flex, .rigid => continue,
+                .alias, .structure, .field_presence, .err => {},
+            }
+            try self.scheme_vars_pool.append(self.allocator, self.checked_types.rootForSourceVar(self.module, @enumFromInt(demand.var_)) orelse
+                checkedArtifactInvariant("scheme inspect term type was not published", .{}));
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.scheme_vars_pool.items.len)) - start };
+    }
+
+    /// One scheme use's instance of each of its target's inspect terms.
+    fn appendUseInspectTerms(self: *EvidencePass, record_idx: u32) Allocator.Error!artifact_serialize.Span {
+        const module_env = self.module.moduleEnvConst();
+        const record = module_env.inspectDemandRecord(.use_terms, record_idx) orelse return .{};
+        const start: u32 = @intCast(self.site_substitutions.items.len);
+        for (module_env.inspectDemandVars(record)) |term| {
+            try self.site_substitutions.append(self.allocator, self.checked_types.rootForSourceVar(self.module, @enumFromInt(term.var_)) orelse
+                checkedArtifactInvariant("scheme use inspect term type was not published", .{}));
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.site_substitutions.items.len)) - start };
     }
 
     /// The identity variables of `scheme_root`, enumerated once per resolved
@@ -20685,8 +20743,47 @@ const EvidencePass = struct {
                 .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
             };
             if (function.args.len != 1) checkedArtifactInvariant("inspect override instance did not take one argument", .{});
-            entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge);
+            const constraint_fn_var: ?Var = if (target.kind == .local_proc) null else use_var;
+            entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], constraint_fn_var, null, .dispatch_edge);
         }
+    }
+
+    /// Inspection's decision for each concrete application of a conditional
+    /// override's owner checking reached (design.md "Inspect Overrides"). A
+    /// usable override's instance is a dispatch-target edge whose evidence
+    /// supplies the method's requirements at that type.
+    fn publishInspectTypeDecisions(self: *EvidencePass) Allocator.Error!void {
+        const module_env = self.module.moduleEnvConst();
+        self.current_chain = &.{};
+        var decisions = std.ArrayList(static_dispatch.InspectTypeDecision).empty;
+        errdefer decisions.deinit(self.allocator);
+        for (module_env.inspect_demand_records.items.items) |record| {
+            if (record.recordKind() != .type_decision) continue;
+            const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, @enumFromInt(record.key)) orelse
+                checkedArtifactInvariant("inspect type decision type was not published", .{});
+            const owner = static_dispatch.methodOwnerForCheckedType(self.checked_types, dispatcher_ty) orelse
+                checkedArtifactInvariant("inspect type decision type had no method owner", .{});
+            var decision = static_dispatch.InspectTypeDecision{ .owner = owner, .dispatcher_ty = dispatcher_ty };
+            if (record.data != ModuleEnv.InspectDemandRecord.none) {
+                const use_var: Var = @enumFromInt(record.data);
+                const to_inspect = try self.names.internMethodName("to_inspect");
+                const target = switch (self.lookupMethodTargetAcrossViews(owner, to_inspect) orelse
+                    checkedArtifactInvariant("inspect type decision owner had no to_inspect", .{})) {
+                    .target => |target| target,
+                    .rejected => checkedArtifactInvariant("inspect type decision used a rejected to_inspect", .{}),
+                };
+                decision.callable_ty = self.checked_types.rootForSourceVar(self.module, use_var) orelse
+                    checkedArtifactInvariant("inspect type decision instance was not published", .{});
+                // A requirement on the enclosing function's variables is that
+                // function's own, which only the frame inspecting the value
+                // holds.
+                self.frame_supplies_rigid_dispatchers = record.formals_len != 0;
+                defer self.frame_supplies_rigid_dispatchers = false;
+                decision.evidence = try self.evidenceNodeForTarget(target, dispatcher_ty, if (target.kind == .local_proc) null else use_var, null, .dispatch_edge);
+            }
+            try decisions.append(self.allocator, decision);
+        }
+        self.plan_table.inspect_type_decisions = try decisions.toOwnedSlice(self.allocator);
     }
 
     /// Preserve the checked registry's semantic resolution. Compiler-derived
@@ -20885,6 +20982,7 @@ const EvidencePass = struct {
         const nested: RecordSiteSpans = .{
             .refs = try self.appendEvidenceRefs(frame.entries.items),
             .subst = try self.appendSiteSubstitution(frame.scheme_root, frame.pairs),
+            .inspect_terms = try self.appendUseInspectTerms(frame.record_idx),
         };
         if (frame.procedure_schema == .requires_record or frame.procedure_schema == .from_target) {
             const target_view = self.procedureEvidenceView(frame.target);
@@ -20899,6 +20997,7 @@ const EvidencePass = struct {
             .instantiation = .{ .callable = frame.callable_ty },
             .nested = .{ .resolved = nested.refs },
             .subst = nested.subst,
+            .inspect_terms = nested.inspect_terms,
         });
         try self.node_by_record.put(frame.record_idx, node_id);
         _ = self.record_in_progress.remove(frame.record_idx);
@@ -21090,6 +21189,9 @@ const EvidencePass = struct {
         for (left_subst, right_subst) |left_ty, right_ty| {
             if (left_ty != right_ty) return false;
         }
+        const left_terms = self.site_substitutions.items[left.inspect_terms.start .. left.inspect_terms.start + left.inspect_terms.len];
+        const right_terms = self.site_substitutions.items[right.inspect_terms.start .. right.inspect_terms.start + right.inspect_terms.len];
+        if (!checkedTypeIdSliceEql(left_terms, right_terms)) return false;
         return switch (left.nested) {
             .from_callable => right.nested == .from_callable,
             .resolved => |left_span| switch (right.nested) {
@@ -21110,6 +21212,7 @@ const EvidencePass = struct {
     const RecordSiteSpans = struct {
         refs: artifact_serialize.Span,
         subst: artifact_serialize.Span,
+        inspect_terms: artifact_serialize.Span = .{},
     };
 
     /// Resolve one scheme-use record's obligations (in the scheme's canonical
@@ -21142,6 +21245,7 @@ const EvidencePass = struct {
         return .{
             .refs = try self.appendEvidenceRefs(entries.items),
             .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+            .inspect_terms = try self.appendUseInspectTerms(record_idx),
         };
     }
 
@@ -21359,7 +21463,10 @@ const EvidencePass = struct {
                     }
                     break :blk .checked_error;
                 },
-                .@"unreachable" => .unreachable_value,
+                .@"unreachable" => if (self.frame_supplies_rigid_dispatchers and self.types.resolveVar(var_).desc.content == .rigid)
+                    .from_callable
+                else
+                    .unreachable_value,
             },
         };
     }
@@ -21521,6 +21628,7 @@ const EvidencePass = struct {
 
         const span = try self.appendEvidenceRefs(entries.items);
         const subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs);
+        const inspect_terms = try self.appendUseInspectTerms(record_idx);
         try self.site_seen.put(site_key, {});
         try self.site_evidence.append(self.allocator, .{
             .key = site_key,
@@ -21528,6 +21636,8 @@ const EvidencePass = struct {
             .len = span.len,
             .subst_start = subst.start,
             .subst_len = subst.len,
+            .inspect_start = inspect_terms.start,
+            .inspect_len = inspect_terms.len,
         });
     }
 
@@ -21568,6 +21678,8 @@ const EvidencePass = struct {
             .subst_start = spans.subst.start,
             .subst_len = spans.subst.len,
             .instance_ty = self.siteInstanceType(record_idx),
+            .inspect_start = spans.inspect_terms.start,
+            .inspect_len = spans.inspect_terms.len,
         });
     }
 
@@ -22727,6 +22839,14 @@ pub const CheckedProcedureTemplate = struct {
     /// specialization of this template is the template plus one monomorphic
     /// type per entry; every obligation's receiver is one of these entries.
     scheme_vars: artifact_serialize.Span = .{},
+    /// The applications of conditional overrides' owners over the scheme's
+    /// variables that the procedure may inspect (design.md "Inspect
+    /// Overrides"), a range into `scheme_vars_pool`. Each instantiation
+    /// supplies its instance of them (`SiteEvidenceEntry`, `EvidenceNode`).
+    inspect_terms: artifact_serialize.Span = .{},
+    /// Whether the procedure may inspect a value whose type mentions one of
+    /// its scheme's variables, directly or through what it calls.
+    inspects_scheme_types: bool = false,
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -23359,6 +23479,16 @@ pub const CheckedProcedureTemplateTable = struct {
 
     /// The quantified variables of a generalized-local scope's scheme, in
     /// slot order.
+    /// The inspect terms of a template's scheme.
+    pub fn templateInspectTerms(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const CheckedTypeId {
+        return self.scheme_vars_pool[template.inspect_terms.start .. template.inspect_terms.start + template.inspect_terms.len];
+    }
+
+    /// The inspect terms of a generalized local scope's scheme.
+    pub fn scopeInspectTerms(self: *const CheckedProcedureTemplateTable, scope: *const DispatchRefScope) []const CheckedTypeId {
+        return self.scheme_vars_pool[scope.inspect_terms.start .. scope.inspect_terms.start + scope.inspect_terms.len];
+    }
+
     pub fn scopeSchemeVars(self: *const CheckedProcedureTemplateTable, scope: *const DispatchRefScope) []const CheckedTypeId {
         return self.scheme_vars_pool[scope.scheme_vars.start .. scope.scheme_vars.start + scope.scheme_vars.len];
     }
@@ -34053,7 +34183,7 @@ pub const CheckedModuleArtifact = struct {
             // plans add one. Promoted local procedure templates and callable
             // contract types add one each, and the single-source-call template
             // list one more. Nested procedure runtime captures add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 233);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 234);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -39527,6 +39657,7 @@ fn isSliceField(comptime FT: type) bool {
 /// every field is byte-identical (incl. padding) after relocation. Validates the
 /// per-field serialize/deserialize wiring for any POD element shape.
 fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestError!void {
+    @setEvalBranchQuota(4000);
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (std.meta.fields(Store)) |field| {
@@ -40638,8 +40769,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xDF, 0x85, 0xC3, 0x5E, 0x48, 0x7A, 0xBC, 0xA8, 0xCB, 0x17, 0x91, 0x86, 0x14, 0xA4, 0x7C, 0xBD,
-        0xFB, 0xEF, 0x32, 0x59, 0xEF, 0xF7, 0xF3, 0xA6, 0xB2, 0x25, 0x82, 0x37, 0x21, 0x43, 0x72, 0x7C,
+        0x33, 0xE1, 0x1C, 0x58, 0xF9, 0xAD, 0xAA, 0xEF, 0xB5, 0x3B, 0x8E, 0x89, 0xDC, 0xC8, 0xBC, 0x2E,
+        0x57, 0xC0, 0x88, 0x1B, 0x7C, 0x71, 0x86, 0xA8, 0x0D, 0xBD, 0x35, 0x50, 0xF3, 0x23, 0x2F, 0x8D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

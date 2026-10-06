@@ -1182,6 +1182,13 @@ pub const ProgramPlan = struct {
     runtime_callable_eval_uses: std.ArrayList(RuntimeCallableEvalUsePlan),
     stored_callable_capture_sources: std.ArrayList(StoredCallableCaptureSource),
     inspect_methods: std.ArrayList(InspectMethodPlan),
+    /// Workers' inspect terms (design.md "Inspect Overrides"): each use
+    /// supplies its own instance's descriptor whole, whose inspection checking
+    /// decided for it, rather than an instantiation of the term's template.
+    inspect_term_reps: std.AutoHashMapUnmanaged(TypeRepId, void) = .empty,
+    /// Each other representation of an inspect term's checked type, mapped to
+    /// the term.
+    inspect_term_occurrences: std.AutoHashMapUnmanaged(TypeRepId, TypeRepId) = .empty,
     const_eval_calls: std.ArrayList(ConstEvalCallPlan),
     iterator_calls: std.ArrayList(IteratorCallPlan),
     generated_codec_calls: std.ArrayList(GeneratedCodecCallPlan),
@@ -1375,6 +1382,8 @@ pub const ProgramPlan = struct {
         self.iterator_calls.deinit(self.allocator);
         self.const_eval_calls.deinit(self.allocator);
         self.inspect_methods.deinit(self.allocator);
+        self.inspect_term_reps.deinit(self.allocator);
+        self.inspect_term_occurrences.deinit(self.allocator);
         self.stored_callable_capture_sources.deinit(self.allocator);
         self.runtime_callable_eval_uses.deinit(self.allocator);
         self.callable_uses.deinit(self.allocator);
@@ -1899,6 +1908,17 @@ pub const ProgramPlan = struct {
             if (method.source_rep == source_rep) return method;
         }
         return null;
+    }
+
+    /// Whether each inspected descriptor supplies `method`'s worker
+    /// dictionaries: some are a local procedure's enclosing requirements,
+    /// bound in the frame that builds the descriptor.
+    pub fn inspectDictionariesFromDescriptor(self: *const ProgramPlan, method: InspectMethodPlan) bool {
+        for (self.directCallHiddenDictionaryArgSlice(method.hidden_dict_args)) |arg| switch (arg.source) {
+            .bound_dictionaries => return true,
+            .static_rep, .literal => {},
+        };
+        return false;
     }
 
     pub fn constEvalCallFor(self: *const ProgramPlan, worker: WorkerPlanId, ret_type: CheckedTypeIdentity) ?ConstEvalCallPlan {
@@ -3563,6 +3583,7 @@ pub fn analyzeProgram(
     // propagation re-run before descriptor requirements are derived from it.
     builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
+    try builder.indexInspectTermOccurrences();
     try builder.materializeWorkerHiddenDescriptorParams();
     try builder.materializeCallableUseHiddenDescriptorArgs();
     try builder.materializeInspectMethodHiddenDescriptorArgs();
@@ -3725,6 +3746,15 @@ const Builder = struct {
     activated_numeral_sites: usize = 0,
     generic_numeral_sites: std.ArrayList(LiteralSite) = .empty,
     inspect_demand_count: usize = 0,
+    /// Checking's decisions for concrete applications of conditional
+    /// overrides' owners, by the decided type's structural key.
+    inspect_type_decisions: ?std.AutoHashMapUnmanaged(checked_names.CanonicalTypeKey, InspectDecisionInView) = null,
+    /// Each use's instance of a worker's inspect term, paired with the term.
+    inspect_term_pairs: std.ArrayList([2]TypeRepId) = .empty,
+    /// For a worker inspect term and a use's concrete instance of it whose
+    /// override checking decided is used, the descriptor representation the
+    /// use supplies: the term's own representation, carrying that override.
+    inspect_term_uses: std.AutoHashMapUnmanaged([2]TypeRepId, TypeRepId) = .empty,
     /// Derived `is_eq`/`to_hash` roots whose components still need decisions.
     derived_roots: std.ArrayList(DerivedRoot) = .empty,
     derived_roots_seen: std.AutoHashMapUnmanaged(DerivedComponentKey, void) = .{},
@@ -3814,6 +3844,9 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        if (self.inspect_type_decisions) |*decisions| decisions.deinit(self.allocator);
+        self.inspect_term_pairs.deinit(self.allocator);
+        self.inspect_term_uses.deinit(self.allocator);
         var host_nominal_keys = self.host_nominals.keyIterator();
         while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
         self.host_nominals.deinit(self.allocator);
@@ -4880,6 +4913,12 @@ const Builder = struct {
             self.rootWorkerBody(source)
         else
             null;
+        if (self.workerInspectTerms(source)) |terms| {
+            for (terms.vars) |term| {
+                const term_rep = try self.analyzeType(terms.view, term);
+                try self.plan.inspect_term_reps.put(self.allocator, term_rep, {});
+            }
+        }
         try self.plan.workers.append(self.allocator, .{
             .id = worker_id,
             .root_request = root_request,
@@ -5934,6 +5973,23 @@ const Builder = struct {
                     try actions.append(self.allocator, .{ .ensure_worker = .{ .source = source, .checked_type = source_fn_type, .root_request = null } });
                     try actions.append(self.allocator, .{ .inspect_override = .{ .rep_id = rep_id, .lookup = lookup, .source_fn_type = source_fn_type } });
                 }
+            } else if (self.lookupConditionalInspectOverride(view, owner)) |conditional| {
+                // A concrete type's decision is checked data; a type that
+                // still holds variables is described by its use.
+                const decided = if (self.plan.inspectMethodForRep(rep_id) == null) try self.inspectTypeDecision(view, rep.source_type.ty) else null;
+                if (decided) |ref| {
+                    if (ref.decision.callable_ty) |callable_ty| {
+                        var lookup = conditional;
+                        lookup.target.callable_ty = callable_ty;
+                        lookup.inspect_evidence = ref.decision.evidence;
+                        lookup.evidence_view = ref.view;
+                        const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
+                        const source_fn_type = CheckedTypeIdentity{ .module = ref.view.key, .ty = callable_ty };
+                        _ = try self.analyzeType(ref.view, callable_ty);
+                        try actions.append(self.allocator, .{ .ensure_worker = .{ .source = source, .checked_type = source_fn_type, .root_request = null } });
+                        try actions.append(self.allocator, .{ .inspect_override = .{ .rep_id = rep_id, .lookup = lookup, .source_fn_type = source_fn_type } });
+                    }
+                }
             }
         }
         for (0..rep.children.len) |child_index| {
@@ -5957,15 +6013,16 @@ const Builder = struct {
         }
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
+        const evidence_view = lookup.evidence_view orelse lookup.view;
         const evidence: DictionaryMethodEvidence.EvidenceEdge = .{
-            .module = lookup.view.key,
+            .module = evidence_view.key,
             .node = lookup.inspect_evidence orelse
                 boxyPlanInvariant("planned boxy inspect target had no checked use evidence"),
         };
         try self.analyzeEvidenceEdgeSchemeSubstitution(evidence);
-        const relation: ?Span = if (inspectUseNestedEvidence(lookup.view, evidence.node)) |nested| blk: {
-            try self.observeNumeralEvidence(lookup.view, nested, self.workerEvidenceParams(source));
-            for (nested) |entry| _ = try self.analyzeType(lookup.view, entry.dispatcher_ty);
+        const relation: ?Span = if (inspectUseNestedEvidence(evidence_view, evidence.node)) |nested| blk: {
+            try self.observeNumeralEvidence(evidence_view, nested, self.workerEvidenceParams(source));
+            for (nested) |entry| _ = try self.analyzeType(evidence_view, entry.dispatcher_ty);
             break :blk null;
         } else try self.inspectUseRelation(worker, rep_id, source_function.ret);
         try self.plan.inspect_methods.append(self.allocator, .{
@@ -11953,6 +12010,15 @@ const Builder = struct {
                         try evidence_reps.put(rep, {});
                     }
                 }
+                // Each inspect term's descriptor, whose inspection its use
+                // decided, is supplied by the use.
+                if (self.workerInspectTerms(self.plan.workers.items[worker_index].source)) |terms| {
+                    for (terms.vars) |term| {
+                        const rep = self.plan.repForSourceType(typeRef(terms.view, term)) orelse
+                            boxyPlanInvariant("worker inspect term type was not analyzed");
+                        try self.collectInspectTermDescriptor(rep, &pending, &seen_reps, &seen_descs);
+                    }
+                }
                 for (worker_leaves[worker_index].order.items) |leaf| {
                     if (seen_reps.contains(leaf) or evidence_reps.contains(leaf)) continue;
                     // A dictionary of the worker's own describes an open
@@ -12043,6 +12109,10 @@ const Builder = struct {
         /// an override leaves the owner's type variables free; each inspected
         /// value supplies them.
         site_rep_bindings: []const SiteRepBinding = &.{},
+        /// The callee scheme's inspect terms and this use's instance of each
+        /// (design.md "Inspect Overrides").
+        callee_inspect_terms: []const checked.CheckedTypeId = &.{},
+        site_inspect_terms: []const checked.CheckedTypeId = &.{},
 
         fn siteRep(self: SchemeCallSubstitution, site_rep: TypeRepId) TypeRepId {
             for (self.site_rep_bindings) |binding| {
@@ -12092,6 +12162,95 @@ const Builder = struct {
             .generated_interpolation_step,
             => null,
         };
+    }
+
+    /// The inspect terms of a worker's checked scheme: applications of
+    /// conditional overrides' owners over its variables that it may inspect,
+    /// whose descriptors each use supplies.
+    fn workerInspectTerms(self: *Builder, source: WorkerSource) ?WorkerSchemeVars {
+        return switch (source) {
+            .procedure_template => |template| self.templateInspectTerms(template),
+            .procedure_binding => |binding| self.bindingInspectTerms(self.moduleForId(binding.artifact), binding.binding),
+            .procedure_use => |use| switch (use.binding) {
+                .top_level => |binding| self.bindingInspectTerms(self.moduleForId(binding.artifact), binding.binding),
+                .platform_required => |required| self.bindingInspectTerms(
+                    self.moduleForId(required.app_value.artifact),
+                    required.procedure_binding,
+                ),
+                .imported => |imported| blk: {
+                    const view = self.moduleForId(imported.artifact);
+                    break :blk self.bindingBodyInspectTerms(self.importedProcedureBinding(view, imported).body);
+                },
+                .hosted => null,
+            },
+            .nested_expr => |expr_ref| blk: {
+                const view = self.moduleForId(expr_ref.module);
+                const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
+                for (view.checked_procedure_templates.dispatch_scopes) |*scope| {
+                    if (scope.checked_expr != site_expr) continue;
+                    break :blk .{ .view = view, .vars = view.checked_procedure_templates.scopeInspectTerms(scope) };
+                }
+                // A callable no scheme of its own generalizes inspects the
+                // terms of the scope around it, whose frame supplies them.
+                for (view.nested_proc_sites.sites) |site| {
+                    if (site.checked_expr != site_expr) continue;
+                    switch (site.lexical_scope) {
+                        .generalized => |scope_id| {
+                            const scope = &view.checked_procedure_templates.dispatch_scopes[@intFromEnum(scope_id)];
+                            break :blk .{ .view = view, .vars = view.checked_procedure_templates.scopeInspectTerms(scope) };
+                        },
+                        .root => switch (site.owner) {
+                            .template => |template| break :blk self.templateInspectTerms(template),
+                            .default_root => break :blk null,
+                        },
+                    }
+                }
+                break :blk null;
+            },
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => null,
+        };
+    }
+
+    fn templateInspectTerms(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerSchemeVars {
+        const view = self.moduleForCheckedModuleId(template_ref.artifact);
+        const template = &view.checked_procedure_templates.templates.items[@intFromEnum(template_ref.template)];
+        return .{ .view = view, .vars = view.checked_procedure_templates.templateInspectTerms(template) };
+    }
+
+    fn bindingInspectTerms(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) ?WorkerSchemeVars {
+        return self.bindingBodyInspectTerms(view.top_level_procedure_bindings.get(binding_ref).body);
+    }
+
+    fn bindingBodyInspectTerms(self: *Builder, body: anytype) ?WorkerSchemeVars {
+        return switch (body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.templateInspectTerms(template),
+                .lifted, .synthetic => null,
+            },
+            .checked_error => null,
+            .callable_eval_template => null,
+        };
+    }
+
+    /// Attach a use's instances of its callee's inspect terms.
+    fn withInspectTerms(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        substitution: SchemeCallSubstitution,
+        site_terms: []const checked.CheckedTypeId,
+    ) SchemeCallSubstitution {
+        var result = substitution;
+        const terms = self.workerInspectTerms(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return result;
+        if (terms.vars.len == 0) return result;
+        if (terms.vars.len != site_terms.len) {
+            boxyPlanInvariant("checked use inspect terms disagreed with its callee scheme's inspect terms");
+        }
+        result.callee_inspect_terms = terms.vars;
+        result.site_inspect_terms = site_terms;
+        return result;
     }
 
     fn templateSchemeVars(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerSchemeVars {
@@ -12187,12 +12346,12 @@ const Builder = struct {
         if (scheme.vars.len != site_types.len) {
             boxyPlanInvariant("checked call-site substitution disagreed with its callee scheme's variables");
         }
-        return .{
+        return self.withInspectTerms(direct.worker, .{
             .callee_view = scheme.view,
             .scheme_vars = scheme.vars,
             .site_view = site_view,
             .site_types = site_types,
-        };
+        }, site_view.static_dispatch_plans.siteInspectTerms(call_expr.data.call.func));
     }
 
     /// A direct call's scheme substitution names caller-side types that
@@ -12208,12 +12367,12 @@ const Builder = struct {
         if (scheme.vars.len != site_types.len) {
             boxyPlanInvariant("checked use-site substitution disagreed with its worker scheme's variables");
         }
-        return .{
+        return self.withInspectTerms(worker_id, .{
             .callee_view = scheme.view,
             .scheme_vars = scheme.vars,
             .site_view = site_view,
             .site_types = site_types,
-        };
+        }, site_view.static_dispatch_plans.siteInspectTerms(use.expr));
     }
 
     fn analyzeUseSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) Allocator.Error!void {
@@ -12222,6 +12381,7 @@ const Builder = struct {
             if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
             _ = try self.analyzeType(substitution.site_view, site_type);
         }
+        try self.analyzeInspectTermSubstitution(substitution);
     }
 
     fn analyzeDirectCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!void {
@@ -12232,6 +12392,138 @@ const Builder = struct {
             if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
             _ = try self.analyzeType(substitution.site_view, site_type);
         }
+        try self.analyzeInspectTermSubstitution(substitution);
+    }
+
+    /// Analyze a use's instances of its callee's inspect terms, pairing each
+    /// with the worker's term so inspection demand crosses the use. A
+    /// concrete instance's override is checked data; the use describes its
+    /// value as the worker stores it, carrying that override.
+    fn analyzeInspectTermSubstitution(self: *Builder, substitution: SchemeCallSubstitution) Allocator.Error!void {
+        for (substitution.callee_inspect_terms, substitution.site_inspect_terms) |callee_term, site_term| {
+            const worker_rep = try self.analyzeType(substitution.callee_view, callee_term);
+            const call_rep = try self.analyzeType(substitution.site_view, site_term);
+            try self.inspect_term_pairs.append(self.allocator, .{ worker_rep, call_rep });
+        }
+    }
+
+    /// Map each representation of an inspect term's checked type, other than
+    /// the term's own, to the term: checking may give one type several
+    /// checked identities, and every occurrence is described by the term's
+    /// descriptor.
+    fn indexInspectTermOccurrences(self: *Builder) Allocator.Error!void {
+        if (self.plan.inspect_term_reps.count() == 0) return;
+        const Key = struct { module: checked.ModuleId, key: checked_names.CanonicalTypeKey };
+        var terms = std.AutoHashMapUnmanaged(Key, std.ArrayListUnmanaged(TypeRepId)).empty;
+        defer {
+            var lists = terms.valueIterator();
+            while (lists.next()) |list| list.deinit(self.allocator);
+            terms.deinit(self.allocator);
+        }
+        var term_iter = self.plan.inspect_term_reps.keyIterator();
+        while (term_iter.next()) |term| {
+            const source = self.plan.representations.items[@intFromEnum(term.*)].source_type;
+            const view = self.moduleForId(source.module);
+            const entry = try terms.getOrPut(self.allocator, .{ .module = source.module, .key = view.checked_types.structuralRootKey(source.ty) });
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.allocator, term.*);
+        }
+        for (self.plan.representations.items, 0..) |rep, index| {
+            const rep_id: TypeRepId = @enumFromInt(@as(u32, @intCast(index)));
+            if (rep.kind != .nominal) continue;
+            if (self.plan.inspect_term_reps.contains(rep_id)) continue;
+            const view = self.moduleForId(rep.source_type.module);
+            const candidates = terms.get(.{ .module = rep.source_type.module, .key = view.checked_types.structuralRootKey(rep.source_type.ty) }) orelse continue;
+            for (candidates.items) |term| {
+                const term_source = self.plan.representations.items[@intFromEnum(term)].source_type;
+                if (!checkedTypesIdentical(view, rep.source_type.ty, term_source.ty)) continue;
+                try self.plan.inspect_term_occurrences.put(self.allocator, rep_id, term);
+                break;
+            }
+        }
+    }
+
+    /// Whether two checked types of one module are the same type over the
+    /// same type variables.
+    fn checkedTypesIdentical(view: ModuleView, left_root: checked.CheckedTypeId, right_root: checked.CheckedTypeId) bool {
+        var pending: [512][2]checked.CheckedTypeId = undefined;
+        var len: usize = 1;
+        pending[0] = .{ left_root, right_root };
+        var steps: usize = 0;
+        while (len > 0) {
+            len -= 1;
+            steps += 1;
+            if (steps > 8192) return false;
+            const left = pending[len][0];
+            const right = pending[len][1];
+            if (left == right) continue;
+            const left_payload = view.checked_types.payload(left);
+            const right_payload = view.checked_types.payload(right);
+            if (std.meta.activeTag(left_payload) != std.meta.activeTag(right_payload)) return false;
+            var children_left: []const checked.CheckedTypeId = &.{};
+            var children_right: []const checked.CheckedTypeId = &.{};
+            switch (left_payload) {
+                .flex, .rigid, .pending, .err => return false,
+                .empty_record, .empty_tag_union => continue,
+                .alias => {
+                    children_left = &.{left_payload.alias.backing};
+                    children_right = &.{right_payload.alias.backing};
+                },
+                .nominal => |nominal| {
+                    if (nominal.name != right_payload.nominal.name or nominal.origin_module != right_payload.nominal.origin_module or !std.meta.eql(nominal.source_decl, right_payload.nominal.source_decl)) return false;
+                    children_left = nominal.args;
+                    children_right = right_payload.nominal.args;
+                },
+                .tuple => |items| {
+                    children_left = items;
+                    children_right = right_payload.tuple;
+                },
+                .function => |function| {
+                    if (function.args.len != right_payload.function.args.len) return false;
+                    for (function.args, right_payload.function.args) |a, b| {
+                        if (len == pending.len) return false;
+                        pending[len] = .{ a, b };
+                        len += 1;
+                    }
+                    children_left = &.{function.ret};
+                    children_right = &.{right_payload.function.ret};
+                },
+                .record => |record| {
+                    if (record.fields.len != right_payload.record.fields.len) return false;
+                    for (record.fields, right_payload.record.fields) |a, b| {
+                        if (!std.meta.eql(a.name, b.name)) return false;
+                        if (len == pending.len) return false;
+                        pending[len] = .{ a.ty, b.ty };
+                        len += 1;
+                    }
+                    children_left = &.{record.ext};
+                    children_right = &.{right_payload.record.ext};
+                },
+                .tag_union => |tag_union| {
+                    if (tag_union.tags.len != right_payload.tag_union.tags.len) return false;
+                    for (tag_union.tags, right_payload.tag_union.tags) |a, b| {
+                        if (!std.meta.eql(a.name, b.name)) return false;
+                        const a_args = a.argsSlice(view.checked_types);
+                        const b_args = b.argsSlice(view.checked_types);
+                        if (a_args.len != b_args.len) return false;
+                        for (a_args, b_args) |x, y| {
+                            if (len == pending.len) return false;
+                            pending[len] = .{ x, y };
+                            len += 1;
+                        }
+                    }
+                    children_left = &.{tag_union.ext};
+                    children_right = &.{right_payload.tag_union.ext};
+                },
+            }
+            if (children_left.len != children_right.len) return false;
+            for (children_left, children_right) |a, b| {
+                if (len == pending.len) return false;
+                pending[len] = .{ a, b };
+                len += 1;
+            }
+        }
+        return true;
     }
 
     fn workerEvidenceParams(self: *Builder, source: WorkerSource) ?WorkerEvidenceParams {
@@ -13668,6 +13960,10 @@ const Builder = struct {
             try self.materializeInspectMethodsForRep(arg_rep);
         }
 
+        // A worker's inspect terms are inspected values by definition.
+        var terms = self.plan.inspect_term_reps.keyIterator();
+        while (terms.next()) |term| try self.materializeInspectMethodsForRep(term.*);
+
         if (self.inspect_demand_count == 0) return;
         // Reuse the call-site type relations already recorded by planning.
         // Demands cross generic boundaries before descriptor construction, so
@@ -13685,6 +13981,11 @@ const Builder = struct {
             const call = self.plan.direct_calls.items[index];
             const ret = call.ret_substitution orelse continue;
             try self.propagateInspectDemand(ret.worker_rep, ret.call_rep, &pairs);
+        }
+        var term_index: usize = 0;
+        while (term_index < self.inspect_term_pairs.items.len) : (term_index += 1) {
+            const pair = self.inspect_term_pairs.items[term_index];
+            try self.propagateInspectDemand(pair[0], pair[1], &pairs);
         }
         inline for (.{ "callable_uses", "nested_callable_uses" }) |field| {
             const count = @field(self.plan, field).items.len;
@@ -14266,6 +14567,7 @@ const Builder = struct {
                 .scheme_substitution = try self.inspectUseSchemeSubstitution(method, &bindings),
                 .relation = method.relation,
                 .env = 0,
+                .frame_bound = true,
             })) |span| span else blk: {
                 try self.runDictionaryArgs(&machine);
                 break :blk machine.span_result;
@@ -14526,6 +14828,16 @@ const Builder = struct {
                 // A bound site can be the scheme variable itself.
                 if (call_rep == worker_var_rep) continue;
                 try substitutions.put(self.allocator, worker_var_rep, call_rep);
+            }
+            // A use supplies its instance of each inspect term, whose
+            // inspection checking decided for that instance.
+            for (substitution.callee_inspect_terms, substitution.site_inspect_terms) |callee_term, site_term| {
+                const worker_term_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, callee_term)) orelse
+                    boxyPlanInvariant("worker inspect term type was not analyzed");
+                const call_rep = self.plan.repForSourceType(typeRef(substitution.site_view, site_term)) orelse
+                    boxyPlanInvariant("checked use inspect term type was not analyzed");
+                if (call_rep == worker_term_rep) continue;
+                try substitutions.put(self.allocator, worker_term_rep, call_rep);
             }
         }
         // A stored function value was produced at the one instantiation of its
@@ -15317,6 +15629,11 @@ const Builder = struct {
         /// it names the worker's variables exactly as a checked substitution.
         relation: ?Span = null,
         env: u32,
+        /// The call is an inspect slot's call. A requirement on a type
+        /// variable of the function a local type is declared in is that
+        /// function's own, so the frame that builds the inspected value's
+        /// descriptor supplies its dictionary (`inspect_hidden_dicts`).
+        frame_bound: bool = false,
     };
 
     /// One worker call's hidden dictionary arguments, collected parameter by
@@ -15324,6 +15641,7 @@ const Builder = struct {
     const DictionaryCallArgs = struct {
         worker_id: WorkerPlanId,
         caller_id: ?WorkerPlanId,
+        frame_bound: bool = false,
         arg_types: []CheckedTypeIdentity,
         ret_type: CheckedTypeIdentity,
         evidence_view: ?ModuleView,
@@ -15471,6 +15789,7 @@ const Builder = struct {
         state.* = .{
             .worker_id = request.worker_id,
             .caller_id = request.caller_id,
+            .frame_bound = request.frame_bound,
             .arg_types = arg_types,
             .ret_type = request.ret_type,
             .evidence_view = request.evidence_view,
@@ -15596,6 +15915,16 @@ const Builder = struct {
             return true;
         }
         const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.currentParam()];
+        if (param.scheme_param != null and param.evidence_index == null and state.caller_id == null and state.frame_bound) {
+            const source = try self.schemeDictionary(param.scheme_param.?);
+            state.record(.{
+                .worker_dictionaries = param.dictionaries,
+                .source_type = source.source_type,
+                .rep = source.rep,
+                .source = .{ .bound_dictionaries = source.dictionaries },
+            });
+            return false;
+        }
         if (param.scheme_param != null and param.evidence_index == null) {
             const caller = state.caller_id orelse boxyPlanInvariant("captured codec dictionary had no calling worker");
             const source = try self.requireWorkerSchemeDictionary(caller, param.scheme_param.?);
@@ -15851,6 +16180,20 @@ const Builder = struct {
         // its use's actual; one that reads such formals is instantiated
         // at them.
         const argument_rep = self.repQuery().dictionaryArgumentIdentityRep(derivedEnvActual(env_bindings, call_rep) orelse call_rep);
+        if (state.frame_bound and caller_id == null and evidence_source.rep == null and self.repIsUnboundVariable(argument_rep)) {
+            // A type variable of the function a local type is declared in:
+            // the frame building the inspected value's descriptor binds its
+            // dictionaries.
+            state.record(.{
+                .worker_dictionaries = param.dictionaries,
+                .source_type = self.plan.representations.items[@intFromEnum(argument_rep)].source_type,
+                .rep = argument_rep,
+                .method_evidence = evidence_source.method_evidence,
+                .source = .{ .bound_dictionaries = self.plan.representations.items[@intFromEnum(argument_rep)].dictionaries },
+                .env = 0,
+            });
+            return;
+        }
         // A call no worker makes (a root or a compile-time evaluation)
         // has nothing to bind a variable its types still hold, so the
         // variable is at its checked default there.
@@ -16364,6 +16707,26 @@ const Builder = struct {
                 try reps.append(self.allocator, child.rep);
             }
         }
+    }
+
+    /// An inspect term's own descriptor: its use supplies it whole, so none
+    /// of its parts is described separately.
+    fn collectInspectTermDescriptor(
+        self: *Builder,
+        rep_id: TypeRepId,
+        pending: *std.ArrayList(HiddenDescriptorParam),
+        seen_reps: *collections.DenseMap(TypeRepId, void),
+        seen_descs: *collections.DenseMap(DescriptorRequirementId, void),
+    ) Allocator.Error!void {
+        if ((try seen_reps.getOrPut(rep_id)).found_existing) return;
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const desc = rep.descriptor orelse return;
+        if ((try seen_descs.getOrPut(desc)).found_existing) return;
+        try pending.append(self.allocator, .{
+            .source_type = rep.source_type,
+            .rep = rep_id,
+            .desc = desc,
+        });
     }
 
     fn collectRuntimeHiddenDescriptorsForRep(
@@ -17639,12 +18002,12 @@ const Builder = struct {
         if (scheme.vars.len != site_types.len) {
             boxyPlanInvariant("checked evidence-edge substitution disagreed with its target scheme's variables");
         }
-        return .{
+        return self.withInspectTerms(worker_id, .{
             .callee_view = scheme.view,
             .scheme_vars = scheme.vars,
             .site_view = site_view,
             .site_types = site_types,
-        };
+        }, site_view.static_dispatch_plans.edgeInspectTerms(edge.node));
     }
 
     /// A call's checked substitution for its callee scheme, as representation
@@ -18469,7 +18832,126 @@ const Builder = struct {
         target: static_dispatch.MethodTarget,
         /// For an inspect override, the checked evidence of inspection's use.
         inspect_evidence: ?static_dispatch.EvidenceNodeId = null,
+        /// The module whose plan table holds `inspect_evidence`, when it is
+        /// not `view`: a conditional override's decision for one concrete
+        /// type belongs to the module whose checking reached that type.
+        evidence_view: ?ModuleView = null,
     };
+
+    const InspectDecisionInView = struct {
+        view: ModuleView,
+        decision: static_dispatch.InspectTypeDecision,
+    };
+
+    /// The conditional `to_inspect` override of `owner`, decided per
+    /// concrete type, or null when its declaration is no such override.
+    fn lookupConditionalInspectOverride(
+        self: *Builder,
+        owner_view: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodTargetLookup {
+        if (conditionalInspectOverrideInView(owner_view, owner_view, owner)) |decision| return decision.target;
+        for (self.imports) |imported| {
+            const view = moduleViewFromImported(imported);
+            if (moduleKeyEqual(view.key, owner_view.key)) continue;
+            if (conditionalInspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
+        }
+        for (self.relation_modules) |relation| {
+            const view = moduleViewFromImported(relation);
+            if (moduleKeyEqual(view.key, owner_view.key)) continue;
+            if (conditionalInspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    fn conditionalInspectOverrideInView(
+        candidate: ModuleView,
+        owner_view: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) ?InspectOverrideDecision {
+        const owner_names = owner_view.canonical_names orelse return null;
+        const candidate_names = candidate.canonical_names orelse return null;
+        const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
+        const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
+        _ = candidate.method_registry.lookup(key) orelse return null;
+        const target = candidate.method_registry.lookupConditionalInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .view = candidate, .method = candidate_method, .target = target } };
+    }
+
+    /// Checking's decision for `ty` of `view`: whether its conditional
+    /// override is used there (design.md "Inspect Overrides"). Checking
+    /// decided every type inspection reaches whose variables no scheme
+    /// quantifies; null is a type its uses decide.
+    fn inspectTypeDecision(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!?InspectDecisionInView {
+        if (self.inspect_type_decisions == null) {
+            var decisions: std.AutoHashMapUnmanaged(checked_names.CanonicalTypeKey, InspectDecisionInView) = .empty;
+            errdefer decisions.deinit(self.allocator);
+            try self.collectInspectTypeDecisions(&decisions, self.root_view);
+            for (self.imports) |imported| try self.collectInspectTypeDecisions(&decisions, moduleViewFromImported(imported));
+            for (self.relation_modules) |relation| try self.collectInspectTypeDecisions(&decisions, moduleViewFromImported(relation));
+            self.inspect_type_decisions = decisions;
+        }
+        if (self.inspect_type_decisions.?.get(view.checked_types.structuralRootKey(ty))) |ref| return ref;
+        if (!checkedTypeHasVariables(view, ty)) boxyPlanInvariant("inspection reached a concrete type checking did not decide");
+        return null;
+    }
+
+    fn checkedTypeHasVariables(view: ModuleView, root: checked.CheckedTypeId) bool {
+        var pending: [256]checked.CheckedTypeId = undefined;
+        var len: usize = 1;
+        pending[0] = root;
+        var steps: usize = 0;
+        while (len > 0) {
+            len -= 1;
+            steps += 1;
+            if (steps > 4096) return true;
+            const current = pending[len];
+            const children: []const checked.CheckedTypeId = switch (view.checked_types.payload(current)) {
+                .flex, .rigid => return true,
+                .pending, .err, .empty_record, .empty_tag_union => &.{},
+                .alias => |alias| &.{alias.backing},
+                .nominal => |nominal| nominal.args,
+                .tuple => |items| items,
+                .function => |function| function.args,
+                .record => |record| blk: {
+                    for (record.fields) |field| {
+                        if (len == pending.len) return true;
+                        pending[len] = field.ty;
+                        len += 1;
+                    }
+                    break :blk &.{record.ext};
+                },
+                .tag_union => |tag_union| blk: {
+                    for (tag_union.tags) |tag| {
+                        for (tag.argsSlice(view.checked_types)) |arg| {
+                            if (len == pending.len) return true;
+                            pending[len] = arg;
+                            len += 1;
+                        }
+                    }
+                    break :blk &.{tag_union.ext};
+                },
+            };
+            for (children) |child| {
+                if (len == pending.len) return true;
+                pending[len] = child;
+                len += 1;
+            }
+        }
+        return false;
+    }
+
+    fn collectInspectTypeDecisions(
+        self: *Builder,
+        decisions: *std.AutoHashMapUnmanaged(checked_names.CanonicalTypeKey, InspectDecisionInView),
+        view: ModuleView,
+    ) Allocator.Error!void {
+        for (view.static_dispatch_plans.inspect_type_decisions) |decision| {
+            const entry = try decisions.getOrPut(self.allocator, view.checked_types.structuralRootKey(decision.dispatcher_ty));
+            if (!entry.found_existing) entry.value_ptr.* = .{ .view = view, .decision = decision };
+        }
+    }
 
     /// What an exact registry lookup found. `rejected` is a declared method
     /// whose declaration canonicalization or checking rejected: it has no
@@ -21643,6 +22125,12 @@ test "boxy planner walks callable eval finalized const function bodies" {
         },
     };
     var nested_proc_site_table = checked.NestedProcSiteTable{ .sites = &nested_sites };
+    // The nested site's owner template, whose scheme the nested callable's
+    // inspect terms are read from.
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
+    };
+    var template_table = checked.CheckedProcedureTemplateTable{ .templates = .{ .items = &templates, .capacity = templates.len } };
     var bindings = [_]checked.TopLevelProcedureBinding{
         .{
             .source_scheme = .{},
@@ -21672,6 +22160,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
         },
         .compile_time_roots = &compile_time_root_table,
         .nested_proc_sites = &nested_proc_site_table,
+        .checked_procedure_templates = &template_table,
         .top_level_procedure_bindings = &binding_table,
         .callable_eval_templates = .{ .templates = &callable_templates },
         .const_store = &const_store,

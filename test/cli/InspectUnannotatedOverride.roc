@@ -25,9 +25,9 @@ Wrap(a) := [W(a)].{
 	to_inspect = |Wrap.(W(v))| "Wrap<${Str.inspect(v)}>"
 }
 
-# These results cannot be `Str` for every instantiation of the owner: a
-# numeral is never `Str`, and interpolating the payload requires it to be
-# `Str`. Inspection renders their default form.
+# A numeral result is never `Str`, so inspection renders `Five`'s default
+# form. Interpolating the payload requires it to be `Str`, so `Echo`'s method
+# is an override for `Echo(Str)` only.
 Five := [N(I64)].{
 	to_inspect = |_| 5
 }
@@ -44,4 +44,5 @@ main! = || {
 	Stdout.line!(Str.inspect([Wrap.W(1.I64)]))
 	Stdout.line!(Str.inspect(Five.N(3)))
 	Stdout.line!(Str.inspect(Echo.E("x")))
+	Stdout.line!(Str.inspect(Echo.E(4.I64)))
 }

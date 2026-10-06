@@ -349,6 +349,8 @@ boundary_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCall) = .em
 /// and explicit requirements. The append-only log owns speculative imports so
 /// rollback discards their cache entries and scheme metadata together.
 imported_schemes: std.ArrayListUnmanaged(ImportedScheme) = .empty,
+/// Inspect demands copied with imported schemes (`ImportedScheme`).
+imported_inspect_demand_vars: std.ArrayListUnmanaged(Var) = .empty,
 imported_scheme_by_source: std.AutoHashMapUnmanaged(ImportedSchemeKey, u32) = .empty,
 /// Exact associated-item targets keyed by the alias declaration type var and
 /// item. Alias traversal and owner-scope lookup happen once per declaration.
@@ -926,6 +928,10 @@ ambiguity_candidates: std.ArrayListUnmanaged(AmbiguityCandidate),
 /// remain distinct, while repeated explicit requirements on one shared outer
 /// receiver contribute only one judgment candidate.
 ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32) = .empty,
+/// For each type declared in a function body, the generalized type variables
+/// of the definitions enclosing it (`localTypeEnclosingVars`); built the
+/// first time inspection instantiates such a type's method.
+local_type_enclosing_vars: ?std.AutoHashMapUnmanaged(CIR.Statement.Idx, []const Var) = null,
 /// Undo journal for `requires_current_resolution` escalations performed while
 /// a probe is open: each entry is the index of a candidate whose flag an
 /// in-probe repeated observation flipped. `Probe.rollback` resets the flags
@@ -1667,6 +1673,10 @@ const ImportedSchemeKey = struct {
 const ImportedScheme = struct {
     key: ImportedSchemeKey,
     scheme_var: Var,
+    /// The source scheme's inspect demands, copied with it, as a range of
+    /// `imported_inspect_demand_vars`.
+    inspect_demands_start: u32 = 0,
+    inspect_demands_len: u32 = 0,
 };
 
 fn literalMethodIdents(self: *const Self) literal_defaulting.LiteralMethodIdents {
@@ -3625,6 +3635,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_generated_codec_calls.deinit(self.gpa);
     self.scratch_scheme_owned_codec_fns.deinit(self.gpa);
     self.imported_schemes.deinit(self.gpa);
+    self.imported_inspect_demand_vars.deinit(self.gpa);
     self.imported_scheme_by_source.deinit(self.gpa);
     self.associated_lookup_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
@@ -3648,6 +3659,11 @@ pub fn deinit(self: *Self) void {
     self.pending_scheme_requirement_dispatchers.deinit(self.gpa);
     self.ambiguity_candidates.deinit(self.gpa);
     self.ambiguity_candidate_by_key.deinit(self.gpa);
+    if (self.local_type_enclosing_vars) |*map| {
+        var values = map.valueIterator();
+        while (values.next()) |vars| self.gpa.free(vars.*);
+        map.deinit(self.gpa);
+    }
     self.ambiguity_escalation_journal.deinit(self.gpa);
     self.ambiguity_verdicts.deinit(self.gpa);
     self.default_materializations.deinit(self.gpa);
@@ -9091,14 +9107,10 @@ fn instantiateVarOrphanFlexed(
     return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
-/// Instantiate a variable, substituting any encountered rigids with
-/// user-provided variables.
-///
-/// Based on the provided map, the caller can specifically set specified rigids
-/// to be a specific var. This is used when evaluating type annotation.
-///
-/// If a rigid is is encountered that's not in the provided map, a debug assertion
-/// will fail. In production mode, that rigid var will be set as an `.err`
+/// Instantiate a nominal backing, substituting its formals' rigids with the
+/// application's arguments. Any other rigid the backing names is a type
+/// variable of the function the type is declared in, which every application
+/// shares.
 fn instantiateVarWithSubs(
     self: *Self,
     var_to_instantiate: Var,
@@ -9106,7 +9118,7 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested);
+    return self.instantiateVarWithSubsPolarizedSharing(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, true);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -9121,6 +9133,20 @@ fn instantiateVarWithSubsPolarized(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
 ) std.mem.Allocator.Error!Var {
+    return self.instantiateVarWithSubsPolarizedSharing(var_to_instantiate, subs, env, region_behavior, polarity_behavior, polarity, reach, false);
+}
+
+fn instantiateVarWithSubsPolarizedSharing(
+    self: *Self,
+    var_to_instantiate: Var,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+    polarity_behavior: PolarityVarBehavior,
+    polarity: Polarity,
+    reach: Instantiator.AdapterReach,
+    share_unknown_rigids: bool,
+) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -9132,7 +9158,7 @@ fn instantiateVarWithSubsPolarized(
         .var_map = &self.var_map,
 
         .current_rank = env.rank(),
-        .rigid_behavior = .{ .substitute_rigids = subs },
+        .rigid_behavior = if (share_unknown_rigids) .{ .substitute_rigids_sharing = subs } else .{ .substitute_rigids = subs },
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = polarity_behavior,
@@ -34622,6 +34648,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 
     if (scope == .module) {
         try self.recordInspectOverrideInstances(env);
+        try self.recordInspectDemands(env);
         // A recorded instance's result requirements resolve against Str.
         if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
             try self.checkStaticDispatchConstraints(env, true);
@@ -34678,29 +34705,1113 @@ fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Erro
         if (entry.key.ownerIdent().moduleIdentity() != null) continue;
         if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key.owner)).tag != .statement_nominal_decl) continue;
         const binding_var = ModuleEnv.varFrom(entry.value.type_node_idx);
-        const use_var = try self.inspectOverrideStrInstance(entry.value.def_idx, entry.key.owner, binding_var, env) orelse continue;
-        try self.cir.recordInspectOverrideInstance(entry.value.def_idx, use_var);
+        switch (try self.inspectOverrideStrInstance(entry.value.def_idx, entry.key.owner, binding_var, env)) {
+            .none => {},
+            .unconditional => |use_var| try self.cir.recordInspectOverrideInstance(entry.value.def_idx, use_var),
+            .conditional => try self.cir.recordInspectDemand(.conditional_override, @intFromEnum(entry.value.def_idx), ModuleEnv.InspectDemandRecord.none, 0, &.{}),
+        }
     }
 }
 
-/// The instance of `binding_var`'s type at `owner -> Str`, or null when the
-/// method cannot be used there. The returned use var is unified with that
-/// instance and names its dispatch-target scheme-use record.
-fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Statement.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
+/// How inspection can use a `to_inspect` method (design.md "Inspect
+/// Overrides").
+const InspectOverrideClassification = union(enum) {
+    /// No instantiation of the owner can use the method at `T -> Str`.
+    none,
+    /// Every instantiation can, through this instance.
+    unconditional: Var,
+    /// Some instantiations can; each concrete type is decided on its own.
+    conditional,
+};
+
+/// Classify `binding_var`'s method by its instance at `owner -> Str`, where
+/// `owner` is applied to fresh type variables. When that instance leaves the
+/// variables distinct and unconstrained, the method is usable at every
+/// instantiation and the returned use var is unified with the instance and
+/// names its dispatch-target scheme-use record. When the instance exists but
+/// binds or constrains them, whether the method is usable depends on the
+/// owner's type arguments.
+fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Statement.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!InspectOverrideClassification {
     var probe = try self.beginCommitProbe(env);
     var committed = false;
     defer if (!committed) probe.rollback();
 
     const region = self.getRegionAt(binding_var);
     const use_var = try self.fresh(env, region);
-    const generalized = self.isBindingSchemeVar(binding_var) or self.types.resolveVar(binding_var).desc.rank == .generalized;
-    const instance = if (generalized)
-        try self.instantiateBindingVar(binding_var, env, .use_last_var, .{ .dispatch_target = .{
-            .node_idx = @intFromEnum(self.cir.store.getDef(def_idx).pattern),
-            .constraint_fn_var = use_var,
-        } })
+    const instance = try self.instantiateInspectMethod(owner, binding_var, env, .use_last_var, .{ .dispatch_target = .{
+        .node_idx = @intFromEnum(self.cir.store.getDef(def_idx).pattern),
+        .constraint_fn_var = use_var,
+    } });
+    if (!(try probe.unify(use_var, instance)).isEstablished()) return .none;
+    const func = self.pureFunctionThroughAliases(instance) orelse return .none;
+    if (self.types.sliceVars(func.args).len != 1) return .none;
+
+    var requirements: std.ArrayListUnmanaged(InstanceRequirement) = .empty;
+    defer requirements.deinit(self.gpa);
+    try self.collectInstanceRequirements(instance, &requirements);
+
+    const owner_var = try self.instantiateVar(ModuleEnv.varFrom(owner), env, .{ .explicit = region }, .none);
+    if (!(try probe.unify(self.types.sliceVars(func.args)[0], owner_var)).isEstablished()) return .none;
+    const str_var = try self.freshStr(env, region);
+    if (!(try probe.unify(str_var, func.ret)).isEstablished()) return .none;
+    if (!try self.instanceRequirementsAccept(&probe, requirements.items, env)) return .none;
+
+    // An instance whose argument is still the owner over distinct type
+    // variables that carry no requirements serves every instantiation.
+    if (!self.isNominalOverDistinctUnconstrainedVars(func)) return .conditional;
+    if (try self.settleInspectInstanceDispatches(probe.probe.ambiguity_candidates_len, owner) == .undetermined) return .conditional;
+
+    committed = true;
+    probe.commit();
+    return .{ .unconditional = use_var };
+}
+
+/// Instantiate this module's `to_inspect` method for inspection's use of it.
+/// The method of a type declared in a function body names that function's
+/// type variables (through its owner's backing or its requirements); every
+/// instance shares them, exactly as a use inside the function does. Checking
+/// has generalized the function by now, so the instance keeps them by
+/// identity rather than by rank.
+fn instantiateInspectMethod(
+    self: *Self,
+    owner: ?CIR.Statement.Idx,
+    binding_var: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+    evidence: InstantiationEvidence,
+) std.mem.Allocator.Error!Var {
+    if (!self.isBindingSchemeVar(binding_var)) {
+        if (self.types.resolveVar(binding_var).desc.rank != .generalized) {
+            self.var_map.clearRetainingCapacity();
+            return binding_var;
+        }
+        return self.instantiateVar(binding_var, env, region_behavior, evidence);
+    }
+    const enclosing = if (owner) |statement| try self.localTypeEnclosingVars(statement) else &.{};
+    if (enclosing.len == 0) return self.instantiateTypeScheme(binding_var, env, region_behavior, evidence);
+    std.debug.assert(self.hole_shared_schemes.get(binding_var) == null);
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .close,
+        .share_vars = enclosing,
+    };
+    return self.instantiateVarHelp(binding_var, &instantiate_ctx, env, region_behavior, true, evidence);
+}
+
+/// Settle the dispatches inspection's instance of a `to_inspect` method
+/// copied (the ambiguity candidates from `candidates_start`): each receiver
+/// is concrete, or a type variable of the function its owner is declared in,
+/// whose own requirements supply the method. When one is still undetermined
+/// the instance is unusable, and the probe's rollback discards them.
+fn settleInspectInstanceDispatches(self: *Self, candidates_start: usize, owner: ?CIR.Statement.Idx) std.mem.Allocator.Error!InspectInstanceDispatches {
+    const enclosing = if (owner) |statement| try self.localTypeEnclosingVars(statement) else &.{};
+    var result: InspectInstanceDispatches = .settled;
+    for (self.ambiguity_candidates.items[candidates_start..]) |candidate| {
+        const resolved = self.types.resolveVar(candidate.var_);
+        const constraints = contentConstraintRange(resolved.desc.content) orelse continue;
+        if (constraints.len() == 0) continue;
+        if (resolved.desc.content == .rigid and varSliceContains(enclosing, resolved.var_)) {
+            result = .reads_enclosing;
+            continue;
+        }
+        return .undetermined;
+    }
+    for (self.ambiguity_candidates.items[candidates_start..]) |*candidate| candidate.judged = true;
+    return result;
+}
+
+fn varSliceContains(vars: []const Var, target: Var) bool {
+    for (vars) |var_| {
+        if (var_ == target) return true;
+    }
+    return false;
+}
+
+const InspectInstanceDispatches = enum {
+    /// A receiver is still undetermined.
+    undetermined,
+    /// Every receiver is concrete.
+    settled,
+    /// Every receiver is concrete or a type variable of the function the
+    /// owner is declared in.
+    reads_enclosing,
+};
+
+/// The generalized type variables of the definitions lexically enclosing
+/// the type declaration `owner`: empty for a top-level declaration. Computed
+/// for every type declared in a function body by one walk of the module, the
+/// first time a method of one is inspected.
+fn localTypeEnclosingVars(self: *Self, owner: CIR.Statement.Idx) std.mem.Allocator.Error![]const Var {
+    if (self.local_type_enclosing_vars == null) try self.indexLocalTypeEnclosingVars();
+    return self.local_type_enclosing_vars.?.get(owner) orelse &.{};
+}
+
+fn indexLocalTypeEnclosingVars(self: *Self) std.mem.Allocator.Error!void {
+    self.local_type_enclosing_vars = .empty;
+    const map = &self.local_type_enclosing_vars.?;
+    // Each enclosing definition's pattern root, linked to its own enclosing one.
+    const Scope = struct { root: Var, body: Var, parent: ?u32 };
+    var scopes: std.ArrayListUnmanaged(Scope) = .empty;
+    defer scopes.deinit(self.gpa);
+    const Item = struct { expr: CIR.Expr.Idx, scope: u32 };
+    var stack: std.ArrayListUnmanaged(Item) = .empty;
+    defer stack.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        try scopes.append(self.gpa, .{ .root = ModuleEnv.varFrom(def.pattern), .body = ModuleEnv.varFrom(def.expr), .parent = null });
+        try stack.append(self.gpa, .{ .expr = def.expr, .scope = @intCast(scopes.items.len - 1) });
+    }
+    const Pusher = struct {
+        checker: *Self,
+        stack: *std.ArrayListUnmanaged(Item),
+        scope: u32,
+
+        fn expr(p: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+            try p.stack.append(p.checker.gpa, .{ .expr = child, .scope = p.scope });
+        }
+
+        fn boundPattern(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
+    };
+    var vars: std.ArrayListUnmanaged(Var) = .empty;
+    defer vars.deinit(self.gpa);
+    while (stack.pop()) |item| {
+        const expr = self.cir.store.getExpr(item.expr);
+        if (expr != .e_block) {
+            try self.visitExprChildren(item.expr, Pusher{ .checker = self, .stack = &stack, .scope = item.scope });
+            continue;
+        }
+        for (self.cir.store.sliceStatements(expr.e_block.stmts)) |statement_idx| {
+            switch (self.cir.store.getStatement(statement_idx)) {
+                .s_decl => |decl| {
+                    try scopes.append(self.gpa, .{ .root = ModuleEnv.varFrom(decl.pattern), .body = ModuleEnv.varFrom(decl.expr), .parent = item.scope });
+                    try stack.append(self.gpa, .{ .expr = decl.expr, .scope = @intCast(scopes.items.len - 1) });
+                },
+                .s_nominal_decl => {
+                    vars.clearRetainingCapacity();
+                    var scope: ?u32 = item.scope;
+                    while (scope) |index| : (scope = scopes.items[index].parent) {
+                        try self.appendInspectTypeVariables(scopes.items[index].root, &vars);
+                        try self.appendInspectTypeVariables(scopes.items[index].body, &vars);
+                    }
+                    var enclosing: std.ArrayListUnmanaged(Var) = .empty;
+                    errdefer enclosing.deinit(self.gpa);
+                    for (vars.items) |var_| {
+                        const resolved = self.types.resolveVar(var_);
+                        if (resolved.desc.rank != .generalized) continue;
+                        if (!varSliceContains(enclosing.items, resolved.var_)) try enclosing.append(self.gpa, resolved.var_);
+                    }
+                    try map.put(self.gpa, statement_idx, try enclosing.toOwnedSlice(self.gpa));
+                },
+                .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => try self.visitStatementChildren(statement_idx, Pusher{ .checker = self, .stack = &stack, .scope = item.scope }),
+            }
+        }
+        try stack.append(self.gpa, .{ .expr = expr.e_block.final_expr, .scope = item.scope });
+    }
+}
+
+/// How a `to_inspect` method of an owner is used by inspection (design.md
+/// "Inspect Overrides").
+const InspectOverrideKind = enum {
+    /// Usable at the owner over distinct type variables: every instantiation.
+    unconditional,
+    /// Usable at some instantiations only, decided per concrete type.
+    conditional,
+};
+
+/// The `to_inspect` override an owner declares, as inspection demands see it.
+const InspectOverrideInfo = struct {
+    kind: InspectOverrideKind,
+    method: StaticDispatchMethodBinding,
+    /// For an unconditional override: the instance's nominal type arguments,
+    /// which its formal demands are written over.
+    formals: []const Var = &.{},
+    /// For an imported unconditional override: its formal demands. A local
+    /// override's grow with the analysis (`InspectDemandAnalysis.override_demands`).
+    imported_formal_demands: []const Var = &.{},
+};
+
+const InspectOwnerKey = struct {
+    env: *const ModuleEnv,
+    statement: u32,
+};
+
+/// A demand recorded on a scheme or an override: the owner's identity and
+/// the identity-sensitive structure of the term.
+const InspectDemandSeenKey = struct {
+    owner: u64,
+    hash: u64,
+};
+
+/// Where the demands one normalization finds go.
+const InspectDemandSink = union(enum) {
+    /// To the schemes whose type variables they name.
+    schemes,
+    /// To a local unconditional override's formal demands.
+    override_formals: CIR.Def.Idx,
+};
+
+/// A walk through an application of a local unconditional override's owner:
+/// the override's formal demands, substituted at the application's
+/// arguments, grow with the analysis.
+const InspectOverrideUse = struct {
+    def_idx: CIR.Def.Idx,
+    substitution: std.AutoHashMapUnmanaged(Var, Var),
+    sink: InspectDemandSink,
+    site_node: u32,
+    processed: u32 = 0,
+};
+
+/// Inspection's demands on the schemes this module declares, and the
+/// per-type override decisions they reach (design.md "Inspect Overrides").
+/// Transient: built and consumed by `recordInspectDemands`.
+const InspectDemandAnalysis = struct {
+    /// Each scheme's demands, by resolved scheme root.
+    demands: std.AutoArrayHashMapUnmanaged(Var, std.ArrayListUnmanaged(Var)) = .empty,
+    seen: std.AutoHashMapUnmanaged(InspectDemandSeenKey, void) = .empty,
+    /// Each local unconditional override's formal demands, by method def.
+    override_demands: std.AutoArrayHashMapUnmanaged(CIR.Def.Idx, std.ArrayListUnmanaged(Var)) = .empty,
+    override_formals: std.AutoArrayHashMapUnmanaged(CIR.Def.Idx, []const Var) = .empty,
+    /// The local unconditional override whose generic instance a use var is.
+    override_instance_defs: std.AutoHashMapUnmanaged(Var, CIR.Def.Idx) = .empty,
+    override_uses: std.ArrayListUnmanaged(InspectOverrideUse) = .empty,
+    override_use_keys: std.AutoHashMapUnmanaged(InspectDemandSeenKey, void) = .empty,
+    /// The scheme a type variable belongs to: the scheme whose instantiations
+    /// copy it.
+    var_owner: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+    /// Lexical nesting depth of each scheme this module declares.
+    scheme_depth: std.AutoArrayHashMapUnmanaged(Var, u32) = .empty,
+    /// How many of its target's demands each scheme use has processed.
+    processed: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    owner_infos: std.AutoHashMapUnmanaged(InspectOwnerKey, ?InspectOverrideInfo) = .empty,
+    /// Closed decisions by the structure of the decided type.
+    decisions: std.AutoHashMapUnmanaged(u64, ?Var) = .empty,
+    /// Every decided type, with the instance it uses or null.
+    decided: std.ArrayListUnmanaged(InspectTypeDecision) = .empty,
+    arena: std.heap.ArenaAllocator,
+    env: *Env,
+    changed: bool = false,
+
+    const InspectTypeDecision = struct {
+        ty: Var,
+        use_var: ?Var,
+        /// The instance's requirements name a type variable of the function
+        /// the owner is declared in.
+        reads_enclosing: bool = false,
+    };
+
+    fn deinit(self: *InspectDemandAnalysis, gpa: Allocator) void {
+        for (self.demands.values()) |*list| list.deinit(gpa);
+        self.demands.deinit(gpa);
+        self.seen.deinit(gpa);
+        for (self.override_demands.values()) |*list| list.deinit(gpa);
+        self.override_demands.deinit(gpa);
+        self.override_formals.deinit(gpa);
+        self.override_instance_defs.deinit(gpa);
+        for (self.override_uses.items) |*use| use.substitution.deinit(gpa);
+        self.override_uses.deinit(gpa);
+        self.override_use_keys.deinit(gpa);
+        self.var_owner.deinit(gpa);
+        self.scheme_depth.deinit(gpa);
+        self.processed.deinit(gpa);
+        self.owner_infos.deinit(gpa);
+        self.decisions.deinit(gpa);
+        self.decided.deinit(gpa);
+        self.arena.deinit();
+    }
+};
+
+fn inspectSinkKey(sink: InspectDemandSink) u64 {
+    return switch (sink) {
+        .schemes => std.math.maxInt(u64),
+        .override_formals => |def_idx| @intFromEnum(def_idx),
+    };
+}
+
+/// POLICY: inspect demands (design.md "Inspect Overrides"). A conditional
+/// `to_inspect` override is decided per concrete type, so a scheme that may
+/// inspect a value whose type its instantiation decides carries that type as
+/// a demand: each of its own type variables an inspected value reaches, and
+/// each application of a conditional override's owner over them. Every use of
+/// the scheme substitutes the demands; one that becomes closed is decided
+/// there, from an instance of the override at that type, and recorded with
+/// the instance; one that stays open becomes a demand of the scheme around
+/// the use. The demands are a least fixpoint over every use, so the order in
+/// which uses are visited does not matter, and annotations play no part.
+fn recordInspectDemands(self: *Self, env: *Env) Allocator.Error!void {
+    var analysis = InspectDemandAnalysis{ .arena = std.heap.ArenaAllocator.init(self.gpa), .env = env };
+    defer analysis.deinit(self.gpa);
+
+    try self.indexInspectDemandSchemes(&analysis);
+    try self.seedBuiltinInspectDemand(&analysis);
+
+    // Each local unconditional override's generic instance collects the
+    // override's formal demands.
+    for (self.cir.inspect_override_instances.items.items) |instance| {
+        const use_var = self.types.resolveVar(instance.callableVar()).var_;
+        const formals = try self.inspectOverrideFormals(&analysis, use_var);
+        try analysis.override_formals.put(self.gpa, instance.def(), formals);
+        try analysis.override_instance_defs.put(self.gpa, use_var, instance.def());
+    }
+
+    // Inspection sites that are not uses of a scheme.
+    var raw_node_idx: u32 = 0;
+    const node_count = self.cir.store.nodes.len();
+    while (raw_node_idx < node_count) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr = self.cir.store.getExpr(expr_idx);
+        const inspected = if (expr == .e_dbg)
+            expr.e_dbg.expr
+        else if (expr == .e_expect_err)
+            expr.e_expect_err.expr
+        else
+            continue;
+        if (self.erroneous_value_exprs.contains(expr_idx)) continue;
+        try self.normalizeInspectDemand(&analysis, ModuleEnv.varFrom(inspected), .schemes, raw_node_idx, env);
+    }
+
+    // Every use substitutes its target's demands, until no use adds one.
+    analysis.changed = true;
+    while (analysis.changed) {
+        analysis.changed = false;
+        var record_idx: u32 = 0;
+        while (record_idx < self.cir.scheme_uses.items.items.len) : (record_idx += 1) {
+            try self.processInspectDemandUse(&analysis, record_idx, env);
+        }
+        var use_idx: usize = 0;
+        while (use_idx < analysis.override_uses.items.len) : (use_idx += 1) {
+            try self.processInspectOverrideUse(&analysis, use_idx, env);
+        }
+    }
+
+    try self.publishInspectDemands(&analysis);
+}
+
+fn inspectDemandUseSlotParticipates(record: ModuleEnv.SchemeUseRecord) bool {
+    return switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
+        .value_use, .nested_function_use, .dispatch_target => true,
+        .shared_value_use, .recursive_dispatch_target, .recursive_reference, .where_method_use => false,
+    };
+}
+
+/// Record how deeply each scheme this module declares is nested, and which
+/// scheme each generalized type variable belongs to: the outermost scheme
+/// whose type or requirements name it. A variable no scheme quantifies is
+/// fixed: nothing instantiates it.
+fn indexInspectDemandSchemes(self: *Self, analysis: *InspectDemandAnalysis) Allocator.Error!void {
+    var roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer roots.deinit(self.gpa);
+    for (self.cir.scheme_uses.items.items) |record| {
+        if (!inspectDemandUseSlotParticipates(record)) continue;
+        try roots.put(self.gpa, self.types.resolveVar(@enumFromInt(record.scheme_root)).var_, {});
+    }
+
+    // Depth by lexical nesting of the schemes this module declares.
+    const Item = struct { expr: CIR.Expr.Idx, depth: u32 };
+    var stack: std.ArrayListUnmanaged(Item) = .empty;
+    defer stack.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const root = self.types.resolveVar(ModuleEnv.varFrom(def.pattern)).var_;
+        try analysis.scheme_depth.put(self.gpa, root, 1);
+        try stack.append(self.gpa, .{ .expr = def.expr, .depth = 1 });
+    }
+    const Pusher = struct {
+        checker: *Self,
+        stack: *std.ArrayListUnmanaged(Item),
+        depth: u32,
+
+        fn expr(p: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+            try p.stack.append(p.checker.gpa, .{ .expr = child, .depth = p.depth });
+        }
+
+        fn boundPattern(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
+    };
+    while (stack.pop()) |item| {
+        var depth = item.depth;
+        const expr_root = self.types.resolveVar(ModuleEnv.varFrom(item.expr)).var_;
+        if (roots.contains(expr_root)) {
+            const entry = try analysis.scheme_depth.getOrPut(self.gpa, expr_root);
+            if (!entry.found_existing) {
+                depth += 1;
+                entry.value_ptr.* = depth;
+            }
+        }
+        const expr = self.cir.store.getExpr(item.expr);
+        if (expr == .e_block) {
+            for (self.cir.store.sliceStatements(expr.e_block.stmts)) |statement_idx| {
+                switch (self.cir.store.getStatement(statement_idx)) {
+                    .s_decl => |decl| {
+                        const root = self.types.resolveVar(ModuleEnv.varFrom(decl.pattern)).var_;
+                        const entry = try analysis.scheme_depth.getOrPut(self.gpa, root);
+                        if (!entry.found_existing) entry.value_ptr.* = depth + 1;
+                        try stack.append(self.gpa, .{ .expr = decl.expr, .depth = depth + 1 });
+                    },
+                    .s_nominal_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => try self.visitStatementChildren(statement_idx, Pusher{ .checker = self, .stack = &stack, .depth = depth }),
+                }
+            }
+            try stack.append(self.gpa, .{ .expr = expr.e_block.final_expr, .depth = depth });
+            continue;
+        }
+        try self.visitExprChildren(item.expr, Pusher{ .checker = self, .stack = &stack, .depth = depth });
+    }
+
+    // Each generalized variable belongs to the outermost scheme naming it.
+    var identity_vars: std.ArrayListUnmanaged(Var) = .empty;
+    defer identity_vars.deinit(self.gpa);
+    for (analysis.scheme_depth.keys(), analysis.scheme_depth.values()) |root, depth| {
+        identity_vars.clearRetainingCapacity();
+        try self.appendInspectTypeVariables(root, &identity_vars);
+        if (self.typeSchemeIndexForRoot(root)) |scheme_idx| {
+            for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+                try self.appendInspectTypeVariables(requirement.receiver_var, &identity_vars);
+                try self.appendInspectTypeVariables(requirement.constraint.fn_var, &identity_vars);
+            }
+        }
+        for (identity_vars.items) |identity_var| {
+            const resolved = self.types.resolveVar(identity_var);
+            if (resolved.desc.rank != .generalized) continue;
+            const entry = try analysis.var_owner.getOrPut(self.gpa, resolved.var_);
+            if (!entry.found_existing or (analysis.scheme_depth.get(entry.value_ptr.*) orelse 0) > depth) {
+                entry.value_ptr.* = root;
+            }
+        }
+    }
+}
+
+/// The type variables `root` reaches, through every type it is built from
+/// (including the callables of the requirements its variables carry) except
+/// nominal backings. Unlike canonical identity keys, the walk accepts any
+/// settled type, including the rows of rejected definitions.
+fn appendInspectTypeVariables(self: *Self, root: Var, out: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex => |flex| {
+                try out.append(self.gpa, resolved.var_);
+                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var);
+            },
+            .rigid => |rigid| {
+                try out.append(self.gpa, resolved.var_);
+                for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var);
+            },
+            .err, .field_presence => {},
+            .alias => |alias| {
+                try pending.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try pending.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try pending.append(self.gpa, func.ret);
+                },
+                .empty_record, .empty_tag_union, .nominal_type, .tuple, .record, .tag_union => try self.pushInspectTermChildren(resolved.desc.content, &pending),
+            },
+        }
+    }
+}
+
+/// `Str.inspect` inspects its argument.
+fn seedBuiltinInspectDemand(self: *Self, analysis: *InspectDemandAnalysis) Allocator.Error!void {
+    if (!can.BuiltinLowLevel.isBuiltinModule(self.cir)) return;
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const expr = self.cir.store.getExpr(def.expr);
+        if (expr != .e_anno_only) continue;
+        if (!expr.e_anno_only.ident.eql(self.cir.idents.builtin_str_inspect)) continue;
+        const root = self.types.resolveVar(ModuleEnv.varFrom(def.pattern)).var_;
+        const func = self.pureFunctionThroughAliases(root) orelse continue;
+        const args = self.types.sliceVars(func.args);
+        if (args.len != 1) continue;
+        try self.addInspectDemand(analysis, root, @intFromEnum(root), args[0]);
+    }
+}
+
+/// The demands of the scheme `scheme_root`: this module's own, or those
+/// copied with an imported scheme.
+fn inspectDemandsOf(self: *Self, analysis: *InspectDemandAnalysis, scheme_root: Var) []const Var {
+    if (analysis.demands.getPtr(scheme_root)) |list| return list.items;
+    for (self.imported_schemes.items) |imported| {
+        if (imported.inspect_demands_len == 0) continue;
+        if (self.types.resolveVar(imported.scheme_var).var_ != scheme_root) continue;
+        return self.imported_inspect_demand_vars.items[imported.inspect_demands_start..][0..imported.inspect_demands_len];
+    }
+    return &.{};
+}
+
+/// Substitute the demands one scheme use has not processed yet.
+fn processInspectDemandUse(self: *Self, analysis: *InspectDemandAnalysis, record_idx: u32, env: *Env) Allocator.Error!void {
+    const record = self.cir.scheme_uses.items.items[record_idx];
+    if (!inspectDemandUseSlotParticipates(record)) return;
+    const scheme_root = self.types.resolveVar(@enumFromInt(record.scheme_root)).var_;
+    const available: u32 = @intCast(self.inspectDemandsOf(analysis, scheme_root).len);
+    const entry = try analysis.processed.getOrPut(self.gpa, record_idx);
+    if (!entry.found_existing) entry.value_ptr.* = 0;
+    const start = entry.value_ptr.*;
+    if (start >= available) return;
+    entry.value_ptr.* = available;
+
+    var substitution: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    defer substitution.deinit(self.gpa);
+    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len];
+    for (pairs) |pair| {
+        try substitution.put(self.gpa, self.types.resolveVar(@enumFromInt(pair.old_var)).var_, @enumFromInt(pair.fresh_var));
+    }
+
+    const is_dispatch_target = @as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind)) == .dispatch_target;
+    const sink: InspectDemandSink = if (is_dispatch_target)
+        if (analysis.override_instance_defs.get(self.types.resolveVar(@enumFromInt(record.slot_data)).var_)) |def_idx|
+            .{ .override_formals = def_idx }
+        else
+            .schemes
     else
-        binding_var;
+        .schemes;
+
+    var index = start;
+    while (index < available) : (index += 1) {
+        const demand = self.inspectDemandsOf(analysis, scheme_root)[index];
+        const substituted = try self.substituteInspectTerm(demand, &substitution, env);
+        try self.normalizeInspectDemand(analysis, substituted, sink, record.node_idx, env);
+    }
+}
+
+/// Substitute the formal demands one walk through an override's owner has
+/// not processed yet.
+fn processInspectOverrideUse(self: *Self, analysis: *InspectDemandAnalysis, use_idx: usize, env: *Env) Allocator.Error!void {
+    const def_idx = analysis.override_uses.items[use_idx].def_idx;
+    const available: u32 = if (analysis.override_demands.getPtr(def_idx)) |list| @intCast(list.items.len) else 0;
+    const start = analysis.override_uses.items[use_idx].processed;
+    if (start >= available) return;
+    analysis.override_uses.items[use_idx].processed = available;
+    var index = start;
+    while (index < available) : (index += 1) {
+        const use = analysis.override_uses.items[use_idx];
+        const demand = analysis.override_demands.getPtr(def_idx).?.items[index];
+        const substituted = try self.substituteInspectTerm(demand, &use.substitution, env);
+        try self.normalizeInspectDemand(analysis, substituted, use.sink, use.site_node, env);
+    }
+}
+
+/// `term` with each type variable `substitution` maps replaced, sharing
+/// every part that names none.
+fn substituteInspectTerm(self: *Self, term: Var, substitution: *const std.AutoHashMapUnmanaged(Var, Var), env: *Env) Allocator.Error!Var {
+    const resolved = self.types.resolveVar(term);
+    if (substitution.get(resolved.var_)) |replacement| return replacement;
+    if (!try self.inspectTermMentionsAny(resolved.var_, substitution)) return resolved.var_;
+    const region = self.getRegionAt(resolved.var_);
+    switch (resolved.desc.content) {
+        .flex, .rigid, .err, .field_presence => return resolved.var_,
+        .alias => |alias| return try self.substituteInspectTerm(self.types.getAliasBackingVar(alias), substitution, env),
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => return resolved.var_,
+            .fn_pure, .fn_effectful, .fn_unbound => return resolved.var_,
+            .nominal_type => |nominal| {
+                const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
+                defer self.gpa.free(args);
+                for (args) |*arg| arg.* = try self.substituteInspectTerm(arg.*, substitution, env);
+                var copy = nominal;
+                copy.args = try self.types.appendVars(args);
+                return try self.freshFromContent(.{ .structure = .{ .nominal_type = copy } }, env, region);
+            },
+            .tuple => |tuple| {
+                const elems = try self.gpa.dupe(Var, self.types.sliceVars(tuple.elems));
+                defer self.gpa.free(elems);
+                for (elems) |*elem| elem.* = try self.substituteInspectTerm(elem.*, substitution, env);
+                return try self.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try self.types.appendVars(elems) } } }, env, region);
+            },
+            .record => |record| {
+                const fields = try self.gpa.alloc(types_mod.RecordField, record.fields.count);
+                defer self.gpa.free(fields);
+                for (fields, 0..) |*field, offset| {
+                    field.* = self.types.getRecordFieldAt(record.fields, @intCast(offset));
+                    field.presence.var_ = try self.substituteInspectTerm(field.presence.var_, substitution, env);
+                }
+                const ext = try self.substituteInspectTerm(record.ext, substitution, env);
+                return try self.freshFromContent(.{ .structure = .{ .record = .{
+                    .fields = try self.types.appendRecordFields(fields),
+                    .ext = ext,
+                } } }, env, region);
+            },
+            .tag_union => |tag_union| {
+                const tags = try self.gpa.alloc(types_mod.Tag, tag_union.tags.count);
+                defer self.gpa.free(tags);
+                for (tags, 0..) |*tag, offset| {
+                    tag.* = self.types.getTagAt(tag_union.tags, @intCast(offset));
+                    const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
+                    defer self.gpa.free(args);
+                    for (args) |*arg| arg.* = try self.substituteInspectTerm(arg.*, substitution, env);
+                    tag.args = try self.types.appendVars(args);
+                }
+                const ext = try self.substituteInspectTerm(tag_union.ext, substitution, env);
+                return try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+                    .tags = try self.types.appendTags(tags),
+                    .ext = ext,
+                } } }, env, region);
+            },
+        },
+    }
+}
+
+/// Whether `term` names a type variable `substitution` maps.
+fn inspectTermMentionsAny(self: *Self, term: Var, substitution: *const std.AutoHashMapUnmanaged(Var, Var)) Allocator.Error!bool {
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, term);
+    while (pending.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if (substitution.contains(resolved.var_)) return true;
+        if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        try self.pushInspectTermChildren(resolved.desc.content, &pending);
+    }
+    return false;
+}
+
+/// The type children inspection's walk follows from `content`, other than a
+/// nominal's backing.
+fn pushInspectTermChildren(self: *Self, content: Content, pending: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+    switch (content) {
+        .flex, .rigid, .err, .field_presence => {},
+        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => {},
+            .fn_pure, .fn_effectful, .fn_unbound => {},
+            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .record => |record| {
+                for (0..record.fields.count) |offset| {
+                    try pending.append(self.gpa, self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence.var_);
+                }
+                try pending.append(self.gpa, record.ext);
+            },
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.count) |offset| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(self.types.getTagAt(tag_union.tags, @intCast(offset)).args));
+                }
+                try pending.append(self.gpa, tag_union.ext);
+            },
+        },
+    }
+}
+
+/// Whether `term` names no type variable a scheme quantifies: every use
+/// sees it as it is.
+fn inspectTermIsClosed(self: *Self, analysis: *const InspectDemandAnalysis, term: Var) Allocator.Error!bool {
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, term);
+    while (pending.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid => if (analysis.var_owner.contains(resolved.var_)) return false,
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try pending.append(self.gpa, func.ret);
+                    continue;
+                },
+                .empty_record, .empty_tag_union, .nominal_type, .tuple, .record, .tag_union => {},
+            },
+            .alias, .field_presence, .err => {},
+        }
+        try self.pushInspectTermChildren(resolved.desc.content, &pending);
+    }
+    return true;
+}
+
+/// An identity-sensitive hash of `term`'s structure: equal for two terms that
+/// are the same type over the same type variables.
+fn inspectTermHash(self: *Self, term: Var) Allocator.Error!u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, term);
+    while (pending.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        const seen = try visited.getOrPut(self.gpa, resolved.var_);
+        if (seen.found_existing) {
+            hasher.update(std.mem.asBytes(seen.value_ptr));
+            continue;
+        }
+        seen.value_ptr.* = visited.count();
+        hasher.update(&.{@intFromEnum(std.meta.activeTag(resolved.desc.content))});
+        switch (resolved.desc.content) {
+            .flex, .rigid => hasher.update(std.mem.asBytes(&resolved.var_)),
+            .err, .field_presence => {},
+            .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| {
+                hasher.update(&.{@intFromEnum(std.meta.activeTag(flat))});
+                switch (flat) {
+                    .empty_record, .empty_tag_union => {},
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                        try pending.append(self.gpa, func.ret);
+                    },
+                    .nominal_type => |nominal| {
+                        hasher.update(std.mem.asBytes(self.cir.moduleIdentityHash(nominal.origin_module)));
+                        hasher.update(std.mem.asBytes(&nominal.source));
+                        try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                    },
+                    .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                    .record => |record| {
+                        for (0..record.fields.count) |offset| {
+                            const field = self.types.getRecordFieldAt(record.fields, @intCast(offset));
+                            hasher.update(self.cir.getIdentStoreConst().getText(field.name));
+                            try pending.append(self.gpa, field.presence.var_);
+                        }
+                        try pending.append(self.gpa, record.ext);
+                    },
+                    .tag_union => |tag_union| {
+                        for (0..tag_union.tags.count) |offset| {
+                            const tag_entry = self.types.getTagAt(tag_union.tags, @intCast(offset));
+                            hasher.update(self.cir.getIdentStoreConst().getText(tag_entry.name));
+                            try pending.appendSlice(self.gpa, self.types.sliceVars(tag_entry.args));
+                        }
+                        try pending.append(self.gpa, tag_union.ext);
+                    },
+                }
+            },
+        }
+    }
+    return hasher.final();
+}
+
+/// Add `term` to the demands of the scheme `owner`.
+fn addInspectDemand(self: *Self, analysis: *InspectDemandAnalysis, owner: Var, owner_key: u64, term: Var) Allocator.Error!void {
+    const key = InspectDemandSeenKey{ .owner = owner_key, .hash = try self.inspectTermHash(term) };
+    if ((try analysis.seen.getOrPut(self.gpa, key)).found_existing) return;
+    const entry = try analysis.demands.getOrPut(self.gpa, owner);
+    if (!entry.found_existing) entry.value_ptr.* = .empty;
+    try entry.value_ptr.append(self.gpa, self.types.resolveVar(term).var_);
+    analysis.changed = true;
+}
+
+/// Record an open demand on the innermost scheme whose type variables it
+/// names, or on the override whose formal demands are being collected.
+fn attachInspectDemand(self: *Self, analysis: *InspectDemandAnalysis, term: Var, sink: InspectDemandSink) Allocator.Error!void {
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, term);
+    switch (sink) {
+        .override_formals => |def_idx| {
+            const formals = analysis.override_formals.get(def_idx) orelse return;
+            var names_formal = false;
+            while (pending.pop()) |current| {
+                const resolved = self.types.resolveVar(current);
+                if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+                for (formals) |formal| {
+                    if (self.types.resolveVar(formal).var_ == resolved.var_) names_formal = true;
+                }
+                try self.pushInspectTermChildren(resolved.desc.content, &pending);
+            }
+            if (!names_formal) return;
+            const key = InspectDemandSeenKey{ .owner = inspectSinkKey(sink), .hash = try self.inspectTermHash(term) };
+            if ((try analysis.seen.getOrPut(self.gpa, key)).found_existing) return;
+            const entry = try analysis.override_demands.getOrPut(self.gpa, def_idx);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.gpa, self.types.resolveVar(term).var_);
+            analysis.changed = true;
+        },
+        .schemes => {
+            var owner: ?Var = null;
+            var owner_depth: u32 = 0;
+            while (pending.pop()) |current| {
+                const resolved = self.types.resolveVar(current);
+                if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+                if (analysis.var_owner.get(resolved.var_)) |candidate| {
+                    const depth = analysis.scheme_depth.get(candidate) orelse 0;
+                    if (owner == null or depth > owner_depth) {
+                        owner = candidate;
+                        owner_depth = depth;
+                    }
+                }
+                try self.pushInspectTermChildren(resolved.desc.content, &pending);
+            }
+            const scheme = owner orelse return;
+            try self.addInspectDemand(analysis, scheme, @intFromEnum(scheme), term);
+        },
+    }
+}
+
+/// Walk an inspected type as inspection renders it, recording the demands it
+/// leaves open and deciding each closed application of a conditional
+/// override's owner.
+fn normalizeInspectDemand(self: *Self, analysis: *InspectDemandAnalysis, root: Var, sink: InspectDemandSink, site_node: u32, env: *Env) Allocator.Error!void {
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    // Opening a backing mints fresh variables, so a recursive type is
+    // recognized by its structure: one application is walked once.
+    var walked_nominals: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    defer walked_nominals.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid => try self.attachInspectDemand(analysis, resolved.var_, sink),
+            .err, .field_presence => {},
+            .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound => {},
+                .tuple, .record, .tag_union => try self.pushInspectTermChildren(resolved.desc.content, &pending),
+                .nominal_type => |nominal| {
+                    if ((try walked_nominals.getOrPut(self.gpa, try self.inspectTermHash(resolved.var_))).found_existing) continue;
+                    try self.normalizeInspectNominal(analysis, resolved.var_, nominal, sink, site_node, &pending, env);
+                },
+            },
+        }
+    }
+}
+
+fn normalizeInspectNominal(
+    self: *Self,
+    analysis: *InspectDemandAnalysis,
+    nominal_var: Var,
+    nominal: types_mod.NominalType,
+    sink: InspectDemandSink,
+    site_node: u32,
+    pending: *std.ArrayListUnmanaged(Var),
+    env: *Env,
+) Allocator.Error!void {
+    const args = self.types.sliceNominalArgs(nominal);
+    if (self.nominalIsBuiltinListType(nominal) or self.nominalIsBoxType(nominal)) {
+        try pending.appendSlice(self.gpa, args);
+        return;
+    }
+    if (nominal.originIsBuiltin() and args.len == 0) return;
+    const info = (try self.inspectOverrideInfoFor(analysis, nominal)) orelse {
+        try self.pushInspectDefaultForm(nominal, pending, env);
+        return;
+    };
+    switch (info.kind) {
+        .unconditional => {
+            if (info.formals.len != args.len) return;
+            var substitution: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+            for (info.formals, args) |formal, arg| try substitution.put(self.gpa, self.types.resolveVar(formal).var_, arg);
+            if (!info.method.is_this_module) {
+                defer substitution.deinit(self.gpa);
+                for (info.imported_formal_demands) |demand| {
+                    try pending.append(self.gpa, try self.substituteInspectTerm(demand, &substitution, env));
+                }
+                return;
+            }
+            const key = InspectDemandSeenKey{
+                .owner = inspectSinkKey(sink) ^ (@as(u64, @intFromEnum(info.method.binding.def_idx)) << 32),
+                .hash = try self.inspectTermHash(nominal_var),
+            };
+            if ((try analysis.override_use_keys.getOrPut(self.gpa, key)).found_existing) {
+                substitution.deinit(self.gpa);
+                return;
+            }
+            try analysis.override_uses.append(self.gpa, .{
+                .def_idx = info.method.binding.def_idx,
+                .substitution = substitution,
+                .sink = sink,
+                .site_node = site_node,
+            });
+            analysis.changed = true;
+        },
+        .conditional => {
+            if (!try self.inspectTermIsClosed(analysis, nominal_var)) {
+                // Its uses decide the override; where it is not used, the
+                // default form's parts are inspected in turn.
+                try self.attachInspectDemand(analysis, nominal_var, sink);
+                try self.pushInspectDefaultForm(nominal, pending, env);
+                return;
+            }
+            const decision = try self.decideClosedInspectOverride(analysis, nominal_var, info, site_node, env);
+            if (decision == null) try self.pushInspectDefaultForm(nominal, pending, env);
+        },
+    }
+}
+
+/// Inspection's default form renders a non-opaque nominal through its
+/// backing; an opaque one shows no contents.
+fn pushInspectDefaultForm(self: *Self, nominal: types_mod.NominalType, pending: *std.ArrayListUnmanaged(Var), env: *Env) Allocator.Error!void {
+    if (nominal.isOpaque()) return;
+    const backing = (try self.openNominalBackingForApp(nominal, env, base.Region.zero())) orelse return;
+    try pending.append(self.gpa, backing);
+}
+
+/// The `to_inspect` override `nominal`'s owner declares, or null when it
+/// declares none inspection uses.
+fn inspectOverrideInfoFor(self: *Self, analysis: *InspectDemandAnalysis, nominal: types_mod.NominalType) Allocator.Error!?InspectOverrideInfo {
+    const statement = nominal.sourceDeclOptional() orelse return null;
+    const owner_env, _ = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "inspect override",
+    );
+    const key = InspectOwnerKey{ .env = owner_env, .statement = statement };
+    if (analysis.owner_infos.get(key)) |info| return info;
+    const info = try self.computeInspectOverrideInfo(analysis, owner_env, nominal);
+    try analysis.owner_infos.put(self.gpa, key, info);
+    return info;
+}
+
+fn computeInspectOverrideInfo(
+    self: *Self,
+    analysis: *InspectDemandAnalysis,
+    owner_env: *const ModuleEnv,
+    nominal: types_mod.NominalType,
+) Allocator.Error!?InspectOverrideInfo {
+    const method = self.lookupStaticDispatchMethodBinding(
+        owner_env,
+        nominal.sourceDeclOptional(),
+        self.cir,
+        self.cir.idents.to_inspect,
+    ) orelse return null;
+    const def_idx = method.binding.def_idx;
+    if (method.env.inspectOverrideIsConditional(def_idx)) {
+        return .{ .kind = .conditional, .method = method };
+    }
+    if (method.env.inspectOverrideInstance(def_idx) == null) return null;
+    if (method.is_this_module) {
+        return .{
+            .kind = .unconditional,
+            .method = method,
+            .formals = analysis.override_formals.get(def_idx) orelse &.{},
+        };
+    }
+    const record = method.env.inspectDemandRecord(.override_demands, @intFromEnum(def_idx)) orelse
+        return .{ .kind = .unconditional, .method = method };
+    const vars = method.env.inspectDemandVars(record);
+    const copied = try analysis.arena.allocator().alloc(Var, vars.len);
+    self.var_map.clearRetainingCapacity();
+    const first_new_var: usize = @intCast(self.types.len());
+    for (vars, copied) |source, *dest| {
+        dest.* = try copy_import.copyVar(&method.env.types, self.types, @enumFromInt(source.var_), &self.var_map, null, method.env, self.cir, self.gpa);
+    }
+    try self.postProcessCopiedVars(first_new_var, base.Region.zero());
+    return .{
+        .kind = .unconditional,
+        .method = method,
+        .formals = copied[0..record.formals_len],
+        .imported_formal_demands = copied[record.formals_len..],
+    };
+}
+
+/// The nominal type arguments of a local unconditional override's instance,
+/// which its formal demands are written over.
+fn inspectOverrideFormals(self: *Self, analysis: *InspectDemandAnalysis, use_var: Var) Allocator.Error![]const Var {
+    const func = self.pureFunctionThroughAliases(use_var) orelse return &.{};
+    var current = self.types.sliceVars(func.args)[0];
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex, .rigid, .structure, .field_presence, .err => break,
+        }
+    }
+    const nominal = self.types.resolveVar(current).desc.content.unwrapNominalType() orelse return &.{};
+    return try analysis.arena.allocator().dupe(Var, self.types.sliceNominalArgs(nominal));
+}
+
+/// Decide a conditional override at a closed type: whether the method can be
+/// used at `T(args) -> Str`. A use is committed and recorded with the
+/// decision; null is the decision that the type renders its default form.
+fn decideClosedInspectOverride(
+    self: *Self,
+    analysis: *InspectDemandAnalysis,
+    nominal_var: Var,
+    info: InspectOverrideInfo,
+    site_node: u32,
+    env: *Env,
+) Allocator.Error!?Var {
+    const hash = try self.inspectTermHash(nominal_var);
+    if (analysis.decisions.get(hash)) |decision| return decision;
+    // A closed type's remaining variables are fixed: no use instantiates
+    // them, and a usable instance leaves them as they are.
+    var fixed: std.ArrayListUnmanaged(Var) = .empty;
+    defer fixed.deinit(self.gpa);
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, nominal_var);
+    while (pending.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid => try fixed.append(self.gpa, resolved.var_),
+            .alias, .structure, .field_presence, .err => try self.pushInspectTermChildren(resolved.desc.content, &pending),
+        }
+    }
+    var reads_enclosing = false;
+    const decision = try self.probeInspectOverrideAt(nominal_var, info.method, fixed.items, site_node, env, &reads_enclosing);
+    try analysis.decisions.put(self.gpa, hash, decision);
+    try analysis.decided.append(self.gpa, .{ .ty = nominal_var, .use_var = decision, .reads_enclosing = reads_enclosing });
+    if (decision != null) analysis.changed = true;
+    return decision;
+}
+
+/// Instantiate `method` at `nominal_var -> Str` and accept every requirement
+/// the instance carries, committing the instance when it is usable.
+fn probeInspectOverrideAt(
+    self: *Self,
+    nominal_var: Var,
+    method: StaticDispatchMethodBinding,
+    fixed: []const Var,
+    site_node: u32,
+    env: *Env,
+    reads_enclosing: *bool,
+) Allocator.Error!?Var {
+    // An imported method's scheme is copied before the probe, so the copy
+    // outlives it.
+    const imported_scheme: ?Var = if (method.is_this_module) null else try self.importedMethodScheme(method);
+
+    var probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) probe.rollback();
+
+    const region = self.getRegionAt(nominal_var);
+    const use_var = try self.fresh(env, region);
+    const evidence: InstantiationEvidence = .{ .dispatch_target = .{
+        .node_idx = site_node,
+        .constraint_fn_var = use_var,
+    } };
+    const owner: ?CIR.Statement.Idx = if (imported_scheme != null)
+        null
+    else if (self.types.resolveVar(nominal_var).desc.content.unwrapNominalType()) |nominal|
+        if (nominal.sourceDeclOptional()) |statement| @enumFromInt(statement) else null
+    else
+        null;
+    const instance = if (imported_scheme) |scheme|
+        try self.instantiateVar(scheme, env, .{ .explicit = region }, evidence)
+    else
+        try self.instantiateInspectMethod(owner, ModuleEnv.varFrom(method.binding.type_node_idx), env, .use_last_var, evidence);
     if (!(try probe.unify(use_var, instance)).isEstablished()) return null;
     const func = self.pureFunctionThroughAliases(instance) orelse return null;
     if (self.types.sliceVars(func.args).len != 1) return null;
@@ -34709,20 +35820,101 @@ fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Stat
     defer requirements.deinit(self.gpa);
     try self.collectInstanceRequirements(instance, &requirements);
 
-    const owner_var = try self.instantiateVar(ModuleEnv.varFrom(owner), env, .{ .explicit = region }, .none);
-    if (!(try probe.unify(self.types.sliceVars(func.args)[0], owner_var)).isEstablished()) return null;
+    if (!(try probe.unify(self.types.sliceVars(func.args)[0], nominal_var)).isEstablished()) return null;
     const str_var = try self.freshStr(env, region);
     if (!(try probe.unify(str_var, func.ret)).isEstablished()) return null;
     if (!try self.instanceRequirementsAccept(&probe, requirements.items, env)) return null;
+    // At a closed type every requirement's receiver is known, except a
+    // rigid variable of the function a local type is declared in, whose
+    // requirements that function's own type supplies.
+    for (requirements.items) |requirement| {
+        const receiver = self.types.resolveVar(requirement.var_);
+        switch (receiver.desc.content) {
+            .rigid => if (!varSliceContains(fixed, receiver.var_)) continue,
+            .flex, .alias, .structure, .field_presence, .err => {},
+        }
+        if (receiver.desc.content.unwrapNominalType() == null) return null;
+    }
+    for (fixed) |fixed_var| {
+        switch (self.types.resolveVar(fixed_var).desc.content) {
+            .flex => |flex| if (!flex.constraints.isEmpty()) return null,
+            .rigid => {},
+            .alias, .structure, .field_presence, .err => return null,
+        }
+    }
 
-    // Inspection calls the method at any instantiation of its owner, so the
-    // instance's argument must still be the owner over distinct type
-    // variables that carry no requirements.
-    if (!self.isNominalOverDistinctUnconstrainedVars(func)) return null;
-
+    switch (try self.settleInspectInstanceDispatches(probe.probe.ambiguity_candidates_len, owner)) {
+        .undetermined => return null,
+        .settled => {},
+        .reads_enclosing => reads_enclosing.* = true,
+    }
     committed = true;
     probe.commit();
     return use_var;
+}
+
+/// Whether a demand is an application of a conditional override's owner,
+/// rather than one of a scheme's type variables.
+fn inspectDemandIsTerm(types: *const types_mod.Store, demand: Var) bool {
+    return switch (types.resolveVar(demand).desc.content) {
+        .flex, .rigid => false,
+        .alias, .structure, .field_presence, .err => true,
+    };
+}
+
+/// Persist the demands and decisions for this module's importers and for
+/// publication.
+fn publishInspectDemands(self: *Self, analysis: *InspectDemandAnalysis) Allocator.Error!void {
+    for (analysis.demands.keys(), analysis.demands.values()) |root, list| {
+        try self.cir.recordInspectDemand(.scheme_demands, @intFromEnum(root), ModuleEnv.InspectDemandRecord.none, 0, list.items);
+    }
+    for (analysis.override_formals.keys(), analysis.override_formals.values()) |def_idx, formals| {
+        const demands = analysis.override_demands.getPtr(def_idx) orelse continue;
+        if (demands.items.len == 0) continue;
+        const vars = try self.gpa.alloc(Var, formals.len + demands.items.len);
+        defer self.gpa.free(vars);
+        @memcpy(vars[0..formals.len], formals);
+        @memcpy(vars[formals.len..], demands.items);
+        try self.cir.recordInspectDemand(.override_demands, @intFromEnum(def_idx), ModuleEnv.InspectDemandRecord.none, @intCast(formals.len), vars);
+    }
+    // Each use's instances of its target's conditional demands, which the
+    // use supplies as descriptors where its target is planned once for every
+    // instantiation.
+    var use_terms: std.ArrayListUnmanaged(Var) = .empty;
+    defer use_terms.deinit(self.gpa);
+    var substitution: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    defer substitution.deinit(self.gpa);
+    var record_idx: u32 = 0;
+    while (record_idx < self.cir.scheme_uses.items.items.len) : (record_idx += 1) {
+        const record = self.cir.scheme_uses.items.items[record_idx];
+        if (!inspectDemandUseSlotParticipates(record)) continue;
+        const scheme_root = self.types.resolveVar(@enumFromInt(record.scheme_root)).var_;
+        const demands = self.inspectDemandsOf(analysis, scheme_root);
+        if (demands.len == 0) continue;
+        use_terms.clearRetainingCapacity();
+        substitution.clearRetainingCapacity();
+        const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len];
+        for (pairs) |pair| {
+            try substitution.put(self.gpa, self.types.resolveVar(@enumFromInt(pair.old_var)).var_, @enumFromInt(pair.fresh_var));
+        }
+        var index: usize = 0;
+        while (index < self.inspectDemandsOf(analysis, scheme_root).len) : (index += 1) {
+            const demand = self.inspectDemandsOf(analysis, scheme_root)[index];
+            if (!inspectDemandIsTerm(self.types, demand)) continue;
+            try use_terms.append(self.gpa, try self.substituteInspectTerm(demand, &substitution, analysis.env));
+        }
+        if (use_terms.items.len == 0) continue;
+        try self.cir.recordInspectDemand(.use_terms, record_idx, ModuleEnv.InspectDemandRecord.none, 0, use_terms.items);
+    }
+    for (analysis.decided.items) |decided| {
+        try self.cir.recordInspectDemand(
+            .type_decision,
+            @intFromEnum(decided.ty),
+            if (decided.use_var) |use_var| @intFromEnum(use_var) else ModuleEnv.InspectDemandRecord.none,
+            @intFromBool(decided.reads_enclosing),
+            &.{},
+        );
+    }
 }
 
 /// A type variable of a `to_inspect` instance and the requirements it
@@ -39301,10 +40493,24 @@ fn importedSchemeFromSource(
         // must use it too, preserving every variable shared with the type.
         try self.copyImportedBindingSchemeCodecRequirements(source_env, type_node_idx, scheme_var);
     }
+    // The scheme's inspect demands share its variables, so they are copied
+    // with the same map.
+    const demands_start: u32 = @intCast(self.imported_inspect_demand_vars.items.len);
+    const source_root = source_env.types.resolveVar(source_var).var_;
+    if (source_env.inspectDemandRecord(.scheme_demands, @intFromEnum(source_root))) |record| {
+        const first_new_var: usize = @intCast(self.types.len());
+        for (source_env.inspectDemandVars(record)) |demand| {
+            const copied = try copy_import.copyVar(&source_env.types, self.types, @enumFromInt(demand.var_), &self.var_map, null, source_env, self.cir, self.gpa);
+            try self.imported_inspect_demand_vars.append(self.gpa, copied);
+        }
+        try self.postProcessCopiedVars(first_new_var, base.Region.zero());
+    }
     const index: u32 = @intCast(self.imported_schemes.items.len);
     self.imported_schemes.appendAssumeCapacity(.{
         .key = key,
         .scheme_var = scheme_var,
+        .inspect_demands_start = demands_start,
+        .inspect_demands_len = @as(u32, @intCast(self.imported_inspect_demand_vars.items.len)) - demands_start,
     });
     self.imported_scheme_by_source.putAssumeCapacityNoClobber(key, index);
     return scheme_var;

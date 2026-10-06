@@ -869,6 +869,63 @@ pub const InspectOverrideInstance = extern struct {
     }
 };
 
+/// One fact checking records about inspection's per-type override decisions
+/// (design.md "Inspect Overrides"). `vars` ranges over
+/// `inspect_demand_vars`.
+pub const InspectDemandRecord = extern struct {
+    kind: u32,
+    /// `scheme_demands`: the resolved root var of the scheme. `override_demands`
+    /// and `conditional_override`: the method's def index. `type_decision`: the
+    /// checked type inspection decided, as a var of this store. `use_terms`:
+    /// the scheme-use record index.
+    key: u32,
+    /// `type_decision`: the callable var of the instance the decision uses, or
+    /// `none` when the decision is that the type renders its default form.
+    data: u32,
+    vars_start: u32,
+    vars_len: u32,
+    /// `override_demands`: how many leading `vars` are the instance's
+    /// nominal type arguments the remaining demands are written over.
+    /// `type_decision`: 1 when the instance's requirements name a type
+    /// variable of the function the owner is declared in, whose own
+    /// requirements supply them; 0 otherwise.
+    formals_len: u32,
+
+    pub const none = std.math.maxInt(u32);
+
+    pub const Kind = enum(u32) {
+        /// The types a scheme may inspect whose rendering depends on how it is
+        /// instantiated: its own type variables, and applications of owners
+        /// whose `to_inspect` is a conditional override.
+        scheme_demands,
+        /// The demands of an unconditional override's method at its owner over
+        /// distinct type variables, written over those variables.
+        override_demands,
+        /// A `to_inspect` method whose use depends on its owner's type
+        /// arguments, decided per concrete type.
+        conditional_override,
+        /// A conditional override decided for one concrete type.
+        type_decision,
+        /// One scheme use's instance of each demand of its target that is an
+        /// application of a conditional override's owner, in the target's
+        /// demand order. `key` is the scheme-use record index.
+        use_terms,
+    };
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub fn recordKind(self: InspectDemandRecord) Kind {
+        return @enumFromInt(self.kind);
+    }
+};
+
+/// A type variable named by an `InspectDemandRecord`.
+pub const InspectDemandVar = extern struct {
+    var_: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -1145,6 +1202,10 @@ rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 record_omitted_defaults: RecordOmittedDefault.SafeList,
 /// Checked `to_inspect` instances at result `Str`, one per method that has one.
 inspect_override_instances: InspectOverrideInstance.SafeList,
+/// Inspection's per-type override facts (design.md "Inspect Overrides").
+inspect_demand_records: InspectDemandRecord.SafeList,
+/// Type variables `inspect_demand_records` names.
+inspect_demand_vars: InspectDemandVar.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1504,6 +1565,8 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
     self.inspect_override_instances.relocate(offset);
+    self.inspect_demand_records.relocate(offset);
+    self.inspect_demand_vars.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1610,6 +1673,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
         .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
+        .inspect_demand_records = try InspectDemandRecord.SafeList.initCapacity(gpa, 0),
+        .inspect_demand_vars = try InspectDemandVar.SafeList.initCapacity(gpa, 0),
     };
 }
 
@@ -1645,6 +1710,8 @@ pub fn deinit(self: *Self) void {
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
+    self.inspect_demand_records.deinit(self.gpa);
+    self.inspect_demand_vars.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1750,6 +1817,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
+    self.inspect_demand_records.deinit(self.gpa);
+    self.inspect_demand_vars.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -4543,6 +4612,8 @@ pub const Serialized = extern struct {
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
+    inspect_demand_records: InspectDemandRecord.SafeList.Serialized,
+    inspect_demand_vars: InspectDemandVar.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4665,6 +4736,8 @@ pub const Serialized = extern struct {
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
         try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
+        try self.inspect_demand_records.serialize(&env.inspect_demand_records, allocator, writer);
+        try self.inspect_demand_vars.serialize(&env.inspect_demand_vars, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4739,6 +4812,8 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
+            .inspect_demand_records = self.inspect_demand_records.deserializeInto(base_addr),
+            .inspect_demand_vars = self.inspect_demand_vars.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4815,6 +4890,8 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
+            .inspect_demand_records = self.inspect_demand_records.deserializeInto(base_addr),
+            .inspect_demand_vars = self.inspect_demand_vars.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4894,6 +4971,8 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
+            .inspect_demand_records = try self.inspect_demand_records.deserializeWithCopy(base_addr, gpa),
+            .inspect_demand_vars = try self.inspect_demand_vars.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4985,6 +5064,8 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
+            .inspect_demand_records = try self.inspect_demand_records.deserializeWithCopy(base_addr, gpa),
+            .inspect_demand_vars = try self.inspect_demand_vars.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -5442,6 +5523,46 @@ pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable
         .def_idx = @intFromEnum(def_idx),
         .callable_var = @intFromEnum(callable_var),
     });
+}
+
+/// Persist one inspection fact. `vars` are type variables of this store.
+pub fn recordInspectDemand(
+    self: *Self,
+    kind: InspectDemandRecord.Kind,
+    key: u32,
+    data: u32,
+    formals_len: u32,
+    vars: []const TypeVar,
+) std.mem.Allocator.Error!void {
+    const start: u32 = @intCast(self.inspect_demand_vars.items.items.len);
+    for (vars) |var_| _ = try self.inspect_demand_vars.append(self.gpa, .{ .var_ = @intFromEnum(var_) });
+    _ = try self.inspect_demand_records.append(self.gpa, .{
+        .kind = @intFromEnum(kind),
+        .key = key,
+        .data = data,
+        .vars_start = start,
+        .vars_len = @intCast(vars.len),
+        .formals_len = formals_len,
+    });
+}
+
+/// The inspection facts of one kind and key, or null when none was recorded.
+pub fn inspectDemandRecord(self: *const Self, kind: InspectDemandRecord.Kind, key: u32) ?InspectDemandRecord {
+    for (self.inspect_demand_records.items.items) |record| {
+        if (record.kind == @intFromEnum(kind) and record.key == key) return record;
+    }
+    return null;
+}
+
+/// The type variables an inspection fact names.
+pub fn inspectDemandVars(self: *const Self, record: InspectDemandRecord) []const InspectDemandVar {
+    return self.inspect_demand_vars.items.items[record.vars_start..][0..record.vars_len];
+}
+
+/// Whether the `to_inspect` method `def_idx` is a conditional override,
+/// decided per concrete type.
+pub fn inspectOverrideIsConditional(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    return self.inspectDemandRecord(.conditional_override, @intFromEnum(def_idx)) != null;
 }
 
 /// The use inspection makes of the `to_inspect` method `def_idx`, or null

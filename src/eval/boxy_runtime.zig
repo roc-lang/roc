@@ -1859,6 +1859,15 @@ pub const BoxyRuntime = struct {
         target.inspect_method = source.inspect_method;
         target.inspect_hidden_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_hidden_descs, copied);
         target.inspect_arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_arg_descs, copied);
+        target.inspect_from = if (source.inspect_from) |inspect_from|
+            try self.copyBoxyDescRefToRuntime(hooks, inspect_from, copied)
+        else
+            null;
+        if (source.inspect_hidden_dicts.len != 0) {
+            var copied_dicts = std.AutoHashMapUnmanaged(u32, u32){};
+            defer copied_dicts.deinit(self.scratch);
+            target.inspect_hidden_dicts = try self.copyBoxyDictRefSpanToRuntime(hooks, source.inspect_hidden_dicts, &copied_dicts, copied);
+        }
         // Field names are immutable static-pool data; runtime copies keep the
         // static span.
         target.field_names = source.field_names;
@@ -5517,8 +5526,20 @@ pub const BoxyRuntime = struct {
         value_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!bool {
-        const method = desc.inspect_method orelse return false;
-        const result = try hooks.callInspectMethod(method, value, value_layout, desc);
+        // A descriptor whose use decided its inspection names the descriptor
+        // carrying that decision.
+        var method_owner = desc;
+        var remaining: usize = self.boxy_tables.type_descs.len + 1;
+        while (method_owner.inspect_method == null) {
+            const inspect_from = method_owner.inspect_from orelse return false;
+            if (remaining == 0) {
+                return self.invariantFailedError("LIR/interpreter invariant violated: boxy inspect_from chain did not end", .{});
+            }
+            remaining -= 1;
+            method_owner = try hooks.resolveDescRef(inspect_from);
+        }
+        const method = method_owner.inspect_method.?;
+        const result = try hooks.callInspectMethod(method, value, value_layout, desc, method_owner);
         if (result.layout != .str) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: to_inspect worker returned layout {d} instead of Str",
@@ -7734,6 +7755,7 @@ pub const BoxyRuntime = struct {
         alloc: Allocator,
         slot_id: LirProgram.BoxyMethodSlotId,
         source: DictCallArg,
+        method_owner: *const LirProgram.BoxyTypeDesc,
     ) Error!PreparedWorkerCall {
         const slot = self.requireBoxyMethodSlot(slot_id);
         const arg_layouts = self.requireBoxyMethodArgLayouts(slot.adapter.arg_layouts);
@@ -7744,15 +7766,17 @@ pub const BoxyRuntime = struct {
             );
         }
 
-        // The inspected descriptor carries the worker's hidden descriptors
-        // for its own type arguments.
-        const inspected_desc = source.source_desc orelse return self.invariantFailedError(
+        // The descriptor owning the method carries the worker's hidden
+        // descriptors for its own type arguments.
+        if (source.source_desc == null) return self.invariantFailedError(
             "LIR/interpreter invariant violated: inspect method call had no source descriptor",
             .{},
         );
         var inspect_slot = slot.*;
-        inspect_slot.hidden_descs = inspected_desc.inspect_hidden_descs;
-        inspect_slot.adapter.arg_descs = inspected_desc.inspect_arg_descs;
+        inspect_slot.hidden_descs = method_owner.inspect_hidden_descs;
+        inspect_slot.adapter.arg_descs = method_owner.inspect_arg_descs;
+        // A local procedure's dictionaries are the descriptor's own.
+        if (method_owner.inspect_hidden_dicts.len != 0) inspect_slot.nested_dicts = method_owner.inspect_hidden_dicts;
         return try self.prepareMethodSlotCall(
             hooks,
             alloc,

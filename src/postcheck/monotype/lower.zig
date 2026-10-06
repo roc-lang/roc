@@ -4288,6 +4288,7 @@ const Builder = struct {
     /// `scoped_method_targets`. `null` means inspection renders the owner's
     /// default form.
     scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ?MethodLookup) = .{},
+    scoped_conditional_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ?MethodLookup) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -4655,6 +4656,7 @@ const Builder = struct {
         if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
         self.scoped_inspect_overrides.deinit(self.allocator);
+        self.scoped_conditional_inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
         self.equality_defs.deinit();
@@ -7927,7 +7929,8 @@ const Builder = struct {
         const structural_lexical_dependent = template.target != .hosted and
             source_ctx.local_proc_contexts.count() != 0 and
             (try specEvidenceContainsStructural(self.allocator, evidence) or
-                (codec_contract != null and source_ctx.activeCodecContractContainsLocalTarget()));
+                (codec_contract != null and source_ctx.activeCodecContractContainsLocalTarget()) or
+                (template.inspects_scheme_types and source_ctx.localInspectOverridesInScope()));
         const lexical_context_key: ?names.TypeDigest = if (structural_lexical_dependent)
             try source_ctx.codecLexicalContextKey()
         else
@@ -10038,6 +10041,53 @@ const Builder = struct {
     const InspectOverrideDecision = struct {
         target: ?MethodLookup,
     };
+
+    /// The conditional `to_inspect` override inspection decides per concrete
+    /// type for `owner`, or null when its declaration is no such override.
+    fn lookupConditionalInspectOverride(
+        self: *Builder,
+        scope: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        const method = try self.activeNameStore().internMethodName("to_inspect");
+        const address = ScopedMethodDispatch.init(scope.key, owner, method);
+        if (self.scoped_conditional_inspect_overrides.get(address)) |resolution| return resolution;
+        const resolution = self.findConditionalInspectOverrideFromStore(scope, &self.program.names, owner);
+        try self.scoped_conditional_inspect_overrides.put(self.allocator, address, resolution);
+        return resolution;
+    }
+
+    /// Selects the view that declares `owner.to_inspect` exactly as method
+    /// dispatch does; that declaration's checked classification is the answer.
+    fn findConditionalInspectOverrideFromStore(
+        self: *Builder,
+        scope: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodLookup {
+        if (conditionalInspectOverrideInView(scope, owner_names, owner)) |decision| return decision.target;
+        for (scope.method_lookup_scope) |module_id| {
+            const candidate = self.moduleForId(module_id);
+            if (conditionalInspectOverrideInView(candidate, owner_names, owner)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    fn conditionalInspectOverrideInView(
+        view: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+    ) ?InspectOverrideDecision {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
+        const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
+        switch (view.method_registry.lookup(key) orelse return null) {
+            .rejected => return .{ .target = null },
+            .target => {},
+        }
+        const target = view.method_registry.lookupConditionalInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .view = view, .target = target } };
+    }
 
     fn inspectOverrideInViewFromStore(
         view: ModuleView,
@@ -20169,6 +20219,46 @@ const BodyContext = struct {
         return self.builder.findInspectOverrideFromStore(self.method_scope, self.nameStore(), owner);
     }
 
+    /// The override inspection uses for a value of the concrete type
+    /// `value_ty`: its owner's unconditional override, or its conditional
+    /// override when checking decided it is used at that type.
+    fn inspectOverrideForType(
+        self: *BodyContext,
+        owner: static_dispatch.MethodOwner,
+        value_ty: Type.TypeId,
+    ) Allocator.Error!?MethodLookup {
+        if (try self.lookupInspectOverride(owner)) |lookup| return lookup;
+        const conditional = (try self.lookupConditionalInspectOverride(owner)) orelse return null;
+        return if (try self.conditionalInspectDecision(value_ty)) conditional else null;
+    }
+
+    /// The conditional `to_inspect` override of `owner`, qualified by the
+    /// graph's name store exactly as in `lookupInspectOverride`.
+    fn lookupConditionalInspectOverride(
+        self: *BodyContext,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        if (self.nameStore() == &self.builder.program.names) {
+            return try self.builder.lookupConditionalInspectOverride(self.method_scope, owner);
+        }
+        return self.builder.findConditionalInspectOverrideFromStore(self.method_scope, self.nameStore(), owner);
+    }
+
+    /// Whether checking decided that a conditional override is used at the
+    /// concrete type `value_ty`. Every concrete type inspection reaches was
+    /// decided by the module whose checking reached it (design.md "Inspect
+    /// Overrides").
+    fn conditionalInspectDecision(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!bool {
+        for (self.builder.moduleViews()) |*view_data| {
+            const view: ModuleView = view_data;
+            for (view.static_dispatch_plans.inspect_type_decisions) |decision| {
+                const decided = try self.lowerTypeFromView(view, decision.dispatcher_ty);
+                if (try self.typeStore().typeEql(self.nameStore(), decided, value_ty)) return decision.callable_ty != null;
+            }
+        }
+        Common.invariant("inspection reached a concrete type checking did not decide");
+    }
+
     fn lookupMethodTarget(
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
@@ -22435,7 +22525,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.lookupInspectOverride(owner)) orelse return null);
+        const lookup = try self.withLocalProcContext((try self.inspectOverrideForType(owner, value_ty)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -22522,7 +22612,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.lookupInspectOverride(owner)) orelse return null;
+        const raw_lookup = (try self.inspectOverrideForType(owner, try self.activeTypeFromNode(node))) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -63335,6 +63425,27 @@ const BodyContext = struct {
             } }));
             entry.local = @intFromEnum(snapshot);
         }
+    }
+
+    /// Whether a local procedure in this body's declaration contexts is an
+    /// inspect override. Inspection selects an override by the inspected
+    /// type, so a specialization that inspects its scheme's types lowers with
+    /// the requesting body's declaration contexts (design.md "Inspect
+    /// Overrides").
+    fn localInspectOverridesInScope(self: *BodyContext) bool {
+        var addresses = self.local_proc_contexts.keyIterator();
+        while (addresses.next()) |address| {
+            const view = self.builder.moduleForKeyBytes(address.module) orelse
+                Common.invariant("local procedure context named a module outside lowering visibility");
+            for (view.method_registry.entries) |entry| {
+                if (entry.inspect_override == null and !entry.inspect_override_conditional) continue;
+                switch ((entry.target orelse continue).kind) {
+                    .local_proc => |local| if (local.binder == address.binder and local.expr == address.expr) return true,
+                    .procedure, .structural => {},
+                }
+            }
+        }
+        return false;
     }
 
     fn localProcContextId(

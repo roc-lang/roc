@@ -2,9 +2,9 @@
 # be used at `T -> Str`, whatever its form: a lambda or a value alias, each
 # annotated or unannotated, on a top-level type and on a function-body type.
 # Inspection uses it directly, nested in records and lists, and through
-# generic helpers. A generic type's `to_inspect` is an override when it can be
-# used at the type applied to any arguments. A `to_inspect` that cannot be
-# used at `T -> Str` is no override: inspection renders the default form, and
+# generic helpers. A generic type's `to_inspect` is used at each application
+# it can be used at, such as `Needs(U64)`. A `to_inspect` that cannot be used
+# at `T -> Str` is no override: inspection renders the default form, and
 # explicit calls still reach the method.
 
 render = |c| "Alias(${c.count.to_str()})"

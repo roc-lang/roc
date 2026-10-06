@@ -451,6 +451,7 @@ const AbiHooks = struct {
         value: Value,
         value_layout: layout_mod.Idx,
         desc: *const BoxyTypeDesc,
+        method_owner: *const BoxyTypeDesc,
     ) Error!boxy_runtime.InspectCallResult {
         const scratch = self.g.value_scratch.allocator();
         const prepared = try self.g.runtime.prepareInspectCall(
@@ -458,6 +459,7 @@ const AbiHooks = struct {
             scratch,
             method,
             .{ .value = value, .layout = value_layout, .source_desc = desc },
+            method_owner,
         );
         const registered = self.g.procs.get(@intFromEnum(prepared.proc)) orelse return error.RuntimeError;
         if (prepared.arg_values.len == 0) return error.RuntimeError;

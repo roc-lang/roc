@@ -102,10 +102,10 @@ pub fn instantiateNominalBacking(
         .var_map = var_map,
         .current_rank = current_rank,
         .purpose = purpose,
-        // Rigids naming a formal take that formal's arg; any other rigid
-        // (impossible in a well-formed template) stays rigid rather than
-        // silently flexing.
-        .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
+        // Rigids naming a formal take that formal's arg; any other rigid is a
+        // type variable of the function the type is declared in, which every
+        // application shares.
+        .rigid_behavior = .{ .substitute_rigids_sharing = &rigid_subs },
     };
     const minted_start: u32 = @intCast(store.len());
     const opened = try instantiator.instantiateVar(decl.backing);
@@ -457,8 +457,10 @@ pub const Instantiator = struct {
         substitute_rigids: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
 
         /// In this mode, rigids present in the provided map are substituted,
-        /// and any other rigids are instantiated as fresh rigid variables.
-        substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        /// and any other rigid is kept: a nominal backing names only its
+        /// declaration's formals and the type variables of the function the
+        /// type is declared in, which every application shares.
+        substitute_rigids_sharing: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
     /// How to instantiate polarity vars: the marker rigids (named
@@ -1001,7 +1003,7 @@ pub const Instantiator = struct {
                             // An anonymous open extension (`..`, written or
                             // implicit) is never a declaration parameter, so
                             // it is never in the substitution map: copy it as
-                            // a fresh rigid, like `.substitute_rigids_fresh`.
+                            // a fresh rigid.
                             if (self.anonymous_ext_ident) |ext_ident| {
                                 if (rigid.name.eql(ext_ident)) break :blk .rigid;
                             }
@@ -1027,13 +1029,14 @@ pub const Instantiator = struct {
                             try machine.value_stack.append(self.store.gpa, existing_var);
                             return true;
                         },
-                        .substitute_rigids_fresh => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_var| {
-                                try self.var_map.put(resolved_var, existing_var);
-                                try machine.value_stack.append(self.store.gpa, existing_var);
-                                return true;
+                        .substitute_rigids_sharing => |rigid_subs| {
+                            if (self.anonymous_ext_ident) |ext_ident| {
+                                if (rigid.name.eql(ext_ident)) break :blk .rigid;
                             }
-                            break :blk .rigid;
+                            const kept = rigid_subs.get(rigid.name) orelse resolved_var;
+                            try self.var_map.put(resolved_var, kept);
+                            try machine.value_stack.append(self.store.gpa, kept);
+                            return true;
                         },
                     }
                 };

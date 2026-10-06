@@ -128,6 +128,7 @@ pub const Matcher = struct {
             if (!try self.descriptors(@field(a, field), @field(b, field))) return false;
         }
         if (!try self.optionalDescriptor(a.tag_ext_desc, b.tag_ext_desc)) return false;
+        if (!try self.optionalDescriptor(a.inspect_from, b.inspect_from)) return false;
         const left_names = self.runtime.requireBoxyFieldNames(a.field_names);
         const right_names = self.runtime.requireBoxyFieldNames(b.field_names);
         if (left_names.len != right_names.len) return false;
