@@ -1140,6 +1140,61 @@ test "boxy layout planner preserves zero-payload tag variants" {
     try std.testing.expectEqual(layout.Idx.u64, info.variants.get(1).payload_layout);
 }
 
+test "boxy projected closed singleton layouts cannot alias multi-variant storage" {
+    const gpa = std.testing.allocator;
+    const payload_cases = [_]checked.StoredCheckedTypePayload{
+        .empty_record,
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
+        .{ .nominal = builtinNominal(.str, @enumFromInt(fixtureTableIndex(0)), .{}) },
+        .{ .flex = .{} },
+        .{ .tag_union = .{ .tags = .{ .start = 3, .len = 2 }, .ext = @enumFromInt(1) } },
+    };
+    for (payload_cases) |payload| {
+        for (0..3) |arity| {
+            const type_pool = [_]checked.CheckedTypeId{
+                @enumFromInt(fixtureTableIndex(0)),
+                @enumFromInt(fixtureTableIndex(0)),
+            };
+            const tags = [_]checked.CheckedTag{
+                .{ .name = @enumFromInt(1), .args_start = 0, .args_len = @intCast(arity) },
+                .{ .name = @enumFromInt(2), .args_start = 0, .args_len = @intCast(arity) },
+                .{ .name = @enumFromInt(3), .args_start = 0, .args_len = @intCast(arity) },
+                .{ .name = @enumFromInt(4), .args_start = 0, .args_len = 0 },
+                .{ .name = @enumFromInt(5), .args_start = 0, .args_len = 1 },
+            };
+            const payloads = [_]checked.StoredCheckedTypePayload{
+                payload,
+                .empty_tag_union,
+                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = @enumFromInt(1) } },
+                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) } },
+                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 3 }, .ext = @enumFromInt(1) } },
+            };
+            const view = checked.CheckedTypeStoreView{
+                .stored_payloads = &payloads,
+                .type_id_pool = &type_pool,
+                .tag_pool = &tags,
+            };
+            var program = try Plan.analyzeCheckedTypes(gpa, view, &.{
+                @enumFromInt(2), @enumFromInt(3), @enumFromInt(4),
+            }, .{});
+            defer program.deinit();
+            var store = try layout.Store.init(gpa, .u64);
+            defer store.deinit();
+            var layouts = try build(gpa, &program, &store, .{});
+            defer layouts.deinit();
+            const singleton = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])].worker.layoutIdx();
+            for (program.root_reps.items) |rep_id| {
+                // Dynamic payload storage does not turn a closed root row into
+                // an open-row representation that erases its variant universe.
+                try std.testing.expectEqual(Plan.RepresentationKind.tag_union, program.representations.items[@intFromEnum(rep_id)].kind);
+            }
+            for (program.root_reps.items[1..]) |rep_id| {
+                try std.testing.expect(singleton != layouts.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx());
+            }
+        }
+    }
+}
+
 test "boxy layout planner gives open tag descriptors a row-extension payload layout" {
     const gpa = std.testing.allocator;
 

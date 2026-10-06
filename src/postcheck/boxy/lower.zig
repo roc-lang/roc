@@ -18689,10 +18689,23 @@ const ProcBodyBuilder = struct {
         backing_id: checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const backing_ty = self.module.static_dispatch_plans.siteInstanceType(backing_id) orelse self.module.checked_bodies.expr(backing_id).ty;
-        const backing_local = try self.addFrameLocalForType(backing_ty);
+        const backing = self.module.checked_bodies.expr(backing_id);
         const nominal_rep = self.repForType(nominal_ty);
         const described = try self.prependNominalOwnDescriptorMaterialization(target, nominal_rep, next);
+        // The nominal edge owns the complete constructor representation; its
+        // producer-owned tag child may contain only the selected variant.
+        if (backing.data == .tag and self.nominalPatternSourceRep(nominal_rep) != null) {
+            return .{ .tail = .{ .tag_rep = .{
+                .target = target,
+                .tag_ty = nominal_ty,
+                .rep_id = nominal_rep,
+                .name = backing.data.tag.name,
+                .args = backing.data.tag.args,
+                .next = described,
+            } } };
+        }
+        const backing_ty = self.module.static_dispatch_plans.siteInstanceType(backing_id) orelse backing.ty;
+        const backing_local = try self.addFrameLocalForType(backing_ty);
         const assign = try self.assignRepresentationBoundaryConsumingSource(target, backing_local, nominal_rep, self.repForType(backing_ty), described);
         return .{ .tail = .{ .expr = .{ .target = backing_local, .expr_id = backing_id, .next = assign } } };
     }
@@ -28098,7 +28111,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("degenerate checked match alternative reached boxy lowering");
         }
         const remaps = branch_pattern.binderRemapsSlice(self.module.checked_bodies);
-        const needs_miss_join = try self.patternCanMiss(branch_pattern.pattern);
+        const needs_miss_join = try self.patternFromRepCanMiss(branch_pattern.pattern, task.source_rep);
         task.alt_miss = if (needs_miss_join)
             PatternMiss{ .join_id = self.freshJoinPointId() }
         else
@@ -29808,20 +29821,9 @@ const ProcBodyBuilder = struct {
             .record_destructure => |destructs| try self.expandRecordPattern(state, pattern.ty, destructs, source, mode),
             .nominal => |nominal| {
                 const nominal_rep = self.repForType(pattern.ty);
-                switch (self.parent.plan.representations.items[@intFromEnum(nominal_rep)].kind) {
-                    .nominal => |kind| switch (kind) {
-                        // The value keeps the nominal's representation, whose backing is
-                        // the declaration's shared template; the backing pattern's own
-                        // type is this use's instantiation, which may be laid out
-                        // differently (a concrete row where the template holds boxed
-                        // formals), so the pattern reads it from the nominal's rep.
-                        .transparent, .builtin_other => {
-                            try state.actions.append(allocator, .{ .from_rep = .{ .pattern = nominal.backing_pattern, .source = source, .source_rep = nominal_rep, .context = context } });
-                            return null;
-                        },
-                        .opaque_nominal => {},
-                    },
-                    .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+                if (self.nominalPatternSourceRep(nominal_rep)) |source_rep| {
+                    try state.actions.append(allocator, .{ .from_rep = .{ .pattern = nominal.backing_pattern, .source = source, .source_rep = source_rep, .context = context } });
+                    return null;
                 }
                 try self.expandNominalBacking(state, pattern.ty, nominal.backing_pattern, source, mode);
             },
@@ -30029,7 +30031,8 @@ const ProcBodyBuilder = struct {
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const pattern_rep = self.repForType(pattern.ty);
         if (pattern_rep == source_rep or
-            self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx())
+            (pattern.data != .applied_tag and
+                self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
         {
             try state.actions.append(allocator, .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .{ .match = context } } });
             return;
@@ -30042,7 +30045,7 @@ const ProcBodyBuilder = struct {
                 try state.actions.append(allocator, .{ .from_rep = .{ .pattern = as.pattern, .source = source, .source_rep = source_rep, .context = context } });
             },
             .applied_tag => |tag| {
-                const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse {
+                const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse {
                     const source_identity = self.descriptorStorageRep(source_rep);
                     const source_rep_value = self.parent.plan.representations.items[@intFromEnum(source_identity)];
                     if (source_rep_value.kind != .dynamic) {
@@ -30355,6 +30358,19 @@ const ProcBodyBuilder = struct {
         return read;
     }
 
+    /// Transparent nominal patterns read the declaration-owned representation,
+    /// not the possibly projected backing pattern row. Builtin Bool has the
+    /// same contract despite having a dedicated scalar representation.
+    fn nominalPatternSourceRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return switch (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind) {
+            .nominal => |kind| switch (kind) {
+                .transparent, .builtin_other => rep_id,
+                .opaque_nominal => null,
+            },
+            .bool_tag_union => rep_id,
+            .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
+        };
+    }
     fn recordDescriptorPreservingListResult(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -42616,13 +42632,14 @@ const ProcBodyBuilder = struct {
                     try pending.append(allocator, .{ .pattern_id = as.pattern, .source_rep = source_rep });
                 },
                 .applied_tag => |tag| {
-                    const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
+                    const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse
                         boxyLowerInvariant("boxy tag pattern binder source had no tag representation");
                     const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep)];
                     const payloads = switch (rep.kind) {
                         .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
                         .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
-                        .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
+                        .bool_tag_union => &.{},
+                        .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
                     };
                     if (payloads.len != tag.args.len) {
                         boxyLowerInvariant("boxy tag pattern binder payload count disagreed with its source representation");
@@ -42715,18 +42732,31 @@ const ProcBodyBuilder = struct {
     /// Whether some value fails to match `root`. Which subpatterns are
     /// reached does not depend on visiting order.
     fn patternCanMiss(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!bool {
+        return self.patternFromRepCanMiss(root, self.repForType(self.module.checked_bodies.pattern(root).ty));
+    }
+
+    /// Miss analysis uses the same producer-owned constructor universe as
+    /// pattern lowering, even when a contextual child has a selected-only row.
+    fn patternFromRepCanMiss(
+        self: *ProcBodyBuilder,
+        root: checked.CheckedPatternId,
+        root_source_rep: Plan.TypeRepId,
+    ) Allocator.Error!bool {
         const allocator = self.parent.allocator;
-        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        const Pending = struct { pattern: checked.CheckedPatternId, source_rep: Plan.TypeRepId };
+        var pending: std.ArrayList(Pending) = .empty;
         defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |pattern_id| {
-            const pattern = self.module.checked_bodies.pattern(pattern_id);
+        try pending.append(allocator, .{ .pattern = root, .source_rep = root_source_rep });
+        while (pending.pop()) |item| {
+            const pattern = self.module.checked_bodies.pattern(item.pattern);
             switch (pattern.data) {
                 .assign,
                 .underscore,
                 => {},
-                .as => |as| try pending.append(allocator, as.pattern),
-                .tuple => |items| try pending.appendSlice(allocator, items),
+                .as => |as| try pending.append(allocator, .{ .pattern = as.pattern, .source_rep = item.source_rep }),
+                .tuple => |items| for (items) |child| {
+                    try pending.append(allocator, .{ .pattern = child, .source_rep = self.repForType(self.module.checked_bodies.pattern(child).ty) });
+                },
                 .record_destructure => |destructs| for (destructs) |destruct| {
                     const child = switch (destruct.kind) {
                         .required,
@@ -42734,14 +42764,52 @@ const ProcBodyBuilder = struct {
                         .rest,
                         => |child| child,
                     };
-                    try pending.append(allocator, child);
+                    try pending.append(allocator, .{ .pattern = child, .source_rep = self.repForType(self.module.checked_bodies.pattern(child).ty) });
                 },
-                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .nominal => |nominal| {
+                    const nominal_rep = self.repForType(pattern.ty);
+                    const backing = self.module.checked_bodies.pattern(nominal.backing_pattern);
+                    try pending.append(allocator, .{
+                        .pattern = nominal.backing_pattern,
+                        .source_rep = self.nominalPatternSourceRep(nominal_rep) orelse self.repForType(backing.ty),
+                    });
+                },
                 .applied_tag => |tag| {
-                    // A tag misses when its union has other variants; a sole
-                    // variant misses only through its payloads.
-                    if (try self.appliedTagPatternRepCanMiss(pattern.ty, self.repForType(pattern.ty), tag.name, tag.args)) return true;
-                    try pending.appendSlice(allocator, tag.args);
+                    const tag_rep = self.tagPatternRepForBoundary(item.source_rep) orelse {
+                        const source_identity = self.descriptorStorageRep(item.source_rep);
+                        if (self.parent.plan.representations.items[@intFromEnum(source_identity)].kind != .dynamic) {
+                            boxyLowerInvariant("boxy tag pattern producer had no tag representation during miss analysis");
+                        }
+                        return true;
+                    };
+                    const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep)];
+                    switch (rep.kind) {
+                        .bool_tag_union => {
+                            if (tag.args.len != 0) {
+                                boxyLowerInvariant("builtin Bool match pattern carried a payload during miss analysis");
+                            }
+                            _ = self.boolVariantIndex(tag.name);
+                            return true;
+                        },
+                        .tag_union => {
+                            const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                            const payloads = self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads);
+                            if (payloads.len != tag.args.len) {
+                                boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
+                            }
+                            if (variants.len > 1) return true;
+                            for (tag.args, payloads) |arg, payload| {
+                                try pending.append(allocator, .{ .pattern = arg, .source_rep = payload.rep });
+                            }
+                        },
+                        .dynamic => {
+                            if ((try self.dynamicTagPayloadsForName(tag_rep, tag.name)).len != tag.args.len) {
+                                boxyLowerInvariant("dynamic tag match pattern payload count disagreed during miss analysis");
+                            }
+                            return true;
+                        },
+                        .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("tag match producer representation was not a tag union during miss analysis"),
+                    }
                 },
                 .list,
                 .str_interpolation,
@@ -42754,56 +42822,6 @@ const ProcBodyBuilder = struct {
             }
         }
         return false;
-    }
-
-    /// Whether a tag pattern misses by its tag alone.
-    fn appliedTagPatternRepCanMiss(
-        self: *ProcBodyBuilder,
-        root_ty: checked.CheckedTypeId,
-        root_rep: Plan.TypeRepId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-    ) Allocator.Error!bool {
-        var tag_ty = root_ty;
-        var rep_id = root_rep;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-            switch (rep.kind) {
-                .bool_tag_union => {
-                    if (args.len != 0) {
-                        boxyLowerInvariant("builtin Bool match pattern carried a payload during miss analysis");
-                    }
-                    _ = self.boolVariantIndex(name);
-                    return true;
-                },
-                .tag_union => {
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const variant = self.tagVariant(rep, name);
-                    const payloads = self.parent.plan.childSlice(variant.payloads);
-                    if (payloads.len != args.len) {
-                        boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
-                    }
-                    return variants.len > 1;
-                },
-                .dynamic => {
-                    const payloads = try self.dynamicTagPayloadsForName(rep_id, name);
-                    if (payloads.len != args.len) {
-                        boxyLowerInvariant("dynamic tag match pattern payload count disagreed during miss analysis");
-                    }
-                    return true;
-                },
-                .alias => rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => {
-                        tag_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
-                        rep_id = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    },
-                    .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
-                },
-                .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy miss analysis"),
-                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation during miss analysis"),
-            }
-        }
     }
 
     fn reserveReassignPatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
@@ -43099,6 +43117,14 @@ const ProcBodyBuilder = struct {
     }
 
     fn tagVariantRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return self.tagRepForBoundary(rep_id, false);
+    }
+
+    fn tagPatternRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return self.tagRepForBoundary(rep_id, true);
+    }
+
+    fn tagRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, include_bool: bool) ?Plan.TypeRepId {
         var current = rep_id;
         while (true) {
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
@@ -43112,7 +43138,8 @@ const ProcBodyBuilder = struct {
                     if (rep.tag_variants.len == 0) return null;
                     return current;
                 },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
+                .bool_tag_union => return if (include_bool) current else null,
+                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
     }

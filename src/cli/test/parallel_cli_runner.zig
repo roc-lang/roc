@@ -29,6 +29,7 @@ const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 const collections = @import("collections");
 const base = @import("base");
+const TestPackFile = @import("backend").dev.PackFile;
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
@@ -419,12 +420,14 @@ const CustomCase = enum {
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
+    early_ctfe_cache,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
     issue_11710_shared_object_cache,
     issue_11826_cache_ownership_variants,
     cache_fingerprints_agree,
+    shared_early_object_cache,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_12029_wasm_boxy_tail_calls,
@@ -2607,9 +2610,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
+    .{ .id = 0, .suite = .subcommands, .name = "shared early object cache preserves relation identity and LLVM source bodies", .timeout_ms = 600_000, .body = .{ .custom = .shared_early_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -2738,6 +2743,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects parser FieldNames pattern matching", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParserFieldsPatternRejected.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects parser Field phantom mismatch", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParserFieldShapeMismatchRejected.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts direct nominal record construction", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/NominalRecordConstruction.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "projected nominal loop condition retains complete Bool representation", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ProjectedNominalLoopCondition.roc", .stdin = "\n", .stdout_exact = "false\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check keeps generic missing-field errors out of optional-only parser records", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParserOptionalOnlyRecordNoMissingMethod.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test composes JSON and derived-record parser errors", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseErrorComposition.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11158: empty record parsers omit renaming and validate input", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11158_empty_record_parser.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -2764,6 +2770,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test derives runtime tag-union parser evidence", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserTagUnionRuntime.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test drives counted containers with no per-entry format calls", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyParserCountedFormat.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test binds a nested nominal's formals again for the inner use", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyNestedTryDescriptor.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy projected nominal construction retains nested and opaque variants (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyProjectedNominalConstruction.roc", .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy projected nominal construction retains nested and opaque variants (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyProjectedNominalConstruction.roc", .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11870: boxy roc test prepends to a list of a type variable (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyGenericListPrepend.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11870: boxy roc test prepends to a list of a type variable (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyGenericListPrepend.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11871: boxy roc test compares an open tag union against a payload-free tag (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyOpenTagDiscriminantEq.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }} } } },
@@ -4435,8 +4443,10 @@ fn runCustomCase(
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
         .cache_fingerprints_agree => customCacheFingerprintsAgree(io, allocator, &env, &timer, timeout_ms),
+        .shared_early_object_cache => customSharedEarlyObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
+        .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -7440,6 +7450,297 @@ fn customNativeBuildPackHits(
     return null;
 }
 
+/// A real checked-artifact/object-store workflow, with a changed app so the
+/// warm build must evaluate roots again rather than replay their stored values.
+fn customEarlyCtfeCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "early_ctfe_cache",
+        .platform = "test/fx/platform/main.roc",
+        .platform_spelling = "../../fx/platform/main.roc",
+        .sources = &.{ "test/cli/pack_comptime/Shapes.roc", "test/cli/pack_comptime/PackComptime.roc" },
+        .app_name = "PackComptime.roc",
+    }, &app)) |failure| return failure;
+    const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read CTFE app: {}", .{err});
+    const with_debug = std.fmt.allocPrint(
+        allocator,
+        "{s}\nreplayed = {{\n    dbg \"early ctfe replay\"\n    hexagon_sides\n}}\nexpect replayed == hexagon_sides\n",
+        .{source},
+    ) catch |err| return customInfraFailure(allocator, timer, "failed to allocate CTFE app: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = with_debug }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write CTFE app: {}", .{err});
+    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "early_ctfe", .{
+        .edit_between_builds = true,
+        .evaluator_artifacts = true,
+        .monotype_body_reduction = true,
+        .pack_hit_proc = "Shapes.sides_of",
+        .compile_debug = "[dbg] \"early ctfe replay\"",
+        .stdout = "triangle:3 square:4 pentagon:5 hexagon:6 28 5 4.5\n",
+    })) |failure| return failure;
+
+    // No edit here: stored constants, aliases, and debug output must survive
+    // checked-artifact replay without re-evaluating the app.
+    const replay_exe = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "early_ctfe_replay" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate replay path: {}", .{err});
+    const out_arg = outputArg(allocator, replay_exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate replay output: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", out_arg },
+        .roc_file = app,
+        .occurrences = &.{.{ .stream = .stderr, .text = "[dbg] \"early ctfe replay\"", .count = 1 }},
+    })) |failure| return failure;
+
+    // The library packs stay warm while only the app changes. Both arbitrary
+    // expect roots and empirically checked matches must retain exact reports,
+    // including the source region, rather than disappearing behind a hit.
+    const failures = [_]struct { source: []const u8, diagnostic: []const u8 }{
+        .{
+            .source = "\nfailed = {\n    expect Shapes.sides_of(\"hexagon\") == 0\n    42\n}\n",
+            .diagnostic = "This expect failed during compile-time evaluation.",
+        },
+        .{
+            .source = "\nbad = {\n    candidate : Try(U64, Str)\n    candidate = Err(\"bad\")\n    match candidate {\n        Ok(value) => value\n    }\n}\n",
+            .diagnostic = "discovered empirically",
+        },
+    };
+    for (failures) |failure_case| {
+        const failing = std.fmt.allocPrint(allocator, "{s}{s}", .{ source, failure_case.source }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate failing CTFE app: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = failing }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write failing CTFE app: {}", .{err});
+        var reports: [2]std.process.RunResult = undefined;
+        for (0..2) |index| {
+            const args: []const []const u8 = if (index == 0) &.{ "check", "--no-cache", "--no-color" } else &.{ "check", "--no-color" };
+            const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a failing CTFE check");
+            reports[index] = runRocInEnv(io, allocator, env, args, app, .relative, &.{}, null, check_timeout) catch |err|
+                return customInfraFailure(allocator, timer, "failing CTFE check spawn error: {}", .{err});
+            const report = reports[index];
+            if (processSucceeded(report.term) or std.mem.find(u8, report.stderr, failure_case.diagnostic) == null or std.mem.find(u8, report.stderr, "panic") != null or std.mem.find(u8, report.stderr, "invariant violated") != null) {
+                return failureFromRun(allocator, timer, report, "invalid CTFE root did not produce an ordinary compiler diagnostic");
+            }
+        }
+        if (!std.mem.eql(u8, reports[0].stderr, reports[1].stderr)) {
+            return failureFromRun(allocator, timer, reports[1], "warm CTFE diagnostics or source regions differ from the uncached report");
+        }
+    }
+    return null;
+}
+
+/// A platform requirement and an independent CTFE/runtime procedure share
+/// the producer. Dev may elide compatible bodies; LLVM still needs source.
+fn customSharedEarlyObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "shared_early_object_cache",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{
+            "test/cli/shared_early_object_cache/Closed.roc",
+            "test/cli/shared_early_object_cache/main.roc",
+            "test/cli/shared_early_object_cache/edited.roc",
+        },
+        .app_name = "main.roc",
+    }, &app)) |failure| return failure;
+
+    var platform_offer: ?PlatformCacheOffer = null;
+    for ([_][]const u8{ "original 45 55\n", "edited 45 55\n" }, 0..) |stdout, revision| {
+        if (revision == 1) {
+            const edited_path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "edited.roc" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate edited source path: {}", .{err});
+            const edited = std.Io.Dir.cwd().readFileAlloc(io, edited_path, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read edited source: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to change the app's requirement filling: {}", .{err});
+        }
+        const prefix = std.fmt.allocPrint(allocator, "shared_early_{d}", .{revision}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate revision prefix: {}", .{err});
+        if (verifyDependentPlatformCache(io, allocator, env, timer, timeout_ms, app, prefix, &platform_offer)) |failure| return failure;
+        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, prefix, .{
+            .uncached_baseline = true,
+            .edit_between_builds = true,
+            .monotype_body_reduction = true,
+            .pack_hit_proc = "Closed.total",
+            .early_hit_only = true,
+            .stdout = stdout,
+        })) |failure| return failure;
+
+        // Force finalization again rather than merely replaying stored CTFE
+        // values. The dev-seeded cache must not remove LLVM's source bodies.
+        const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read LLVM source: {}", .{err});
+        const llvm_source = std.fmt.allocPrint(allocator, "{s}\n# LLVM consumes the shared source body.\n", .{source}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate LLVM source: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = llvm_source }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write LLVM source: {}", .{err});
+        const exe = std.fmt.allocPrint(allocator, "{s}/{s}_llvm", .{ env.dirs.work_dir, prefix }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate LLVM executable path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate LLVM output argument: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", out_arg },
+            .roc_file = app,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = stdout,
+            .stderr_exact = "",
+        })) |failure| return failure;
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{"check"},
+            .roc_file = app,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+const PlatformCacheOffer = struct {
+    key: [32]u8,
+    relation: [32]u8,
+};
+
+/// Pin the platform's dependent export, not only an independent imported loop.
+fn verifyDependentPlatformCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    app: []const u8,
+    prefix: []const u8,
+    previous: *?PlatformCacheOffer,
+) ?TestResult {
+    var traced = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone platform trace environment: {}", .{err}),
+    };
+    defer traced.env_map.deinit();
+    for ([_][]const u8{ "ROC_SPEC_CENSUS", "ROC_PACK_TRACE" }) |name| {
+        traced.env_map.put(name, "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable platform cache trace: {}", .{err});
+    }
+    const exe = std.fmt.allocPrint(allocator, "{s}/{s}_platform", .{ env.dirs.work_dir, prefix }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform output: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform output argument: {}", .{err});
+    const seed = switch (captureRocRun(io, allocator, &traced, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", out_arg },
+        .roc_file = app,
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    var offered_key: ?[32]u8 = null;
+    var lines = std.mem.splitScalar(u8, seed.stderr, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.tokenizeScalar(u8, line, ' ');
+        if (!std.mem.eql(u8, fields.next() orelse continue, "offer")) continue;
+        const key_text = fields.next() orelse continue;
+        _ = fields.next() orelse continue; // artifact digest
+        if (!std.mem.eql(u8, fields.next() orelse continue, "main_for_host!")) continue;
+        var key: [32]u8 = undefined;
+        _ = std.fmt.hexToBytes(&key, key_text) catch
+            return failureFromRun(allocator, timer, seed, "platform offer had an invalid semantic key");
+        offered_key = key;
+    }
+    const key = offered_key orelse
+        return failureFromRun(allocator, timer, seed, "dependent platform export was not offered");
+    if (namedProcBody(seed.stderr, "main_for_host!") != true) {
+        return failureFromRun(allocator, timer, seed, "new platform relation did not construct its source body");
+    }
+
+    var cache = std.Io.Dir.cwd().openDir(io, env.dirs.roc_cache_dir, .{ .iterate = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to open platform cache: {}", .{err});
+    defer cache.close(io);
+    var walker = cache.walk(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to walk platform cache: {}", .{err});
+    defer walker.deinit();
+    var relation: ?[32]u8 = null;
+    while (walker.next(io) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read platform cache entry: {}", .{err})) |entry|
+    {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
+        const bytes = cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read platform pack: {}", .{err});
+        defer allocator.free(bytes);
+        var pack = TestPackFile.read(allocator, bytes) catch |err|
+            return customInfraFailure(allocator, timer, "failed to decode platform pack: {}", .{err});
+        defer pack.deinit();
+        for (pack.specs) |spec| {
+            if (!std.mem.eql(u8, &spec.key, &key)) continue;
+            relation = spec.platform_requirement_relation orelse
+                return failureFromRun(allocator, timer, seed, "platform requirement summary was incorrectly independent");
+        }
+    }
+    const current: PlatformCacheOffer = .{
+        .key = key,
+        .relation = relation orelse return failureFromRun(allocator, timer, seed, "platform semantic offer was not stored"),
+    };
+    if (previous.*) |old| {
+        if (std.mem.eql(u8, &old.key, &current.key) or std.mem.eql(u8, &old.relation, &current.relation)) {
+            return failureFromRun(allocator, timer, seed, "changed app implementation retained the previous platform relation");
+        }
+    }
+    const warm = switch (captureRocRun(io, allocator, &traced, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", out_arg },
+        .roc_file = app,
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    const short_key = std.fmt.bytesToHex(current.key[0..8].*, .lower);
+    const census = std.fmt.allocPrint(allocator, "CENSUS_KEY\tmain_for_host!\t{s}\t", .{short_key}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform census assertion: {}", .{err});
+    if (std.mem.find(u8, warm.stderr, census) == null or namedProcBody(warm.stderr, "main_for_host!") != false) {
+        return failureFromRun(allocator, timer, warm, "unchanged platform relation did not preserve its key and elide its source body");
+    }
+    if (hasNamedCacheHit(warm.stderr, "main_for_host!", false) and !hasNamedCacheHit(warm.stderr, "main_for_host!", true)) {
+        return failureFromRun(allocator, timer, warm, "dependent platform export was spliced only after Monotype constructed its body");
+    }
+    previous.* = current;
+    return null;
+}
+
+/// Distinguish a named constructed source body from a cached bodyless stub.
+fn namedProcBody(stderr: []const u8, procedure: []const u8) ?bool {
+    var lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        if (!std.mem.eql(u8, fields.next() orelse continue, "CENSUS_PROC")) continue;
+        _ = fields.next() orelse continue;
+        if (!std.mem.eql(u8, fields.next() orelse continue, procedure)) continue;
+        const statements = fields.next() orelse continue;
+        const blocks = fields.next() orelse continue;
+        const body = fields.next() orelse continue;
+        if (std.mem.eql(u8, body, "nobody") and std.mem.eql(u8, statements, "0") and std.mem.eql(u8, blocks, "0")) return false;
+        if (std.mem.eql(u8, body, "body") and countAfterMarker(statements) > 0 and countAfterMarker(blocks) > 0) return true;
+    }
+    return null;
+}
+
+test "named platform body distinguishes constructed bodies from cached stubs" {
+    const testing = std.testing;
+    try testing.expectEqual(@as(?bool, true), namedProcBody("CENSUS_PROC\t1\tmain_for_host!\t546\t19\tbody\n", "main_for_host!"));
+    try testing.expectEqual(@as(?bool, false), namedProcBody("CENSUS_PROC\t1\tmain_for_host!\t0\t0\tnobody\n", "main_for_host!"));
+    try testing.expectEqual(@as(?bool, null), namedProcBody("CENSUS_PROC\t1\tmain_for_host!\t0\t19\tbody\n", "main_for_host!"));
+    try testing.expectEqual(@as(?bool, null), namedProcBody("CENSUS_PROC\t1\tother\t546\t19\tbody\n", "main_for_host!"));
+}
+
 /// A literal that only a specialization made by the app converts, inside a
 /// module an earlier build cached clean, is converted at compile time and
 /// reported on every build: with the object cache on and off, from a
@@ -7472,9 +7773,9 @@ fn customLiteralRootRejectedEveryBuild(
         const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
         const args: []const []const u8 = if (build.no_cache)
-            &.{ "build", "--no-cache", "--opt=dev", out_arg }
+            &.{ "build", "--no-cache", "--opt=dev", "--jobs=2", out_arg }
         else
-            &.{ "build", "--opt=dev", out_arg };
+            &.{ "build", "--opt=dev", "--jobs=2", out_arg };
         const built = runRocInEnv(io, allocator, env, args, build.roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
         if (std.mem.find(u8, built.stderr, "panic") != null or std.mem.find(u8, built.stderr, "invariant violated") != null) {
@@ -7944,6 +8245,10 @@ const StoreExpectations = struct {
     edit_between_builds: bool = false,
     /// The compile-time evaluator spliced at least one entry.
     evaluator_artifacts: bool = false,
+    /// Require less Monotype body construction, not merely less native emission.
+    monotype_body_reduction: bool = false,
+    /// Root debug output must appear once on every build, including cache reuse.
+    compile_debug: ?[]const u8 = null,
     /// Run an uncached build before populating the store.
     uncached_baseline: bool = false,
     /// Which cached build must consume an object pack. Later checked-cache
@@ -7952,6 +8257,8 @@ const StoreExpectations = struct {
     /// Require a hit for this procedure's census key, not just an aggregate hit.
     /// The case must enable ROC_SPEC_CENSUS and ROC_PACK_TRACE.
     pack_hit_proc: ?[]const u8 = null,
+    /// A late Direct LIR splice does not prove shared producer body elision.
+    early_hit_only: bool = false,
     /// Require every execution to produce this exact output.
     stdout: ?[]const u8 = null,
 };
@@ -7980,8 +8287,15 @@ fn storeBuildsBehaveIdentically(
     defer stats_env.env_map.deinit();
     stats_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
         return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    if (expect.monotype_body_reduction) {
+        stats_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack lookup trace: {}", .{err});
+        stats_env.env_map.put("ROC_SPEC_CENSUS", "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable named specialization census: {}", .{err});
+    }
     const store_exes: []const []const u8 = if (expect.uncached_baseline) &.{ "uncached", "a", "b" } else &.{ "a", "b" };
     var store_runs: [3]std.process.RunResult = undefined;
+    var cold_body_contexts: ?u64 = null;
     for (store_exes, 0..) |name, index| {
         const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{s}", .{ out_dir, prefix, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
@@ -7998,11 +8312,41 @@ fn storeBuildsBehaveIdentically(
             std.Io.Dir.cwd().writeFile(io, .{ .sub_path = roc_file, .data = edited }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ roc_file, err });
         }
-        const build_args: []const []const u8 = if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
+        const build_args: []const []const u8 = if (expect.monotype_body_reduction)
+            if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", "--timings", out_arg } else &.{ "build", "--opt=dev", "--timings", out_arg }
+        else if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
         const built = runRocInEnv(io, allocator, &stats_env, build_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
+        }
+        if (expect.compile_debug) |message| {
+            if (std.mem.count(u8, built.stderr, message) != 1) {
+                return failureFromRun(allocator, timer, built, "compile-time debug output was not preserved exactly once");
+            }
+        }
+        if (expect.monotype_body_reduction) {
+            const contexts = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Body contexts created") orelse
+                return failureFromRun(allocator, timer, built, "build did not report shared Monotype body work");
+            if (index == 0) cold_body_contexts = contexts;
+            if (last) {
+                const cold = cold_body_contexts.?;
+                const early_hits = timingCounter(built.stderr, "Shared Monotype specialization", "Object specialization cache hits") orelse
+                    return failureFromRun(allocator, timer, built, "build did not report shared Monotype object-cache hits");
+                if (early_hits == 0) return failureFromRun(allocator, timer, built, "shared Monotype skipped no specialization bodies using the object cache");
+                var early_hit = false;
+                var trace_lines = std.mem.splitScalar(u8, built.stderr, '\n');
+                while (trace_lines.next()) |line| {
+                    if (std.mem.startsWith(u8, line, "lookup monotype key=") and std.mem.endsWith(u8, line, " hit")) early_hit = true;
+                }
+                if (!early_hit) return failureFromRun(allocator, timer, built, "warm evaluator had no early Monotype object-cache lookup hit");
+                // Work counts, unlike elapsed times, are independent of machine
+                // load. The early-hit assertion above rules out a late LIR
+                // splice that has already constructed every source body.
+                if (cold == 0 or contexts >= cold) {
+                    return failureFromRun(allocator, timer, built, "early CTFE cache did not reduce Monotype body contexts");
+                }
+            }
         }
         const require_hits = switch (expect.cache_hit_build) {
             .first_cached => index == @intFromBool(expect.uncached_baseline),
@@ -8013,7 +8357,7 @@ fn storeBuildsBehaveIdentically(
                 return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
             if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
             if (expect.pack_hit_proc) |procedure| {
-                if (!hasNamedPackHit(built.stderr, procedure)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
+                if (!hasNamedCacheHit(built.stderr, procedure, expect.early_hit_only)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
             }
             if (expect.evaluator_artifacts) {
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
@@ -8037,9 +8381,38 @@ fn storeBuildsBehaveIdentically(
     return null;
 }
 
+/// Read one exact counter from its named diagnostic group. Missing counters
+/// are not zero: a test must fail when instrumentation was not enabled.
+fn timingCounter(stderr: []const u8, group: []const u8, counter: []const u8) ?u64 {
+    var lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.eql(u8, std.mem.trim(u8, line, " \r"), group)) continue;
+        while (lines.next()) |row| {
+            if (!std.mem.startsWith(u8, row, "      ")) return null;
+            const text = std.mem.trim(u8, row, " \r");
+            if (!std.mem.startsWith(u8, text, counter)) continue;
+            const rest = text[counter.len..];
+            if (rest.len == 0 or rest[0] != ' ') continue;
+            return std.fmt.parseInt(u64, std.mem.trim(u8, rest, " "), 10) catch null;
+        }
+    }
+    return null;
+}
+
+test "Monotype work counter requires the exact group and counter" {
+    const text = "  Runtime Monotype body + dispatch\n      Body contexts created 99\n  Shared Monotype body + dispatch\n      Body contexts created     42\n";
+    try std.testing.expectEqual(@as(?u64, 42), timingCounter(text, "Shared Monotype body + dispatch", "Body contexts created"));
+    try std.testing.expectEqual(@as(?u64, null), timingCounter(text, "Missing", "Body contexts created"));
+    try std.testing.expectEqual(@as(?u64, null), timingCounter(text, "Shared Monotype body + dispatch", "Body contexts"));
+}
+
 /// Join the producer's named specialization key to the cache lookup trace.
 /// A hit for an unrelated procedure or an identity mismatch cannot satisfy it.
 fn hasNamedPackHit(stderr: []const u8, procedure: []const u8) bool {
+    return hasNamedCacheHit(stderr, procedure, false);
+}
+
+fn hasNamedCacheHit(stderr: []const u8, procedure: []const u8, early_only: bool) bool {
     var census_lines = std.mem.splitScalar(u8, stderr, '\n');
     while (census_lines.next()) |line| {
         var fields = std.mem.splitScalar(u8, line, '\t');
@@ -8049,6 +8422,7 @@ fn hasNamedPackHit(stderr: []const u8, procedure: []const u8) bool {
         var trace_lines = std.mem.splitScalar(u8, stderr, '\n');
         while (trace_lines.next()) |trace| {
             for ([_][]const u8{ "lookup monotype key=", "lookup direct-lir key=" }) |prefix| {
+                if (early_only and !std.mem.eql(u8, prefix, "lookup monotype key=")) continue;
                 if (!std.mem.startsWith(u8, trace, prefix)) continue;
                 const lookup = trace[prefix.len..];
                 if (std.mem.startsWith(u8, lookup, key) and std.mem.eql(u8, lookup[key.len..], " hit")) return true;
@@ -8062,6 +8436,8 @@ test "named pack hit requires the selected procedure's key and a successful look
     const census = "CENSUS_KEY\tEq.same\t1234\tev=abcd\nCENSUS_KEY\tOther.same\t5678\tev=abcd\n";
     try std.testing.expect(hasNamedPackHit(census ++ "lookup monotype key=1234 hit\n", "Eq.same"));
     try std.testing.expect(hasNamedPackHit(census ++ "lookup direct-lir key=1234 hit\n", "Eq.same"));
+    try std.testing.expect(hasNamedCacheHit(census ++ "lookup monotype key=1234 hit\n", "Eq.same", true));
+    try std.testing.expect(!hasNamedCacheHit(census ++ "lookup direct-lir key=1234 hit\n", "Eq.same", true));
     try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=5678 hit\npack hits: 1\n", "Eq.same"));
     try std.testing.expect(!hasNamedPackHit(census ++ "lookup direct-lir key=1234 identity-mismatch\n", "Eq.same"));
     try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=12345 hit\n", "Eq.same"));

@@ -4092,7 +4092,7 @@ pub fn build(b: *std.Build) void {
         build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
         const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
-        run_cli.addArg("zig-out/bin/roc");
+        run_cli.addArg(b.getInstallPath(.bin, "roc"));
         if (cli_test_llvm) {
             run_cli.addArg("--include-llvm");
         }
@@ -8903,7 +8903,8 @@ fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compile
 /// switches, or serialization format identity.
 fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc-checked-artifact-v1");
+    // Unconditional implementations must not reuse experimental flag namespaces.
+    hasher.update("roc-checked-artifact-v2");
     hasher.update(compiler_version);
 
     // Resolve against the build root rather than cwd so the hash works both for

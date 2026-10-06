@@ -1770,10 +1770,7 @@ pub const Coordinator = struct {
             .compiler_owned => |platform| {
                 const materialized = compiler_platforms.materialize(self.gpa, self.roc_ctx, null, platform) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.AccessDenied,
-                    error.IoError,
-                    error.NoHomeDirectory,
-                    => return error.UnsupportedPlatformSpec,
+                    else => return error.UnsupportedPlatformSpec,
                 };
                 defer self.gpa.free(materialized.root_file);
                 defer self.gpa.free(materialized.root_dir);
@@ -3399,7 +3396,7 @@ pub const Coordinator = struct {
         _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable;
         canonicalized_cache_entry.encode(parse_record, entry[canonicalized_module_cache_header_len + env_len ..][0..record_len]);
 
-        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir);
+        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir, env.module_name);
     }
 
     fn resolvedDirectImportsHaveCheckedOutput(
@@ -3452,7 +3449,7 @@ pub const Coordinator = struct {
         };
         writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes);
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
-        manager.storeRawBytes(key.bytes, bytes, directory);
+        manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
@@ -3540,7 +3537,7 @@ pub const Coordinator = struct {
         _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
         _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
 
-        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
+        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedCheckedModule(
@@ -10333,7 +10330,9 @@ test "shared CTFE and runtime requests specialize once across workers and target
     for ([_]usize{ 1, 4 }) |jobs| {
         for ([_]lir.CheckedPipeline.TargetConfig{
             .{ .target_usize = .native, .inline_expects = .run },
+            .{ .target_usize = .native, .inline_expects = .run, .code_provision = .host_dev_objects },
             .{ .target_usize = other_width, .inline_expects = .run },
+            .{ .target_usize = other_width, .inline_expects = .run, .code_provision = .target_dev_objects },
             .{ .target_usize = .native, .inline_expects = .omit },
         }) |consumer| {
             const width = consumer.target_usize;
@@ -10366,6 +10365,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
                 .inline_expects = consumer.inline_expects,
+                .code_provision = consumer.code_provision,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };

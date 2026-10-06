@@ -12,6 +12,12 @@ const roc_target = @import("roc_target");
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        @import("std").testing.refAllDecls(dev.PackFile);
+    }
+}
+
 // Re-export dev backend types at top level.
 pub const Relocation = dev.Relocation;
 pub const applyRelocationsWithContext = dev.applyRelocationsWithContext;

@@ -490,6 +490,10 @@ pub const Instantiator = struct {
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+
+        /// Expected shape context substitutes declaration parameters with
+        /// owned context copies while flexing other rigid leaves.
+        substitute_rigids_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
     /// How to instantiate polarity vars: the marker rigids (named
@@ -1098,6 +1102,14 @@ pub const Instantiator = struct {
                                 return true;
                             }
                             break :blk .rigid;
+                        },
+                        .substitute_rigids_flex => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                                try self.var_map.put(resolved_var, existing_var);
+                                try machine.value_stack.append(self.store.gpa, existing_var);
+                                return true;
+                            }
+                            break :blk .flex;
                         },
                     }
                 };

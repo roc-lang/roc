@@ -1243,6 +1243,17 @@ pub const Program = struct {
         return self.requirement_reaching_fns.?.isSet(@intFromEnum(fn_id));
     }
 
+    /// The frozen dependency fact exported to cache-writing consumers.
+    /// Preparation computes reachability before any consumer borrows it.
+    pub fn fnPlatformRequirementRelation(self: *const Program, fn_id: FnId) ?[32]u8 {
+        const filling = self.platform_requirement_filling orelse return null;
+        const reaching = self.requirement_reaching_fns orelse
+            Common.invariant("consumer read platform dependencies before producer preparation");
+        if (reaching.bit_length != self.fnCount())
+            Common.invariant("consumer read stale platform dependency facts");
+        return if (reaching.isSet(@intFromEnum(fn_id))) filling.relation else null;
+    }
+
     fn fnIsInApp(self: *const Program, fn_id: FnId, filling: Common.PlatformRequirementFilling) bool {
         const template = self.getFn(fn_id).source orelse return false;
         const proc_template = switch (template.fn_def) {
@@ -1296,6 +1307,18 @@ pub const Program = struct {
         for (0..fn_count) |raw| {
             const fn_id: FnId = @enumFromInt(@as(u32, @intCast(raw)));
             if (self.fnIsInApp(fn_id, filling)) continue;
+            const fn_ = self.getFn(fn_id);
+            if (fn_.body == .hosted) if (fn_.source) |template| if (template.cached) |hit| {
+                if (hit.platform_requirement_relation) |relation| {
+                    if (!std.mem.eql(u8, &relation, &filling.relation)) {
+                        Common.invariant("cached requirement dependency disagrees with the producer's app filling");
+                    }
+                    // The cache producer already proved the transitive fact.
+                    // Its skipped body has no edges to rediscover it from.
+                    reaching.set(raw);
+                    continue;
+                }
+            };
             for (edges.items[edge_starts[raw]..edge_starts[raw + 1]]) |callee| {
                 if (self.fnIsInApp(callee, filling)) {
                     reaching.set(raw);
@@ -2220,6 +2243,81 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     program.next_symbol = symbols.next;
     const clone_digest = program.fnSourceDigest(clone_fn) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], clone_digest[0..]));
+}
+
+test "cached requirement summaries preserve source identity and transitive callers" {
+    var symbols: Common.SymbolGen = .{};
+    var program = testLiftedProgram(std.testing.allocator);
+    defer program.deinit();
+    const app_identity = [_]u8{11} ** 32;
+    const relation = [_]u8{17} ** 32;
+    program.platform_requirement_filling = .{ .app_module = app_identity, .relation = relation };
+    const ret_ty = try program.types.add(.zst);
+    const fn_ty = try program.types.add(.{ .func = .{ .args = Type.Span.empty(), .ret = ret_ty } });
+    var app_template = try testSourceDigestTemplate(&program.names, 1);
+    app_template.artifact.bytes = app_identity;
+    const app_source: Mono.FnTemplate = .{
+        .fn_def = .{ .local_template = app_template },
+        .source_fn_ty = @enumFromInt(0),
+        .source_fn_key = .{},
+        .mono_fn_ty = fn_ty,
+    };
+    const app_fn = try addSourceDigestFn(&program, &symbols, app_source, ret_ty);
+    const template = try testSourceDigestTemplate(&program.names, 2);
+    const ordinary: Mono.FnTemplate = .{
+        .fn_def = .{ .local_template = template },
+        .source_fn_ty = @enumFromInt(0),
+        .source_fn_key = .{},
+        .mono_fn_ty = fn_ty,
+    };
+    const body = try program.addExpr(.{
+        .ty = ret_ty,
+        .data = .{ .call_proc = .{ .callee = .{ .lifted = app_fn }, .args = Span(ExprId).empty() } },
+    });
+    const cold_fn = try program.addFn(.{
+        .symbol = symbols.fresh(),
+        .source = ordinary,
+        .args = Span(TypedLocal).empty(),
+        .captures = Span(TypedLocal).empty(),
+        .body = .{ .roc = body },
+        .ret = ret_ty,
+    });
+    var cached_source = ordinary;
+    cached_source.cached = .{
+        .identity = [_]u8{0} ** 32,
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+        .platform_requirement_relation = relation,
+    };
+    const cached_fn = try addSourceDigestFn(&program, &symbols, cached_source, ret_ty);
+    const caller_body = try program.addExpr(.{
+        .ty = ret_ty,
+        .data = .{ .call_proc = .{ .callee = .{ .lifted = cached_fn }, .args = Span(ExprId).empty() } },
+    });
+    const caller = try program.addFn(.{
+        .symbol = symbols.fresh(),
+        .source = ordinary,
+        .args = Span(TypedLocal).empty(),
+        .captures = Span(TypedLocal).empty(),
+        .body = .{ .roc = caller_body },
+        .ret = ret_ty,
+    });
+    const independent = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
+    try std.testing.expect(program.fnReachesPlatformRequirement(cold_fn));
+    try std.testing.expect(program.fnReachesPlatformRequirement(cached_fn));
+    try std.testing.expect(program.fnReachesPlatformRequirement(caller));
+    try std.testing.expect(!program.fnReachesPlatformRequirement(app_fn));
+    try std.testing.expect(!program.fnReachesPlatformRequirement(independent));
+    const cold_digest = program.fnSourceDigest(cold_fn).?;
+    const cached_digest = program.fnSourceDigest(cached_fn).?;
+    try std.testing.expectEqualSlices(u8, &cold_digest, &cached_digest);
+    const independent_digest = program.fnSourceDigest(independent).?;
+    try std.testing.expect(!std.mem.eql(u8, &cold_digest, &independent_digest));
 }
 
 test "monotype lifted declarations are referenced" {

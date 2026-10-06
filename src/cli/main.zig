@@ -133,6 +133,7 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
+        std.testing.refAllDecls(pack_store);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -177,6 +178,8 @@ const CliBuildEnvOptions = struct {
     /// checked-module cache.
     no_cache: bool = false,
     verbose_cache: bool = false,
+    /// Collect CTFE body work for explicit `--timings`, without changing cache identity.
+    timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
     /// Identity-only synthetic marking for staged default-app roots (check
@@ -213,6 +216,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_version;
+    build_env.detailed_monotype_diagnostics = opts.timings;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
@@ -6764,6 +6768,7 @@ fn lowerLirWithBuildEnv(
         ),
         .max_threads = max_threads,
         .no_cache = !enable_checked_cache,
+        .timings = if (reporter) |r| r.always else false,
         .resolution_config = resolution_config,
         .track_watch_inputs = true,
         .source_dir_override = source_dir_override,
@@ -6880,6 +6885,7 @@ fn lowerLirWithBuildEnv(
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -7069,7 +7075,7 @@ fn resolvePlatformRefToPaths(
                     .path = compile.compiler_platforms.identity(platform),
                     .err = error.AccessDenied,
                 } }),
-                error.IoError => return ctx.fail(.{ .file_write_failed = .{
+                else => return ctx.fail(.{ .file_write_failed = .{
                     .path = compile.compiler_platforms.identity(platform),
                     .err = error.WriteFailed,
                 } }),
@@ -8781,6 +8787,7 @@ fn packFileBytes(
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
+            .platform_requirement_relation = spec_proc.platform_requirement_relation,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -10460,6 +10467,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -10599,6 +10607,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -10816,6 +10825,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -10938,6 +10948,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
+    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -10986,6 +10997,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         &spec_timing,
         build_env.runtimeProgramSession(),
         if (loaded_packs) |packs| packs.specCacheLookup() else null,
+        nativeObjectCodeProvision(target, args.opt, loaded_packs != null),
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11232,6 +11244,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -11354,6 +11367,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11967,7 +11981,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir);
+    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir, artifact.moduleEnvConst().module_name);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -12745,6 +12759,26 @@ fn checkedRuntimeLoweringConfig(
     };
 }
 
+/// Native builds promise object provision only when their emitter has a
+/// splice source. Foreign objects cannot replace CTFE's host-domain bodies.
+fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool) lir.CheckedPipeline.CodeProvision {
+    if (!has_splice_source or opt != .dev) return .source_bodies;
+    return if (target == RocTarget.detectNative()) .host_dev_objects else .target_dev_objects;
+}
+
+test "native code provision names the emitter target and splice capability" {
+    const native = RocTarget.detectNative();
+    for (std.enums.values(cli_args.OptLevel)) |opt| {
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false));
+        const expected: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_dev_objects else .source_bodies;
+        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true));
+    }
+    for (std.enums.values(RocTarget)) |target| {
+        if (target == native) continue;
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true));
+    }
+}
+
 fn lowerCheckedSourceToLir(
     lir_allocator: Allocator,
     gpa: Allocator,
@@ -12760,6 +12794,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: lir.CheckedPipeline.CodeProvision,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12775,6 +12810,7 @@ fn lowerCheckedSourceToLir(
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;
+    config.target.code_provision = code_provision;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
         .include_provided_data_exports = config.include_provided_data_exports,
@@ -15056,6 +15092,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .root_source_url = args.root_source_url,
@@ -16806,7 +16843,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -16837,6 +16874,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
         .{ .name = "Missing evidence", .count = counters.evidence_missing },
         .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
+        .{ .name = "Object specialization cache hits", .count = counters.spec_cache_hits },
     };
 }
 
@@ -17982,7 +18020,7 @@ fn checkFileWithBuildEnvPreserved(
     main_filepath: ?[]const u8,
     root_source_url: ?[]const u8,
     main_source_url: ?[]const u8,
-    _: bool,
+    timings: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
@@ -18000,6 +18038,7 @@ fn checkFileWithBuildEnvPreserved(
         .max_threads = max_threads,
         .no_cache = !cache_config.enabled,
         .verbose_cache = cache_config.verbose,
+        .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
         .synthetic_default_app = synthetic_default_app,
@@ -18122,7 +18161,7 @@ fn checkFileWithBuildEnv(
     main_filepath: ?[]const u8,
     root_source_url: ?[]const u8,
     main_source_url: ?[]const u8,
-    _: bool,
+    timings: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
@@ -18137,6 +18176,7 @@ fn checkFileWithBuildEnv(
         .max_threads = max_threads,
         .no_cache = !cache_config.enabled,
         .verbose_cache = cache_config.verbose,
+        .timings = timings,
         .resolution_config = resolution_config,
         .source_dir_override = source_dir_override,
         .synthetic_default_app = synthetic_default_app,
@@ -18336,7 +18376,7 @@ fn rocCheckDefaultApp(
         null,
         null,
         null,
-        args.time,
+        args.timings,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
@@ -18391,7 +18431,7 @@ fn rocCheckDefaultAppPreserved(
         null,
         null,
         null,
-        args.time,
+        args.timings,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
@@ -18500,7 +18540,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main,
             args.root_source_url,
             args.main_source_url,
-            args.time,
+            args.timings,
             cache_config,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
@@ -18540,7 +18580,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main,
             args.root_source_url,
             args.main_source_url,
-            args.time,
+            args.timings,
             cache_config,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
@@ -19423,7 +19463,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         args.main,
         args.root_source_url,
         args.main_source_url,
-        args.time,
+        false,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),
