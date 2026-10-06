@@ -3989,6 +3989,7 @@ const Pass = struct {
                             .value = @enumFromInt(children[0]),
                             .recursive = let_.recursive,
                             .comptime_site = let_.comptime_site,
+                            .constructor_operand = let_.constructor_operand,
                         } },
                         .expr => .{ .expr = @enumFromInt(children[0]) },
                         .uninitialized, .expect, .dbg, .return_, .crash, .checked_error => Common.invariant("fresh clone finished a statement it does not clone"),
@@ -4150,6 +4151,7 @@ const Pass = struct {
                     .value = @enumFromInt(children[0]),
                     .rest = @enumFromInt(children[2]),
                     .comptime_site = let_.comptime_site,
+                    .constructor_operand = let_.constructor_operand,
                 } },
                 .block => .{ .block = try clone.blockData(children) },
                 .if_ => .{ .if_ = try clone.ifData(children) },
@@ -7267,11 +7269,29 @@ const Cloner = struct {
         value: Ast.ExprId,
         rest: Ast.ExprId,
         comptime_site: ?Ast.ComptimeSiteId,
+        constructor_operand: bool = false,
 
         fn fromExpr(let_: @FieldType(Ast.ExprData, "let_")) LetParts {
-            return .{ .bind = let_.bind, .value = let_.value, .rest = let_.rest, .comptime_site = let_.comptime_site };
+            return .{
+                .bind = let_.bind,
+                .value = let_.value,
+                .rest = let_.rest,
+                .comptime_site = let_.comptime_site,
+                .constructor_operand = let_.constructor_operand,
+            };
         }
     };
+
+    /// Clone a non-recursive binding's value. A binding that only sequences
+    /// one constructor operand (`constructor_operand`) clones its value exactly
+    /// as that operand, demanding its result shape, while its strict work stays
+    /// in `bindings` at the binding's own position.
+    fn letBindingValueTask(value: Ast.ExprId, constructor_operand: bool, bindings: *BindingChain) CloneTask {
+        return if (constructor_operand)
+            .{ .demanding = .{ .expr = value, .bindings = bindings } }
+        else
+            .{ .expr_value = .{ .expr = value, .bindings = bindings } };
+    }
 
     const JoinPointTask = struct {
         ty: Type.TypeId,
@@ -7355,7 +7375,7 @@ const Cloner = struct {
         }
         task.value_chain = try self.newChain();
         frame.cursor = 2;
-        return .{ .call = .{ .expr_value = .{ .expr = task.let_.value, .bindings = task.value_chain } } };
+        return .{ .call = letBindingValueTask(task.let_.value, task.let_.constructor_operand, task.value_chain) };
     }
 
     /// Consume an already-cloned producer. Block traversal uses this only when
@@ -7422,6 +7442,7 @@ const Cloner = struct {
                     .value = task.value_expr,
                     .rest = rest,
                     .comptime_site = let_.comptime_site,
+                    .constructor_operand = let_.constructor_operand,
                 } } }) });
             },
         }
@@ -9118,6 +9139,7 @@ const Cloner = struct {
                     .pat = task.pattern,
                     .value = input.?.get(.expr),
                     .comptime_site = let_.comptime_site,
+                    .constructor_operand = let_.constructor_operand,
                 } });
                 try self.appendBindingStmts(task.block_bindings.*, task.statements);
                 task.block_bindings.* = .{};
@@ -9204,7 +9226,7 @@ const Cloner = struct {
             .let_ => |let_| {
                 if (!let_.recursive and !task.terminated) {
                     frame.cursor = BlockValueCursor.let_value;
-                    return .{ .call = .{ .expr_value = .{ .expr = let_.value, .bindings = task.block_bindings } } };
+                    return .{ .call = letBindingValueTask(let_.value, let_.constructor_operand, task.block_bindings) };
                 }
                 if (try self.blockLetTakesContinuation(task, let_, frame.index)) {
                     return try self.blockLetContinuation(frame, task);
@@ -9269,6 +9291,7 @@ const Cloner = struct {
             .value = let_.value,
             .rest = tail,
             .comptime_site = let_.comptime_site,
+            .constructor_operand = let_.constructor_operand,
         };
         frame.cursor = BlockValueCursor.let_continuation;
         if (task.case_value) |cloned| {
@@ -11075,10 +11098,10 @@ const Cloner = struct {
                     // initializer; placing it before the recursive statement
                     // would turn those exact back-edges into free locals.
                     task.recursive_value_bindings = try self.newChain();
-                    return .{ .call = .{ .expr_value = .{
-                        .expr = let_.value,
-                        .bindings = if (let_.recursive) task.recursive_value_bindings else task.chain,
-                    } } };
+                    if (let_.recursive) {
+                        return .{ .call = .{ .expr_value = .{ .expr = let_.value, .bindings = task.recursive_value_bindings } } };
+                    }
+                    return .{ .call = letBindingValueTask(let_.value, let_.constructor_operand, task.chain) };
                 },
                 1 => {
                     task.value = input.?.get(.value);
@@ -11119,6 +11142,7 @@ const Cloner = struct {
                             .value = task.value_expr,
                             .recursive = let_.recursive,
                             .comptime_site = let_.comptime_site,
+                            .constructor_operand = let_.constructor_operand,
                         } };
                         try self.leaveRecursiveStmt(task, let_);
                         return try self.finishStmt(task, cloned);
@@ -11176,6 +11200,7 @@ const Cloner = struct {
             .value = task.value_expr,
             .recursive = let_.recursive,
             .comptime_site = let_.comptime_site,
+            .constructor_operand = let_.constructor_operand,
         } };
         try self.leaveRecursiveStmt(task, let_);
         return try self.finishStmt(task, cloned);

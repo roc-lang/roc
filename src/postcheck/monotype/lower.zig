@@ -15171,6 +15171,8 @@ const DraftExprData = union(enum(u8)) {
         value: DraftExprId,
         rest: DraftExprId,
         comptime_site: ?DraftComptimeSiteId = null,
+        /// See `Ast.ExprData.let_.constructor_operand`.
+        constructor_operand: bool = false,
     },
     lambda: DraftLambdaExpr,
     def_ref: DraftDefTarget,
@@ -18936,6 +18938,7 @@ const BodyDraftStore = struct {
                 .value = ids.expr(let_.value),
                 .rest = ids.expr(let_.rest),
                 .comptime_site = if (let_.comptime_site) |site| ids.comptimeSite(site) else null,
+                .constructor_operand = let_.constructor_operand,
             } },
             .lambda => |lambda| .{ .lambda = .{
                 .fn_id = ids.fnTarget(lambda.fn_id),
@@ -48000,7 +48003,12 @@ const BodyContext = struct {
         defer labels.deinit(self.allocator);
         var pre_by_expr = try self.preLoweredIndex(pre_lowered);
         defer pre_by_expr.deinit(self.allocator);
-        if (record.ext) |ext| {
+        if (record.ext) |ext| update: {
+            const layout_fields = self.typeStore().fieldSpan(self.recordFieldsSpan(ty));
+            const layout_names = try self.allocator.alloc(names.RecordFieldNameId, GuardedList.borrowLen(layout_fields));
+            defer self.allocator.free(layout_names);
+            for (layout_names, 0..) |*name, index| name.* = GuardedList.at(layout_fields, index).name;
+            if (try self.recordUpdateFieldsLeaveSourceOrder(record, labels.field_names, layout_names, &pre_by_expr)) break :update;
             const base_expr = pre_by_expr.get(ext) orelse
                 Common.invariant("record update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
@@ -48117,7 +48125,8 @@ const BodyContext = struct {
                     break :supplied pre;
                 }
                 Common.invariant("record constructor lost its pre-lowered field child");
-            } else if (base_expr) |base_value| blk: {
+            } else if (base_expr != null and !try self.recordUnsetsField(record, field.name)) blk: {
+                const base_value = base_expr.?;
                 // Record update copies unmentioned slots verbatim—for an
                 // optional field that copies the tagged slot, presence state
                 // included. (A MENTIONED optional field takes the supplied
@@ -48182,7 +48191,12 @@ const BodyContext = struct {
         defer pre_by_expr.deinit(self.allocator);
         var construction = try self.constructionFields(record_node);
         defer construction.deinit(self.allocator);
-        if (record.ext) |ext| {
+        if (record.ext) |ext| update: {
+            const layout_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
+            const layout_names = try self.allocator.alloc(names.RecordFieldNameId, layout_fields.len);
+            defer self.allocator.free(layout_names);
+            for (layout_names, 0..) |*name, index| name.* = layout_fields[index].name;
+            if (try self.recordUpdateFieldsLeaveSourceOrder(record, labels.field_names, layout_names, &pre_by_expr)) break :update;
             const base_expr = pre_by_expr.get(ext) orelse
                 Common.invariant("record graph update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
@@ -48358,7 +48372,8 @@ const BodyContext = struct {
                     .default = field.default,
                 };
                 break :blk pre;
-            } else if (base_expr) |base_value| blk: {
+            } else if (base_expr != null and !try self.recordUnsetsField(record, field.name)) blk: {
+                const base_value = base_expr.?;
                 // Record update copies unmentioned slots verbatim—for an
                 // optional field that copies the tagged slot, presence state
                 // included.
@@ -48450,32 +48465,15 @@ const BodyContext = struct {
         source_names: []const names.RecordFieldNameId,
         lowered: []DraftFieldExpr,
     ) Allocator.Error![]RecordFieldBind {
-        const source_index_of_slot = try self.allocator.alloc(?usize, lowered.len);
-        defer self.allocator.free(source_index_of_slot);
-        var in_source_order = true;
-        var previous: ?usize = null;
-        var supplied: usize = 0;
-        for (lowered, source_index_of_slot) |field, *source_index| {
-            const index = for (source_names, 0..) |name, position| {
-                if (name == field.name) break position;
-            } else null;
-            if (index != null) supplied += 1;
-            source_index.* = if (index != null and !(try self.exprEvaluationIsUnobservable(field.value))) index else null;
-            const ordered_index = source_index.* orelse continue;
-            if (previous) |prev| {
-                if (ordered_index < prev) in_source_order = false;
-            }
-            previous = ordered_index;
-        }
-        if (supplied != source_names.len) Common.invariant("record constructor did not lay out every supplied field");
-        if (in_source_order) return &.{};
+        if (!try self.observableFieldsLeaveSourceOrder(source_names, lowered)) return &.{};
 
         const by_source = try self.allocator.alloc(?RecordFieldBind, source_names.len);
         defer self.allocator.free(by_source);
         @memset(by_source, null);
         var bound: usize = 0;
-        for (lowered, source_index_of_slot) |*field, maybe_index| {
-            const index = maybe_index orelse continue;
+        for (lowered) |*field| {
+            const index = recordFieldSourceIndex(source_names, field.name) orelse continue;
+            if (try self.exprEvaluationIsUnobservable(field.value)) continue;
             const cell = self.exprTypeCell(field.value);
             const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
             by_source[index] = .{ .local = local, .cell = cell, .value = field.value };
@@ -48490,6 +48488,75 @@ const BodyContext = struct {
             next += 1;
         }
         return binds;
+    }
+
+    /// Whether evaluating the supplied values among `lowered` (a record's
+    /// fields in layout order) in that order would evaluate its observable
+    /// values (`exprEvaluationIsUnobservable`) out of their source order
+    /// (`source_names`, the checked record's supplied field order).
+    fn observableFieldsLeaveSourceOrder(
+        self: *BodyContext,
+        source_names: []const names.RecordFieldNameId,
+        lowered: []const DraftFieldExpr,
+    ) Allocator.Error!bool {
+        var in_source_order = true;
+        var previous: ?usize = null;
+        var supplied: usize = 0;
+        for (lowered) |field| {
+            const index = recordFieldSourceIndex(source_names, field.name) orelse continue;
+            supplied += 1;
+            if (try self.exprEvaluationIsUnobservable(field.value)) continue;
+            if (previous) |prev| {
+                if (index < prev) in_source_order = false;
+            }
+            previous = index;
+        }
+        if (supplied != source_names.len) Common.invariant("record constructor did not lay out every supplied field");
+        return !in_source_order;
+    }
+
+    /// Whether a record update unsets `name`: its slot is constructed
+    /// Missing rather than copied from the base.
+    fn recordUnsetsField(self: *BodyContext, record: anytype, name: names.RecordFieldNameId) Allocator.Error!bool {
+        for (record.unsets) |label| {
+            if ((try self.recordFieldName(self.view, label)) == name) return true;
+        }
+        return false;
+    }
+
+    fn recordFieldSourceIndex(source_names: []const names.RecordFieldNameId, name: names.RecordFieldNameId) ?usize {
+        return for (source_names, 0..) |source_name, position| {
+            if (source_name == name) break position;
+        } else null;
+    }
+
+    /// Whether a record update's supplied values must be bound in source
+    /// order (`observableFieldsLeaveSourceOrder`). Such an update lowers as a
+    /// closed constructor over its base, which reads the base's unchanged
+    /// fields before any updated value evaluates and orders the updated
+    /// values exactly as a record literal's; every other update keeps its
+    /// `record_update` form, whose consumers fill the updated slots in layout
+    /// order (`layout_names`).
+    fn recordUpdateFieldsLeaveSourceOrder(
+        self: *BodyContext,
+        record: anytype,
+        source_names: []const names.RecordFieldNameId,
+        layout_names: []const names.RecordFieldNameId,
+        pre_by_expr: *const PreLoweredIndex,
+    ) Allocator.Error!bool {
+        const by_layout = try self.allocator.alloc(DraftFieldExpr, source_names.len);
+        defer self.allocator.free(by_layout);
+        var laid_out: usize = 0;
+        for (layout_names) |name| {
+            const index = recordFieldSourceIndex(source_names, name) orelse continue;
+            by_layout[laid_out] = .{
+                .name = name,
+                .value = pre_by_expr.get(record.fields[index].value) orelse
+                    Common.invariant("record update lost its pre-lowered field child"),
+            };
+            laid_out += 1;
+        }
+        return try self.observableFieldsLeaveSourceOrder(source_names, by_layout[0..laid_out]);
     }
 
     /// Whether evaluating `root` can have no observable effect: it reads
@@ -48579,6 +48646,7 @@ const BodyContext = struct {
                 .bind = try self.addPatWithTypeCell(bind.cell, .{ .bind = bind.local }),
                 .value = bind.value,
                 .rest = result,
+                .constructor_operand = true,
             } });
         }
         return result;

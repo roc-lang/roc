@@ -237,6 +237,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/consumer_manifest_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
+    std.testing.refAllDecls(@import("test/record_field_order_lir_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
     std.testing.refAllDecls(@import("test/platform_box_update_lir_test.zig"));
     std.testing.refAllDecls(@import("test/provided_callable_boundary_test.zig"));

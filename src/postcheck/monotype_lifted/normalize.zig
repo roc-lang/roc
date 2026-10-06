@@ -676,6 +676,7 @@ const Normalizer = struct {
                         .pat = binding.bind,
                         .value = value,
                         .comptime_site = binding.comptime_site,
+                        .constructor_operand = binding.constructor_operand,
                     } }));
                     return .{ .request = .{ .expr = .{ .source = binding.rest, .sink = sink_id } } };
                 },

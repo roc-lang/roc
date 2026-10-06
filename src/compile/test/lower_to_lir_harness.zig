@@ -984,6 +984,13 @@ pub fn expectTargetIndependentLir(app_body: []const u8) LowerToLirHarnessError!v
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
+/// Lower `app_body` to LIR with explicit lowering options and write every
+/// procedure's compact LIR dump to `dump`, for tests that compare the LIR two
+/// source forms lower to.
+pub fn writeLirWithOptions(app_body: []const u8, opts: LirLoweringOptions, dump: *std.Io.Writer) LowerToLirHarnessError!void {
+    try runToLir(app_body, dump, opts, null);
+}
+
 fn runToLir(
     app_body: []const u8,
     dump: ?*std.Io.Writer,

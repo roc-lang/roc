@@ -1118,6 +1118,12 @@ pub const ExprData = union(enum(u8)) {
         value: ExprId,
         rest: ExprId,
         comptime_site: ?ComptimeSiteId = null,
+        /// This binding only sequences one operand of the constructor its
+        /// continuation builds: `value` is evaluated here, in source order,
+        /// and the bound local's single use is that constructor operand. A
+        /// pass that treats a constructor operand's value specially treats
+        /// `value` the same way.
+        constructor_operand: bool = false,
     },
     lambda: LambdaExpr,
     def_ref: DefId,
@@ -1298,6 +1304,8 @@ pub const Stmt = union(enum(u8)) {
         value: ExprId,
         recursive: bool = false,
         comptime_site: ?ComptimeSiteId = null,
+        /// See the `let_` expression's `constructor_operand`.
+        constructor_operand: bool = false,
     },
     expr: ExprId,
     expect: ExprId,

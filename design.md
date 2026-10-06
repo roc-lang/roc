@@ -7443,7 +7443,11 @@ accepted call patterns are copied into pass-wide storage, so discarded symbolic
 value graphs do not accumulate across functions. Generic analysis follows
 existing constructor evidence; a structural consumer requests a producer's
 result shape through the separate demand path, which propagates through the
-callee's exact used-argument plan.
+callee's exact used-argument plan. A constructor field is such a consumer, and
+so is the value of a Monotype binding stamped `constructor_operand`, which
+only sequences one constructor field ahead of its constructor (see "Record
+fields evaluate in source order"); the binding's strict work stays at the
+binding's position.
 
 Inlining a call additionally requires exact closed Monotype identity between
 the call-site result and the callee body's result. Independently specialized
@@ -13522,6 +13526,26 @@ constructor operand moves into a local only when its evaluation order would
 otherwise change, and the producer-consumer shape that later passes see
 (a call whose result is directly a constructor field) is kept everywhere
 else. Boxy lowers record literals from their source field order directly.
+
+Each such binding is stamped `constructor_operand`: its value is evaluated at
+the binding, in source order, and its bound local's single use is the
+constructor field. SpecConstr clones a `constructor_operand` binding's value
+exactly as it clones a constructor field, demanding its result shape (so a
+known-argument producer call inlines and specializes), while the value's strict
+work stays in the binding chain at the binding's own position. A record built
+out of layout order therefore lowers to the same work as the record written in
+layout order, differing only in the order of that work.
+
+A `record_update` lists its updated fields in source order, but its consumers
+(SpecConstr, LIR lowering, compile-time evaluation) fill the updated slots in
+layout order. An update whose observable updated values are written out of
+layout order (`recordUpdateFieldsLeaveSourceOrder`) therefore lowers as a
+closed record constructor over its base instead: the base is bound first,
+each unchanged field is read out of it before any updated value evaluates (so
+the base's last use precedes any in-place mutation an updated value
+performs), an unset optional field constructs its Missing slot, and the
+updated values are ordered exactly as a record literal's. Every other update
+keeps its `record_update` form.
 
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
