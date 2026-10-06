@@ -19028,9 +19028,9 @@ const Builder = struct {
         var pending = std.ArrayList(Span).empty;
         defer pending.deinit(self.allocator);
         inline for (.{
-            "roots",                  "direct_calls",            "callable_uses",
-            "nested_callable_uses",   "context_constructs",      "descriptor_methods",
-            "const_eval_calls",       "iterator_calls",          "generated_codec_calls",
+            "roots",                   "direct_calls",       "callable_uses",
+            "nested_callable_uses",    "context_constructs", "descriptor_methods",
+            "const_eval_calls",        "iterator_calls",     "generated_codec_calls",
             "derived_component_calls", "static_fns",
         }) |field| {
             for (@field(self.plan, field).items) |record| try pending.append(self.allocator, record.hidden_dict_args);

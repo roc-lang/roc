@@ -10768,13 +10768,13 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
     return null;
 }
 
-/// Public `CheckedExprData` declaration.
 /// The operands a runtime error evaluates before it crashes
 /// (`CheckedExprData.runtime_error`).
 pub const CheckedRuntimeError = struct {
     evaluated: []const CheckedExprId = &.{},
 };
 
+/// Public `CheckedExprData` declaration.
 pub const CheckedExprData = union(enum) {
     pending,
     /// Any numeric literal: exact digit facts plus an optional dispatch plan.
