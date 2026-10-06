@@ -216,7 +216,8 @@ They can't be used with any other category of module besides type modules.
 
 ### Exposing
 
-Use `exposing` to bring specific items into scope without a package qualifier or module prefix:
+Adding `exposing` to an import brings specific items into scope, so you can use them without
+writing the type's name in front:
 
 ```roc
 import pkg.Json exposing [to_str, decode]
@@ -227,7 +228,7 @@ Now `to_str` and `decode` can be called directly instead of `pkg.Json.to_str` an
 
 ### Renaming imported modules with `as`
 
-Use `as` to give an import a different name:
+Adding `as` to an import gives the imported type a different name in this module:
 
 ```roc
 import Color as CC
@@ -236,19 +237,16 @@ import json.Parser as JP
 
 ### Modules in subdirectories
 
-Use `/` for source-directory traversal and `.` for types nested inside a
-module. Binding clauses do not change which source file is selected. For
-example:
+To import a module that's in a subdirectory, separate the directory names with `/`:
 
 ```roc
 import Src/Widget as Widget
 import Internal/Http/Client exposing [send]
 ```
 
-These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`, respectively,
-relative to the importing file. A bare target and a target beginning with `./`
-use that base; `../` moves toward the package root, and a leading `/` starts at
-the package root:
+These load `Src/Widget.roc` and `Internal/Http/Client.roc`, relative to the directory of the file
+doing the importing. You can also start the path with `./` (which means the same thing), `../` to go
+up a directory, or `/` to start at the package's root directory:
 
 ```roc
 import Helper
@@ -257,12 +255,12 @@ import ../Shared/Codec
 import /Public/Api
 ```
 
-In every form, a dot begins nested-type selection. `import Url.ParseErr` loads
-`Url.roc` and imports `ParseErr`; `import Url/ParseErr` loads
-`Url/ParseErr.roc`. Adding `as` or `exposing` never changes that distinction.
+Note the difference between `/` and `.` here. A `/` means "look in this directory," whereas a `.`
+means "the type nested inside this one." So `import Url/ParseErr` loads the file `Url/ParseErr.roc`,
+whereas `import Url.ParseErr` loads `Url.roc` and imports the `ParseErr` type nested inside `Url`.
 
-A package can expose a module stored in a subdirectory by naming its import
-alias in the package header:
+A package can expose a module that's in a subdirectory by importing it with `as` and listing that
+name in the package header:
 
 ```roc
 package [Widget] {}
@@ -270,16 +268,16 @@ package [Widget] {}
 import Src/Widget as Widget
 ```
 
-Package-qualified imports use one dot after the lowercase package alias, then
-the public module name. Further dots select nested types:
+Modules outside the package then import it as `Widget` (for example, `import ui.Widget`). They
+never see the `Src/` part, so the package can move the file around without breaking anyone.
+
+When importing from another package, write the package's [shorthand](packages#shorthands), then
+`.`, then the module's name. Any more `.`s after that refer to nested types:
 
 ```roc
 import json.Parser
 import json.Parser.ParseErr as PE
 ```
-
-Directory traversal is private to the package that declares the public module;
-consumers use its public name rather than its internal source path.
 
 ### Importing types from packages
 
@@ -345,7 +343,7 @@ Since type modules expose a single type, you can't expose both `Foo` and `Bar` f
 same `.roc` file. However, you can wrap them both in a [void module](#void-modules) named something like `FooBar.roc`:
 
 ```roc
-FooBar :: {}.{
+FooBar :: [].{
 	Foo := [BarVal(Bar), Nothing]
 
 	Bar := [FooVal(Foo), Nothing]
@@ -426,10 +424,9 @@ Exactly what information goes in which headers will be discussed below.
 
 ## Package Modules
 
-Packages are collections of modules that can depend on other packages and on
-one platform.
-
-A _package module_ provides types to be shared with packages, applications and platforms. The module header specifies which types are exposed, and also includes package aliases for importing other packages:
+A [package](packages) is a collection of modules that can be shared between projects. Its
+_package module_ (usually named `main.roc`) has a header that lists which type modules the package
+exposes, along with the package's own dependencies:
 
 ```roc
 package [
@@ -451,15 +448,14 @@ package [FxHttp] {
 import pf.Http
 ```
 
-The package can use the platform's complete exposed API, including its types,
-functions, and hosted effects. It does not provide implementations for the
-platform's `requires` section; the application remains responsible for those.
+A package like this can use everything the platform exposes, including its effectful functions.
+It doesn't provide anything for the platform's `requires` section, though; only the application
+does that.
 
-When an application uses a platform-specific package, every platform
-declaration in the dependency graph must identify exactly the same platform.
-For URL dependencies this includes the declared version and content hash;
-ordinary compatible-version upgrades do not apply to platform selection.
-Local declarations must resolve to the same platform root file.
+When an application uses a package like this, every platform mentioned anywhere in the dependency
+graph has to be exactly the same platform. For URLs, that means the same version and the same hash.
+(The usual [version selection](packages#package-versions) doesn't apply to platforms, since an
+application can only have one.) For paths, they all have to point to the same file.
 
 ### Package Shorthands
 
@@ -469,7 +465,8 @@ dependency, as in `import json.Parser`. See [Packages](packages) for how depende
 
 ## Platform Modules
 
-A _platform module_ defines the interface between a Roc application and the host program.
+A _platform module_ is the root module of a [platform](platforms). Its header describes how
+applications and the platform's [host](platforms#host) connect to each other:
 
 ```roc
 platform "my-platform"
@@ -477,18 +474,18 @@ platform "my-platform"
     exposes [Http, File]
     packages { json: "../json/main.roc" }
     provides { "roc__entrypoint": main }
-    targets : { ... }
+    targets: { … }
 ```
 
 ### requires
 
-The `requires` section declares what the application must provide to the platform:
+The `requires` section says what the application has to provide to the platform:
 
 ```roc
 requires { main : Str -> Str }
 ```
 
-For an app to provide a type to the platform, use a `for` clause:
+If the platform needs the application to choose a type, use a `for` clause:
 
 ```roc
 requires {
@@ -500,11 +497,13 @@ requires {
 }
 ```
 
-The `[Model : model]` syntax maps an uppercase type alias (`Model`) to a lowercase rigid type variable (`model`). This allows the app to provide a `Model` type which remains opaque to the platform.
+Here, the application defines a type named `Model`, and the platform refers to it as the type
+variable `model`. That way, each application can choose its own `Model` type, and the platform
+code works with all of them without knowing what's inside.
 
 ### exposes
 
-The `exposes` section lists the types the platform provides to the application:
+The `exposes` section lists the type modules that applications (and packages) can import from the platform:
 
 ```roc
 exposes [Stdout, Stderr, File, Http]
@@ -512,7 +511,8 @@ exposes [Stdout, Stderr, File, Http]
 
 ### packages
 
-The `packages` section specifies package dependencies and aliases these with package qualifiers, e.g. `json.`:
+The `packages` section lists the platform's own package dependencies, with their
+[shorthands](packages#shorthands):
 
 ```roc
 packages { json: "../json/main.roc" }
@@ -520,7 +520,8 @@ packages { json: "../json/main.roc" }
 
 ### provides
 
-The `provides` section maps each symbol name Roc will link with the platform host to the function that will be exposed under that symbol:
+The `provides` section lists the Roc functions the host can call, and the name of the symbol each
+one will have when the host links against it:
 
 ```roc
 provides { "roc__entrypoint": main }
@@ -528,10 +529,11 @@ provides { "roc__entrypoint": main }
 
 ### targets
 
-The `targets` section specifies the supported build targets, what to link for each, and what kind of artifact each target produces:
+The `targets` section lists which targets the platform supports, what gets linked together for
+each one, and what kind of file each one produces:
 
 ```roc
-targets : {
+targets: {
     inputs_dir: "targets/",
     x64linux: { inputs: ["crt1.o", "host.o", app] },
     arm64mac: { inputs: ["host.o", app] },
@@ -539,22 +541,25 @@ targets : {
 }
 ```
 
-- `inputs_dir`: The directory containing target-specific files within a package `.tar.zst` bundle.
-- Each target entry lists its link `inputs` and an optional `output` kind.
-- Linked WebAssembly targets must list their final host-visible functions in
-  `exports`. Use `exports: []` to export no functions explicitly.
+- `inputs_dir` is the directory (inside the platform's bundle) that contains the files for each target.
+- Each target lists its `inputs`, which are the files that get linked together, and optionally an `output`.
+- WebAssembly targets that get linked must list the functions the final module exports to the
+  outside world, using `exports`. (`exports: []` exports none.)
 
-The `output` field declares the artifact kind the target produces:
+The `output` field says what kind of file the target produces:
 
 - `Exe` (the default): a linked executable. For wasm32, a command module with an entry point.
 - `Shared`: a shared library (`.so`, `.dylib`, `.dll`). For wasm32, a reactor module: no entry point, with the `provides` entrypoints exported.
 - `Archive`: a static archive (`.a`, `.lib`) containing the host inputs, the compiled app, and the builtins, for linking in another build.
 
-The platform decides what gets built; application authors never pass artifact-kind flags to `roc build`.
+The platform decides what kind of file gets built, so application authors never need to tell
+`roc build` that.
 
-The `app` placeholder represents the compiled Roc application. The order files are specified in each of the build targets is important for linking correctly.
+`app` in the `inputs` list stands for the compiled Roc application. The order of the inputs matters,
+because that's the order they get passed to the linker.
 
-The default behaviour for `roc build` without a `--target` flag is the first compatible target in the `targets` section.
+Running `roc build` without a `--target` flag builds for the first target in this list that's
+compatible with the machine running the build.
 
 ### Hosted type modules
 
@@ -574,7 +579,7 @@ name of the symbol the host uses to implement it:
 
 ```roc
 platform ""
-    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    requires { main! : List(Str) => Try({}, [Exit(I8), ..]) }
     exposes [Stdout]
     packages {}
     provides { "roc_main": main_for_host! }
@@ -592,7 +597,8 @@ Hosted functions have a few restrictions:
 
 ## Application Modules
 
-An _application module_ is the entry point for a Roc program. The app provides implementations that satisfy the platform's [requires](#requires) section:
+An _application module_ is the root module of a Roc program. It provides whatever the platform's
+[requires](#requires) section asks for:
 
 ```roc
 app [main!] { pf: platform "https://..." }
@@ -605,10 +611,11 @@ main! = |_| {
 ```
 
 The application header has two parts:
-- **Exposed list** `[main!]`: Implementations the app provides to satisfy the platform's requirements
-- **Packages record** `{ pf: platform "..." }`: Specifies the platform and package dependencies for the application
 
-The app must have a platform package which is marked using the `platform` keyword:
+- **The list** (`[main!]` here) names the things the application provides to the platform.
+- **The record** (`{ pf: platform "…" }` here) lists the application's dependencies, with their [shorthands](packages#shorthands).
+
+Exactly one of the dependencies has to be a platform, marked with the `platform` keyword:
 
 ```roc
 app [main!] {
@@ -617,14 +624,13 @@ app [main!] {
 }
 ```
 
-Packages used by the app may also declare a platform. Those declarations must
-exactly match the app's selected platform. The app is still the only module
-that supplies the values required by the platform.
+Packages the application uses may also depend on a platform, but it has to be exactly the same
+platform the application uses. Only the application provides what the platform requires.
 
 ### Pinning a Roc version
 
-Any app, package or platform header may pin the version of the Roc compiler it
-is written for, using the reserved `roc` entry in its packages record:
+An application, package, or platform can say which version of the Roc compiler it was written
+for, using a `roc` entry in its dependencies:
 
 ```roc
 app [main!] {
@@ -633,44 +639,37 @@ app [main!] {
 }
 ```
 
-This is optional. When present, the value must be a version string of the kind
-`roc version` prints: either a nightly tag such as
-`nightly-2026-08-05-24f0b47` or a release version such as `0.1.0`. Because
-`roc` names the compiler version, it cannot also be used as the shorthand for a
-platform or package.
+This is optional. If it's there, it has to be a version in the format that `roc version` prints:
+either a nightly like `nightly-2026-08-05-24f0b47`, or a release like `0.1.0`. (That's also why
+`roc` can't be used as the shorthand for a package.)
 
-Compiling a file whose pin names a different compiler than the one you are
-running reports a warning; it does not stop the build.
+If you compile it with a different version of the compiler, you get a warning, but the build
+still goes ahead.
 
-`roc fmt` keeps a pinned nightly up to date: when the compiler running it is a
-nightly at least as new as the pin, it rewrites the pin to name that compiler.
-A pinned release version is left alone, since pinning a release is a deliberate
-choice rather than a snapshot of whatever nightly was current. Because this is
-part of formatting, `roc fmt --check` reports a file whose nightly pin is out
-of date as needing formatting.
+`roc fmt` keeps a nightly version up to date: if the compiler running `roc fmt` is a nightly that's
+at least as new as the one written in the header, it updates the header to say that compiler's
+version. It leaves release versions alone, since writing a release version is a deliberate choice,
+whereas a nightly version usually just means "whatever nightly was current when I wrote this."
+Since this is part of formatting, `roc fmt --check` reports an out-of-date nightly version as
+needing to be formatted.
 
 ### Nominal type identity across packages
 
-A nominal type's identity is determined by the *content* of the module that
-declares it: the module's name, its source bytes, and (recursively) the same
-for every module it imports. Two nominal types are the same type exactly when
-they have the same declared name and their declaring modules have
-byte-identical content all the way down through their imports.
+Two [nominal types](types#nominal-types) from different places are the same type if they have the
+same name, and the modules that declare them have exactly the same contents (including the
+contents of every module they import, and every module those import, and so on).
 
-A practical consequence: if the same module content is reached through two
-different package downloads—two versions of a package where that module did
-not change, the same package fetched from two mirror URLs, or a vendored copy
-of a dependency—the types it declares are all the same type, and values of
-those types interoperate freely. A type that did not change keeps working
-across a version bump. Conversely, if the declaring module (or anything it
-imports) changed at all, its types are new, distinct types, even when every
-name and structure looks the same.
+This matters when the same module shows up more than once in a project's dependencies. For
+example, two different versions of a package might both include a module that didn't change
+between those versions, or you might have downloaded the same package from two different URLs.
+In those cases, the types that module declares are the same type, no matter where they came
+from, so you can pass a value from one to code expecting the other. On the other hand, if the
+module (or anything it imports) changed at all, even by one byte, then its types are different
+types, even if they have the same names and look the same.
 
-The exceptions are bindings whose meaning comes from outside the compiled
-program: `hosted` functions and `provides` entrypoints are identified by the
-symbol strings in the platform header, never by module content, so two
-identical hosted declarations bound to different symbols always remain
-distinct.
+The exception is `hosted` functions and `provides` entries in platforms. Those are identified by
+the symbol names in the platform header, not by the module's contents, so two hosted functions
+with different symbol names are always different functions.
 
 ### Headerless Application Modules
 

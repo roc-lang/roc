@@ -29,7 +29,7 @@ Which method gets called is decided at compile time, based on the type of `a`. (
 [static dispatch](static-dispatch) means.) So there's no runtime cost to the desugaring; `a + b`
 on two `U64`s compiles to the same machine instruction that adding two integers would in C.
 
-The operators that aren't in this table (`and`, `or`, `??`, and `?`) don't desugar to method
+The operators that aren't in this table (`and`, `or`, `??`, `?`, and `|>`) don't desugar to method
 calls. They're described in their own sections below.
 
 ## Precedence
@@ -39,7 +39,7 @@ together first. For example, `1 + 2 * 3` is `1 + (2 * 3)`, because `*` is higher
 
 | Operators | Grouping |
 | --- | --- |
-| Function calls, method calls, `.field` access, postfix `?`, prefix `-` and `!` | |
+| Function calls, method calls, `.field` access, the [pipe operator](#-pipe), postfix `?`, prefix `-` and `!` | left to right |
 | `*` `/` `//` `%` | left to right: `a / b * c` is `(a / b) * c` |
 | `+` `-` | left to right: `a - b - c` is `(a - b) - c` |
 | `??` | |
@@ -162,6 +162,30 @@ You can also write a tag instead of a function. In that case, the original error
 tag's payload. So `U64.from_str(b) ? InvalidSecond` would return `Err(InvalidSecond(BadNumStr))`
 if `b` wasn't a valid number. This is a convenient way to keep track of where an error came
 from, while keeping the details of the original error.
+
+### `|>` (pipe)
+
+`a |> f(b, c)` is another way to write `f(a, b, c)`. In other words, it calls the function on the
+right, passing the value on the left as the first argument. If there are no other arguments, you
+can leave off the parentheses, so `a |> f` is the same as `f(a)`.
+
+This is useful for writing a series of function calls in the order they happen, rather than
+nested inside each other:
+
+```roc
+result = input |> parse |> List.map(normalize) |> summarize
+
+# This is the same as:
+result = summarize(List.map(parse(input), normalize))
+```
+
+For calling methods, you can usually write `value.method(arg)` instead (see
+[Calling Methods](static-dispatch#calling-methods)). `|>` is for calling functions that aren't
+methods on the value's type, or for when you'd rather name the function explicitly.
+
+The thing after `|>` has to be a function's name (like `parse` or `List.map`), not some other
+expression. Also note that `|>` groups before binary operators like `+`, so `1 + 2 |> double` is
+`1 + double(2)`, not `double(1 + 2)`.
 
 ## Unary Prefix Operators
 
