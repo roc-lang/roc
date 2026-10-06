@@ -443,6 +443,9 @@ pub const Diagnostic = union(enum) {
     trailing_try_suffix: struct {
         region: Region,
     },
+    redundant_return: struct {
+        region: Region,
+    },
     return_outside_fn: struct {
         region: Region,
         context: ReturnContext,
@@ -585,6 +588,7 @@ pub const Diagnostic = union(enum) {
             .infinite_loop_never_exits => |d| d.region,
             .trailing_try_suffix => |d| d.region,
             .return_outside_fn => |d| d.region,
+            .redundant_return => |d| d.region,
             .control_flow_in_expect => |d| d.region,
             .var_reassigned_in_expect => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,

@@ -4179,6 +4179,20 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .redundant_return => |data| blk: {
+            var report = try Report.init(allocator, "Redundant Return", "", .warning);
+            try report.headline.addReflowingText("This return is unnecessary because its value is already the function's final expression.");
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                self.calcRegionInfo(data.region),
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addReflowingText("Remove `return` or run `roc fmt` to remove it automatically.");
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

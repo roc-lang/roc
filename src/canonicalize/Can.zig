@@ -4615,6 +4615,17 @@ fn canonicalizeTopLevelTypeDecl(
     }
 }
 
+/// Consume the parser's explicit function-result context without reanalyzing CIR.
+fn warnRedundantReturn(self: *Self, node_idx: u32, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
+    if (self.enclosing_lambda != null and self.expect_context == .none and
+        self.parse_ir.redundant_returns.isSet(node_idx))
+    {
+        try self.env.pushDiagnostic(.{ .redundant_return = .{
+            .region = self.parse_ir.tokenizedRegionToRegion(region),
+        } });
+    }
+}
+
 /// Canonicalizes a full Roc source file, transforming the Abstract Syntax Tree (AST)
 /// into Canonical Intermediate Representation (CIR).
 ///
@@ -10708,6 +10719,7 @@ fn canonicalizeStandaloneBlockStatement(
             return try self.canonicalizeStandaloneWhileStatement(while_stmt);
         },
         .@"return" => |return_stmt| {
+            try self.warnRedundantReturn(@intFromEnum(ast_stmt_idx), return_stmt.region);
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
             const expr = try self.canonicalizeExpr(return_stmt.expr);
             try self.warnTrailingTrySuffix(expr.idx);
@@ -12263,6 +12275,7 @@ fn runExprKernel(
                     try stacks.pushParse(frame_allocator, .{ .idx = e.expr, .target = .scratch });
                 },
                 .@"return" => |e| {
+                    try self.warnRedundantReturn(@intFromEnum(idx), e.region);
                     try stacks.pushFinishReturn(frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
                     });
@@ -12671,6 +12684,7 @@ fn runExprKernel(
 
             const ast_stmt_idx = work.stmt_idxs[state.next];
             const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
+            if (ast_stmt == .@"return") try self.warnRedundantReturn(@intFromEnum(ast_stmt_idx), ast_stmt.@"return".region);
             const next = state.next + 1;
             const is_last = state.next == work.stmt_idxs.len - 1;
 

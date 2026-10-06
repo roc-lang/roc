@@ -1772,6 +1772,20 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Redundant explicit returns
+
+Parsing records which explicit returns occupy function result positions. Each
+lambda body starts such a position; a block propagates it to its last expression
+or return, grouping parentheses preserve it, and an `if` with an `else` or
+a `match` propagates it to its branch bodies. A return's operand also occupies
+that position. Bindings, operands of other expressions, conditions, guards,
+loops and `if` without `else` do not propagate it. Nested lambdas start their own independent result positions.
+Canonicalization consumes this inventory to warn on redundant returns, and
+formatting consumes the same inventory to remove their keywords while preserving
+comments and adding parentheses where a bare identifier would otherwise parse
+as a punned record. Explicit early returns retain their control-flow meaning in
+CIR.
+
 ### Bidirectional source controls
 
 Literal Unicode Bidi_Control characters (U+061C, U+200E–U+200F,
