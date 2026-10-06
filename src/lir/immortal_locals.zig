@@ -363,7 +363,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
         while (work.pop()) |stmt_id| {
             if (visited.isSet(@intFromEnum(stmt_id))) continue;
             visited.set(@intFromEnum(stmt_id));
-            try Body.appendSuccessorsWithAllocator(store, &work, stmt_id, gpa);
+            try Body.appendSuccessors(store, &work, stmt_id, gpa);
             const value, _ = referenceCount(store.getCFStmt(stmt_id)) orelse continue;
             if (immortal.contains(value)) immortalInvariant("a program without static-literal shapes counted references on an immortal local");
         }

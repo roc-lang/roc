@@ -12537,7 +12537,7 @@ fn procStmts(
     try work.append(allocator, store.getProcSpec(proc).body orelse return error.MissingProcSpec);
     while (work.pop()) |stmt_id| {
         if ((try seen.getOrPut(stmt_id)).found_existing) continue;
-        try lir.BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+        try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
         try out.append(allocator, stmt_id);
     }
     return out.toOwnedSlice(allocator);

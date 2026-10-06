@@ -485,7 +485,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
             .assign_call_dict,
             => {
                 successors.clearRetainingCapacity();
-                try body_clone.appendSuccessorsWithAllocator(store, &successors, item.stmt, allocator);
+                try body_clone.appendSuccessors(store, &successors, item.stmt, allocator);
                 for (successors.items) |next| try work.append(allocator, .{ .stmt = next, .depth = item.depth });
             },
         }
@@ -621,7 +621,7 @@ fn findCandidate(
         while (try remainder_walk.next()) |stmt_id| {
             stats.inventory_statement_visits += 1;
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+            try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
             for (successors.items) |next| try predecessors.put(next, (predecessors.get(next) orelse 0) + 1);
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .jump and stmt.jump.target == join.id) jump_count += 1;
@@ -738,7 +738,7 @@ fn hasExternalWrapperEntry(
         stats.inventory_statement_visits += 1;
         if (stmt == owner or inside.contains(stmt)) continue;
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt, allocator);
         for (successors.items) |next| {
             for (wrappers) |wrapper| if (next == wrapper) return true;
         }

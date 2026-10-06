@@ -3643,7 +3643,7 @@ pub const MonoLlvmCodeGen = struct {
                 .crash,
                 => {},
             }
-            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, self.allocator);
         }
         if (shape.count > max_wrapper_inline_stmts) return;
         // A loop is a join reached again from inside its own body.
@@ -3659,7 +3659,7 @@ pub const MonoLlvmCodeGen = struct {
                     work.clearRetainingCapacity();
                     return;
                 }
-                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, self.allocator);
             }
         }
     }

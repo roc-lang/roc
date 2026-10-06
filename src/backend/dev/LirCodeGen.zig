@@ -10035,7 +10035,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .switch_initialized_payload,
                     .ret,
                     .crash,
-                    => try lir.BodyClone.appendSuccessorsWithAllocator(self.store, &successors, id, self.allocator),
+                    => try lir.BodyClone.appendSuccessors(self.store, &successors, id, self.allocator),
                 }
                 for (successors.items) |next| {
                     const to = try self.stackPlanNode(&plan, &nodes, &work, next);

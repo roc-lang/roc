@@ -230,7 +230,7 @@ fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: 
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             const count = counts.get(successor) orelse 0;
             if (count == std.math.maxInt(u32)) invariant("{s}", .{"LIR statement incoming-edge count overflowed"});
@@ -268,7 +268,7 @@ fn collectMovedBody(
     while (try walk.next()) |stmt_id| {
         try nodes.append(allocator, stmt_id);
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             const count = internal_incoming.get(successor) orelse 0;
             if (count == std.math.maxInt(u32)) invariant("{s}", .{"LIR subtree incoming-edge count overflowed"});
@@ -290,7 +290,7 @@ fn collectMovedBody(
         if (shared_stmts.contains(stmt_id)) continue;
         try shared_stmts.put(stmt_id, {});
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         try shared_work.appendSlice(allocator, successors.items);
     }
 

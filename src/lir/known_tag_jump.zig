@@ -128,7 +128,7 @@ const Analysis = struct {
                 }
             }
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+            try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
             for (successors.items) |successor| {
                 if (self.shared.contains(successor)) continue;
                 if (self.single_pred.fetchRemove(successor)) |_| {
@@ -342,7 +342,7 @@ const Analysis = struct {
             if (current == stmt) return true;
             if (current == scope) continue;
             if ((try seen.getOrPut(current)).found_existing) continue;
-            try body_clone.appendSuccessorsWithAllocator(self.store, &work, current, self.allocator);
+            try body_clone.appendSuccessors(self.store, &work, current, self.allocator);
         }
         return false;
     }
@@ -371,7 +371,7 @@ const Analysis = struct {
                 const target = self.joins.get(stmt.jump.target) orelse return true;
                 try work.append(self.allocator, self.store.getCFStmt(target).join.body);
             } else {
-                try body_clone.appendSuccessorsWithAllocator(self.store, &work, current, self.allocator);
+                try body_clone.appendSuccessors(self.store, &work, current, self.allocator);
             }
         }
         return false;

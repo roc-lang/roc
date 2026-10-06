@@ -2306,7 +2306,7 @@ const Pass = struct {
                 .crash,
                 => {
                     successors.clearRetainingCapacity();
-                    try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, item.stmt, self.allocator);
+                    try BodyClone.appendSuccessors(self.store, &successors, item.stmt, self.allocator);
                     for (successors.items) |next| try stack.append(self.allocator, .{ .stmt = next, .join = item.join });
                 },
             }
@@ -2458,7 +2458,7 @@ const Pass = struct {
                 .loop_break,
                 .ret,
                 .crash,
-                => try BodyClone.appendSuccessorsWithAllocator(self.store, successors, stmt, gpa),
+                => try BodyClone.appendSuccessors(self.store, successors, stmt, gpa),
             }
             for (successors.items) |next| {
                 try scan.edges.append(gpa, .{ .from = cursor, .to = try scan.node(gpa, next) });

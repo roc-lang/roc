@@ -577,7 +577,7 @@ const Transform = struct {
             if (stmt == .jump) {
                 if (stmt.jump.target == join_id) count += 1;
             } else {
-                try body_clone.appendSuccessorsWithAllocator(self.store, &work, stmt_id, self.scratch_allocator);
+                try body_clone.appendSuccessors(self.store, &work, stmt_id, self.scratch_allocator);
             }
         }
 

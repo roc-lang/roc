@@ -965,7 +965,7 @@ const FutureFields = struct {
                 .comptime_exhaustiveness_failed,
                 => {
                     successors.clearRetainingCapacity();
-                    try body_clone.appendSuccessors(@constCast(store), &successors, cursor);
+                    try body_clone.appendSuccessors(store, &successors, cursor, gpa);
                     for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
                 },
             }
@@ -1067,7 +1067,7 @@ fn fieldObservedAfter(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            => try body_clone.appendSuccessors(@constCast(store), &work, cursor),
+            => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
     return false;
@@ -1099,7 +1099,7 @@ fn collectProcJoinBodies(
                 entry.value_ptr.* = stmt.join.body;
             }
         }
-        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+        try body_clone.appendSuccessors(store, stack, stmt_id, gpa);
     }
 }
 
@@ -1470,7 +1470,7 @@ const StatementDominance = struct {
         defer successors.deinit(store.allocator);
         for (0..store.cfStmtCount()) |index| {
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))));
+            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))), store.allocator);
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @intFromEnum(next) });
         }
         for (0..store.procSpecCount()) |index| {
@@ -1708,7 +1708,7 @@ pub fn compute(
         const index = @intFromEnum(stmt_id);
         if (reachable.isSet(index)) continue;
         reachable.set(index);
-        try body_clone.appendSuccessors(@constCast(store), &reach_work, stmt_id);
+        try body_clone.appendSuccessors(store, &reach_work, stmt_id, gpa);
     }
 
     const join_init_counts = try gpa.alloc(u32, store.localCount());
@@ -2230,7 +2230,7 @@ pub fn compute(
             } else if (owner.* != @as(u32, @intCast(proc_index))) {
                 owner.* = ambiguous_proc;
             }
-            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+            try body_clone.appendSuccessors(store, &join_scan_stack, stmt_id, gpa);
         }
     }
     var future_fields = FutureFields.init(gpa);

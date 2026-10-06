@@ -235,17 +235,9 @@ fn forwardLocalAliasChainImpl(
 /// Push every control-flow successor of `stmt_id` onto `work`, covering
 /// straight-line `next` edges, switch branches and continuations, initialized
 /// payload arms, string-match arms, and join bodies. This is the reachability
-/// step shared by the proc walkers.
+/// step shared by the proc walkers. `allocator` must be the one that owns
+/// `work`.
 pub fn appendSuccessors(
-    store: *const LirStore,
-    work: *std.ArrayList(CFStmtId),
-    stmt_id: CFStmtId,
-) Allocator.Error!void {
-    return appendSuccessorsWithAllocator(store, work, stmt_id, store.allocator);
-}
-
-/// Like `appendSuccessors`, using the walk owner's scratch allocator.
-pub fn appendSuccessorsWithAllocator(
     store: *const LirStore,
     work: *std.ArrayList(CFStmtId),
     stmt_id: CFStmtId,
@@ -821,7 +813,7 @@ pub const ReachableStmts = struct {
         while (self.work.pop()) |stmt_id| {
             const entry = try self.visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
-            try appendSuccessorsWithAllocator(self.store, &self.work, stmt_id, self.allocator);
+            try appendSuccessors(self.store, &self.work, stmt_id, self.allocator);
             return stmt_id;
         }
         return null;
@@ -998,7 +990,7 @@ pub fn collectCopiedStmts(
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
-        try appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             try predecessors.append(allocator, .{ .key = @intFromEnum(successor), .stmt = stmt_id });
         }

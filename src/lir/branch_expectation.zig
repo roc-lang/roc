@@ -44,7 +44,7 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
     try work.append(scratch_allocator, body);
     while (work.pop()) |stmt_id| {
         if ((try visited.getOrPut(stmt_id)).found_existing) continue;
-        try BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, scratch_allocator);
+        try BodyClone.appendSuccessors(store, &work, stmt_id, scratch_allocator);
         switch (store.getCFStmt(stmt_id)) {
             inline .init_uninitialized,
             .assign_ref,

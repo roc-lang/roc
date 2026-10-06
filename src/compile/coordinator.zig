@@ -10407,7 +10407,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             }
             while (work.pop()) |stmt_id| {
                 if ((try visited.getOrPut(stmt_id)).found_existing) continue;
-                try lir.BodyClone.appendSuccessors(store, &work, stmt_id);
+                try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .assign_literal) continue;
                 switch (stmt.assign_literal.value) {

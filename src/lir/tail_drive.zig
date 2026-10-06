@@ -129,7 +129,7 @@ pub fn run(
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                 outside.set(@intFromEnum(stmt.assign_literal.value.proc_ref));
             }
-            try body_clone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+            try body_clone.appendSuccessors(store, &work, stmt_id, allocator);
         }
     }
     if (deferred_calls.items.len == 0) return;
