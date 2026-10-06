@@ -9,6 +9,13 @@ const arm = @import("compiler_rt/arm.zig");
 
 /// Use the toolchain's ARM EABI implementations on ARM Linux.
 pub const want_aeabi = builtin.cpu.arch.isArm();
+/// This private runtime is not used by Windows shims.
+pub const want_windows_arm_abi = false;
+/// This private runtime is not used by Windows shims.
+pub const want_windows_v2u64_abi = false;
+/// Match the toolchain's runtime arithmetic rather than its test instrumentation.
+pub const test_safety = false;
+
 /// Upstream modules must not register their public compiler-rt exports.
 pub fn symbol(comptime _: *const anyopaque, comptime _: []const u8) void {}
 

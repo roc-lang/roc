@@ -1322,7 +1322,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE NOT DETERMINED"} }, true));
 
     // A buffer checked on its own gets no compile-time finalization, so the
     // exhaustiveness checks deferred to it are settled when reports are collected.
