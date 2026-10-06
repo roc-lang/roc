@@ -166,7 +166,12 @@ test = |{}| {
 				(s-let
 					(p-assign (ident "fmt"))
 					(e-tag (name "Utf8Format")))
-				(e-runtime-error (tag "erroneous_value_expr")))))
+				(e-call (constraint-fn-var 314)
+					(e-runtime-error (tag "erroneous_value_expr"))
+					(e-string
+						(e-literal (string "hi")))
+					(e-lookup-local
+						(p-assign (ident "fmt")))))))
 	(s-nominal-decl
 		(ty-header (name "Utf8Format"))
 		(ty-record)))

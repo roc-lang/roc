@@ -128,7 +128,13 @@ NO CHANGE
 					(e-num (value "99"))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-call (constraint-fn-var 293)
+			(e-runtime-error (tag "erroneous_value_expr"))
+			(e-lambda
+				(args
+					(p-assign (ident "z")))
+				(e-lookup-local
+					(p-assign (ident "z")))))))
 ~~~
 # TYPES
 ~~~clojure
