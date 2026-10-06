@@ -401,7 +401,7 @@ test "where clause - method signature mismatch" {
     try test_env_b.assertFirstTypeError("Type Mismatch");
 }
 
-test "where clause - discarded unpinned return type reports missing method" {
+test "where clause - discarded unpinned return type reports an undetermined type" {
     const source =
         \\Thing := [Thing]
         \\
@@ -424,7 +424,7 @@ test "where clause - discarded unpinned return type reports missing method" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Missing Method");
+    try test_env.assertOneTypeError("Type Not Determined");
     try std.testing.expect(hasRuntimeErrorExpr(&test_env));
 }
 

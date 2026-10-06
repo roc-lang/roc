@@ -830,6 +830,39 @@ checker recovery. The recovery rules:
   rejects is reported once, as the `undetermined_type` problem for its class
   (Diagnostics About Defaulted Types), and the warning that announced the
   default is withdrawn once every problem is recorded.
+- A relation that read a name bound from a value rejected later reports
+  nothing, decided once at the settled state
+  (`Check.withdrawProblemsOfVoidRelations`). The relations that read such a
+  name were already checked, and two of them can conflict with each other
+  (`Str.concat(y, "a")` and `List.len(y)` for a loop binder `y` over a
+  literal whose default is rejected); had the name been known erroneous, no
+  such relation would have related anything. Every problem therefore records,
+  as explicit producer data, the relation that owns it
+  (`problem.RelationOwner`): an expression's own checking step owns the
+  relations over its operands (or over its own value, for a name, a literal,
+  a `return`, and a frame's expected type or annotation); a list item's
+  relation reads the items up to it, since an erroneous item poisons
+  the item type every later item meets; and a conditional's or match's
+  branch join reads that branch, and the branches before it only when every
+  one of them is erroneous, since an erroneous branch joins nothing. A
+  dispatch obligation records the relation whose checking queued it, and the
+  problems its resolution reports belong to that relation. Because checking
+  replaces rejected expressions with runtime errors, each expression's operands
+  are captured when its checking begins (`relation_operands`). A relation is
+  void when one of its operands is erroneous through a name: a use of a name
+  that binds nothing, or whose source value (`binder_source_exprs`) is
+  erroneous in any way, or an expression checking retires with such an
+  operand (Erroneous Call Operand Retirement), so a name bound from such an
+  expression binds nothing either. An operand rejected in place is not read
+  through a name; its rejection is reported by the relation that rejected it,
+  which may be the relation reading it. Each erroneous value records the
+  relation under which it was made erroneous, named by the expression that
+  owns the relation (`erroneous_causes`), and a relation never reads a value
+  made erroneous under its own expression as an erroneous operand, so the
+  report that rejects a value is never withdrawn as a consequence of itself.
+  A relation over values that are not erroneous keeps its report: genuine
+  independent errors, such as `Str.concat(1.U8, "x")` or `[1.U8, "s"]` beside
+  such a cascade, are still reported.
 - An uninitialized `var` whose annotation contains an error binds nothing:
   its binders are erroneous and the declaration is a runtime error.
 - An expression statement whose expression's checked type contains an error
@@ -13716,6 +13749,21 @@ closure body remains outside that frontier until an explicit checked call
 invokes it. The checker carries that direct-call data through only the
 value-producing child of a closure, block, conditional, or match; conditions,
 guards, and preceding block statements are not call edges.
+
+This holds even when the receiver is a component of the argument's type that
+the argument's value never holds. In `unwrap = |t| match t { T0(v) =>
+v.concat("0"), T7(v) => v.concat("7") }` called as `unwrap(T7("x"))`, the two
+branches bind different names: the `T7` payload is the string literal, which
+defaults to `Str`, but the `T0` payload is a separate type variable that
+nothing relates to any value, and `unwrap`'s body requires `concat` on it. The
+call is a direct call edge, so that requirement must resolve during checking,
+and it cannot. Such a receiver is reported as an `unresolved_dispatcher`
+problem with the title "type not determined", like a defaulted type a
+requirement rejects (Diagnostics About Defaulted Types). The report says
+which method or operator needs the type, and when the dispatch is inside the
+called function it also shows the argument whose type leaves the receiver
+undetermined; it never describes the receiver as a type that is missing a
+method. The call becomes a runtime error.
 
 A generalized constrained function instantiation is also an explicit pinning
 frontier for receivers reachable from that function's argument positions. This

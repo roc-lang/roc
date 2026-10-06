@@ -268,8 +268,8 @@ TYPE MISMATCH - fuzz_crash_028.md:133:5:133:25
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:31
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
-MISSING METHOD - fuzz_crash_028.md:133:5:133:12
-MISSING METHOD - fuzz_crash_028.md:133:5:133:18
+TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:12
+TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
 ~~~clojure
 (reports
@@ -2446,36 +2446,50 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 133 5) (end 133 12))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(annotated emphasis "Hint:")
+			(reflow "Without knowing which type it is, there's no way to tell which")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 133 5) (end 133 18))
-		(headline
-			(reflow "This is trying to dispatch a method named")
+			(annotated code "od")
 			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(reflow "method to use.")
+			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be.")))
+	(report
+		(severity runtime_error)
+		(title "Type Not Determined")
+		(region (start 133 5) (end 133 18))
+		(headline
+			(reflow "Nothing in this program determines the type this")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method is called on:"))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig

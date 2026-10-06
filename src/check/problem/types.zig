@@ -28,6 +28,49 @@ pub const ExtraStringIdx = ByteListRange;
 /// A range of patterns
 pub const MissingPatternsRange = struct { start: usize, count: usize };
 
+/// The checker relation that recorded a problem, or whose unification queued
+/// a dispatch obligation whose problems then belong to it (design.md "Every
+/// Rejection Is Explicit Recovery"). A relation is void at the settled state
+/// when it read an erroneous value, and a void relation's problems are
+/// withdrawn: an erroneous value relates to nothing. `kind` says which
+/// values the relation read.
+pub const RelationOwner = struct {
+    kind: Kind = .none,
+    /// The raw `CIR.Expr.Idx` of the expression that owns the relation.
+    expr: u32 = 0,
+    /// The item or branch position, for `list_prefix` and `branch`.
+    index: u32 = 0,
+
+    pub const Kind = enum(u8) {
+        /// Not a relation over values: its problems are never withdrawn.
+        none,
+        /// The expression's evaluation operands, all read by one relation.
+        operands,
+        /// The expression's own value.
+        value,
+        /// A list literal's items up to and including `index`: an item
+        /// relates to the item type its earlier items determined.
+        list_prefix,
+        /// A conditional's or match's branch at `index`, related to the
+        /// result its earlier branches determined.
+        branch,
+    };
+
+    pub const none: RelationOwner = .{};
+
+    pub fn of(kind: Kind, expr: CIR.Expr.Idx, index: u32) RelationOwner {
+        return .{ .kind = kind, .expr = @intFromEnum(expr), .index = index };
+    }
+
+    pub fn exprIdx(self: RelationOwner) CIR.Expr.Idx {
+        return @enumFromInt(self.expr);
+    }
+
+    pub fn eql(a: RelationOwner, b: RelationOwner) bool {
+        return a.kind == b.kind and a.expr == b.expr and a.index == b.index;
+    }
+};
+
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
