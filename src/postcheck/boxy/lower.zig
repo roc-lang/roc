@@ -18751,11 +18751,7 @@ const ProcBodyBuilder = struct {
         record_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const rep_id = self.repForType(record_ty);
-        if (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind == .empty_record) {
-            return exprDone(try self.assignZst(target, next));
-        }
-        return try self.beginRecordRep(target, record_expr, rep_id, &.{}, &.{}, null, next);
+        return try self.beginRecordRep(target, record_expr, self.repForType(record_ty), &.{}, &.{}, null, next);
     }
 
     fn beginRecordRep(
@@ -18808,7 +18804,15 @@ const ProcBodyBuilder = struct {
                     return .{ .tail = .{ .chain = .{ .items = chain_items, .current = assign, .scope = scope } } };
                 },
             },
-            .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
+            // A record value with no fields, such as `{}` constructing a
+            // nominal type whose backing is the empty record.
+            .empty_record => {
+                if (expr_fields.len != 0 or unset_fields.len != 0 or extension != null) {
+                    boxyLowerInvariant("record expression with fields had an empty-record representation");
+                }
+                return exprDone(try self.assignZst(target, next));
+            },
+            .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
         }
     }
 

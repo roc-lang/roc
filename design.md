@@ -5402,7 +5402,13 @@ instantiated relation records the expression that instantiated it
 requirement (`parse_tag_union` for a tag union's `parser_for`) belongs to the
 relation it derives (`dispatch_derivation_by_child_fn_var`). A requirement
 the owner instantiated itself, such as a derived `is_eq`'s where-clause at
-`x == x`, is the owner's own dispatch. Nested function
+`x == x`, is the owner's own dispatch. Evaluating an expression that
+instantiated a requirement another expression rejected reaches a dispatch
+that cannot run, so no hoisted root containing it is kept
+(`rejected_instantiation_exprs`): `r = Blub.parse("Friendly")` followed by
+`Ok(Friendly) == r` evaluates the call at runtime, in source order, and
+crashes at the rejected dispatch rather than restoring a compile-time failure
+that only a later read would surface. Nested function
 site collection walks a runtime error's `evaluated` operands like any other
 children, so a closure among them is a nested function like any other.
 
@@ -10949,6 +10955,18 @@ the declaring body reserves a snapshot local, assigns the binder's current value
 to it at the declaration, and every construction of that closure's callable in
 the body reads the snapshot instead of the binder's current local.
 
+Monotype follows the same rule. A local procedure's declaration context names
+the local each lexical binder holds there, but a reassignable binder keeps one
+draft identity whose later reassignments rebind it, and Lifted capture
+collection resolves a capture by its binder's current binding. So the
+declaration binds each captured `reassignable` binder's current value to a
+snapshot local (`snapshotReassignableCaptures`) where the declaration runs, and
+the context names the snapshot: the procedure's body reads it, and every direct
+call and callable construction passes it as the capture. The snapshot is not a
+version of the binder: it carries no binder and its own generated capture
+identity, so a later reassignment rebinds the binder and leaves the snapshot as
+it was.
+
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
 stored value, while checked type interpretation uses the module named by the
@@ -13665,6 +13683,15 @@ restoration neither scans nested values nor reconstructs where a function came
 from. Resolution borrows immutable evidence until an entry resolves, then copies
 the vector once for that request. An unchanged vector is returned directly.
 Unresolved results are not memoized across instantiation-graph refinement.
+
+Boxy plans a callable body's dictionary for such a variable from the same
+explicit data. A lambda that no call ever reaches (`ignore(|x| x.to_str())`,
+or one stored in a record or list and never called) has no caller dictionary
+to bind and no use-site evidence; its parameter's variable is unquantified,
+so it seals to its recorded default (`sealed_default`). When that default is
+uninhabited, the dictionary is the static one the unpinned-dispatch rule
+selects (`unreachable_value` for a non-structural method), so the body lowers
+and the dispatch crashes if it is ever reached.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and

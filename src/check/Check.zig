@@ -821,6 +821,12 @@ hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u3
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
 hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Expressions that instantiated a scheme whose instantiated requirement
+/// another expression rejected (`rejectedRequirementInstantiatedElsewhere`).
+/// Evaluating one reaches a dispatch that cannot run, so no hoisted root
+/// containing one is kept: the expression evaluates at runtime, in source
+/// order, and crashes where the rejected dispatch runs.
+rejected_instantiation_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Top-level-equivalent expressions checked in a guarded hoist position. A
 /// root whose expression is in this set is published as a guarded root.
 hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
@@ -3375,6 +3381,7 @@ fn initAssumePrepared(
         .hoist_selected_exprs = .{},
         .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
+        .rejected_instantiation_exprs = .{},
         .hoist_guarded_exprs = .{},
         .selected_hoisted_roots = .empty,
         .local_procedure_candidates = .{},
@@ -3547,6 +3554,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_selected_exprs.deinit(self.gpa);
     self.hoist_selected_pattern_validations.deinit(self.gpa);
     self.hoist_invalidated_exprs.deinit(self.gpa);
+    self.rejected_instantiation_exprs.deinit(self.gpa);
     self.hoist_guarded_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
@@ -5510,6 +5518,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_selected_exprs = .{};
         checker.hoist_selected_pattern_validations = .{};
         checker.hoist_invalidated_exprs = .{};
+        checker.rejected_instantiation_exprs = .{};
         checker.hoist_guarded_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
@@ -5541,6 +5550,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_selected_exprs.deinit(self.allocator);
         self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
         self.checker.hoist_invalidated_exprs.deinit(self.allocator);
+        self.checker.rejected_instantiation_exprs.deinit(self.allocator);
         self.checker.hoist_guarded_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
@@ -11454,7 +11464,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
-        const intrinsic = (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and try self.hoistedRootIsIntrinsicallyKept(root);
+        const intrinsic = (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
+            !try self.hoistedRootReachesRejectedInstantiation(root.*) and
+            try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
         // enter constant/callable publication even when runtime-body hoisting
@@ -11543,6 +11555,39 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
     try self.debugVerifyKeptHoistedRootDependencies();
+}
+
+/// Whether evaluating a selected root's expression evaluates an expression
+/// that instantiated a requirement another expression rejected
+/// (`rejected_instantiation_exprs`).
+fn hoistedRootReachesRejectedInstantiation(self: *Self, root: hoist_roots.SelectedHoistedRoot) Allocator.Error!bool {
+    if (self.rejected_instantiation_exprs.count() == 0) return false;
+    switch (root.body) {
+        .pattern_error, .valueless_binding => return false,
+        .expr, .pattern_extraction, .pattern_validation => {},
+    }
+    var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer work.deinit(self.gpa);
+    try work.append(self.gpa, root.expr);
+    const Collector = struct {
+        work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+        gpa: Allocator,
+
+        fn expr(collector: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+            try collector.work.append(collector.gpa, child);
+        }
+
+        fn boundPattern(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
+    };
+    while (work.pop()) |expr| {
+        if (self.rejected_instantiation_exprs.contains(expr)) return true;
+        try self.visitExprChildren(expr, Collector{ .work = &work, .gpa = self.gpa });
+    }
+    return false;
 }
 
 fn hoistedRootIsIntrinsicallyKept(
@@ -13292,11 +13337,34 @@ fn poisonConstraintFailureSource(
         .region = self.cir.store.getExprRegion(expr_idx),
     } });
     if (self.rejectedRequirementInstantiatedElsewhere(constraint, expr_idx)) {
+        try self.recordRejectedInstantiations(constraint);
         try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
     } else {
         try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
     }
     try self.markErroneousValueExpr(expr_idx);
+}
+
+/// Record every expression that instantiated the relation owning the rejected
+/// `constraint` (`rejected_instantiation_exprs`), following derivation edges
+/// to that relation as `rejectedRequirementInstantiatedElsewhere` does. This
+/// runs only on the failure path.
+fn recordRejectedInstantiations(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    var relation_fn = constraint.fn_var;
+    var followed_edges: usize = 0;
+    while (self.dispatch_derivation_by_child_fn_var.get(relation_fn)) |parent| {
+        relation_fn = parent;
+        followed_edges += 1;
+        std.debug.assert(followed_edges <= self.dispatch_derivations.items.len);
+    }
+    const relation_root = self.types.resolveVar(relation_fn).var_;
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const instantiation_expr = dispatcher.instantiation_expr orelse continue;
+        const carries_relation = for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |candidate| {
+            if (self.types.resolveVar(candidate.fn_var).var_ == relation_root) break true;
+        } else false;
+        if (carries_relation) try self.rejected_instantiation_exprs.put(self.gpa, instantiation_expr, {});
+    }
 }
 
 /// Whether a rejected requirement owned by `owner` belongs to a scheme that
