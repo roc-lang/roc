@@ -653,9 +653,9 @@ consumers require the shared body; it is lowered once, while CTFE may still
 splice native code in its own LIR consumer. A target-specific native provision
 does not authorize host-native CTFE body elision.
 
-Matching native domains are not proof of artifact availability. Shared elision
+Matching native domains are not proof that cached object packs are available. Shared elision
 also requires the same non-null lookup capability (context and callback), whose
-owner supplies both readers the same immutable offers and splice artifacts.
+provider supplies both readers the same immutable offers and splice packs.
 This is session-local provider identity, never a persistent cache-key input.
 Separate providers retain source bodies and their independent late native hits.
 
@@ -1064,7 +1064,7 @@ checker recovery. The recovery rules:
   inferred for the binding from its right-hand side or from its uses
   (`recordValuelessTopLevelValue`). Its right-hand side is still evaluated
   once, at compile time, by a selected root of its own
-  (`hoist_roots.Body.valueless_binding`, published as a `hoisted_validation`
+  (`hoist_roots.Body.valueless_binding`, output as a `hoisted_validation`
   root): the root evaluates the right-hand side for its effects up to where
   it crashes and archives nothing, so its result is unit-valued like any
   validation root's, and no erroneous type is lowered. The binding's own

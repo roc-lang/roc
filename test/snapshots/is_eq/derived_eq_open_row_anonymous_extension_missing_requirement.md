@@ -114,7 +114,10 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-lookup-local
+					(p-assign (ident "v")))
+				(e-tag (name "Nope"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-tag-union

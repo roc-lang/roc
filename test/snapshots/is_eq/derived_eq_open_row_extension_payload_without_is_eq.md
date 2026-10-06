@@ -91,7 +91,10 @@ NO CHANGE
 						(ty-lookup (name "U64") (builtin)))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "b1")))
+			(e-tag (name "Nope")))))
 ~~~
 # TYPES
 ~~~clojure

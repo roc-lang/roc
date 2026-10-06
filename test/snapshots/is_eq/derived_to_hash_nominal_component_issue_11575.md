@@ -264,7 +264,7 @@ y = Dict.empty().insert(k, 99)
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "erroneous_value_expr")
-			(e-call (constraint-fn-var 395)
+			(e-call (constraint-fn-var 386)
 				(e-lookup-external
 					(builtin)))
 			(e-lookup-local

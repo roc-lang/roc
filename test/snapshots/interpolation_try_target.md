@@ -205,7 +205,11 @@ main = {
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "domain"))))
-					(e-runtime-error (tag "erroneous_value_expr"))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-literal (string "https://"))
+						(e-lookup-local
+							(p-assign (ident "#interp_0")))
+						(e-literal (string ".com")))))
 			(e-lookup-local
 				(p-assign (ident "url")))))
 	(s-nominal-decl
