@@ -33,12 +33,12 @@ as a shebang by a shell.
 
 ## Doc Comments
 
-Doc comments add documentation to an assignment. They have a special comment syntax:
+Doc comments add documentation to a top-level definition. They have a special comment syntax:
 
 - Each line of a doc comment begins with `"## "` - so, two `#`s and then a space, at the very beginning of the line.
 - Each consecutive line that begins with `"## "` continues the doc comment.
-- The next line after a doc comment's final `"## "` line must begin with an [assignment statement](statements#assignment).
-    - If one or more lines beginning with `"## "` are not followed immediately by an assignment statement at the beginning of the next line, then none of them are considered a doc comment; they are instead treated as an ordinary comment.
+- The next line after a doc comment's final `"## "` line must begin with an [assignment statement](statements#assignment) or a [type annotation](statements#type-annotations).
+    - If one or more lines beginning with `"## "` are not followed immediately by one of those, then none of them are considered a doc comment; they're treated as an ordinary comment instead.
 
 For example:
 
@@ -119,9 +119,11 @@ This generates the documentation as usual and then starts a local HTTP server
 
 ## Bidirectional controls
 
-Comments and documentation comments cannot contain literal Unicode
-bidirectional controls. These invisible characters can make source code appear
-different from what Roc executes (CVE-2021-42574). Remove them from comments;
-when documenting a control, write its code point, such as `U+202E`, visibly.
-Ordinary Arabic and Hebrew text is allowed. See [strings](strings) for using
-explicit Unicode escapes when the character is needed as runtime data.
+Comments (including doc comments) can't contain Unicode bidirectional control characters. These
+are invisible characters that change the direction text is displayed in, which means they can make
+source code look different from what the compiler actually sees. (This has been used to sneak
+malicious code past code review; see [CVE-2021-42574](https://nvd.nist.gov/vuln/detail/CVE-2021-42574).)
+
+If you want to mention one of these characters in a comment, write out its code point, like
+`U+202E`. Ordinary Arabic and Hebrew text is allowed. [Strings](strings#bidirectional-controls)
+explains how to put these characters in a string when you need them at runtime.
