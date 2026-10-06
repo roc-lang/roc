@@ -25113,9 +25113,9 @@ const ProcBodyBuilder = struct {
     }
 
     /// A runtime error first evaluates its `evaluated` operands, in order,
-    /// each into a discarded local. The last of them is the erroneous operand
-    /// whose own evaluation crashes; the checked-error crash after it is the
-    /// continuation no evaluation reaches.
+    /// each into a discarded local, then crashes with the checked error. When
+    /// the last of them is an erroneous operand, its own evaluation crashes
+    /// first.
     fn beginRuntimeError(self: *ProcBodyBuilder, evaluated: []const checked.CheckedExprId) Allocator.Error!ExprStep {
         const crash = try self.lowerCheckedRuntimeError();
         if (evaluated.len == 0) return exprDone(crash);

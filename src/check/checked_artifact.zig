@@ -11046,10 +11046,11 @@ pub const CheckedExprData = union(enum) {
         tuple: CheckedExprId,
         elem_index: u32,
     },
-    /// A runtime error. `evaluated` lists the operands a call-like expression
-    /// retired for an erroneous operand still evaluates, in order, before it
-    /// crashes; the last of them is that erroneous operand. Empty for every
-    /// other runtime error.
+    /// A runtime error. `evaluated` lists the operands a retired expression
+    /// still evaluates, in order, before it crashes: those up to and
+    /// including an erroneous operand, or every operand of the owner of a
+    /// rejected dispatch on its operands' values. Empty for every other
+    /// runtime error.
     runtime_error: CheckedRuntimeError,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -23966,12 +23967,14 @@ const NestedProcSiteBuilder = struct {
                     for (substitution) |ty| try self.captureType(ty);
                 }
             },
+            .runtime_error => |runtime_error| {
+                for (runtime_error.evaluated) |operand| try self.pushExpr(operand, owner);
+            },
             .str_segment,
             .bytes_literal,
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .runtime_error,
             .crash,
             .ellipsis,
             .anno_only,
@@ -29783,7 +29786,7 @@ fn exhaustivenessReplacingRootForSource(
                 const base_expr, const exact_pattern = switch (body) {
                     .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
                     .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
-                    .expr, .pattern_error => unreachable,
+                    .expr, .pattern_error, .valueless_binding => unreachable,
                 };
                 if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
 
@@ -29805,7 +29808,7 @@ fn exhaustivenessReplacingRootForSource(
                 if (base_contains) return root;
                 continue;
             },
-            .expr, .pattern_error => {},
+            .expr, .pattern_error, .valueless_binding => {},
         };
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
@@ -29841,7 +29844,7 @@ fn syntheticExprCapacityForHoistedRoots(selected_hoisted_roots: []const hoist_ro
     var count: usize = 0;
     for (selected_hoisted_roots) |root| {
         count += switch (root.body) {
-            .expr => 0,
+            .expr, .valueless_binding => 0,
             .pattern_extraction => 2,
             .pattern_validation => 2,
             .pattern_error => 1,
@@ -29913,6 +29916,13 @@ fn checkedBodyForSelectedHoistedRoot(
             selected_index,
             validation,
         ),
+        // The right-hand side always crashes, so the root produces no value:
+        // like a validation root, its discarded result is unit-valued.
+        .valueless_binding => .{
+            .expr = checkedExprIdForSource(checked_bodies, selected.expr),
+            .pattern = null,
+            .checked_type = try checked_types.store.ensureEmptyRecordRoot(allocator, names),
+        },
     };
 }
 
@@ -30366,6 +30376,7 @@ pub const HoistedConstTable = struct {
             const source_scheme = if (root.hoisted_body) |body| switch (body) {
                 .pattern_validation => try checked_types.ensureSchemeForRoot(allocator, root.checked_type),
                 .expr, .pattern_extraction, .pattern_error => checked_type_publication.schemeForSourceVar(module, source_var),
+                .valueless_binding => checkedArtifactInvariant("valueless binding root was published as a hoisted constant", .{}),
             } else checked_type_publication.schemeForSourceVar(module, source_var);
             const const_ref = try const_templates.reserveHoisted(
                 allocator,
@@ -40627,8 +40638,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x86, 0xCA, 0x6D, 0x2F, 0xE3, 0x52, 0x41, 0x57, 0x73, 0x7E, 0x11, 0x5D, 0x00, 0x89, 0xD8, 0x90,
-        0x33, 0xB8, 0xA1, 0x74, 0x28, 0x69, 0x05, 0xD0, 0x55, 0x7A, 0x04, 0xFD, 0x88, 0xBC, 0xC8, 0x86,
+        0xDF, 0x85, 0xC3, 0x5E, 0x48, 0x7A, 0xBC, 0xA8, 0xCB, 0x17, 0x91, 0x86, 0x14, 0xA4, 0x7C, 0xBD,
+        0xFB, 0xEF, 0x32, 0x59, 0xEF, 0xF7, 0xF3, 0xA6, 0xB2, 0x25, 0x82, 0x37, 0x21, 0x43, 0x72, 0x7C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

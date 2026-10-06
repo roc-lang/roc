@@ -133,11 +133,33 @@ test "an erroneous function body of a closed result adds no mismatch" {
     , "Name Not In Scope");
 }
 
-test "an annotation of an erroneous function value adds no mismatch" {
+test "an annotation of a function whose body value is erroneous adds no mismatch" {
     try expectOnlyCanError(
-        \\k : I64, I64 -> I64
+        \\k : I64 -> I64
         \\k = |x| undefined_fn(x)
     , "Name Not In Scope");
+}
+
+test "a function whose body value is erroneous still checks its parameters against its annotation" {
+    var test_env = try TestEnv.init("Test",
+        \\k : I64, I64 -> I64
+        \\k = |x| undefined_fn(x)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Name Not In Scope");
+    try test_env.assertTypeErrorTitles(&.{"Type Mismatch"});
+    try test_env.assertNoReportRendersErrorType();
+}
+
+test "an unannotated function whose body value is erroneous adds no report" {
+    var test_env = try TestEnv.init("Test",
+        \\k = |x| undefined_fn(x)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Name Not In Scope");
+    try std.testing.expectEqual(@as(usize, 0), try test_env.typeProblemCount());
 }
 
 test "a valid `?` on a numeral-producing call still checks" {

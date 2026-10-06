@@ -296,7 +296,11 @@ NO CHANGE
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "mkPairInvalid"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "x"))
+				(p-assign (ident "y")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

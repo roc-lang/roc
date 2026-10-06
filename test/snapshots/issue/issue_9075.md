@@ -157,7 +157,11 @@ main = "${y}"
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "y"))))
-			(e-runtime-error (tag "erroneous_value_expr")))))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-literal (string ""))
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure

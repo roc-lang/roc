@@ -263,7 +263,13 @@ y = Dict.empty().insert(k, 99)
 						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-call (constraint-fn-var 395)
+				(e-lookup-external
+					(builtin)))
+			(e-lookup-local
+				(p-assign (ident "k")))
+			(e-num (value "99"))))
 	(s-nominal-decl
 		(ty-header (name "Nullable")
 			(ty-args

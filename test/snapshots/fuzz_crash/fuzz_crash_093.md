@@ -79,15 +79,18 @@ d = (0, || ())
 (can-ir
 	(d-let
 		(p-assign (ident "d"))
-		(e-runtime-error (tag "erroneous_value_expr")
-			(e-num (value "0"))
-			(e-runtime-error (tag "erroneous_value_expr")))))
+		(e-tuple
+			(elems
+				(e-num (value "0"))
+				(e-lambda
+					(args)
+					(e-runtime-error (tag "empty_tuple")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Dec, ({}) -> Error)")))
+		(patt (type "(Dec, ({}) -> _ret)")))
 	(expressions
-		(expr (type "(Dec, ({}) -> Error)"))))
+		(expr (type "(Dec, ({}) -> _ret)"))))
 ~~~

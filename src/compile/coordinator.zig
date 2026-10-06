@@ -8091,7 +8091,7 @@ fn hashPatternExtractionRegionsForView(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation, .pattern_error => continue,
+            .pattern_validation, .pattern_error, .valueless_binding => continue,
         };
         count.* += 1;
 

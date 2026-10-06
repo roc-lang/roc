@@ -284,7 +284,7 @@ pub const Constants = struct {
     ///      checked procedure names use the module's own name.
     /// 129: If-expression metadata records source, and, or or origin instead
     ///      of a boolean warning flag.
-    pub const CACHE_VERSION = 129;
+    pub const CACHE_VERSION = 130;
 };
 
 /// Configuration for the Roc cache system.

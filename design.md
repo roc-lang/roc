@@ -899,6 +899,38 @@ checker recovery. The recovery rules:
   retires the whole block, function, or binding, so the block's earlier
   statements would never run. The statements run and the program crashes
   where the erroneous final value is evaluated.
+- A function whose body value is erroneous (the body expression is in
+  `call_operand_type_error_exprs`) retires only its body, by the same rule:
+  the body does not become the function's result (`resumeLambdaCheck` gives
+  the return frame a fresh result), so the function's type is whatever its
+  parameters, its other returns, its annotation, and its uses make it, and
+  the function is not itself erroneous. Calling it evaluates the body up to
+  where it crashes, exactly as the body's own retirement says: a body that is
+  a call retired for an erroneous operand evaluates that call's earlier
+  operands. A parameter-count mismatch with an annotation is still reported,
+  because it does not depend on the body. Monotype lowers such a body at the
+  function's declared result, since a runtime error produces no value.
+- An unannotated top-level value that always crashes has no value: every
+  result position of its right-hand side is a `crash`, a `...`, or an
+  erroneous value (`exprAlwaysCrashes`, following a block's final expression
+  and each branch of an `if`), so the crash happens before its name is bound,
+  exactly as when a pattern meets an erroneous value. Its name binds nothing:
+  every use is erroneous at the use and adds no report, and no type is
+  inferred for the binding from its right-hand side or from its uses
+  (`recordValuelessTopLevelValue`). Its right-hand side is still evaluated
+  once, at compile time, by a selected root of its own
+  (`hoist_roots.Body.valueless_binding`, published as a `hoisted_validation`
+  root): the root evaluates the right-hand side for its effects up to where
+  it crashes and archives nothing, so its result is unit-valued like any
+  validation root's, and no erroneous type is lowered. The binding's own
+  constant root has no concrete type and is never requested; nothing reads
+  it. Its `dbg` and other effects therefore run exactly once, at compile
+  time, in every lowering mode, and a crash with a message is reported as a
+  compile-time crash. An annotated value keeps its annotated type, is
+  evaluated as its own constant root, and its uses read the stored crash. An
+  effectful value is rejected as effectful and is never evaluated at
+  compile time. A crashing destructure has no name of its own; its pattern
+  relates to `{}`.
 - A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
   owning expression (the access chain, record literal, or record update) a
   runtime error. The rejected relation has no lowering.
@@ -5312,6 +5344,21 @@ the erroneous operand may itself be a runtime error with `evaluated`
 operands, which run before it crashes. The result is that earlier operands
 run, with their `dbg`, effects, and crashes, and the program crashes where
 the erroneous operand is evaluated, in every lowering mode.
+
+A rejected static dispatch retires its owner by the same rule
+(`replaceRejectedOperationWithRuntimeError`). An owner that dispatches on its
+operands' values selects its method only once every operand is evaluated, so
+it becomes a runtime error that evaluates all of its operands in evaluation
+order and then crashes: a method call (`x.add(1)` where `x`'s type has no
+`add`, a method on a record or other non-nominal value), a type-variable
+method call, a binary operator or comparison whose method is missing,
+unary minus, `==` on a type that does not support equality, an interpolation,
+and a `for` loop's iterable. Any other owner fails where its own evaluation
+begins and is the crash alone: a call whose callee's instantiation carries the
+rejected requirement fails at the callee, which is evaluated first, and a
+literal whose conversion is rejected is itself the failure. Nested function
+site collection walks a runtime error's `evaluated` operands like any other
+children, so a closure among them is a nested function like any other.
 
 Retirement is atomic with dispatch introduction. A retired expression emits no
 constraint and no live plan; a required iterator recovery plan carries rejected
