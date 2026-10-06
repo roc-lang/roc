@@ -107,6 +107,9 @@ pub const LiteralFreezeContext = struct {
     worker: WorkerPlanId,
     bindings: Span,
     dictionaries: Span,
+    /// A literal initializer's own frame: callables it builds are frozen
+    /// under its bindings rather than any instantiation of its site's worker.
+    literal_initializer: ?u32 = null,
     callable_types: std.AutoHashMapUnmanaged(TypeRepId, u32) = .empty,
 };
 
@@ -3762,6 +3765,16 @@ const LiteralPlanner = struct {
             const owned = try self.builder.allocator.dupe(LiteralRequirements.Argument, args);
             errdefer self.builder.allocator.free(owned);
             try self.result.generated_captures.put(self.builder.allocator, factory.*, owned);
+        }
+        if (self.result.freeze_contexts.items.len != 0) {
+            for (self.result.initializers.items, 0..) |initializer, index| {
+                try self.result.freeze_contexts.append(self.builder.allocator, .{
+                    .worker = plan.literal_sites.items[initializer.site].worker,
+                    .bindings = initializer.bindings,
+                    .dictionaries = .{},
+                    .literal_initializer = @intCast(index),
+                });
+            }
         }
         var rep_index: usize = 0;
         while (self.result.freeze_contexts.items.len != 0 and rep_index < plan.representations.items.len) : (rep_index += 1) {

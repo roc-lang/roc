@@ -1435,6 +1435,9 @@ const ProcedureBuilder = struct {
         fields: []const FrozenCaptureRecipe,
         result_rep: Plan.TypeRepId,
         rep: Plan.TypeRepId,
+        /// The literal initializer whose frame built this callable, which
+        /// then describes it under that initializer's own bindings.
+        literal_initializer: ?u32 = null,
     };
     /// A frozen callable's captured descriptor: the creating frame built it
     /// for `source_rep`, the representation it described there, and the
@@ -8197,10 +8200,10 @@ const ProcedureBuilder = struct {
         return self.literal_const_plans != null and self.plan.literal_evidence.?.freeze_contexts.items.len != 0;
     }
 
-    fn recordFrozenCallable(self: *ProcedureBuilder, worker: Plan.WorkerPlanId, source_rep: Plan.TypeRepId, target_rep: Plan.TypeRepId, entry: LIR.LirProcSpecId, capture_layout: layout.Idx, on_drop: LIR.ErasedCallableOnDrop, result_rep: Plan.TypeRepId, fields: []const FrozenCaptureRecipe) Allocator.Error!void {
+    fn recordFrozenCallable(self: *ProcedureBuilder, worker: Plan.WorkerPlanId, literal_initializer: ?u32, source_rep: Plan.TypeRepId, target_rep: Plan.TypeRepId, entry: LIR.LirProcSpecId, capture_layout: layout.Idx, on_drop: LIR.ErasedCallableOnDrop, result_rep: Plan.TypeRepId, fields: []const FrozenCaptureRecipe) Allocator.Error!void {
         if (!self.needsFrozenCallableRecipes()) return;
         var hash = base.Sha256.init(.{});
-        const identities = [_]u32{ @intFromEnum(worker), @intFromEnum(source_rep), @intFromEnum(target_rep) };
+        const identities = [_]u32{ @intFromEnum(worker), @intFromEnum(source_rep), @intFromEnum(target_rep), if (literal_initializer) |index| index + 1 else 0 };
         hash.update(std.mem.asBytes(&identities));
         for (fields) |field| {
             const identity = [_]u32{ @intFromEnum(std.meta.activeTag(field)), switch (field) {
@@ -8222,7 +8225,7 @@ const ProcedureBuilder = struct {
         for (self.frozen_callable_recipes.items) |existing| {
             if (std.mem.eql(u8, &existing.key, &key)) return;
         }
-        try self.frozen_callable_recipes.append(self.allocator, .{ .worker = worker, .source_rep = source_rep, .entry = entry, .key = key, .capture_layout = capture_layout, .on_drop = on_drop, .result_rep = result_rep, .rep = target_rep, .fields = try self.allocator.dupe(FrozenCaptureRecipe, fields) });
+        try self.frozen_callable_recipes.append(self.allocator, .{ .worker = worker, .source_rep = source_rep, .entry = entry, .key = key, .capture_layout = capture_layout, .on_drop = on_drop, .result_rep = result_rep, .rep = target_rep, .fields = try self.allocator.dupe(FrozenCaptureRecipe, fields), .literal_initializer = literal_initializer });
     }
 
     fn emitHostedExternalProc(
@@ -24587,7 +24590,7 @@ const ProcBodyBuilder = struct {
         defer stored_capture_initializers.deinit(self.parent.allocator);
 
         if (captures.len == 0) {
-            try self.parent.recordFrozenCallable(worker_id, worker_function.rep, worker_function.rep, erased_proc, .zst, .none, worker_function.ret, &.{});
+            try self.parent.recordFrozenCallable(worker_id, null, worker_function.rep, worker_function.rep, erased_proc, .zst, .none, worker_function.ret, &.{});
             const result_desc = try self.exactCallResultDescriptorRef(worker_function.ret);
             try self.appendResultDescriptorInitializers(&result_desc_initializers, result_desc);
             if (result_desc_initializers.items.len != 0) {
@@ -24807,7 +24810,7 @@ const ProcBodyBuilder = struct {
                     .hidden_literal => .{ .literal = capture.literal_parameter.? },
                 };
             }
-            try self.parent.recordFrozenCallable(worker_id, worker_function.rep, worker_function.rep, erased_proc, capture_layout, on_drop, worker_function.ret, fields);
+            try self.parent.recordFrozenCallable(worker_id, null, worker_function.rep, worker_function.rep, erased_proc, capture_layout, on_drop, worker_function.ret, fields);
         }
 
         const assign = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
@@ -25400,7 +25403,7 @@ const ProcBodyBuilder = struct {
                 .hidden_dict => .{ .dictionary = capture.dictionaries },
                 .hidden_literal => .{ .literal = capture.literal_parameter.? },
             };
-            try self.parent.recordFrozenCallable(worker_id, callable_rep, callable_rep, erased_proc, capture_layout, on_drop, result_rep, fields);
+            try self.parent.recordFrozenCallable(worker_id, null, callable_rep, callable_rep, erased_proc, capture_layout, on_drop, result_rep, fields);
         }
         const pack = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
@@ -38911,7 +38914,7 @@ const ProcBodyBuilder = struct {
             defer self.parent.allocator.free(fields);
             fields[0] = .{ .value = source_function.rep };
             for (descriptor_captures, fields[1..]) |capture, *field| field.* = .{ .descriptor = .{ .worker_rep = capture.materialize_rep, .source_rep = capture.materialize_rep } };
-            try self.parent.recordFrozenCallable(self.worker_layout.worker, source_function.rep, target_function.rep, adapter.proc, adapter.capture_layout, self.erasedCallableOnDrop(adapter.capture_layout), target_function.ret, fields);
+            try self.parent.recordFrozenCallable(self.worker_layout.worker, self.literal_initializer, source_function.rep, target_function.rep, adapter.proc, adapter.capture_layout, self.erasedCallableOnDrop(adapter.capture_layout), target_function.ret, fields);
         }
 
         const assign_callable = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
@@ -45731,6 +45734,7 @@ const ConstPlanBuilder = struct {
                 const recipe = self.procedure_builder.frozen_callable_recipes.items[cursor];
                 for (self.plan.literal_evidence.?.freeze_contexts.items, 0..) |context, context_index| {
                     if (context.worker != recipe.worker) continue;
+                    if (!std.meta.eql(context.literal_initializer, recipe.literal_initializer)) continue;
                     self.active_context = @intCast(context_index);
                     defer self.active_context = null;
                     // An adapter's wrapped value retains the source worker's
