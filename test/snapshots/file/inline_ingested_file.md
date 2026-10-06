@@ -14,7 +14,7 @@ foo = Json.parse(data)
 DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 MOD NOT FOUND - inline_ingested_file.md:2:1:2:12
-MISSING METHOD - inline_ingested_file.md:4:7:4:17
+TYPE NOT DETERMINED - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -63,20 +63,27 @@ MISSING METHOD - inline_ingested_file.md:4:7:4:17
 			(source-region (file "inline_ingested_file.md") (start 2 1) (end 2 12) (annotation error) (line-text "import Json"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 4 7) (end 4 17))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "parser_for")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "inline_ingested_file.md") (start 4 7) (end 4 17) (annotation error) (line-text "foo = Json.parse(data)"))
 			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "parser_for")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig

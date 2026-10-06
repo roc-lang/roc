@@ -47607,12 +47607,16 @@ const BodyContext = struct {
     const RecordFieldBind = struct { local: DraftLocalId, cell: DraftTypeCell, value: DraftExprId };
 
     /// Record field values evaluate in source order, while a record
-    /// constructor lists its fields in layout order. When the supplied
-    /// fields' source order (`source_names`, the checked record literal's
-    /// field order) differs from the layout order of `lowered`, each supplied
-    /// value is bound to a local and the constructor reads that local; the
-    /// returned bindings are in source order. When the orders agree, nothing
-    /// is bound and the returned slice is empty.
+    /// constructor lists its fields in layout order. Only the supplied
+    /// values whose evaluation is observable (`exprEvaluationIsUnobservable`)
+    /// have an order to keep. When those values' source order (`source_names`,
+    /// the checked record literal's field order) differs from their layout
+    /// order in `lowered`, each of them is bound to a local and the
+    /// constructor reads that local; the returned bindings are in source
+    /// order. Every other value stays in its constructor slot, so a
+    /// constructor operand moves into a local only when its evaluation order
+    /// would otherwise change. When the orders agree, nothing is bound and
+    /// the returned slice is empty.
     fn bindRecordFieldsInSourceOrder(
         self: *BodyContext,
         source_names: []const names.RecordFieldNameId,
@@ -47622,31 +47626,113 @@ const BodyContext = struct {
         defer self.allocator.free(source_index_of_slot);
         var in_source_order = true;
         var previous: ?usize = null;
+        var supplied: usize = 0;
         for (lowered, source_index_of_slot) |field, *source_index| {
-            source_index.* = for (source_names, 0..) |name, index| {
-                if (name == field.name) break index;
+            const index = for (source_names, 0..) |name, position| {
+                if (name == field.name) break position;
             } else null;
-            const index = source_index.* orelse continue;
+            if (index != null) supplied += 1;
+            source_index.* = if (index != null and !(try self.exprEvaluationIsUnobservable(field.value))) index else null;
+            const ordered_index = source_index.* orelse continue;
             if (previous) |prev| {
-                if (index < prev) in_source_order = false;
+                if (ordered_index < prev) in_source_order = false;
             }
-            previous = index;
+            previous = ordered_index;
         }
+        if (supplied != source_names.len) Common.invariant("record constructor did not lay out every supplied field");
         if (in_source_order) return &.{};
 
-        const binds = try self.allocator.alloc(RecordFieldBind, source_names.len);
-        errdefer self.allocator.free(binds);
+        const by_source = try self.allocator.alloc(?RecordFieldBind, source_names.len);
+        defer self.allocator.free(by_source);
+        @memset(by_source, null);
         var bound: usize = 0;
         for (lowered, source_index_of_slot) |*field, maybe_index| {
             const index = maybe_index orelse continue;
             const cell = self.exprTypeCell(field.value);
             const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
-            binds[index] = .{ .local = local, .cell = cell, .value = field.value };
+            by_source[index] = .{ .local = local, .cell = cell, .value = field.value };
             field.value = try self.addExprWithTypeCell(cell, .{ .local = local });
             bound += 1;
         }
-        if (bound != source_names.len) Common.invariant("record constructor did not lay out every supplied field");
+        const binds = try self.allocator.alloc(RecordFieldBind, bound);
+        var next: usize = 0;
+        for (by_source) |maybe_bind| {
+            const bind = maybe_bind orelse continue;
+            binds[next] = bind;
+            next += 1;
+        }
         return binds;
+    }
+
+    /// Whether evaluating `root` can have no observable effect: it reads
+    /// locals and builds values from literals and closures, and so cannot
+    /// crash, call, print, or diverge. Moving such
+    /// an evaluation before or after any other cannot be observed.
+    fn exprEvaluationIsUnobservable(self: *BodyContext, root: DraftExprId) Allocator.Error!bool {
+        var work: std.ArrayList(DraftExprId) = .empty;
+        defer work.deinit(self.allocator);
+        try work.append(self.allocator, root);
+        while (work.pop()) |expr_id| {
+            switch (self.draft.exprs.items[@intFromEnum(expr_id)].data) {
+                .local,
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .lambda,
+                .fn_def,
+                .fn_ref,
+                => {},
+                .nominal => |backing| try work.append(self.allocator, backing),
+                .tag => |tag| try work.appendSlice(self.allocator, self.exprSpan(tag.payloads)),
+                .tuple => |items| try work.appendSlice(self.allocator, self.exprSpan(items)),
+                .record => |fields| for (self.fieldExprSpan(fields)) |field| {
+                    try work.append(self.allocator, field.value);
+                },
+                .pending_deferred,
+                .@"unreachable",
+                .def_ref,
+                .static_data_candidate,
+                .comptime_value,
+                .list,
+                .record_update,
+                .let_,
+                .call_value,
+                .call_proc,
+                .low_level,
+                .field_access,
+                .tuple_access,
+                .structural_eq,
+                .structural_hash,
+                .match_,
+                .if_,
+                .uninitialized,
+                .uninitialized_payload,
+                .if_initialized_payload,
+                .try_sequence,
+                .try_record_sequence,
+                .block,
+                .loop_,
+                .break_,
+                .continue_,
+                .join_point,
+                .jump,
+                .return_,
+                .crash,
+                .checked_error,
+                .comptime_branch_taken,
+                .comptime_exhaustiveness_failed,
+                .dbg,
+                .expect_err,
+                .expect,
+                .literal_rejected,
+                => return false,
+            }
+        }
+        return true;
     }
 
     /// Bind `binds`' values, first source field outermost, around `body`.

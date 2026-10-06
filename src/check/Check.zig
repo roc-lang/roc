@@ -755,6 +755,22 @@ erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 binder_source_exprs: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
 /// Scratch for the binders `valueIsErroneous` walks through.
 binder_source_path: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
+/// The relation being checked (`problem.RelationOwner`). Every problem
+/// recorded while it is current, and every dispatch obligation queued while
+/// it is current, belongs to it.
+relation_owner: problem.RelationOwner = .none,
+/// The relation that owns each recorded problem, by problem index. The
+/// problems past its end belong to `relation_owner`.
+problem_owners: std.ArrayListUnmanaged(problem.RelationOwner) = .empty,
+/// The values each relation-owning expression reads, captured when its
+/// checking begins (`recordRelationOperands`), since a rejected expression is
+/// later replaced by a runtime error. Ranges into `relation_operand_pool`.
+relation_operands: std.AutoHashMapUnmanaged(CIR.Expr.Idx, RelationOperands) = .empty,
+relation_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+/// The relation under which each erroneous value expression or binder in
+/// `erroneous_value_exprs` and `erroneous_value_patterns` was made
+/// erroneous, by raw node index (`ErroneousCause`).
+erroneous_causes: std.AutoHashMapUnmanaged(u32, ErroneousCause) = .empty,
 /// Patterns of value bindings whose annotation writes a type variable the
 /// binding cannot quantify (design.md "Value Bindings Generalize By
 /// Expression"). The annotation is reported and not applied, so the binding
@@ -3815,6 +3831,10 @@ pub fn deinit(self: *Self) void {
     self.erroneous_value_patterns.deinit(self.gpa);
     self.binder_source_exprs.deinit(self.gpa);
     self.binder_source_path.deinit(self.gpa);
+    self.problem_owners.deinit(self.gpa);
+    self.relation_operands.deinit(self.gpa);
+    self.relation_operand_pool.deinit(self.gpa);
+    self.erroneous_causes.deinit(self.gpa);
     self.rejected_value_annotations.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
@@ -4338,7 +4358,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
     defer reported.deinit(self.gpa);
     for (methods.keys(), methods.values()) |pattern, method| {
         if (self.cir.store.getExpr(method.expr) == .e_runtime_error) {
-            try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+            try self.markErroneousValuePattern(pattern);
             continue;
         }
         try self.collectLexicalScope(method.expr, &scope);
@@ -4361,8 +4381,8 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
             .region = self.cir.store.getExprRegion(method.expr),
         } });
         try self.replaceExprWithRuntimeError(method.expr, diagnostic_idx);
-        try self.erroneous_value_exprs.put(self.gpa, method.expr, {});
-        try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+        try self.markErroneousValueExpr(method.expr);
+        try self.markErroneousValuePattern(pattern);
     }
 }
 
@@ -11846,6 +11866,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeWeakValueImplicitOpenExts(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
+    try self.withdrawProblemsOfVoidRelations();
     // Pruning can mark a destructured name erroneous; its uses are poisoned
     // like those of any other erroneous binding.
     try self.poisonErroneousValueUses();
@@ -12208,7 +12229,7 @@ fn hoistedRootIsIntrinsicallyKept(
                 const has_error = try self.canonical_key_writer.containsError(type_var) or
                     try self.canonical_key_writer.containsError(ModuleEnv.varFrom(root.expr));
                 if (has_error) {
-                    if (root.pattern) |pattern| try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+                    if (root.pattern) |pattern| try self.markErroneousValuePattern(pattern);
                 }
                 return !has_error;
             }
@@ -13406,8 +13427,8 @@ fn pushCirSubpatterns(self: *const Self, pending: *std.ArrayList(CIR.Pattern.Idx
 ///   the deferred dispatch fires, and the resolved method's signature pins
 ///   every var in the constraint fn—return position included. Without this,
 ///   an instantiated helper's RETURN var (`add_x(5)` with
-///   `add_x : a -> r where [a.plus : (a, x) -> r]`) was falsely reported
-///   MISSING METHOD. Generalized entries are deliberately NOT skipped: a
+///   `add_x : a -> r where [a.plus : (a, x) -> r]`) would be falsely
+///   reported as undetermined. Generalized entries are deliberately NOT skipped: a
 ///   generalized literal stays open and resolves per instantiation, which is
 ///   exactly why its chain is pinnable.
 /// - Everything reachable from the given lambda parameter spans (recorded as
@@ -13563,12 +13584,12 @@ fn literalFailureOwnerExpr(self: *const Self, owner: CIR.Node.Idx) ?CIR.Expr.Idx
 }
 
 fn poisonPatternBindings(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
-    try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+    try self.markErroneousValuePattern(pattern);
     var bindings = std.ArrayList(PatternBinding).empty;
     defer bindings.deinit(self.gpa);
     try self.collectPatternBindings(pattern, &bindings);
     for (bindings.items) |binding| {
-        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+        try self.markErroneousValuePattern(binding.pattern_idx);
     }
 }
 
@@ -13588,7 +13609,7 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     // pattern it is) becomes a runtime error; the binders are scoped inside
     // it.
     if (isExprNodeTag(tag)) {
-        try self.erroneous_value_exprs.put(self.gpa, @enumFromInt(@intFromEnum(owner)), {});
+        try self.markErroneousValueExpr(@enumFromInt(@intFromEnum(owner)));
         return;
     }
     if (tag == .def) {
@@ -13617,10 +13638,10 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
 /// root that outputs a typed runtime-error constant, so no stage evaluates the
 /// rejected pattern against its RHS.
 fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnostic.Idx) Allocator.Error!void {
-    try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    try self.markErroneousValuePattern(def.pattern);
     try self.retirePatternMetadata(def.pattern, diagnostic);
     try self.replaceExprWithRuntimeError(def.expr, diagnostic);
-    try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+    try self.markErroneousValueExpr(def.expr);
     // Extraction/validation roots synthesize a match over this RHS.
     // A rejected destructure has no pattern evaluation to select.
     try self.hoist_invalidated_exprs.put(self.gpa, def.expr, {});
@@ -13628,7 +13649,7 @@ fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnost
     defer bindings.deinit(self.gpa);
     try self.collectPatternBindings(def.pattern, &bindings);
     for (bindings.items) |binding| {
-        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+        try self.markErroneousValuePattern(binding.pattern_idx);
         const root_index = try self.ensureHoistedPatternExtractionRoot(binding.pattern_idx, .{
             .base_expr = def.expr,
             .scrutinee_pattern = def.pattern,
@@ -13642,7 +13663,7 @@ fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnost
 /// nothing, and a selected root of its own evaluates its right-hand side for
 /// its effects, up to where it crashes, and archives nothing.
 fn recordValuelessTopLevelValue(self: *Self, def: CIR.Def) Allocator.Error!void {
-    try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    try self.markErroneousValuePattern(def.pattern);
     try self.selected_hoisted_roots.append(self.gpa, .{
         .expr = def.expr,
         .body = .{ .valueless_binding = def.pattern },
@@ -13851,7 +13872,7 @@ fn poisonLiteralFailureOwners(
             .region = self.cir.store.getExprRegion(expr_idx),
         } });
         try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.markErroneousValueExpr(expr_idx);
     }
     for (pattern_owners.items) |owner| {
         try self.rejectPatternFailureOwner(owner);
@@ -13905,14 +13926,14 @@ fn poisonConstraintFailureSource(
     const expr = self.cir.store.getExpr(expr_idx);
     if (expr == .e_runtime_error) return;
     if (expr == .e_lambda or expr == .e_closure) {
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.markErroneousValueExpr(expr_idx);
         return;
     }
     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
         .region = self.cir.store.getExprRegion(expr_idx),
     } });
     try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
-    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    try self.markErroneousValueExpr(expr_idx);
 }
 
 /// Replace the owner of a rejected static dispatch with a runtime error. An
@@ -14486,7 +14507,7 @@ fn findStaticDispatchUseForConstraint(
 }
 
 /// Apply the ambiguity verdicts collected by the local judgments: emit each
-/// `MISSING METHOD` problem and mark the offending expressions runtime errors
+/// `unresolved_dispatcher` problem and mark the offending expressions runtime errors
 /// so lowering never reaches an ownerless dispatch. Applying is batched here,
 /// at the settled end-of-check state, for two reasons: problem order stays
 /// stable (all ambiguity reports follow the other end-of-check reports, as
@@ -15155,7 +15176,7 @@ fn rejectEffectfulCompileTimeExecutableRoots(self: *Self) Allocator.Error!void {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_comptime_expression = .{
             .region = self.cir.store.getExprRegion(root.body),
         } });
-        try self.erroneous_value_exprs.put(self.gpa, root.body, {});
+        try self.markErroneousValueExpr(root.body);
     }
 }
 
@@ -16761,7 +16782,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
 
         // Check the pattern
         if (!try self.checkPattern(def.pattern, def_pattern_ctx, env)) {
-            try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+            try self.markErroneousValueExpr(def.expr);
         }
     }
 
@@ -16869,14 +16890,14 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     // without the annotation, becomes a runtime error, and as an unannotated
     // binding of an erroneous value its name is erroneous.
     if (self.rejected_value_annotations.contains(def.pattern)) {
-        try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+        try self.markErroneousValueExpr(def.expr);
     }
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
             .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
         } });
         try self.markErroneous(expr_var);
-        try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+        try self.markErroneousValueExpr(def.expr);
     }
     // An unannotated value that always crashes has no value: the crash
     // happens before its name is bound, exactly as when a pattern meets an
@@ -16897,7 +16918,7 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
     }
     if (self.erroneous_value_exprs.contains(def.expr)) {
-        if (applied_annotation == null) try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+        if (applied_annotation == null) try self.markErroneousValuePattern(def.pattern);
         // Destructuring a runtime error binds nothing, so every name the
         // pattern introduces is erroneous, annotated or not.
         if (self.cir.store.getPattern(def.pattern) != .assign) try self.markPatternBindingsErroneous(def.pattern);
@@ -17172,7 +17193,7 @@ fn predeclareAnnotationSchemeHelp(
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
-    self.problems.truncate(problems_len);
+    self.truncateProblems(problems_len);
     self.snapshots.truncateToMark(snapshots_mark);
     try self.resetAnnotationNodes(annotation_idx);
 
@@ -18016,7 +18037,7 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
         try self.setVarRank(ModuleEnv.varFrom(member_def.pattern), env);
         const member_pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(member_def.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(member_def_idx) };
         if (!try self.checkPattern(member_def.pattern, member_pattern_ctx, env)) {
-            try self.erroneous_value_exprs.put(self.gpa, member_def.expr, {});
+            try self.markErroneousValueExpr(member_def.expr);
         }
     }
 
@@ -18444,6 +18465,9 @@ fn enqueueDeferredDispatchConstraint(
         .current_group => self.active_scheme_root,
         .recorded => |recorded| recorded.scheme_root,
     };
+    // The relation whose checking queued the obligation owns what its
+    // resolution reports.
+    if (owned.relation_owner.kind == .none) owned.relation_owner = self.relation_owner;
     _ = try env.deferred_static_dispatch_constraints.append(self.gpa, owned);
 }
 
@@ -19711,7 +19735,7 @@ fn reportImplicitOpenExtExtension(
 /// right-hand side becomes a runtime error. The row keeps what solving gave
 /// it, because every use of a weak value shares that one row.
 fn retireRowExtendingDefinition(self: *Self, owner_expr: CIR.Expr.Idx) std.mem.Allocator.Error!void {
-    try self.erroneous_value_exprs.put(self.gpa, self.definitionBodyExpr(owner_expr), {});
+    try self.markErroneousValueExpr(self.definitionBodyExpr(owner_expr));
 }
 
 /// The expression a definition's value is computed by: a function's body,
@@ -22900,7 +22924,7 @@ fn poisonRejectedPatternBinders(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
     try self.collectPatternBindings(pattern_idx, &bindings);
     for (bindings.items) |binding| {
         if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
-        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+        try self.markErroneousValuePattern(binding.pattern_idx);
         try self.markErroneous(ModuleEnv.varFrom(binding.pattern_idx));
     }
 }
@@ -24205,7 +24229,7 @@ const ExprCheckFrame = struct {
                 // explicit executable value. End-of-check poisoning replaces this
                 // expression with a runtime error while the binding retains the
                 // annotation's checked type for all independent consumers.
-                try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                try checker.markErroneousValueExpr(self.expr_idx);
             }
 
             // Check if the expression type contains any errors anywhere in its
@@ -24227,7 +24251,7 @@ const ExprCheckFrame = struct {
                     checker.varIsFunctionType(anno_vars.anno_var_backup) and
                     checker.exprDefinesMethod(self.expr_idx);
                 if (!is_method_callable) {
-                    try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                    try checker.markErroneousValueExpr(self.expr_idx);
                 }
                 // If there was an annotation AND the expr contains errors, then unify the
                 // raw expr var against the annotation
@@ -24243,7 +24267,7 @@ const ExprCheckFrame = struct {
                 // the expression no instantiable type, so the expression must
                 // itself become the runtime error.
                 if (annotation_result == .suppressed_by_error) {
-                    try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                    try checker.markErroneousValueExpr(self.expr_idx);
                 }
                 // Make the explicit annotation the checked root for
                 // this expression. The body has already constrained the
@@ -24255,7 +24279,7 @@ const ExprCheckFrame = struct {
         checker.var_set.clearRetainingCapacity();
         if (self.mb_anno_vars == null) {
             if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
-                try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                try checker.markErroneousValueExpr(self.expr_idx);
                 checker.call_operand_type_error_exprs.items[nodeSlot(self.expr_idx)] = true;
                 try checker.recordRetiredOperandSequence(self.expr_idx);
             }
@@ -24580,16 +24604,24 @@ fn newExprKernelActivity(self: *Self, next: ExprChildRequest) Allocator.Error!*E
 
 fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
     if (state.finishing) |*finishing| {
+        const previous_relation = try self.enterRelation(.of(.value, finishing.frame.expr_idx, 0));
         try finishing.frame.finishAfterBoundary(finishing.does_fx);
+        try self.leaveRelation(previous_relation);
         state.child_does_fx = finishing.does_fx;
         state.finishing = null;
     }
     while (true) {
         if (state.next) |request| {
             state.next = null;
+            const frame_relation = try self.enterRelation(.of(.value, request.expr, 0));
             var frame = try self.beginExprCheckFrame(request.expr, env, request.expected);
+            try self.leaveRelation(frame_relation);
             const owner = request.function_owner orelse request.expr;
             if (exprTaskState(frame.expr)) |task_state| {
+                self.recordRelationOperands(frame.expr_idx, frame.expr) catch |err| {
+                    frame.deinit();
+                    return err;
+                };
                 state.tasks.append(self.gpa, .{
                     .frame = frame,
                     .expected = request.expected,
@@ -24602,7 +24634,9 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
                 state.child_does_fx = null;
             } else {
                 errdefer frame.deinit();
+                const leaf_relation = try self.enterRelation(exprStepRelation(frame.expr_idx, frame.expr));
                 const does_fx = try self.checkLeafExpr(&frame, request.expected, env);
+                try self.leaveRelation(leaf_relation);
                 if (try self.finishExprFrame(state, &frame, does_fx)) |step| return step;
             }
         }
@@ -24612,7 +24646,10 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
             return checkActivityDone(.{ .does_fx = state.child_does_fx.? });
         }
         const task = &state.tasks.items[state.tasks.items.len - 1];
-        switch (try self.resumeExprTask(task, env, state.child_does_fx)) {
+        const task_relation = try self.enterRelation(exprStepRelation(task.frame.expr_idx, task.frame.expr));
+        const task_step = try self.resumeExprTask(task, env, state.child_does_fx);
+        try self.leaveRelation(task_relation);
+        switch (task_step) {
             .child => |request| state.next = request,
             .done => {
                 var finished = state.tasks.pop().?;
@@ -24626,7 +24663,10 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
 /// Finish a checked expression's frame; a frame at its group's generalization
 /// boundary suspends until the boundary activity completes.
 fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!?CheckActivityStep {
-    switch (try frame.finishBeforeBoundary(does_fx)) {
+    const previous_relation = try self.enterRelation(.of(.value, frame.expr_idx, 0));
+    const finish = try frame.finishBeforeBoundary(does_fx);
+    try self.leaveRelation(previous_relation);
+    switch (finish) {
         .finished => {
             state.child_does_fx = does_fx;
             return null;
@@ -25613,7 +25653,9 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
             // context, at the element's region.
             var first_elem_ok = true;
             state.elem_var = if (state.seed_elem_var) |seed_elem_var| acc: {
+                const previous_relation = try self.enterRelation(.of(.list_prefix, frame.expr_idx, 0));
                 const result = try self.unifyInContext(seed_elem_var, first_elem_var, env, nested_expected.aggregateType().?.context);
+                try self.leaveRelation(previous_relation);
                 first_elem_ok = result.isEstablished();
                 break :acc seed_elem_var;
             } else first_elem_var;
@@ -25634,11 +25676,13 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
             const cur_elem_var = try self.storedValueVar(elem_expr_idx, env);
 
             // Unify each element's var with the list's elem var
+            const previous_relation = try self.enterRelation(.of(.list_prefix, frame.expr_idx, @intCast(state.index)));
             const result = try self.unifyInContext(state.elem_var, cur_elem_var, env, .{ .list_entry = .{
                 .elem_index = @intCast(state.index),
                 .list_length = @intCast(elems.len),
                 .last_elem_idx = ModuleEnv.nodeIdxFrom(state.last_elem_expr_idx),
             } });
+            try self.leaveRelation(previous_relation);
 
             // If we errored, check the rest of the elements without comparing
             // to the elem_var to catch their individual errors, avoiding
@@ -26525,7 +26569,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
 
             // Check the pattern
             if (!try self.checkPattern(decl_stmt.pattern, decl_pattern_ctx, env)) {
-                try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                try self.markErroneousValueExpr(decl_stmt.expr);
             }
 
             // Extract function name from the pattern (for better error messages)
@@ -26588,7 +26632,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
 
             // Check the pattern
             if (!try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env)) {
-                try self.erroneous_value_exprs.put(self.gpa, var_stmt.expr, {});
+                try self.markErroneousValueExpr(var_stmt.expr);
             }
 
             // Check the annotation, if it exists. A mutable `var` never
@@ -26661,7 +26705,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // explicitly before we unify it with the RHS.
             const reassign_pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(reassign.pattern_idx)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
             if (!try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env)) {
-                try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
+                try self.markErroneousValueExpr(reassign.expr);
             }
             self.discardHoistBindingCandidate(reassign.pattern_idx);
             return .{ .expr = reassign.expr, .expected = statement_expected };
@@ -26768,11 +26812,11 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // A rejected annotation retires its binding, as at the top level
             // (see `finishDef`).
             if (self.rejected_value_annotations.contains(decl_stmt.pattern)) {
-                try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                try self.markErroneousValueExpr(decl_stmt.expr);
             }
             try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
             if (self.erroneous_value_exprs.contains(decl_stmt.expr)) {
-                if (applied_annotation == null) try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
+                if (applied_annotation == null) try self.markErroneousValuePattern(decl_stmt.pattern);
                 // Destructuring an erroneous value binds nothing, so every
                 // name the pattern introduces is erroneous, annotated or not.
                 if (self.cir.store.getPattern(decl_stmt.pattern) != .assign) try self.markPatternBindingsErroneous(decl_stmt.pattern);
@@ -26794,7 +26838,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.unify(decl_pattern_var, decl_expr_var, env);
 
             if (decl_pattern_result.isProblem() or self.types.resolveVar(decl_expr_var).desc.content == .err) {
-                try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                try self.markErroneousValueExpr(decl_stmt.expr);
                 try self.erroneous_statements.put(self.gpa, stmt_idx, decl_stmt.expr);
                 try self.poisonPatternBindings(decl_stmt.pattern);
             }
@@ -26876,7 +26920,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
             self.discardHoistBindingCandidate(var_stmt.pattern_idx);
             if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
-                try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
+                try self.markErroneousValuePattern(var_stmt.pattern_idx);
             }
             const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
             try self.closeAbsentConstructedPayloadVars(var_stmt.expr, var_expr);
@@ -26913,7 +26957,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             if (reassign_pattern_result.isProblem() or
                 self.types.resolveVar(reassign_expr_var).desc.content == .err)
             {
-                try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
+                try self.markErroneousValueExpr(reassign.expr);
                 try self.erroneous_statements.put(self.gpa, stmt_idx, reassign.expr);
             }
 
@@ -26965,7 +27009,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // it becomes an explicit runtime error, so no later stage reads
             // the expression's erroneous type.
             if (self.call_operand_type_error_exprs.items[nodeSlot(expr.expr)]) {
-                try self.erroneous_value_exprs.put(self.gpa, expr.expr, {});
+                try self.markErroneousValueExpr(expr.expr);
                 try self.erroneous_statements.put(self.gpa, stmt_idx, expr.expr);
                 try self.markErroneous(stmt_var);
                 return null;
@@ -26979,7 +27023,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
             const statement_result = try self.unifyOwnedRelation(empty_rec, expr_var, env, .statement_value, .construction);
             if (statement_result.isProblem()) {
-                try self.erroneous_value_exprs.put(self.gpa, expr.expr, {});
+                try self.markErroneousValueExpr(expr.expr);
                 try self.markErroneous(stmt_var);
             } else {
                 _ = try self.unify(stmt_var, expr_var, env);
@@ -27396,7 +27440,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
         const pattern_idx = self.cir.store.patternAt(lambda.args, i);
         arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
         if (!try self.checkPattern(pattern_idx, pattern_ctx, env)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            try self.markErroneousValueExpr(expr_idx);
         }
     }
 
@@ -27486,7 +27530,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
                 // the pattern fails its own check.
                 const arg_result = try self.unifyInContext(expected_arg_var, arg_var, env, state.anno_context);
                 if (arg_result.isProblem()) {
-                    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                    try self.markErroneousValueExpr(expr_idx);
                 }
             }
         } else {
@@ -27577,7 +27621,7 @@ fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *
         // the lambda remains a valid structural child until the closure is
         // replaced with a runtime error.
         if (self.erroneous_value_exprs.remove(closure.lambda_idx)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            try self.markErroneousValueExpr(expr_idx);
         }
         const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
@@ -27838,7 +27882,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         // The call owns the callable/arity diagnostic, but its result slot
         // remains a valid continuation type. Keep that type graph intact
         // while lowering replaces only this call with a runtime error.
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.markErroneousValueExpr(expr_idx);
     }
     const did_err = self.types.resolveVar(func_var).desc.content == .err or
         arg_relation_failed or
@@ -27853,7 +27897,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         const result = try self.enforceRecordBuilderMap2Return(state.shape_func, env, expr_idx, func_name);
         if (result.isProblem()) {
             try self.markErroneous(expr_var);
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            try self.markErroneousValueExpr(expr_idx);
             return .done;
         }
     }
@@ -28019,7 +28063,7 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
         // establishes no record relation or field value type.
         if (!access_result.isEstablished()) {
             try self.markErroneous(expr_var);
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            try self.markErroneousValueExpr(expr_idx);
             access_failed = true;
             break;
         }
@@ -28695,7 +28739,9 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .after_branch_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
+                const cond_relation = try self.enterRelation(.of(.value, branch.cond, 0));
                 const result = try self.checkBoolOperand(branch.cond, frame.expr_region, .if_condition, env);
+                try self.leaveRelation(cond_relation);
                 if (if_.origin == .source and result.isEstablished()) {
                     try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
                 }
@@ -28720,6 +28766,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                     try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, state.branch_acc.?, branch_ctx, env);
                 } else if (!self.branchValueIsErroneous(branch.body)) {
                     const body_var: Var = ModuleEnv.varFrom(branch.body);
+                    const previous_relation = try self.enterRelation(.of(.branch, if_expr_idx, @intCast(state.branch_index)));
                     const result = try self.unifyInContext(state.branch_var, body_var, env, .{ .if_branch = .{
                         .branch_index = @intCast(state.branch_index),
                         .num_branches = state.num_branches,
@@ -28727,6 +28774,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                         .parent_if_expr = if_expr_idx,
                         .last_if_branch = state.last_if_branch,
                     } });
+                    try self.leaveRelation(previous_relation);
                     if (!result.isAccepted()) {
                         state.remaining_index = state.branch_index + 1;
                         state.phase = if (state.remaining_index < branches.len)
@@ -28747,7 +28795,9 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .after_remaining_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
+                const cond_relation = try self.enterRelation(.of(.value, branch.cond, 0));
                 const result = try self.checkBoolOperand(branch.cond, frame.expr_region, .if_condition, env);
+                try self.leaveRelation(cond_relation);
                 if (if_.origin == .source and result.isEstablished()) {
                     try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
                 }
@@ -28805,6 +28855,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                 } else {
                     if (!self.branchValueIsErroneous(if_.final_else)) {
                         const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
+                        const previous_relation = try self.enterRelation(.of(.branch, if_expr_idx, state.num_branches - 1));
                         _ = try self.unifyInContext(state.branch_var, final_else_var, env, .{ .if_branch = .{
                             .branch_index = state.num_branches - 1,
                             .num_branches = state.num_branches,
@@ -28812,6 +28863,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                             .parent_if_expr = if_expr_idx,
                             .last_if_branch = state.last_if_branch,
                         } });
+                        try self.leaveRelation(previous_relation);
                     }
                     const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
                     _ = try self.unify(if_expr_var, state.branch_var, env);
@@ -28971,7 +29023,9 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // class can be shared with its producer (a call's result is its
             // callee's return slot), so a rejection retires the match without
             // poisoning that class.
+            const guard_relation = try self.enterRelation(.of(.value, guard_idx, 0));
             const guard_result = try self.unifyOwnedRelation(guard_bool_var, guard_var, env, .if_condition, .construction);
+            try self.leaveRelation(guard_relation);
             if (!guard_result.isEstablished()) state.had_type_error = true;
             if (!match.skip_exhaustiveness and guard_result.isEstablished()) {
                 try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
@@ -29020,11 +29074,13 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                     } };
                     try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, state.branch_acc.?, branch_ctx, env);
                 } else if (!self.branchValueIsErroneous(branch.value)) {
+                    const previous_relation = try self.enterRelation(.of(.branch, expr_idx, @intCast(branch_cur_index)));
                     const branch_result = try self.unifyInContext(state.val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
                         .branch_index = @intCast(branch_cur_index),
                         .num_branches = @intCast(match.branches.span.len),
                         .match_expr = expr_idx,
                     } });
+                    try self.leaveRelation(previous_relation);
 
                     if (!branch_result.isAccepted()) {
                         state.had_type_error = true;
@@ -29185,7 +29241,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
     // boundary; independent expressions and functions remain fully
     // compilable.
     if (state.had_type_error) {
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.markErroneousValueExpr(expr_idx);
     }
     return .done;
 }
@@ -29205,7 +29261,7 @@ fn checkBoolOperand(
 ) std.mem.Allocator.Error!unifier.Result {
     const bool_var = try self.freshBool(env, bool_region);
     const result = try self.unifyOwnedRelation(bool_var, ModuleEnv.varFrom(operand), env, ctx, .construction);
-    if (result.isProblem()) try self.erroneous_value_exprs.put(self.gpa, operand, {});
+    if (result.isProblem()) try self.markErroneousValueExpr(operand);
     return result;
 }
 
@@ -29234,7 +29290,7 @@ fn checkShortCircuitOperand(
 ) std.mem.Allocator.Error!void {
     const bool_var = try self.freshBool(env, bool_region);
     const result = try self.unifyOwnedRelation(bool_var, ModuleEnv.varFrom(operand), env, ctx, .construction);
-    if (result.isProblem()) try self.erroneous_value_exprs.put(self.gpa, operator_expr, {});
+    if (result.isProblem()) try self.markErroneousValueExpr(operator_expr);
 }
 
 /// Check branch `state.branch_index`'s patterns inside a fresh hoist scope,
@@ -29463,7 +29519,7 @@ fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error
 fn retireCallLikeExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
     try self.markErroneous(expr_var);
     if (!self.erroneous_value_exprs.contains(expr_idx)) {
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.markErroneousValueExpr(expr_idx);
     }
     self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
 }
@@ -33094,17 +33150,521 @@ fn poisonRecursiveNonFunctionProcessingDef(
     if (self.cir.store.getExpr(def.expr) != .e_runtime_error) {
         try self.replaceExprWithRuntimeError(def.expr, diagnostic_idx);
     }
-    try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
-    try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    try self.markErroneousValueExpr(def.expr);
+    try self.markErroneousValuePattern(def.pattern);
     try self.markPatternBindingsErroneous(def.pattern);
 
     if (use_expr) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
             try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
         }
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.markErroneousValueExpr(expr_idx);
         try self.markErroneous(ModuleEnv.varFrom(expr_idx));
     }
+}
+
+/// The relation under which a value or binder was made erroneous, named by
+/// the expression that owns the relation. Every relation an expression owns
+/// is part of checking that one expression, so a relation never reads a
+/// rejection made under the same expression as an erroneous operand: the
+/// expression's own checking reports it.
+const ErroneousCause = union(enum) {
+    /// Made erroneous outside any expression's relation: at a generalization
+    /// boundary, at the settled state, or by checking no expression owns.
+    independent,
+    /// Made erroneous by a relation this expression owns (raw
+    /// `CIR.Expr.Idx`).
+    relation_expr: u32,
+    /// Made erroneous by relations of more than one expression.
+    several,
+
+    fn merge(existing: ?ErroneousCause, added: ErroneousCause) ErroneousCause {
+        const current = existing orelse return added;
+        return switch (current) {
+            .independent => .independent,
+            .several => if (added == .independent) .independent else .several,
+            .relation_expr => |expr| switch (added) {
+                .independent => .independent,
+                .several => .several,
+                .relation_expr => |added_expr| if (expr == added_expr) current else .several,
+            },
+        };
+    }
+
+    /// Whether a value with this cause is erroneous to the relation `owner`
+    /// reads it in: something other than a relation of `owner`'s own
+    /// expression made it erroneous.
+    fn erroneousTo(cause: ?ErroneousCause, owner: problem.RelationOwner) bool {
+        return switch (cause orelse return false) {
+            .independent, .several => true,
+            .relation_expr => |expr| expr != owner.expr,
+        };
+    }
+};
+
+fn currentErroneousCause(self: *const Self) ErroneousCause {
+    return if (self.relation_owner.kind == .none) .independent else .{ .relation_expr = self.relation_owner.expr };
+}
+
+fn recordErroneousCause(self: *Self, node: u32) Allocator.Error!void {
+    const cause = self.currentErroneousCause();
+    const entry = try self.erroneous_causes.getOrPut(self.gpa, node);
+    entry.value_ptr.* = if (entry.found_existing) ErroneousCause.merge(entry.value_ptr.*, cause) else cause;
+}
+
+/// Record an erroneous value expression, under the current relation.
+fn markErroneousValueExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    try self.recordErroneousCause(@intFromEnum(expr_idx));
+}
+
+/// Record a binder that binds nothing, under the current relation.
+fn markErroneousValuePattern(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    try self.erroneous_value_patterns.put(self.gpa, pattern_idx, {});
+    try self.recordErroneousCause(@intFromEnum(pattern_idx));
+}
+
+/// Make `owner` the current relation, returning the one it replaces. Every
+/// problem recorded so far belongs to the outgoing relation.
+fn enterRelation(self: *Self, owner: problem.RelationOwner) Allocator.Error!problem.RelationOwner {
+    try self.claimRecordedProblems();
+    const previous = self.relation_owner;
+    self.relation_owner = owner;
+    return previous;
+}
+
+/// Leave the current relation for `previous`, which `enterRelation` returned.
+fn leaveRelation(self: *Self, previous: problem.RelationOwner) Allocator.Error!void {
+    try self.claimRecordedProblems();
+    self.relation_owner = previous;
+}
+
+/// Attribute every problem recorded since the last claim to the current
+/// relation.
+fn claimRecordedProblems(self: *Self) Allocator.Error!void {
+    const recorded = self.problems.problems.items.len;
+    if (self.problem_owners.items.len >= recorded) return;
+    try self.problem_owners.appendNTimes(self.gpa, self.relation_owner, recorded - self.problem_owners.items.len);
+}
+
+/// Truncate the recorded problems, with their owners.
+fn truncateProblems(self: *Self, new_len: usize) void {
+    self.problems.truncate(new_len);
+    if (self.problem_owners.items.len > new_len) self.problem_owners.shrinkRetainingCapacity(new_len);
+}
+
+/// The relation that owns an expression's own checking step. An expression
+/// that dispatches on or combines its operands reads all of them in one
+/// relation; a name, a literal, and a `return` relate their own value, and a
+/// `match` relates its scrutinee to its patterns. Every other expression's
+/// step relates no value of its own, and the list,
+/// conditional, and match steps enter their item and branch relations
+/// themselves.
+fn exprStepRelation(expr_idx: CIR.Expr.Idx, expr: CIR.Expr) problem.RelationOwner {
+    return switch (expr) {
+        .e_call,
+        .e_run_low_level,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_binop,
+        .e_unary_minus,
+        .e_structural_eq,
+        .e_method_eq,
+        .e_structural_hash,
+        .e_interpolation,
+        .e_str,
+        .e_field_access,
+        .e_tuple_access,
+        .e_for,
+        => .of(.operands, expr_idx, 0),
+        .e_record => |record| if (record.ext != null) .of(.operands, expr_idx, 0) else .none,
+        .e_match => |match| .of(.value, match.cond, 0),
+        .e_return => |ret| .of(.value, ret.expr, 0),
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        => .of(.value, expr_idx, 0),
+        .e_list,
+        .e_tuple,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_if,
+        .e_block,
+        .e_closure,
+        .e_lambda,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_break,
+        .e_hosted_lambda,
+        => .none,
+    };
+}
+
+/// The values a relation-owning expression reads (`relation_operands`): its
+/// evaluation operands, a list literal's items, or a conditional's or
+/// match's branch values in branch order.
+const RelationOperands = struct {
+    start: u32,
+    len: u32,
+    /// Checking retires the expression itself when one of these is erroneous
+    /// (`retireCallLikeExprWithErroneousOperands`), so its own value is then
+    /// erroneous too.
+    retired_with_operands: bool,
+};
+
+/// Capture the values an expression's relations read, before its checking
+/// begins (`relation_operands`).
+fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
+    const retired_with_operands = switch (expr) {
+        .e_call,
+        .e_run_low_level,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_binop,
+        .e_unary_minus,
+        .e_method_eq,
+        .e_interpolation,
+        .e_for,
+        => true,
+        .e_record => |record| record.ext != null,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_str,
+        .e_field_access,
+        .e_tuple_access,
+        .e_list,
+        .e_if,
+        .e_match,
+        => false,
+        .e_tuple,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_block,
+        .e_closure,
+        .e_lambda,
+        .e_return,
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_break,
+        .e_hosted_lambda,
+        => return,
+    };
+    const pool = &self.relation_operand_pool;
+    const start: u32 = @intCast(pool.items.len);
+    switch (expr) {
+        .e_list => |list| try pool.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
+        .e_if => |if_| {
+            for (self.cir.store.sliceIfBranches(if_.branches)) |branch_idx| {
+                try pool.append(self.gpa, self.cir.store.getIfBranch(branch_idx).body);
+            }
+            try pool.append(self.gpa, if_.final_else);
+        },
+        .e_match => |match| for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
+            try pool.append(self.gpa, self.cir.store.getMatchBranch(branch_idx).value);
+        },
+        // A call relates its arguments to its callee's instantiated type; the
+        // callee is the relation's other side, not a value it reads.
+        .e_call => |call| try pool.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args)),
+        .e_run_low_level,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_binop,
+        .e_unary_minus,
+        .e_method_eq,
+        .e_interpolation,
+        .e_for,
+        .e_record,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_str,
+        .e_field_access,
+        .e_tuple_access,
+        => {
+            const scratch_start = self.retired_operand_pool.items.len;
+            defer self.retired_operand_pool.shrinkRetainingCapacity(scratch_start);
+            try self.appendEvaluationOperands(expr_idx);
+            try pool.appendSlice(self.gpa, self.retired_operand_pool.items[scratch_start..]);
+        },
+        .e_tuple,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_block,
+        .e_closure,
+        .e_lambda,
+        .e_return,
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_break,
+        .e_hosted_lambda,
+        => unreachable,
+    }
+    try self.relation_operands.put(self.gpa, expr_idx, .{
+        .start = start,
+        .len = @as(u32, @intCast(pool.items.len)) - start,
+        .retired_with_operands = retired_with_operands,
+    });
+}
+
+/// The settled-state facts `settledValueCause` reads.
+const SettledValueCauses = struct {
+    causes: std.AutoHashMapUnmanaged(CIR.Expr.Idx, SettledValueCause) = .empty,
+    /// Each use of a local name, with the binder it reads; a use can since
+    /// have been replaced by a runtime error.
+    lookup_patterns: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Pattern.Idx) = .empty,
+
+    fn deinit(self: *SettledValueCauses, gpa: Allocator) void {
+        self.causes.deinit(gpa);
+        self.lookup_patterns.deinit(gpa);
+    }
+};
+
+/// Withdraw every problem whose relation read a value that is erroneous at
+/// the settled state (design.md "Every Rejection Is Explicit Recovery"). A
+/// value's rejection can be decided after relations that read it were
+/// checked—a literal whose default a requirement rejects, or a dispatch
+/// rejected once its receiver is determined—and a relation that read an
+/// erroneous value relates to nothing, exactly as if the value had been
+/// known erroneous when the relation was checked. Which relation decided a
+/// rejection is explicit (`erroneous_causes`), so a relation's own rejection
+/// is never withdrawn as a consequence of itself. This reads only the settled
+/// state, so the order in which relations were checked does not matter.
+fn withdrawProblemsOfVoidRelations(self: *Self) Allocator.Error!void {
+    try self.leaveRelation(.none);
+    const items = self.problems.problems.items;
+    std.debug.assert(self.problem_owners.items.len == items.len);
+    var any_owned = false;
+    for (self.problem_owners.items) |owner| {
+        if (owner.kind != .none) any_owned = true;
+    }
+    if (!any_owned) return;
+
+    var settled: SettledValueCauses = .{};
+    defer settled.deinit(self.gpa);
+    for (self.value_lookup_tracking.items) |entry| {
+        try settled.lookup_patterns.put(self.gpa, entry.expr_idx, entry.pattern_idx);
+    }
+    var kept: usize = 0;
+    for (items, self.problem_owners.items) |item, owner| {
+        if (try self.relationIsVoid(owner, &settled)) continue;
+        items[kept] = item;
+        self.problem_owners.items[kept] = owner;
+        kept += 1;
+    }
+    self.truncateProblems(kept);
+}
+
+/// Whether a relation read a value that is erroneous to it at the settled
+/// state.
+fn relationIsVoid(self: *Self, owner: problem.RelationOwner, settled: *SettledValueCauses) Allocator.Error!bool {
+    const expr_idx = owner.exprIdx();
+    switch (owner.kind) {
+        .none => return false,
+        .value => return ErroneousCause.erroneousTo((try self.settledValueCause(expr_idx, settled)).through_name, owner),
+        .operands, .list_prefix => {
+            const operands = self.relation_operands.get(expr_idx) orelse return false;
+            const len = if (owner.kind == .list_prefix) owner.index + 1 else operands.len;
+            for (0..len) |offset| {
+                const operand = self.relation_operand_pool.items[operands.start + offset];
+                if (ErroneousCause.erroneousTo((try self.settledValueCause(operand, settled)).through_name, owner)) return true;
+            }
+            return false;
+        },
+        .branch => {
+            // The branch relates to the result its earlier branches joined;
+            // an erroneous earlier branch joins nothing, so the relation reads
+            // an erroneous value only when the branch itself is one or every
+            // earlier branch is.
+            const operands = self.relation_operands.get(expr_idx) orelse return false;
+            const branch_value = self.relation_operand_pool.items[operands.start + owner.index];
+            if (ErroneousCause.erroneousTo((try self.settledValueCause(branch_value, settled)).through_name, owner)) return true;
+            if (owner.index == 0) return false;
+            for (0..owner.index) |earlier| {
+                const earlier_value = self.relation_operand_pool.items[operands.start + earlier];
+                if (!ErroneousCause.erroneousTo((try self.settledValueCause(earlier_value, settled)).through_name, owner)) return false;
+            }
+            return true;
+        },
+    }
+}
+
+/// How a value is erroneous at the settled state (`settledValueCause`).
+const SettledValueCause = struct {
+    /// Why the value is erroneous at all, or null when it is not: it was
+    /// recorded erroneous, it reads a name that binds nothing, or checking
+    /// retires it with an operand that is erroneous.
+    any: ?ErroneousCause = null,
+    /// Why the value is erroneous through a name that binds nothing, or null
+    /// when it is not: it is a use of such a name, or checking retires it
+    /// with an operand that is. A relation's own operands can be rejected
+    /// where the relation reports them, or by a judgment that reports them
+    /// where it decides them, but a name's source value is rejected where
+    /// that value is checked, so a relation reading the name only cascades
+    /// from that rejection.
+    through_name: ?ErroneousCause = null,
+};
+
+/// How a value is erroneous at the settled state. A use of a name is
+/// erroneous through that name when the name's source value
+/// (`binder_source_exprs`) is erroneous in any way, or when the name binds
+/// nothing; an expression checking retires with its operands
+/// (`RelationOperands.retired_with_operands`) is erroneous the way its
+/// operands are. Memoized in `settled`.
+fn settledValueCause(self: *Self, root: CIR.Expr.Idx, settled: *SettledValueCauses) Allocator.Error!SettledValueCause {
+    if (settled.causes.get(root)) |cause| return cause;
+    const Visit = struct { expr: CIR.Expr.Idx, expanded: bool };
+    var stack = std.ArrayList(Visit).empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, .{ .expr = root, .expanded = false });
+    var guard = types_mod.debug.IterationGuard.init("settledValueCause");
+    while (stack.pop()) |visit| {
+        guard.tick();
+        const sources = self.settledCauseSources(visit.expr, settled);
+        if (!visit.expanded) {
+            if (settled.causes.contains(visit.expr)) continue;
+            // An expression reached again while its own cause is being
+            // computed contributes nothing to it.
+            try settled.causes.put(self.gpa, visit.expr, .{});
+            try stack.append(self.gpa, .{ .expr = visit.expr, .expanded = true });
+            for (sources.values) |source| {
+                if (!settled.causes.contains(source)) try stack.append(self.gpa, .{ .expr = source, .expanded = false });
+            }
+            continue;
+        }
+        var cause: SettledValueCause = .{};
+        if (self.erroneous_value_exprs.contains(visit.expr)) {
+            cause.any = ErroneousCause.merge(cause.any, self.erroneous_causes.get(@intFromEnum(visit.expr)) orelse .independent);
+        }
+        if (sources.unlinked_pattern) |pattern| {
+            if (self.erroneous_value_patterns.contains(pattern)) {
+                const binder_cause = self.erroneous_causes.get(@intFromEnum(pattern)) orelse .independent;
+                cause.any = ErroneousCause.merge(cause.any, binder_cause);
+                cause.through_name = ErroneousCause.merge(cause.through_name, binder_cause);
+            }
+        }
+        for (sources.values) |source| {
+            const source_cause = settled.causes.get(source).?;
+            if (source_cause.any) |source_any| cause.any = ErroneousCause.merge(cause.any, source_any);
+            const through_name = if (sources.is_name) source_cause.any else source_cause.through_name;
+            if (through_name) |named| cause.through_name = ErroneousCause.merge(cause.through_name, named);
+        }
+        try settled.causes.put(self.gpa, visit.expr, cause);
+    }
+    return settled.causes.get(root).?;
+}
+
+const SettledCauseSources = struct {
+    values: []const CIR.Expr.Idx,
+    /// Whether `values` is a local name's source value.
+    is_name: bool,
+    /// A local name's binder that records no source value.
+    unlinked_pattern: ?CIR.Pattern.Idx,
+};
+
+/// What a value's erroneousness follows from (`settledValueCause`): a local
+/// name's source value, or the name's binder when it records no source, or
+/// the operands of an expression checking retires with them.
+fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *const SettledValueCauses) SettledCauseSources {
+    const pattern = settled.lookup_patterns.get(expr_idx) orelse lookup: {
+        const expr = self.cir.store.getExpr(expr_idx);
+        break :lookup if (expr == .e_lookup_local) expr.e_lookup_local.pattern_idx else null;
+    };
+    if (pattern) |binder| {
+        if (self.binder_source_exprs.getPtr(binder)) |source| {
+            return .{ .values = @as(*const [1]CIR.Expr.Idx, source), .is_name = true, .unlinked_pattern = null };
+        }
+        return .{ .values = &.{}, .is_name = true, .unlinked_pattern = binder };
+    }
+    const none: SettledCauseSources = .{ .values = &.{}, .is_name = false, .unlinked_pattern = null };
+    const operands = self.relation_operands.get(expr_idx) orelse return none;
+    if (!operands.retired_with_operands) return none;
+    return .{ .values = self.relation_operand_pool.items[operands.start..][0..operands.len], .is_name = false, .unlinked_pattern = null };
 }
 
 /// A use of a name reads its value through that name's own binder pattern,
@@ -33115,7 +33675,7 @@ fn markPatternBindingsErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
     defer bindings.deinit(self.gpa);
     try self.collectPatternBindings(pattern_idx, &bindings);
     for (bindings.items) |binding| {
-        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+        try self.markErroneousValuePattern(binding.pattern_idx);
     }
 }
 
@@ -33147,7 +33707,7 @@ fn binderIsErroneous(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!bool
     if (self.erroneous_value_patterns.contains(pattern)) return true;
     const source = self.binder_source_exprs.get(pattern) orelse return false;
     if (!try self.valueIsErroneous(source)) return false;
-    try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+    try self.markErroneousValuePattern(pattern);
     return true;
 }
 
@@ -33175,7 +33735,7 @@ fn valueIsErroneous(self: *Self, value: CIR.Expr.Idx) Allocator.Error!bool {
         current = source;
     }
     for (self.binder_source_path.items[path_start..]) |pattern| {
-        try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+        try self.markErroneousValuePattern(pattern);
     }
     return true;
 }
@@ -33544,7 +34104,7 @@ const CommitProbe = struct {
         // entries past the rollback.
         std.debug.assert(self.check.problems.extra_strings_backing.items.len == self.extra_strings_len);
         std.debug.assert(self.check.problems.missing_patterns_backing.items.len == self.missing_patterns_len);
-        self.check.problems.truncate(self.problems_len);
+        self.check.truncateProblems(self.problems_len);
         self.check.snapshots.truncateToMark(self.snapshots_mark);
         for (self.check.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
             self.env.var_pool.shrinkRank(@enumFromInt(rank_idx), pool_len);
@@ -33715,7 +34275,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                             .field_name = access.field_name,
                         } },
                     });
-                    try self.erroneous_value_exprs.put(self.gpa, access.owner, {});
+                    try self.markErroneousValueExpr(access.owner);
                 },
                 .defaulted => {
                     _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
@@ -33728,7 +34288,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                             .field_name = access.field_name,
                         } },
                     });
-                    try self.erroneous_value_exprs.put(self.gpa, access.owner, {});
+                    try self.markErroneousValueExpr(access.owner);
                 },
                 .optional => {},
             },
@@ -34233,11 +34793,11 @@ fn retireRejectedDefault(
         if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
         if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
         try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
-        try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
+        try self.markErroneousValueExpr(omitted.expr);
     }
 
     try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
-    try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
+    try self.markErroneousValueExpr(pending.default_expr);
 }
 
 /// A construction that omits a default declared in another module would
@@ -34270,7 +34830,7 @@ fn retireOmissionsOfRejectedForeignDefaults(self: *Self) std.mem.Allocator.Error
             .region = self.cir.store.getExprRegion(omitted.expr),
         } });
         try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
-        try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
+        try self.markErroneousValueExpr(omitted.expr);
     }
 }
 
@@ -38810,7 +39370,7 @@ fn checkReturnRelation(
         std.debug.assert(result == .problem);
         const result_expr = self.resultValueExpr(actual_expr);
         self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-        try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+        try self.markErroneousValueExpr(result_expr);
     }
 }
 
@@ -38838,7 +39398,7 @@ fn relateResultValue(
     self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
-    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    try self.markErroneousValueExpr(result_expr);
     return .{ .problem = problem_idx };
 }
 
@@ -39002,7 +39562,7 @@ fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan,
     const result = try self.unifyReturnContribution(expected, actual, env, ctx);
     if (result.isProblem()) {
         self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
-        try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+        try self.markErroneousValueExpr(plan.expr);
     }
 }
 
@@ -39126,7 +39686,7 @@ fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: C
     self.refinePlatformRequirementReturnContext(body_result);
     const result_expr = self.resultValueExpr(body);
     self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    try self.markErroneousValueExpr(result_expr);
 }
 
 /// A rejected annotated-body relation against a platform requirement reports
@@ -39148,7 +39708,7 @@ fn noteComposedBodyRelation(self: *Self, result: unifier.Result, body_expr: CIR.
     if (annotated) {
         try self.refineAnnotatedBodyMismatch(result, body_expr);
     } else {
-        try self.erroneous_value_exprs.put(self.gpa, self.resultValueExpr(body_expr), {});
+        try self.markErroneousValueExpr(self.resultValueExpr(body_expr));
     }
 }
 
@@ -39323,7 +39883,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         };
         try rows.plans.append(self.gpa, .{ .expr = constraint.actual_expr, .ok = actual.ok, .err = actual.err });
         if ((try self.unifyReturnContribution(composed.ok, actual.ok, env, constraint.kind.problemContext(body_tail_try))).isProblem()) {
-            try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
+            try self.markErroneousValueExpr(constraint.actual_expr);
         }
     }
     if (self.types.resolveVar(composed_var).var_ != self.types.resolveVar(frame.body_result).var_) {
@@ -39407,7 +39967,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
                     // push the result's heads backwards into the source.
                     if (self.types.resolveVar(tail).var_ == self.types.resolveVar(self.tryReturnErrorTail(composed.err)).var_) continue;
                     if ((try self.unifyReturnContribution(composed.err, tail, env, ctx)).isProblem()) {
-                        try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+                        try self.markErroneousValueExpr(plan.expr);
                     }
                     continue;
                 }
@@ -39422,7 +39982,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         }
         tail = gathered.tail;
         if ((try self.unifyReturnContribution(self.tryReturnErrorTail(composed.err), tail, env, ctx)).isProblem()) {
-            try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+            try self.markErroneousValueExpr(plan.expr);
         }
     }
 
@@ -39738,7 +40298,7 @@ fn collapseTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocato
         return;
     }
     if ((try self.unifyReturnContribution(edge.composed_err, edge.plan.err, env, edge.ctx)).isProblem()) {
-        try self.erroneous_value_exprs.put(self.gpa, edge.plan.expr, {});
+        try self.markErroneousValueExpr(edge.plan.expr);
     }
 }
 
@@ -39796,7 +40356,7 @@ fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Al
     if (self.tryRowEdgeDestinationGeneralized(edge)) {
         if (self.types.resolveVar(residual).var_ == self.types.resolveVar(plan.err).var_) return;
         if ((try self.unifyInContext(residual, plan.err, env, edge.ctx)).isProblem()) {
-            try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+            try self.markErroneousValueExpr(plan.expr);
         }
         return;
     }
@@ -39807,7 +40367,7 @@ fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Al
             if (!source_tail.nested and !plan.is_body) {
                 if (self.types.resolveVar(plan.err).var_ == self.types.resolveVar(residual).var_) return;
                 if ((try self.unifyReturnContribution(edge.composed_err, plan.err, env, edge.ctx)).isProblem()) {
-                    try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+                    try self.markErroneousValueExpr(plan.expr);
                 }
                 return;
             }
@@ -39832,7 +40392,7 @@ fn includeTryRowDirected(self: *Self, edge: DeferredTryRowEdge, env: *Env) Alloc
         try self.checkProjectedTryReturn(edge.composed, plan, projection.row, env, edge.ctx);
     }
     if ((try self.unifyReturnContribution(self.tryReturnErrorTail(edge.composed_err), gathered.tail, env, edge.ctx)).isProblem()) {
-        try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+        try self.markErroneousValueExpr(plan.expr);
     }
 }
 
@@ -39846,6 +40406,8 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A queued constraint belongs to no relation the running check owns.
+    const previous_relation = try self.enterRelation(.none);
     var iter = self.constraints.iterIndices();
     while (iter.next()) |idx| {
         const constraint = self.constraints.get(idx);
@@ -39856,6 +40418,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         }
     }
     self.constraints.items.clearRetainingCapacity();
+    try self.leaveRelation(previous_relation);
 }
 
 /// Check static dispatch constraints
@@ -43661,6 +44224,9 @@ fn resumeStaticDispatchDrain(
     // grounding consumes it, and every fresh child edge passes the lineage
     // detectors, which reject an exact repeated state or a strictly grown
     // re-entry of the same binding before it can extend the queue further.
+    // Each obligation's resolution reports for the relation that queued it,
+    // never for the relation whose checking runs the drain.
+    const drain_relation = try self.enterRelation(.none);
     // The use whose relations are settling (design.md "a use's relations
     // settle as one unit"): the queue position of its first processed
     // relation, and how far it has consumed its positions in `use_positions`.
@@ -43719,10 +44285,14 @@ fn resumeStaticDispatchDrain(
             .stopped => {
                 // Settling runs only in a validating drain, which never stops.
                 std.debug.assert(settling == null);
+                try self.leaveRelation(drain_relation);
                 return .stopped;
             },
         }
     }
+    try self.leaveRelation(drain_relation);
+
+    try self.leaveRelation(drain_relation);
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
     env.truncateClean(start);
@@ -43774,6 +44344,8 @@ inline fn processDeferredDispatchEntry(
         try self.scratch_deferred_static_dispatch_constraints.append(retained);
         return .next;
     }
+    try self.claimRecordedProblems();
+    self.relation_owner = deferred_constraint.relation_owner;
     const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
     const scheme_owned_codecs_top = self.scratch_scheme_owned_codec_fns.items.len;
     defer self.scratch_scheme_owned_codec_fns.shrinkRetainingCapacity(scheme_owned_codecs_top);
@@ -49852,7 +50424,7 @@ fn reportValuelessDeclarationUse(
 /// erroneous, which code generates it as a crash.
 fn markNonEffectfulHostedDeclarationUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
     try self.markErroneous(expr_var);
-    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    try self.markErroneousValueExpr(expr_idx);
 }
 
 /// A use of an erroneous name: a binding whose annotation was rejected
@@ -49866,7 +50438,7 @@ fn markNonEffectfulHostedDeclarationUse(self: *Self, expr_idx: CIR.Expr.Idx, exp
 /// variable.
 fn markErroneousNameUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
     try self.markErroneous(expr_var);
-    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    try self.markErroneousValueExpr(expr_idx);
 }
 
 /// A derived codec is the compiler's own structural encoder/parser for the
@@ -53524,7 +54096,7 @@ fn reportBranchMismatchAndPoison(
 ) std.mem.Allocator.Error!void {
     const result_expr = self.resultValueExpr(body_expr_idx);
     try self.recordBranchTypeMismatch(ModuleEnv.varFrom(result_expr), mismatch_against, ctx);
-    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    try self.markErroneousValueExpr(result_expr);
 }
 
 /// Check one if/match branch body against the shared expected return type, and
@@ -53582,11 +54154,18 @@ fn checkBranchBodyAgainstExpected(
     // (Every Rejection Is Explicit Recovery).
     if (self.branchValueIsErroneous(body_expr_idx)) return;
 
-    // Probe (1): does the body match the annotated return type?
+    // Probe (1): does the body match the annotated return type? That relation
+    // reads only this branch's value.
     if (!try self.probeBranchCompatible(body_var, expected_ret)) {
+        const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
         try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
+        try self.leaveRelation(previous_relation);
         return;
     }
+
+    // The fold relates this branch to the result its earlier branches joined.
+    const previous_relation = try self.enterRelation(branchRelationOwner(ctx));
+    defer self.relation_owner = previous_relation;
 
     // Step (2): fold the body into the accumulator with one real unify inside a
     // commit-probe. Success keeps the merge (regions/rank/deferred constraints
@@ -53601,6 +54180,7 @@ fn checkBranchBodyAgainstExpected(
         if (result.isAccepted()) {
             committed = true;
             try commit_probe.commit();
+            try self.claimRecordedProblems();
             return;
         }
     }
@@ -53610,6 +54190,15 @@ fn checkBranchBodyAgainstExpected(
     // touched. (Distinct from a step-(1) failure only when the annotation is looser
     // than `acc`.)
     try self.reportBranchMismatchAndPoison(body_expr_idx, acc, ctx);
+    try self.claimRecordedProblems();
+}
+
+/// The branch relation a branch's problem context names.
+fn branchRelationOwner(ctx: problem.Context) problem.RelationOwner {
+    if (ctx == .if_branch) return .of(.branch, ctx.if_branch.parent_if_expr, ctx.if_branch.branch_index);
+    if (ctx == .match_branch) return .of(.branch, ctx.match_branch.match_expr, ctx.match_branch.branch_index);
+    if (ctx == .try_operator_value) return .of(.branch, ctx.try_operator_value.expr, 0);
+    return .none;
 }
 
 /// Check if a type variable contains any error types anywhere in its structure.

@@ -4136,6 +4136,9 @@ pub const DeferredConstraintCheck = struct {
     /// Set on the copy a drain retains because the obligation still waits
     /// exactly as on its last pass.
     retained_unchanged: bool = false,
+    /// The checker relation that queued this obligation; the problems its
+    /// resolution records belong to that relation (`problem.RelationOwner`).
+    relation_owner: problem_mod.RelationOwner = .none,
 
     pub const SafeList = MkSafeList(@This());
 };

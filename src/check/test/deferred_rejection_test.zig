@@ -2,7 +2,9 @@
 //! checked, and for consumers of erroneous values. A literal's conversion can
 //! be rejected after the names bound from it were checked; every name bound
 //! from it, through any chain of aliases and destructures, binds nothing, so
-//! its uses add no report. An erroneous value already owns its report, so a
+//! its uses add no report, even uses checked before the rejection that
+//! conflict with each other; independent errors beside them are still
+//! reported. An erroneous value already owns its report, so a
 //! `return`, a branch, a function body, or an annotation that consumes it
 //! reports nothing further, and no report prints the erroneous type.
 
@@ -104,6 +106,148 @@ test "a loop binder of a literal whose default is rejected adds no method report
         \\    }
         \\    $acc
         \\}
+    , &.{"Type Not Determined"});
+}
+
+test "two uses of a loop binder of a rejected literal that conflict with each other add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        a = Str.concat(y, "a")
+        \\        b = List.len(y)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "list elements that relate a rejected loop binder to conflicting literals add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        a = [y, "s"]
+        \\        b = [y, 1.U8]
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting annotations on aliases of a rejected loop binder add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        z = y
+        \\        a : Str
+        \\        a = z
+        \\        b : U8
+        \\        b = z
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "an operator on a rejected loop binder whose other use determined its type adds no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        a = Str.concat(y, "a")
+        \\        b = y + 1
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "comparisons of a rejected loop binder with conflicting literals add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        a = if y == "q" 1 else 2
+        \\        b = if y == 1.U8 1 else 2
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "a value computed from a rejected loop binder binds nothing" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        a = Str.concat(y, "a")
+        \\        b = List.len(a)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting uses of the result of a dispatch rejected at its literal's default add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    s = 5
+        \\    y = s.foo()
+        \\    a = Str.concat(y, "a")
+        \\    b = List.len(y)
+        \\    (a, b)
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "independent errors beside a rejected loop binder's conflicting uses are still reported" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        a = Str.concat(y, "a")
+        \\        b = List.len(y)
+        \\        c = Str.concat(1.U8, "x")
+        \\        d = [1.U8, "s"]
+        \\        _ = (a, b, c, d)
+        \\    }
+        \\    {}
+        \\}
+    , &.{ "Type Mismatch", "Type Mismatch", "Type Not Determined" });
+}
+
+test "a branch that conflicts with a valid branch beside a rejected loop binder is still reported" {
+    try expectOnlyTypeProblems(
+        \\run = |c| {
+        \\    for y in 5 {
+        \\        e = if c y else if !c "s" else 1.U8
+        \\        _ = e
+        \\    }
+        \\    {}
+        \\}
+    , &.{ "Type Mismatch", "Type Not Determined" });
+}
+
+test "the relation that rejects a name's literal still reports the rejection" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    y = 5
+        \\    a = Str.concat(y, "a")
+        \\    b = List.len(y)
+        \\    (a, b)
+        \\}
+    , &.{"Type Mismatch"});
+}
+
+test "a dispatch on a tag payload no value determines is reported as an undetermined type" {
+    try expectOnlyTypeProblems(
+        \\unwrap = |t| match t {
+        \\    T0(v) => v.concat("0")
+        \\    T7(v) => v.concat("7")
+        \\}
+        \\
+        \\main = unwrap(T7("x"))
     , &.{"Type Not Determined"});
 }
 

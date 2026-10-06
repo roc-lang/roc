@@ -19,6 +19,7 @@ pub const Store = store.Store;
 // Re-export all problem data types
 pub const ExtraStringIdx = types.ExtraStringIdx;
 pub const MissingPatternsRange = types.MissingPatternsRange;
+pub const RelationOwner = types.RelationOwner;
 
 // Type mismatch types
 pub const TypeMismatch = types.TypeMismatch;

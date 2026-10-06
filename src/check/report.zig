@@ -2711,72 +2711,111 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for when a static dispatch method is called on a receiver
-    /// whose type is an unresolved type variable that no instantiation can ever
-    /// pin down. Unresolved type variables have no methods, so the dispatch is
-    /// genuinely ambiguous.
+    /// Build a report for a static dispatch whose receiver's type nothing in
+    /// the program determines and no instantiation can ever pin down: the
+    /// dispatch cannot choose a method. Like a defaulted type a requirement
+    /// rejects (`buildUndeterminedType`), it is reported as a type the program
+    /// does not determine.
     fn buildStaticDispatchUnresolvedDispatcher(
         self: *Self,
         data: UnresolvedDispatcher,
     ) Allocator.Error!Report {
-        // For a desugared operator, render the source operator symbol rather than
-        // the internal desugared method name (e.g. `==` not `is_eq`, `+` not
-        // `plus`). Equality (`==`/`!=`) gets "compare values with" wording; every
-        // other operator gets generic operator-usage wording.
+        // For a desugared operator, the report names the source operator
+        // symbol rather than the internal method (`==` not `is_eq`, `+` not
+        // `plus`).
         const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
         const is_equality = data.is_binop and data.method_name.eql(self.can_ir.idents.is_eq);
+        const equality_operator: []const u8 = if (data.binop_negated) "!=" else operator orelse "==";
 
-        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
+        // When the dispatch is hidden inside a helper, the call site (primary
+        // region) and the argument whose type leaves the dispatched-on type
+        // undetermined (secondary region) differ, and the report shows both.
+        // When they coincide, the dispatch is the call site itself.
+        const hidden_argument: ?Region = if (data.secondary_region) |secondary|
+            if (secondary.start.offset != data.region.start.offset or
+                secondary.end.offset != data.region.end.offset) secondary else null
+        else
+            null;
+
+        var report = try Report.init(self.gpa, "Type Not Determined", "", .runtime_error);
         errdefer report.deinit();
-        if (is_equality) {
-            const op = if (data.binop_negated) "!=" else operator orelse "==";
+        if (hidden_argument != null) {
+            if (is_equality) {
+                try D.renderSliceInto(&.{
+                    D.bytes("This call compares values with"),
+                    D.bytes(equality_operator).withAnnotation(.inline_code),
+                    D.bytes(", but nothing in this program determines their type:").withNoPrecedingSpace(),
+                }, self, &report, &report.headline);
+            } else if (operator) |operator_text| {
+                try D.renderSliceInto(&.{
+                    D.bytes("This call uses the"),
+                    D.bytes(operator_text).withAnnotation(.inline_code),
+                    D.bytes("operator, but nothing in this program determines the type it operates on:"),
+                }, self, &report, &report.headline);
+            } else {
+                try D.renderSliceInto(&.{
+                    D.bytes("This call uses a"),
+                    D.ident(data.method_name).withAnnotation(.inline_code),
+                    D.bytes("method, but nothing in this program determines the type it is called on:"),
+                }, self, &report, &report.headline);
+            }
+        } else if (is_equality) {
             try D.renderSliceInto(&.{
-                D.bytes("This is trying to compare values with"),
-                D.bytes(op).withAnnotation(.inline_code),
-                D.bytes(", but their type is an unresolved type variable, which has no methods.").withNoPrecedingSpace(),
+                D.bytes("Nothing in this program determines the type of the values this"),
+                D.bytes(equality_operator).withAnnotation(.inline_code),
+                D.bytes("compares:"),
             }, self, &report, &report.headline);
-        } else if (data.is_binop and operator != null) {
+        } else if (operator) |operator_text| {
             try D.renderSliceInto(&.{
-                D.bytes("This is trying to use the"),
-                D.bytes(operator.?).withAnnotation(.inline_code),
-                D.bytes("operator on a value whose type is an unresolved type variable, which has no methods."),
+                D.bytes("Nothing in this program determines the type this"),
+                D.bytes(operator_text).withAnnotation(.inline_code),
+                D.bytes("operates on:"),
             }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
-                D.bytes("This is trying to dispatch a method named"),
+                D.bytes("Nothing in this program determines the type this"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("on an unresolved type variable, but unresolved type variables have no methods."),
+                D.bytes("method is called on:"),
             }, self, &report, &report.headline);
         }
 
-        // Add source region highlighting on the offending dispatch call (the
-        // primary region).
         try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
-        // When the dispatch is hidden inside a helper, the call site (primary
-        // region) and the argument that left the receiver's type undetermined
-        // (secondary region) differ. In that case, show the argument too, with a
-        // connecting note. When they coincide—the dispatch IS the call site, as
-        // in the direct cases—omit the secondary so the rendering is unchanged.
-        if (data.secondary_region) |secondary| {
-            if (secondary.start.offset != data.region.start.offset or
-                secondary.end.offset != data.region.end.offset)
-            {
-                try D.renderSlice(&.{
-                    D.bytes("The type was left undetermined by this call:"),
-                }, self, &report);
-                try report.document.addLineBreak();
+        if (hidden_argument) |secondary| {
+            try D.renderSlice(&.{
+                D.bytes("This argument's type does not determine it:"),
+            }, self, &report);
+            try report.document.addLineBreak();
 
-                const secondary_info = self.module_env.calcRegionInfo(secondary);
-                try self.addSourceRegionTo(&report.document, secondary_info, .error_highlight);
-                try report.document.addLineBreak();
-            }
+            const secondary_info = self.module_env.calcRegionInfo(secondary);
+            try self.addSourceRegionTo(&report.document, secondary_info, .error_highlight);
+            try report.document.addLineBreak();
         }
+
+        if (is_equality) {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell how to compare them."),
+            }, self, &report);
+        } else if (operator) |operator_text| {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell which"),
+                D.bytes(operator_text).withAnnotation(.binary_operator),
+                D.bytes("to use."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Without knowing which type it is, there's no way to tell which"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method to use."),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."),
+            D.bytes("Add a type annotation saying which type it should be."),
         }, self, &report);
 
         return report;

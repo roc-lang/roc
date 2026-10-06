@@ -564,5 +564,5 @@ test "cross-module - ambiguous instantiation of an imported where-clause scheme 
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
 
-    try test_env_b.assertOneTypeError("Missing Method");
+    try test_env_b.assertOneTypeError("Type Not Determined");
 }
