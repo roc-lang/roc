@@ -13291,8 +13291,53 @@ fn poisonConstraintFailureSource(
     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
         .region = self.cir.store.getExprRegion(expr_idx),
     } });
-    try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
+    if (self.rejectedRequirementInstantiatedElsewhere(constraint, expr_idx)) {
+        try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    } else {
+        try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
+    }
     try self.markErroneousValueExpr(expr_idx);
+}
+
+/// Whether a rejected requirement owned by `owner` belongs to a scheme that
+/// another expression instantiated. `Friendly == Blub.parse("Friendly")?`
+/// makes `Blub.parse`'s where-clause `a.parser_for` concrete at the `==`,
+/// which owns its rejection, but the lookup of `Blub.parse` instantiated it.
+/// That instantiation is among `owner`'s operands and a call through it cannot
+/// run, so `owner` must not evaluate its operands: it is the crash alone. A
+/// requirement `owner` instantiated itself, such as a derived `is_eq`'s
+/// where-clause at `x == x`, is its own dispatch.
+///
+/// A derivation's requirement (`parse_tag_union` for a tag union's
+/// `parser_for`) belongs to the relation it derives
+/// (`dispatch_derivation_by_child_fn_var`), and each instantiated relation
+/// records the expression that instantiated it
+/// (`InstantiationDispatcher.instantiation_expr`). This runs only on the
+/// failure path.
+fn rejectedRequirementInstantiatedElsewhere(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    owner: CIR.Expr.Idx,
+) bool {
+    var relation_fn = constraint.fn_var;
+    var followed_edges: usize = 0;
+    while (self.dispatch_derivation_by_child_fn_var.get(relation_fn)) |parent| {
+        relation_fn = parent;
+        followed_edges += 1;
+        std.debug.assert(followed_edges <= self.dispatch_derivations.items.len);
+    }
+    const relation_root = self.types.resolveVar(relation_fn).var_;
+    var instantiated_elsewhere = false;
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const instantiation_expr = dispatcher.instantiation_expr orelse continue;
+        const carries_relation = for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |candidate| {
+            if (self.types.resolveVar(candidate.fn_var).var_ == relation_root) break true;
+        } else false;
+        if (!carries_relation) continue;
+        if (instantiation_expr == owner) return false;
+        instantiated_elsewhere = true;
+    }
+    return instantiated_elsewhere;
 }
 
 /// Replace the owner of a rejected static dispatch with a runtime error. An

@@ -5389,7 +5389,20 @@ unary minus, `==` on a type that does not support equality, an interpolation,
 and a `for` loop's iterable. Any other owner fails where its own evaluation
 begins and is the crash alone: a call whose callee's instantiation carries the
 rejected requirement fails at the callee, which is evaluated first, and a
-literal whose conversion is rejected is itself the failure. Nested function
+literal whose conversion is rejected is itself the failure. A rejected
+requirement of a scheme that another expression instantiated is not its
+owner's own dispatch, even when the owner dispatches on its operands: the
+owner only made it concrete by relating that instantiation's type (`Friendly
+== Blub.parse("Friendly")?` makes `Blub.parse`'s `a.parser_for` concrete at
+`==`, which reports it, while the lookup of `Blub.parse` instantiated it). The
+call carrying the requirement is among the owner's operands, so the owner is
+the crash alone rather than evaluating a call whose callee cannot run. Each
+instantiated relation records the expression that instantiated it
+(`InstantiationDispatcher.instantiation_expr`), and a derivation's
+requirement (`parse_tag_union` for a tag union's `parser_for`) belongs to the
+relation it derives (`dispatch_derivation_by_child_fn_var`). A requirement
+the owner instantiated itself, such as a derived `is_eq`'s where-clause at
+`x == x`, is the owner's own dispatch. Nested function
 site collection walks a runtime error's `evaluated` operands like any other
 children, so a closure among them is a nested function like any other.
 
