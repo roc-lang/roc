@@ -11,9 +11,13 @@ my_fn = |arg1, arg2| arg1 + arg2
 
 Some languages have alternative syntaxes for defining functions. Roc intentionally does not,
 for the same reason that it doesn't have alternative syntax for defining any other type of
-value (such as numbers or strings): functions are ordinary values, just like any other value,
-and all values in Roc are declared using the same syntax. This syntax design decision is
-intended to emphasize that functions are ordinary values like any other.
+value (such as numbers or strings): functions are ordinary values, and all values in Roc are
+defined using the same `name = value` syntax.
+
+Functions take a fixed number of arguments. Calling a function always passes all of them at
+once, as in `my_fn(1, 2)`, and there's no automatic [currying](https://en.wikipedia.org/wiki/Currying)
+or partial application. If you want a function that has some of its arguments filled in already,
+you can write one with a [closure](#closures): `|arg2| my_fn(1, arg2)`.
 
 ## Pure Functions
 
@@ -127,7 +131,28 @@ in  `!`. This design has two purposes:
 
 Roc's compiler reports a warning if an effectful function's name does not end in `!`.
 
-## Purity inference
+## Closures
+
+A function can use names from the scope it was defined in, not just its own arguments:
+
+```roc
+make_adder : U64 -> (U64 -> U64)
+make_adder = |amount| |n| n + amount
+
+add_five = make_adder(5)
+
+answer = add_five(1) # 6
+```
+
+Here, the inner function `|n| n + amount` uses `amount`, which isn't one of its arguments. It
+_captures_ `amount` from `make_adder`'s scope. A function that captures values this way is
+called a [closure](https://en.wikipedia.org/wiki/Closure_(computer_programming)).
+
+Since values in Roc are immutable, a closure captures the captured value itself, not some
+location in memory that might change later. So `add_five` will always add 5, no matter what
+happens after it was created. (See [Performance](#performance) for how closures are stored.)
+
+## Purity Inference
 
 Roc infers which functions are pure and which are effectful. You can choose to annotate
 functions as pure or effectful, and the compiler will warn you if the annotation is incorrect.
@@ -232,6 +257,10 @@ call into a self-tail call.
 Compilers can optimize tail calls in various ways. Here are some that Roc's compiler performs:
 
 - If a self-recursive function only ever calls itself using tail calls, the entire function will be optimized into a `while` loop behind the scenes, and all the recursive calls will be eliminated. This optimization makes the function run faster, and makes it impossible for the function to stack overflow (although it can now loop forever), and otherwise will not affect observable program behavior.
+- Tail calls _modulo cons_ get the same treatment, as described in the next section.
+
+Tail calls between different functions aren't currently guaranteed to be optimized. See
+[Mutually Recursive Functions](#mutually-recursive-functions).
 
 #### Modulo Cons
 
@@ -267,6 +296,85 @@ accumulator in order to get this benefit.
 
 ## Mutually Recursive Functions
 
-_Mutually recursive_ functions are functions that call each another. If one function calls
+_Mutually recursive_ functions are functions that call each other. If one function calls
 another, and that function calls the first one, then the first function did end up calling
 itself (so, recursing)—just with the other function being involved in the middle.
+
+```roc
+is_even : U64 -> Bool
+is_even = |n| if n == 0 True else is_odd(n - 1)
+
+is_odd : U64 -> Bool
+is_odd = |n| if n == 0 False else is_even(n - 1)
+```
+
+Note that even though `is_odd(n - 1)` and `is_even(n - 1)` are tail calls, they're tail calls
+to a _different_ function, not self-tail calls. Tail calls between different functions aren't
+currently guaranteed to run without using up stack space, so `is_even(10_000_000)` can
+overflow the stack. If you
+need a mutually recursive computation to run for many iterations, combine the functions into
+one self-recursive function (for example, one that takes a tag saying which of the two it's
+currently doing).
+
+## Performance
+
+### Calls
+
+Calling a function whose name you wrote directly, like `contains(rest, item)`, compiles to an
+ordinary direct call. The compiler can also [inline](https://en.wikipedia.org/wiki/Inline_expansion)
+small functions, meaning it replaces the call with the function's body, so that there's no
+call at all.
+
+Calling a [generalized](types#generalization) function costs the same as calling any other
+function, because each type it's used with gets its own
+[monomorphized](types#performance) version.
+
+### Arguments and Reference Counts
+
+When a function only reads an argument (rather than, say, returning it or storing it in a
+data structure), passing that argument doesn't change its
+[reference count](expressions#reference-counting). The compiler figures this out
+automatically, by looking at what each function does with each argument.
+
+This is also what makes [opportunistic mutation](expressions#opportunistic-mutation)
+work well across function calls. If you pass a list to a function that only reads it, the
+list is still unique afterward, so you can keep updating it in place.
+
+### Function Values
+
+When you pass a function as an argument, return one, or store one in a record, the
+compiler knows every function that could possibly end up there. So rather than storing a
+pointer to a function's machine code, it stores the function value like a
+[tag union](tag-unions), with one tag for each function that could be there. Each tag's
+payload holds the values that function captured.
+
+For example, in this code, the value returned by `pick` is either `double` or a closure that
+captured an `amount`:
+
+```roc
+double = |n| n * 2
+
+pick : Bool -> (U64 -> U64)
+pick = |should_double| if should_double double else make_adder(10)
+```
+
+So `pick`'s return value is stored as if it were a tag union like
+`[Double, Adder(U64)]`, and calling it checks the tag and then directly calls the right
+function. This has some performance benefits:
+
+- Function values don't need a heap allocation, even when they capture values. They take up
+  as much space as the largest set of captured values (plus a tag, if there's more than one
+  possible function).
+- A function value that's only ever one specific function takes up no space at all if it
+  captures nothing, and calling it is exactly as fast as calling that function directly.
+- Since every possible call target is known, the compiler can inline them.
+
+This technique is called [defunctionalization](https://en.wikipedia.org/wiki/Defunctionalization).
+
+The exception is functions that cross the boundary between Roc and the [platform](platforms),
+since the platform is compiled separately and the compiler can't see what it does with them.
+Those are stored as a heap allocation that holds a pointer to the function along with its
+captured values.
+
+> Note that with `roc build --specialize=no`, all function values are stored this way
+> instead. See the [types performance section](types#performance) for more on that option.
