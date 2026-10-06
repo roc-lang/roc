@@ -34899,6 +34899,9 @@ const BodyContext = struct {
         defer self.allocator.free(renamed_name_locals);
         const renamed_name_exprs = try self.allocator.alloc(DraftExprId, item_fields.len);
         defer self.allocator.free(renamed_name_exprs);
+        const renamed_length_locals = try self.allocator.alloc(DraftLocalId, item_fields.len);
+        defer self.allocator.free(renamed_length_locals);
+        const u64_ty = try self.primitiveType(.u64);
 
         const items_expr = try self.addFieldAccessExpr(
             try self.localExpr(backing_local, fields_backing_ty),
@@ -34924,14 +34927,11 @@ const BodyContext = struct {
                 } },
             });
             renamed_name_locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
+            renamed_length_locals[index] = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
             const renamed_handle = try self.lowerRecordFieldHandleWithName(
                 field_ty,
                 try self.localExpr(renamed_name_locals[index], str_ty),
-                try self.lowLevelExpr(
-                    .str_count_utf8_bytes,
-                    &.{try self.localExpr(renamed_name_locals[index], str_ty)},
-                    try self.primitiveType(.u64),
-                ),
+                try self.localExpr(renamed_length_locals[index], u64_ty),
                 index,
             );
             lowered_items[index] = .{
@@ -34944,7 +34944,7 @@ const BodyContext = struct {
             .ty = info.items_field.ty,
             .data = .{ .record = try self.addFieldExprSpan(lowered_items) },
         });
-        const bound_exprs = try self.fieldNameBoundExprsFromLocals(renamed_name_locals, null, info.shortest_field.ty);
+        const bound_exprs = try self.fieldNameBoundExprsFromLocals(renamed_length_locals, null, info.shortest_field.ty);
         const shortest_expr = bound_exprs[0];
         const longest_expr = bound_exprs[1];
         const backing_type_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(fields_backing_ty)));
@@ -34977,6 +34977,17 @@ const BodyContext = struct {
         var index = item_fields.len;
         while (index > 0) {
             index -= 1;
+            body = try self.wrapLet(
+                renamed_length_locals[index],
+                u64_ty,
+                try self.lowLevelExpr(
+                    .str_count_utf8_bytes,
+                    &.{try self.localExpr(renamed_name_locals[index], str_ty)},
+                    u64_ty,
+                ),
+                body,
+                fields_ty,
+            );
             body = try self.wrapLet(
                 renamed_name_locals[index],
                 str_ty,
@@ -35124,19 +35135,23 @@ const BodyContext = struct {
         }
 
         const str_ty = try self.primitiveType(.str);
+        const u64_ty = try self.primitiveType(.u64);
         const item_values = try self.allocator.alloc(DraftFieldExpr, item_fields.len);
         defer self.allocator.free(item_values);
+        // Each name's byte length, counted once when the lengths are not
+        // known statically; the handles and the name bounds all read it.
+        const length_locals = try self.allocator.alloc(DraftLocalId, item_fields.len);
+        defer self.allocator.free(length_locals);
+        if (renamed_field_lengths == null) {
+            for (length_locals) |*length_local| length_local.* = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
+        }
 
         for (item_fields, 0..) |field, index| {
             const name_expr = try self.localExpr(renamed_field_locals[index], str_ty);
             const name_len_expr = if (renamed_field_lengths) |lengths|
-                try self.intLiteralExpr(lengths[index], try self.primitiveType(.u64))
+                try self.intLiteralExpr(lengths[index], u64_ty)
             else
-                try self.lowLevelExpr(
-                    .str_count_utf8_bytes,
-                    &.{try self.localExpr(renamed_field_locals[index], str_ty)},
-                    try self.primitiveType(.u64),
-                );
+                try self.localExpr(length_locals[index], u64_ty);
             item_values[index] = .{
                 .name = field.name,
                 .value = try self.lowerRecordFieldHandleWithName(field_handle_ty, name_expr, name_len_expr, index),
@@ -35148,7 +35163,7 @@ const BodyContext = struct {
             .data = .{ .record = try self.addFieldExprSpan(item_values) },
         });
         const bound_exprs = try self.fieldNameBoundExprsFromLocals(
-            renamed_field_locals,
+            length_locals,
             renamed_field_lengths,
             info.shortest_field.ty,
         );
@@ -35177,20 +35192,41 @@ const BodyContext = struct {
             .ty = fields_backing_ty,
             .data = .{ .record = try self.addFieldExprSpan(backing_values) },
         });
-        return try self.addExpr(.{
+        var body = try self.addExpr(.{
             .ty = fields_ty,
             .data = .{ .nominal = backing_expr },
         });
+        if (renamed_field_lengths == null) {
+            var index = length_locals.len;
+            while (index > 0) {
+                index -= 1;
+                body = try self.wrapLet(
+                    length_locals[index],
+                    u64_ty,
+                    try self.lowLevelExpr(
+                        .str_count_utf8_bytes,
+                        &.{try self.localExpr(renamed_field_locals[index], str_ty)},
+                        u64_ty,
+                    ),
+                    body,
+                    fields_ty,
+                );
+            }
+        }
+        return body;
     }
 
+    /// The shortest and longest field name lengths: literals when the
+    /// lengths are known statically, otherwise read from `length_locals`,
+    /// which hold each renamed name's byte length.
     fn fieldNameBoundExprsFromLocals(
         self: *BodyContext,
-        renamed_field_locals: []const DraftLocalId,
+        length_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         u64_ty: Type.TypeId,
     ) Allocator.Error!struct { DraftExprId, DraftExprId } {
         if (renamed_field_lengths) |lengths| {
-            if (lengths.len != renamed_field_locals.len) Common.invariant("renamed field length arity differed from locals");
+            if (lengths.len != length_locals.len) Common.invariant("renamed field length arity differed from locals");
             var shortest: u64 = 0;
             var longest: u64 = 0;
             if (lengths.len > 0) {
@@ -35207,39 +35243,28 @@ const BodyContext = struct {
             };
         }
 
-        if (renamed_field_locals.len == 0) {
+        if (length_locals.len == 0) {
             const zero = try self.intLiteralExpr(0, u64_ty);
             return .{ zero, zero };
         }
 
         return .{
-            try self.fieldNameBoundExprFromLocals(renamed_field_locals, u64_ty, .shortest),
-            try self.fieldNameBoundExprFromLocals(renamed_field_locals, u64_ty, .longest),
+            try self.fieldNameBoundExprFromLocals(length_locals, u64_ty, .shortest),
+            try self.fieldNameBoundExprFromLocals(length_locals, u64_ty, .longest),
         };
     }
 
     fn fieldNameBoundExprFromLocals(
         self: *BodyContext,
-        renamed_field_locals: []const DraftLocalId,
+        length_locals: []const DraftLocalId,
         u64_ty: Type.TypeId,
         bound: FieldNameBound,
     ) Allocator.Error!DraftExprId {
-        if (renamed_field_locals.len == 0) return try self.intLiteralExpr(0, u64_ty);
+        if (length_locals.len == 0) return try self.intLiteralExpr(0, u64_ty);
 
-        const str_ty = try self.primitiveType(.str);
-        var body = try self.lowLevelExpr(
-            .str_count_utf8_bytes,
-            &.{try self.localExpr(renamed_field_locals[0], str_ty)},
-            u64_ty,
-        );
-        for (renamed_field_locals[1..]) |field_local| {
+        var body = try self.localExpr(length_locals[0], u64_ty);
+        for (length_locals[1..]) |candidate_local| {
             const current_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
-            const candidate_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
-            const len_expr = try self.lowLevelExpr(
-                .str_count_utf8_bytes,
-                &.{try self.localExpr(field_local, str_ty)},
-                u64_ty,
-            );
             const cond = try self.lowLevelExpr(switch (bound) {
                 .shortest => .num_is_lt,
                 .longest => .num_is_gt,
@@ -35253,13 +35278,7 @@ const BodyContext = struct {
                 try self.localExpr(current_local, u64_ty),
                 u64_ty,
             );
-            body = try self.wrapLet(
-                current_local,
-                u64_ty,
-                body,
-                try self.wrapLet(candidate_local, u64_ty, len_expr, selected, u64_ty),
-                u64_ty,
-            );
+            body = try self.wrapLet(current_local, u64_ty, body, selected, u64_ty);
         }
         return body;
     }
@@ -58493,11 +58512,10 @@ const BodyContext = struct {
         } } });
     }
 
+    /// A primitive `bool` constant: an integer literal of the bool type,
+    /// 1 for true and 0 for false.
     fn boolLiteral(self: *BodyContext, value: bool, bool_ty: Type.TypeId) Allocator.Error!DraftExprId {
-        const u64_ty = try self.primitiveType(.u64);
-        const lhs = try self.intLiteralExpr(0, u64_ty);
-        const rhs = try self.intLiteralExpr(if (value) 0 else 1, u64_ty);
-        return try self.lowLevelExpr(.num_is_eq, &.{ lhs, rhs }, bool_ty);
+        return try self.intLiteralExpr(if (value) 1 else 0, bool_ty);
     }
 
     /// Emit `Hasher.write_u64(hasher, value)` as a low-level operation.

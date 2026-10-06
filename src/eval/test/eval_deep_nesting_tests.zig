@@ -25,6 +25,12 @@ const shallow_stack_bytes = 2 * 1024 * 1024;
 /// type, so it costs the square of its depth.
 const shallower_depth = 500;
 
+/// Each level of a custom-parser chain is its own record type, so it compiles
+/// a complete derived record parser. Compilation is linear in the depth, but
+/// that per-level cost makes the full depth far slower than every other case;
+/// this depth still exceeds any per-level recursion the stack could hold.
+const codec_chain_depth = 1000;
+
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
 }
@@ -414,7 +420,7 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: custom parsers nesting derived record parsers",
         .source_kind = .module,
-        .source = codecChain(depth),
+        .source = codecChain(codec_chain_depth),
         .expected = .{ .inspect_str = "\"err\"" },
         .stack_bytes = stack_bytes,
     },
