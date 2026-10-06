@@ -16433,7 +16433,6 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .method_eq,
         .type_dispatch_call,
         .tuple_access,
-        .runtime_error,
         .crash,
         .dbg,
         .expect_err,
@@ -16452,6 +16451,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .match_ => |match| allocator.free(match.branches),
         .if_ => |if_| allocator.free(if_.branches),
         .call => |call| allocator.free(call.args),
+        .runtime_error => |runtime_error| allocator.free(runtime_error.evaluated),
         .record => |record| {
             allocator.free(record.fields);
             allocator.free(record.unsets);
