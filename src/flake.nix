@@ -1,5 +1,7 @@
 # Use this flake with `nix develop ./src`
 
+# Look at [roc-overlay](https://github.com/roc-lang/roc-overlay) to avoid long build times when you just want to use Roc.
+
 {
   description = "Roc flake for the new compiler, written in Zig.";
 
