@@ -39040,47 +39040,69 @@ fn closeValueRowTailsCarryingDerivations(self: *Self, env: *Env) std.mem.Allocat
 const RowTail = struct { var_: Var, kind: enum { tag, record } };
 
 /// The row tails reachable through `var_`'s data positions (not function
-/// parameters or results), each with the kind of row it ends.
+/// parameters or results), each with the kind of row it ends. Walks an
+/// explicit stack, since data types nest as deeply as the source; children
+/// are pushed in reverse so tails are found in depth-first source order.
 fn collectDataRowTails(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void), out: *std.ArrayList(RowTail)) std.mem.Allocator.Error!void {
-    const resolved = self.types.resolveVar(var_);
-    if ((try visited.getOrPut(resolved.var_)).found_existing) return;
-    switch (resolved.desc.content) {
-        .alias => |alias| try self.collectDataRowTails(self.types.getAliasBackingVar(alias), visited, out),
-        .structure => |flat| switch (flat) {
-            .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try self.collectDataRowTails(elem, visited, out),
-            .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try self.collectDataRowTails(arg, visited, out),
-            .fn_pure, .fn_effectful, .fn_unbound => {},
-            .record => |record| {
-                const fields = self.types.getRecordFieldsSlice(record.fields);
-                for (fields.items(.presence)) |presence| try self.collectDataRowTails(presence.typeVar(), visited, out);
-                try self.collectRowTail(record.ext, .record, visited, out);
-            },
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |tag_args| {
-                    for (self.types.sliceVars(tag_args)) |arg| try self.collectDataRowTails(arg, visited, out);
+    var stack = std.ArrayList(DataRowItem).empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, .{ .data = var_ });
+    while (stack.pop()) |item| {
+        const current = switch (item) {
+            .data => |data| data,
+            .tail => |tail| {
+                const resolved = self.types.resolveVar(tail.var_);
+                switch (resolved.desc.content) {
+                    .flex => try out.append(self.gpa, .{ .var_ = resolved.var_, .kind = tail.kind }),
+                    .rigid, .field_presence, .err => {},
+                    .alias, .structure => try stack.append(self.gpa, .{ .data = tail.var_ }),
                 }
-                try self.collectRowTail(tag_union.ext, .tag, visited, out);
+                continue;
             },
-            .empty_record, .empty_tag_union => {},
-        },
-        .flex, .rigid, .field_presence, .err => {},
+        };
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| try stack.append(self.gpa, .{ .data = self.types.getAliasBackingVar(alias) }),
+            .structure => |flat| switch (flat) {
+                .tuple => |tuple| try appendDataItemsReversed(self.gpa, &stack, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try appendDataItemsReversed(self.gpa, &stack, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => {},
+                .record => |record| {
+                    try stack.append(self.gpa, .{ .tail = .{ .var_ = record.ext, .kind = .record } });
+                    const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+                    var index = presences.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try stack.append(self.gpa, .{ .data = presences[index].typeVar() });
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try stack.append(self.gpa, .{ .tail = .{ .var_ = tag_union.ext, .kind = .tag } });
+                    const tag_args = self.types.getTagsSlice(tag_union.tags).items(.args);
+                    var index = tag_args.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try appendDataItemsReversed(self.gpa, &stack, self.types.sliceVars(tag_args[index]));
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .field_presence, .err => {},
+        }
     }
 }
 
-/// Record a row's tail, or keep walking a tail that is itself more row.
-fn collectRowTail(
-    self: *Self,
-    tail: Var,
-    kind: @FieldType(RowTail, "kind"),
-    visited: *std.AutoHashMap(Var, void),
-    out: *std.ArrayList(RowTail),
-) std.mem.Allocator.Error!void {
-    const resolved = self.types.resolveVar(tail);
-    switch (resolved.desc.content) {
-        .flex => try out.append(self.gpa, .{ .var_ = resolved.var_, .kind = kind }),
-        .rigid, .field_presence, .err => {},
-        .alias, .structure => try self.collectDataRowTails(tail, visited, out),
+const DataRowItem = union(enum) {
+    data: Var,
+    tail: RowTail,
+};
+
+fn appendDataItemsReversed(gpa: std.mem.Allocator, stack: *std.ArrayList(DataRowItem), vars: []const Var) std.mem.Allocator.Error!void {
+    var index = vars.len;
+    while (index > 0) {
+        index -= 1;
+        try stack.append(gpa, .{ .data = vars[index] });
     }
 }
 
