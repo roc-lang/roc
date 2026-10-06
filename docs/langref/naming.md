@@ -169,8 +169,8 @@ for n in 0..<100 {
 }
 ```
 
-Unlike constants, variables are never generalized: a variable has exactly one type,
-even if it's given a type annotation with type variables in it. (See
+Like every other value that isn't a function, a variable is never generalized. It has exactly one
+type, and giving it a type annotation with a type variable in it is an error. (See
 [Generalization](types#generalization) for more on this.)
 
 ### `$` prefix

@@ -258,9 +258,14 @@ Compilers can optimize tail calls in various ways. Here are some that Roc's comp
 
 - If a self-recursive function only ever calls itself using tail calls, the entire function will be optimized into a `while` loop behind the scenes, and all the recursive calls will be eliminated. This optimization makes the function run faster, and makes it impossible for the function to stack overflow (although it can now loop forever), and otherwise will not affect observable program behavior.
 - Tail calls _modulo cons_ get the same treatment, as described in the next section.
+- When a tail call is to a _different_ function, the function being called takes over the
+  current function's stack space instead of using more. This is guaranteed, and it includes
+  calling a function value (like a function that was passed in as an argument). So a group of
+  functions that only ever call each other using tail calls can't overflow the stack either. See
+  [Mutually Recursive Functions](#mutually-recursive-functions).
 
-Tail calls between different functions aren't currently guaranteed to be optimized. See
-[Mutually Recursive Functions](#mutually-recursive-functions).
+One visible consequence of that last one is that a function which has made a tail call is no
+longer on the stack, so it won't show up in a stack trace taken later on.
 
 #### Modulo Cons
 
@@ -308,13 +313,10 @@ is_odd : U64 -> Bool
 is_odd = |n| if n == 0 False else is_even(n - 1)
 ```
 
-Note that even though `is_odd(n - 1)` and `is_even(n - 1)` are tail calls, they're tail calls
-to a _different_ function, not self-tail calls. Tail calls between different functions aren't
-currently guaranteed to run without using up stack space, so `is_even(10_000_000)` can
-overflow the stack. If you
-need a mutually recursive computation to run for many iterations, combine the functions into
-one self-recursive function (for example, one that takes a tag saying which of the two it's
-currently doing).
+Both `is_odd(n - 1)` and `is_even(n - 1)` are [tail calls](#tail-calls), so calling
+`is_even(10_000_000)` goes back and forth between the two functions ten million times without
+overflowing the stack. Each call takes over the stack space of the one that called it, so the
+stack never grows.
 
 ## Performance
 

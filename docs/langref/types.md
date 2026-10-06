@@ -70,6 +70,25 @@ doesn't evaluate anything:
 shorthand = first_or
 ```
 
+A type annotation can make a definition's type more specific, but never more general. So
+annotating a value that isn't a function with a type variable is an error:
+
+```roc
+empty : List(a) # ERROR! empty isn't a function, so it can only have one type.
+empty = []
+```
+
+If you want it to have one type, write that type (or write `List(_)` to let the compiler figure
+out which type it is). If you want to be able to use it with many types, make it a function:
+
+```roc
+empty : {} -> List(a)
+empty = |{}| []
+```
+
+(Inside a function, it's fine to annotate a value with a type variable that the enclosing
+function's annotation introduced, since it's the enclosing function that's generalized.)
+
 A mutable [variable](naming#variables-with-var) is never generalized, even if it's a function.
 If it were, you could assign it a value of one type and then read it back as a different type.
 

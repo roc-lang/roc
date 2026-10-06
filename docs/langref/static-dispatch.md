@@ -77,7 +77,7 @@ Here are all the method names that the language or the builtins use:
 | `negate`, `not` | Unary `-`, unary `!` | The type has a negation or complement operation. |
 | `from_numeral : Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals | You want number literals to work as values of the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | String literals | You want string literals to work as values of the type. |
-| `from_interpolation : Str, Iter((item, Str)) -> T` | String literals with interpolation | You want interpolated string literals to work as values of the type. |
+| `from_interpolation : List(Str) -> Try((List(item) -> T), [InvalidInterpolation(Str)])` | String literals with interpolation | You want interpolated string literals to work as values of the type. |
 | `iter : T -> Iter(item)` | `for item in value` | You want `for` loops to work on the type. |
 | `next` | Each step of a `for` loop | Usually only `Iter` needs this; collections define `iter` instead. |
 | `parser_for : encoding -> (state -> Try({ value : T, rest : state }, err))` | Parsers, such as JSON parsing | You want the type to be parseable from formats like JSON. |
@@ -296,17 +296,42 @@ method = "POST" # calls HttpMethod.from_quote
 Here, writing `method = "PATCH"` would give a compile-time error saying
 `expected GET, POST, PUT, or DELETE`.
 
-A string literal with interpolations in it, like `"<p>${name}</p>"`, calls `from_interpolation`.
-It gets two arguments: the text before the first interpolation, and an iterator of pairs, one for
-each interpolation, containing the interpolated value and the text that comes after it:
+A string literal with interpolations in it, like `"<p>Hello, ${name}!</p>"`, uses
+`from_interpolation`. This happens in two stages:
+
+1. At compile time, `from_interpolation` gets called with the literal's _segments_, which are the
+   pieces of text around the interpolations. Here, those are `["<p>Hello, ", "!</p>"]`.
+2. It returns a function, which gets called each time the program evaluates the string literal.
+   That function receives the interpolated values (here, just `name`) as a list, and returns the
+   finished value.
 
 ```roc
-# For a type named Html:
-from_interpolation : Str, Iter((Html, Str)) -> Html
+Html := [Html(Str)].{
+    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+    from_interpolation = |segments|
+        if segments.any(|segment| segment.contains("<script")) {
+            Err(InvalidInterpolation("Html literals can't contain script tags"))
+        } else {
+            Str.from_interpolation(segments).map_ok(|assemble|
+                |values| Html(assemble(values.map(|value| value.replace_each("<", "&lt;")))))
+        }
+}
+
+page : Str -> Html
+page = |name| "<p>Hello, ${name}!</p>"
 ```
 
-The text pieces are always `Str` values; the interpolated values are whatever type the
-`from_interpolation` method accepts.
+The reason for having two stages is that the segments are written in the source code, so they
+can be checked at compile time, just like a `from_quote` literal can. If `from_interpolation`
+returns `Err(InvalidInterpolation(message))`, you get a compile-time error with that message. The
+interpolated values, on the other hand, aren't known until the program runs, so the function that
+handles them can't fail. Instead, it decides how those values get into the result. In this
+example, `Html` rejects literals with `<script` written in them, and escapes any `<` in the
+interpolated values.
+
+A literal with `n` interpolations always has `n + 1` segments (some of which may be empty
+strings). The segments are always `Str` values, whereas the interpolated values can be whatever
+type the returned function accepts.
 
 ### Iteration
 
