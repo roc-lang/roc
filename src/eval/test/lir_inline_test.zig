@@ -12327,15 +12327,13 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // kept and the predicted delta is zero. A window here would hide exactly
     // the drift this gate exists to catch. Specialization misses may only
     // fall: the eager restore keyed the callee spec as an open request, and
-    // Phase-B emission removes that cause. A record literal whose fields are
-    // written out of layout order binds each field value to a local in source
-    // order, and the counts below include those bindings.
+    // Phase-B emission removes that cause.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 553), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 122), stats.locals);
+    try std.testing.expectEqual(@as(usize, 549), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 120), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
@@ -12460,15 +12458,13 @@ test "stored parser restore lowers a shape with an optional field" {
     // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
     // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
     // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138). The counts include the
-    // source-order bindings of record literal fields written out of layout
-    // order.
+    // directly (exprs 731 -> 727, locals 140 -> 138).
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 683), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 140), stats.locals);
+    try std.testing.expectEqual(@as(usize, 679), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 138), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }

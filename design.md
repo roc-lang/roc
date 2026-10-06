@@ -990,7 +990,7 @@ checker recovery. The recovery rules:
   the item type every later item meets; and a conditional's or match's
   branch join reads that branch, and the branches before it only when every
   one of them is erroneous, since an erroneous branch joins nothing. A
-  dispatch obligation records the relation whose checking queued it, and the
+  dispatch requirement records the relation whose checking queued it, and the
   problems its resolution reports belong to that relation. Because checking
   replaces rejected expressions with runtime errors, each expression's operands
   are captured when its checking begins (`relation_operands`). A relation is
