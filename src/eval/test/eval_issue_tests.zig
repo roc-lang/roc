@@ -4540,4 +4540,95 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "1" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/12100
+        // Two custom `from_numeral` literals at the same nominal type, next to
+        // an `==` on that type, each get their own literal conversion and must
+        // evaluate the boolean expression.
+        .name = "issue 12100: two from_numeral literals beside == on the same nominal type",
+        .source_kind = .module,
+        .source =
+        \\One :: [].{
+        \\    Unit :: I64.{
+        \\        is_eq : _
+        \\
+        \\        from_numeral : Numeral -> Try(Unit, [InvalidNumeral(Str)])
+        \\        from_numeral = |_| Ok(Unit.(0))
+        \\
+        \\        is_lt : Unit, Unit -> Bool
+        \\        is_lt = |Unit.(a), Unit.(b)| a < b
+        \\    }
+        \\}
+        \\
+        \\check : { a : One.Unit, b : One.Unit } -> Bool
+        \\check = |{ a, b }| a < 0 or b < 0 or a == b
+        \\
+        \\main = check({ a: One.Unit.(1), b: One.Unit.(1) })
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12100
+        // The two `+` relations merge into one declarative relation once `==`
+        // unifies their receivers; both dispatches must share its checked
+        // target instantiation, including the target's scheme variable.
+        .name = "issue 12100: two merged operator relations whose target has a scheme variable",
+        .source_kind = .module,
+        .source =
+        \\Unit :: I64.{
+        \\    is_eq : _
+        \\
+        \\    plus : Unit, List(x) -> Unit
+        \\    plus = |u, _| u
+        \\}
+        \\
+        \\check : { a : Unit, b : Unit } -> Bool
+        \\check = |{ a, b }| (a + []) == (b + []) and a == b
+        \\
+        \\main = check({ a: Unit.(1), b: Unit.(1) })
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // A generalized value's literal conversion is committed per
+        // specialization: each use converts at its own type, and checking
+        // instantiates no target for the literal itself.
+        .name = "issue 12100: generalized value literal used at a custom numeral type and at Dec",
+        .source_kind = .module,
+        .source =
+        \\Unit :: I64.{
+        \\    from_numeral : Numeral -> Try(Unit, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Unit.(42))
+        \\
+        \\    to_i64 : Unit -> I64
+        \\    to_i64 = |Unit.(n)| n
+        \\}
+        \\
+        \\t = {
+        \\    (|| 0)
+        \\}
+        \\
+        \\main = {
+        \\    u : Unit
+        \\    u = t()
+        \\    d : Dec
+        \\    d = t()
+        \\    (u.to_i64(), d)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(42, 0.0)" },
+    },
+    .{
+        // A literal no use pins converts at its numeric default.
+        .name = "issue 12100: unpinned generalized value literal converts at its numeric default",
+        .source_kind = .module,
+        .source =
+        \\t = {
+        \\    (|| 0)
+        \\}
+        \\
+        \\main = t()
+        ,
+        .expected = .{ .inspect_str = "0.0" },
+    },
 };

@@ -11466,6 +11466,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Pruning can mark a destructured name erroneous; its uses are poisoned
     // like those of any other erroneous binding.
     try self.poisonErroneousValueUses();
+    try self.publishDispatchRelationMerges();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
     try self.finalizeExpectEffectSlots();
@@ -42976,6 +42977,98 @@ fn literalTargetIsBuiltinDirect(
     }
 }
 
+/// Publish every static-dispatch relation the unifier folded into a retained
+/// relation and that selected no target of its own, mapped to the first
+/// relation, in fold order, reachable through its folds whose target checking
+/// selected. Solving is settled here. One relation can be folded more than
+/// once, because a deferred copy of a constraint keeps it in another
+/// constraint list; every relation it reaches is unified with it and must
+/// have selected the same method. Such a relation's dispatch shares that
+/// relation's instantiation, and checked publication keys it by these exact
+/// raw vars rather than by union-find roots, which unrelated dispatches can
+/// come to share.
+fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
+    const merges = self.types.static_dispatch_relation_merges.items;
+    if (merges.len == 0) return;
+
+    // Each dropped var's folds, in journal order, as a linked list over
+    // journal indexes.
+    const no_fold = std.math.maxInt(u32);
+    var first_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer first_fold.deinit(self.gpa);
+    var last_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer last_fold.deinit(self.gpa);
+    const next_fold = try self.gpa.alloc(u32, merges.len);
+    defer self.gpa.free(next_fold);
+    try first_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
+    try last_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
+    for (merges, 0..) |merge, index| {
+        next_fold[index] = no_fold;
+        const last = last_fold.getOrPutAssumeCapacity(merge.dropped_fn_var);
+        if (last.found_existing) {
+            next_fold[last.value_ptr.*] = @intCast(index);
+        } else {
+            first_fold.putAssumeCapacity(merge.dropped_fn_var, @intCast(index));
+        }
+        last.value_ptr.* = @intCast(index);
+    }
+
+    var stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer stack.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+
+    try self.cir.dispatch_relation_merges.items.ensureUnusedCapacity(self.gpa, first_fold.count());
+    for (merges, 0..) |merge, index| {
+        const dropped = merge.dropped_fn_var;
+        // Visit each dropped var once, at its first fold.
+        if (first_fold.get(dropped).? != index) continue;
+        // A deferred copy of the folded constraint can still discharge it;
+        // that selection is its own exact instantiation.
+        if (self.dispatch_target_instantiation_by_fn_var.contains(dropped)) continue;
+
+        stack.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+        try visited.put(self.gpa, dropped, {});
+        var selected: ?Var = null;
+        var fold = first_fold.get(dropped).?;
+        while (true) {
+            // Push this var's folds in reverse so they pop in journal order.
+            const push_start = stack.items.len;
+            while (fold != no_fold) : (fold = next_fold[fold]) {
+                const retained = merges[fold].retained_fn_var;
+                if ((try visited.getOrPut(self.gpa, retained)).found_existing) continue;
+                try stack.append(self.gpa, retained);
+            }
+            std.mem.reverse(Var, stack.items[push_start..]);
+
+            const current = stack.pop() orelse break;
+            if (self.dispatch_target_instantiation_by_fn_var.get(current)) |raw_index| {
+                if (selected) |first| {
+                    const first_target = self.dispatch_target_instantiations.items[self.dispatch_target_instantiation_by_fn_var.get(first).?];
+                    const target = self.dispatch_target_instantiations.items[raw_index];
+                    if (first_target.target_env != target.target_env or
+                        !std.meta.eql(first_target.target_binding, target.target_binding))
+                    {
+                        std.debug.panic("a folded static-dispatch relation reached two different selected methods", .{});
+                    }
+                } else {
+                    selected = current;
+                }
+                fold = no_fold;
+                continue;
+            }
+            fold = first_fold.get(current) orelse no_fold;
+        }
+
+        const retained = selected orelse continue;
+        self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
+            .dropped_fn_var = @intFromEnum(dropped),
+            .retained_fn_var = @intFromEnum(retained),
+        });
+    }
+}
+
 /// Seal every live literal record with the exact decision checking made. The
 /// method-instantiation table is positive evidence for a concrete custom
 /// target; an identity-bearing target remains a specialization obligation.
@@ -42991,18 +43084,14 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
-    // Evidence is recorded under each discharged constraint's raw fn_var, but
-    // same-name literal constraints deduplicate when their receivers unify
-    // (e.g. two elements of one list): the callable vars are unified and only
-    // one raw fn_var survives on the merged constraint. Solving is settled
-    // here, so comparing resolved roots recovers every literal's share of that
-    // one discharged edge.
-    var evidence_fn_roots = std.AutoHashMap(Var, void).init(self.gpa);
-    defer evidence_fn_roots.deinit();
-    try evidence_fn_roots.ensureTotalCapacity(self.dispatch_target_instantiation_by_fn_var.count());
-    var evidence_key_it = self.dispatch_target_instantiation_by_fn_var.keyIterator();
-    while (evidence_key_it.next()) |evidence_fn_var| {
-        try evidence_fn_roots.put(self.types.resolveVar(evidence_fn_var.*).var_, {});
+    // A literal whose constraint was folded into a same-name relation (e.g.
+    // two elements of one list) shares the target that relation selected.
+    var folded_fn_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer folded_fn_vars.deinit();
+    const merges = self.cir.dispatch_relation_merges.items.items;
+    try folded_fn_vars.ensureTotalCapacity(@intCast(merges.len));
+    for (merges) |merge| {
+        folded_fn_vars.putAssumeCapacity(@enumFromInt(merge.dropped_fn_var), {});
     }
 
     // Finalization only changes resolution fields and retirement happens
@@ -43047,7 +43136,9 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;
             }
-            if (evidence_fn_roots.contains(self.types.resolveVar(fn_var).var_)) {
+            if (self.dispatch_target_instantiation_by_fn_var.contains(fn_var) or
+                folded_fn_vars.contains(fn_var))
+            {
                 break :resolution .custom_dispatch;
             }
 

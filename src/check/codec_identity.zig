@@ -199,6 +199,7 @@ const Comparer = struct {
                     switch (a.instantiation) {
                         .monomorphic => {},
                         .callable => |ty| try self.typesPair(ty, b.instantiation.callable),
+                        .derived_from_callable => |ty| try self.typesPair(ty, b.instantiation.derived_from_callable),
                     }
                     const left_subst = self.table.site_substitutions[a.subst.start..][0..a.subst.len];
                     const right_subst = self.table.site_substitutions[b.subst.start..][0..b.subst.len];

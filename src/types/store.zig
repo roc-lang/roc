@@ -182,6 +182,14 @@ pub const Slot = union(enum) {
 /// A Slot either redirects to a different slot or contains type `Content`
 ///
 /// Var maps to a SlotStore.Idx internally
+/// One static-dispatch relation the unifier folded into a retained same-name
+/// relation. Both are raw constraint function vars; unification has already
+/// made their callables equal.
+pub const StaticDispatchRelationMerge = struct {
+    dropped_fn_var: Var,
+    retained_fn_var: Var,
+};
+
 pub const Store = struct {
     const Self = @This();
 
@@ -245,6 +253,12 @@ pub const Store = struct {
     desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
     root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
     union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
+
+    /// Every static-dispatch relation the unifier folded into a retained
+    /// same-name relation, by raw constraint function var. Checking publishes
+    /// these so a folded relation's dispatch names the retained relation's
+    /// target instantiation.
+    static_dispatch_relation_merges: std.ArrayListUnmanaged(StaticDispatchRelationMerge) = .empty,
 
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
@@ -320,6 +334,7 @@ pub const Store = struct {
         self.tags.deinit(self.gpa);
         self.interpolation_parts.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
+        self.static_dispatch_relation_merges.deinit(self.gpa);
 
         // nominal declaration table
         self.nominal_decls.deinit(self.gpa);
@@ -406,6 +421,7 @@ pub const Store = struct {
         tags_len: usize,
         interpolation_parts_len: usize,
         static_dispatch_constraints_len: usize,
+        static_dispatch_relation_merges_len: usize,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
 
@@ -483,6 +499,7 @@ pub const Store = struct {
             .tags_len = self.tags.items.len,
             .interpolation_parts_len = self.interpolation_parts.items.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+            .static_dispatch_relation_merges_len = self.static_dispatch_relation_merges.items.len,
             .verify_clone = verify_clone,
         };
 
@@ -580,6 +597,7 @@ pub const Store = struct {
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
         self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
+        self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
 
         // Back to not speculating; savepoint_baseline_* are dead until the next create.
         self.savepoint_active = false;

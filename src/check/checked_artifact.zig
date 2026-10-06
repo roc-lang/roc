@@ -19571,6 +19571,16 @@ const EvidencePass = struct {
                 .nested_function_use, .recursive_reference => {},
             }
         }
+        // A relation checking folded into a retained same-name relation
+        // dispatches through that relation's target instantiation.
+        for (module_env.dispatch_relation_merges.items.items) |merge| {
+            const record_idx = self.target_by_fn_var.get(merge.retained_fn_var) orelse continue;
+            const entry = try self.target_by_fn_var.getOrPut(merge.dropped_fn_var);
+            if (entry.found_existing) {
+                checkedArtifactInvariant("folded static-dispatch relation had its own dispatch-target evidence", .{});
+            }
+            entry.value_ptr.* = record_idx;
+        }
 
         var raw_node: u32 = 0;
         while (raw_node < self.module.nodeCount()) : (raw_node += 1) {
@@ -19727,7 +19737,7 @@ const EvidencePass = struct {
                             );
                         }
                         const instantiated_callable = switch (node.instantiation) {
-                            .callable => |callable| callable,
+                            .callable, .derived_from_callable => |callable| callable,
                             .monomorphic => checkedArtifactInvariant(
                                 "checked generated codec callable evidence had no exact instantiation",
                                 .{},
@@ -20226,15 +20236,25 @@ const EvidencePass = struct {
         // where-vars against the same chain.
         self.current_chain = chain;
         defer self.current_chain = &.{};
-        plan.resolution = (try self.resolveObligation(
+        plan.resolution = switch (try self.resolveObligationStep(
             src.dispatcher_var,
             plan.dispatcher_ty,
             plan.method,
             structural_kind,
             src.constraint_fn_var,
+            src.literal_kind,
             chain,
             commit_unpinned,
-        )) orelse return;
+        )) {
+            .resolved => |resolution| resolution orelse return,
+            .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(
+                request.target,
+                request.dispatcher_ty,
+                request.constraint_fn_var,
+                null,
+                if (src.target_selected_by_checking) request.selection else .publication,
+            ) },
+        };
         plan.generated_codec_derivation = switch (plan.resolution) {
             .structural => |derivation| switch (derivation.kind()) {
                 .parser => self.generatedCodecDerivationForSourceConstraint(
@@ -20253,10 +20273,30 @@ const EvidencePass = struct {
             },
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => null,
         };
+        if (builtin.mode == .Debug) switch (plan.resolution) {
+            .direct_pending => |node_id| self.verifyDirectPlanSubstitution(node_id),
+            else => {},
+        };
         self.plan_resolved[raw] = true;
         if (plan.resolution == .checked_error) {
             self.checked_bodies.stored_exprs.items[@intFromEnum(plan.expr)].contains_diagnostic_error = true;
             self.rejected_dispatches = true;
+        }
+    }
+
+    /// A direct dispatch specializes its target under the evidence node's
+    /// substitution, so that substitution must cover every quantified
+    /// variable of the target's scheme, unless the node says the
+    /// substitution derives from its callable.
+    fn verifyDirectPlanSubstitution(self: *EvidencePass, node_id: static_dispatch.EvidenceNodeId) void {
+        const node = self.evidence_nodes.items[@intFromEnum(node_id)];
+        if (node.target.kind != .procedure) return;
+        const expected_len = switch (node.instantiation) {
+            .derived_from_callable => 0,
+            .monomorphic, .callable => self.procedureEvidenceView(node.target).template.scheme_vars.len,
+        };
+        if (node.subst.len != expected_len) {
+            checkedArtifactInvariant("direct dispatch plan's checked substitution did not match its target's scheme", .{});
         }
     }
 
@@ -20274,6 +20314,7 @@ const EvidencePass = struct {
             plan.iter.method,
             null,
             src.iter_fn_var,
+            null,
             chain,
             commit_unpinned,
         )) orelse return;
@@ -20283,6 +20324,7 @@ const EvidencePass = struct {
             plan.next.method,
             null,
             src.next_fn_var,
+            null,
             chain,
             commit_unpinned,
         )) orelse return;
@@ -20304,12 +20346,13 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
+        literal_kind: ?LiteralKind,
         chain: []const ChainLevel,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
-        return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, chain, commit_unpinned)) {
+        return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, literal_kind, chain, commit_unpinned)) {
             .resolved => |resolution| resolution,
-            .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(request.target, request.dispatcher_ty, request.constraint_fn_var, null, .dispatch_edge) },
+            .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(request.target, request.dispatcher_ty, request.constraint_fn_var, null, request.selection) },
         };
     }
 
@@ -20318,6 +20361,7 @@ const EvidencePass = struct {
         target: static_dispatch.MethodTarget,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
+        selection: MethodTargetSelection,
     };
 
     /// An obligation's resolution, or the procedure target whose evidence
@@ -20335,6 +20379,7 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var_in: ?Var,
+        literal_kind: ?LiteralKind,
         chain: []const ChainLevel,
         commit_unpinned_in: bool,
     ) Allocator.Error!ObligationStep {
@@ -20432,7 +20477,13 @@ const EvidencePass = struct {
                                 // reported why. The dispatch itself needs no second
                                 // diagnostic; it just must never lower.
                                 .rejected => .{ .resolved = .checked_error },
-                                .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
+                                .target => |target| try self.resolutionForMethodTarget(
+                                    target,
+                                    structural_kind,
+                                    dispatcher_ty,
+                                    constraint_fn_var,
+                                    if (literal_kind != null and isBuiltinLiteralConversion(literal_kind.?, owner)) .builtin_literal else .dispatch_edge,
+                                ),
                             };
                         }
                         // The dispatcher has an owner, checking passed, and no
@@ -20518,7 +20569,7 @@ const EvidencePass = struct {
             if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
                 return switch (found) {
                     .rejected => .{ .resolved = .checked_error },
-                    .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
+                    .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var, .publication),
                 };
             }
         }
@@ -20650,6 +20701,7 @@ const EvidencePass = struct {
         structural_kind: ?static_dispatch.StructuralKind,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
+        selection: MethodTargetSelection,
     ) Allocator.Error!ObligationStep {
         return switch (target.kind) {
             .structural => |kind| blk: {
@@ -20662,6 +20714,7 @@ const EvidencePass = struct {
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .constraint_fn_var = constraint_fn_var,
+                .selection = selection,
             } },
         };
     }
@@ -20726,8 +20779,32 @@ const EvidencePass = struct {
     /// chosen by resolving a static-dispatch constraint, and that resolution
     /// records the instantiation it performed. A `derivation` target was
     /// chosen by a generated codec deriving over a type's fields: there is no
-    /// dispatch edge behind it, so no such record was ever written.
-    const MethodTargetSelection = enum { dispatch_edge, derivation };
+    /// dispatch edge behind it, so no such record was ever written. A
+    /// `publication` target was chosen by publication rather than checking:
+    /// the numeric default owner of a dispatcher no edge pins, or the target
+    /// of a literal conversion checking left to each specialization.
+    /// A `builtin_literal` target converts a source literal on a builtin
+    /// number or `Str`, which checking discharges as a primitive with no
+    /// callable instantiation.
+    const MethodTargetSelection = enum { dispatch_edge, derivation, publication, builtin_literal };
+
+    const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
+
+    /// Checking's primitive literal rule: a numeral converts natively to a
+    /// builtin number, and a quote or interpolation to `Str`.
+    fn isBuiltinLiteralConversion(kind: LiteralKind, owner: static_dispatch.MethodOwner) bool {
+        const builtin_owner = switch (owner) {
+            .builtin => |builtin_owner| builtin_owner,
+            .nominal => return false,
+        };
+        return switch (kind) {
+            .numeral => switch (builtin_owner) {
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => true,
+                else => false,
+            },
+            .quote, .interpolation => builtin_owner == .str,
+        };
+    }
 
     fn evidenceNodeForTarget(
         self: *EvidencePass,
@@ -20763,10 +20840,10 @@ const EvidencePass = struct {
                 const param = frame.params.items[frame.next];
                 frame.next += 1;
                 const context = try self.evidenceContextForRecordParam(frame.pairs, param);
-                switch (try self.resolveObligationStep(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, self.current_chain, true)) {
+                switch (try self.resolveObligationStep(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, context.literal_kind, self.current_chain, true)) {
                     .resolved => |resolution| frame.entries.appendAssumeCapacity(self.evidenceFromResolution(context, resolution orelse
                         checkedArtifactInvariant("committed evidence resolution was not total", .{}))),
-                    .node => |request| switch (try self.beginEvidenceNode(request.target, request.dispatcher_ty, request.constraint_fn_var, null, .dispatch_edge)) {
+                    .node => |request| switch (try self.beginEvidenceNode(request.target, request.dispatcher_ty, request.constraint_fn_var, null, request.selection)) {
                         .done => |node_id| frame.entries.appendAssumeCapacity(self.evidenceFromResolution(context, .{ .direct_pending = node_id })),
                         .record => |nested| {
                             frame.pending = context;
@@ -20877,7 +20954,7 @@ const EvidencePass = struct {
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .callable = callable },
+                .instantiation = .{ .derived_from_callable = callable },
                 .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
             }) };
         }
@@ -20901,7 +20978,7 @@ const EvidencePass = struct {
             if (self.node_by_record.get(idx)) |memoized| {
                 const existing = self.evidence_nodes.items[@intFromEnum(memoized)];
                 const callable_matches = switch (existing.instantiation) {
-                    .monomorphic => false,
+                    .monomorphic, .derived_from_callable => false,
                     .callable => |existing_callable| existing_callable == callable_ty.?,
                 };
                 if (existing.dispatcher_ty != dispatcher_ty or
@@ -20936,6 +21013,22 @@ const EvidencePass = struct {
             return .{ .record = frame };
         }
 
+        // Without a record this node carries no substitution. A dispatch edge
+        // the checker discharged records one whenever the target's scheme has
+        // variables; a target publication selected was never instantiated by
+        // checking, so its node says the substitution derives from the
+        // callable.
+        if (target.kind == .procedure and constraint_fn_var != null and selection == .dispatch_edge and
+            self.procedureEvidenceView(target).template.scheme_vars.len != 0)
+        {
+            checkedArtifactInvariant("polymorphic procedure target evidence had no checked instantiation record", .{});
+        }
+        const instantiation: static_dispatch.EvidenceTargetInstantiation = switch (selection) {
+            .publication, .builtin_literal => .{ .derived_from_callable = callable_ty orelse
+                checkedArtifactInvariant("target evidence checking never instantiated had no checked callable", .{}) },
+            .dispatch_edge, .derivation => if (callable_ty) |callable| .{ .callable = callable } else .monomorphic,
+        };
+
         if (procedure_schema == .from_callable) {
             if (constraint_fn_var == null) {
                 checkedArtifactInvariant("callable-derived procedure evidence had no checked callable relation", .{});
@@ -20944,7 +21037,7 @@ const EvidencePass = struct {
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .callable = callable_ty.? },
+                .instantiation = instantiation,
                 .nested = .from_callable,
             }) };
         }
@@ -20956,10 +21049,6 @@ const EvidencePass = struct {
             checkedArtifactInvariant("constrained local-procedure target evidence had no checked instantiation record", .{});
         }
 
-        const instantiation: static_dispatch.EvidenceTargetInstantiation = if (callable_ty) |callable|
-            .{ .callable = callable }
-        else
-            .monomorphic;
         return .{ .done = try self.internEvidenceNode(.{
             .target = target,
             .dispatcher_ty = dispatcher_ty,
@@ -21085,7 +21174,7 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
         const context = try self.evidenceContextForRecordParam(pairs, param);
-        const resolution = (try self.resolveObligation(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
+        const resolution = (try self.resolveObligation(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, context.literal_kind, self.current_chain, commit_unpinned)) orelse return null;
         var evidence = self.evidenceFromResolution(context, resolution);
         if (param.callable_contracts.len != 0) {
             // A non-structural method on one settled receiver has one target.
@@ -21144,6 +21233,8 @@ const EvidencePass = struct {
         param: EvidenceParam,
         var_: Var,
         fresh_fn_var: ?Var,
+        /// The kind of source literal the obligation converts, if any.
+        literal_kind: ?LiteralKind,
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         dispatcher_ty: CheckedTypeId,
@@ -21155,6 +21246,7 @@ const EvidencePass = struct {
             .param = param,
             .var_ = var_,
             .fresh_fn_var = fresh_fn_var,
+            .literal_kind = param.constraint.origin.literalKind(),
             .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
             .structural_kind = self.structuralKindForMethodIdent(param.constraint.fn_name),
             .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, var_) orelse
@@ -21231,7 +21323,7 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
         const context = try self.evidenceContext(param, var_, fresh_fn_var);
-        const resolution = (try self.resolveObligation(var_, context.dispatcher_ty, context.method, context.structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
+        const resolution = (try self.resolveObligation(var_, context.dispatcher_ty, context.method, context.structural_kind, fresh_fn_var, context.literal_kind, self.current_chain, commit_unpinned)) orelse return null;
         return self.evidenceFromResolution(context, resolution);
     }
 
@@ -34748,7 +34840,7 @@ pub const CheckedModuleArtifact = struct {
                         }
                         const node_callable = switch (node.instantiation) {
                             .monomorphic => return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method },
-                            .callable => |callable| callable,
+                            .callable, .derived_from_callable => |callable| callable,
                         };
                         if (@intFromEnum(node_callable) >= self.checked_types.payloadCount() or
                             !std.meta.eql(type_view.rootKey(node_dispatcher), type_view.rootKey(call.dispatcher_ty)) or
@@ -40358,8 +40450,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xDC, 0x02, 0x5A, 0xE0, 0x70, 0x4B, 0x6B, 0x6F, 0x61, 0xFE, 0x92, 0xED, 0xC0, 0xBE, 0x14, 0x37,
-        0x99, 0xA5, 0x3D, 0x7F, 0x80, 0xAB, 0x1D, 0x1A, 0xCB, 0xEB, 0x1F, 0xA3, 0xCA, 0x70, 0x75, 0x7E,
+        0x5A, 0xCE, 0x73, 0x4E, 0xFB, 0x1A, 0xE2, 0xCB, 0x03, 0x1D, 0xE2, 0x40, 0xE9, 0x91, 0x00, 0x34,
+        0x99, 0x35, 0xBA, 0xE4, 0xDA, 0x0C, 0x19, 0xAF, 0x04, 0x83, 0x6E, 0xCC, 0x95, 0xE1, 0x67, 0x92,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
