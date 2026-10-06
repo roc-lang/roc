@@ -44,6 +44,7 @@ pub const ModuleIdentity = @import("module_identity.zig");
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
+pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
 pub const safe_memory = @import("safe_memory.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
@@ -98,6 +99,7 @@ test {
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(@import("sha256.zig"));
+    std.testing.refAllDecls(DeterministicAllocator);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }

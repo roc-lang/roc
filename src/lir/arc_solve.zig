@@ -53,6 +53,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const body_clone = @import("body_clone.zig");
+const DeterministicAllocator = @import("base").DeterministicAllocator;
 const task_executor = @import("base").post_check_task_executor;
 
 const LIR = core.LIR;
@@ -6895,7 +6896,9 @@ test "ARC public solve cleans up every coordinator allocation failure" {
     };
     // Inputs outlive the entire sweep: every injected failure belongs to
     // public solver construction, analysis, publication, or result handoff.
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{ &f, rc_local, caller });
+    // Heap-layout dependent remaps would vary the allocation count between runs.
+    var deterministic = DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Probe.run, .{ &f, rc_local, caller });
 }
 
 test "ordered-use inventory transfer cleans up on allocation failure" {

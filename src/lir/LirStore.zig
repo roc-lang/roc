@@ -2239,7 +2239,9 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             try std.testing.expectEqual(@as(u32, 102), @backingInt(coordinator.getProcSpec(proc).tail_calls.?.loop));
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
+    // Heap-layout dependent remaps would vary the allocation count between runs.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Helper.run, .{});
 }
 
 test "body shard rejects generated symbol identities" {
