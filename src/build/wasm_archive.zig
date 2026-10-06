@@ -1,7 +1,8 @@
-//! Build helper: compress a WebAssembly module into a `.zst` archive using the
-//! zstd streaming compressor that powers `roc bundle` (see `src/bundle/`).
+//! Build helper: compress a WebAssembly module (or another build artifact) into a
+//! `.zst` archive using the zstd streaming compressor that powers `roc bundle`
+//! (see `src/bundle/`).
 //!
-//! Usage: wasm_archive <input.wasm> <output.wasm.zst>
+//! Usage: wasm_archive <input> <output.zst> [level]
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -13,8 +14,9 @@ const ArchiveError = std.process.Args.ToSliceError ||
     std.Io.Writer.Error ||
     std.mem.Allocator.Error;
 
-/// Reads the input wasm path (argv[1]), zstd-compresses it with the shared
-/// `roc bundle` compressor, and writes the archive to the output path (argv[2]).
+/// Reads the input path (argv[1]), zstd-compresses it with the shared
+/// `roc bundle` compressor at the optional level (argv[3], default
+/// `bundle.DEFAULT_COMPRESSION_LEVEL`), and writes the archive to the output path (argv[2]).
 pub fn main(init: std.process.Init) ArchiveError!void {
     const io = init.io;
 
@@ -29,10 +31,11 @@ pub fn main(init: std.process.Init) ArchiveError!void {
     const stderr_file: std.Io.File = .stderr();
 
     const args = try init.minimal.args.toSlice(arena);
-    if (args.len != 3) {
-        stderr_file.writeStreamingAll(io, "Usage: wasm_archive <input.wasm> <output.wasm.zst>\n") catch {};
-        std.process.exit(2);
-    }
+    if (args.len != 3 and args.len != 4) usage(io, stderr_file);
+    const level: c_int = if (args.len == 4)
+        std.fmt.parseInt(c_int, args[3], 10) catch usage(io, stderr_file)
+    else
+        bundle.DEFAULT_COMPRESSION_LEVEL;
 
     const input_path = args[1];
     const output_path = args[2];
@@ -45,7 +48,7 @@ pub fn main(init: std.process.Init) ArchiveError!void {
 
     var compressor = try bundle.streaming_writer.CompressingHashWriter.init(
         &gpa,
-        bundle.DEFAULT_COMPRESSION_LEVEL,
+        level,
         &out.writer,
         bundle.allocForZstd,
         bundle.freeForZstd,
@@ -61,4 +64,9 @@ pub fn main(init: std.process.Init) ArchiveError!void {
         .sub_path = output_path,
         .data = compressed,
     });
+}
+
+fn usage(io: std.Io, stderr_file: std.Io.File) noreturn {
+    stderr_file.writeStreamingAll(io, "Usage: wasm_archive <input> <output.zst> [level]\n") catch {};
+    std.process.exit(2);
 }
