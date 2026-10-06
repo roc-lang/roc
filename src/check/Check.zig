@@ -13862,7 +13862,13 @@ fn poisonConstraintFailureSource(
     constraint: StaticDispatchConstraint,
     explicit_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const expr_idx = explicit_expr orelse self.constraintSourceExpr(dispatcher_var, constraint) orelse return;
+    // A constraint an instantiation copied out of a generalized scheme is the
+    // requirement of that instantiating use, whose evaluation fails, even when
+    // a deferred check on the same variable names another owner.
+    const expr_idx = self.instantiatedConstraintUseExpr(constraint) orelse
+        explicit_expr orelse
+        self.constraintSourceExpr(dispatcher_var, constraint) orelse
+        return;
     const expr = self.cir.store.getExpr(expr_idx);
     if (expr == .e_runtime_error) return;
     if (expr == .e_lambda or expr == .e_closure) {
